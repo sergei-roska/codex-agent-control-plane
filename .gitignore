@@ -1,0 +1,15 @@
+# Local authentication and runtime configuration
+.env
+.env.*
+!.env.example
+*.log
+*.pid
+*.sock
+
+# Codex and generated task data
+.codex/auth.json
+.codex/sessions/
+.runtime/
+runtime/
+data/
+artifacts/

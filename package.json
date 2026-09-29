@@ -1,0 +1,17 @@
+{
+  "name": "codex-universal-a2a",
+  "version": "1.0.0",
+  "description": "Codex Universal roles exposed over the A2A protocol",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "ask": "node src/cli.js",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "dependencies": {
+    "@a2a-js/sdk": "^1.3.0",
+    "express": "^5.2.1"
+  }
+}
