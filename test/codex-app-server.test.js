@@ -121,6 +121,98 @@ test('reuses a supplied thread without starting another thread', async (t) => {
   assert.equal(fake.getChild().sent.find(({ method }) => method === 'turn/start').params.threadId, 'existing-thread');
 });
 
+test('resumes an unknown thread once, then reuses it', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  await client.run({ role, cwd: '/tmp/project', input: 'one', threadId: 'old-thread' });
+  await client.run({ role, cwd: '/tmp/project', input: 'two', threadId: 'old-thread' });
+  const sent = fake.getChild().sent;
+  const resumes = sent.filter(({ method }) => method === 'thread/resume');
+  assert.equal(resumes.length, 1);
+  assert.deepEqual(resumes[0].params, {
+    threadId: 'old-thread',
+    cwd: '/tmp/project',
+    approvalPolicy: 'on-request',
+    sandbox: 'workspace-write',
+    model: 'gpt-6-sol',
+    developerInstructions: role.instructions,
+  });
+  const methods = sent.map(({ method }) => method).filter((m) => m === 'thread/resume' || m === 'turn/start');
+  assert.deepEqual(methods, ['thread/resume', 'turn/start', 'turn/start']);
+});
+
+test('does not resume a thread started in this process', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const first = await client.run({ role, cwd: '/tmp/project', input: 'one' });
+  await client.run({ role, cwd: '/tmp/project', input: 'two', threadId: first.threadId });
+  assert.equal(fake.getChild().sent.some(({ method }) => method === 'thread/resume'), false);
+});
+
+test('resumes again after the child process restarts', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const first = await client.run({ role, cwd: '/tmp/project', input: 'one' });
+  const firstChild = fake.getChild();
+  firstChild.emit('exit', 9, null);
+  // Simulate a supervisor restart: drop the failed state so start() spawns a new child.
+  client.exitError = null;
+  client.startPromise = null;
+  await client.run({ role, cwd: '/tmp/project', input: 'two', threadId: first.threadId });
+  assert.notEqual(fake.getChild(), firstChild);
+  const resumes = fake.getChild().sent.filter(({ method }) => method === 'thread/resume');
+  assert.equal(resumes.length, 1);
+  assert.equal(resumes[0].params.threadId, first.threadId);
+});
+
+test('propagates a thread/resume RPC error without starting a new thread', async (t) => {
+  const base = baseHandler();
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'thread/resume') {
+      return send({ id: request.id, error: { code: -32600, message: 'no rollout found', data: { codexErrorInfo: 'other' } } });
+    }
+    return base(request, send);
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  await assert.rejects(
+    client.run({ role, cwd: '/tmp/project', input: 'x', threadId: 'gone' }),
+    (error) => error.name === 'CodexAppServerError'
+      && error.rpcCode === -32600
+      && error.rpcData.codexErrorInfo === 'other'
+      && /no rollout found/.test(error.message),
+  );
+  const methods = fake.getChild().sent.map(({ method }) => method);
+  assert.equal(methods.includes('thread/start'), false);
+  assert.equal(methods.includes('turn/start'), false);
+});
+
+test('readRateLimits returns the result or null on error', async (t) => {
+  const limits = { ordinaryUsageAllowed: true, rateLimits: { primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: 1 }, secondary: null } };
+  const ok = fakeSpawn((request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'account/rateLimits/read') return send({ id: request.id, result: limits });
+  });
+  const okClient = new CodexAppServer({ spawnImpl: ok.spawnImpl });
+  t.after(() => okClient.close());
+  assert.deepEqual(await okClient.readRateLimits(), limits);
+
+  const bad = fakeSpawn((request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'account/rateLimits/read') return send({ id: request.id, error: { code: -32601, message: 'nope' } });
+  });
+  const badClient = new CodexAppServer({ spawnImpl: bad.spawnImpl });
+  t.after(() => badClient.close());
+  assert.equal(await badClient.readRateLimits(), null);
+});
+
 test('returns schema-shaped fail-closed responses to server requests', async (t) => {
   const fake = fakeSpawn((request, send) => {
     if (request.method === 'initialize') send({ id: request.id, result: {} });
@@ -163,6 +255,7 @@ test('returns schema-shaped fail-closed responses to server requests', async (t)
 test('rejects overlapping runs on the same thread', async (t) => {
   const fake = fakeSpawn((request, send) => {
     if (request.method === 'initialize') send({ id: request.id, result: {} });
+    if (request.method === 'thread/resume') send({ id: request.id, result: {} });
     if (request.method === 'turn/start') send({ id: request.id, result: { turn: { id: 'turn-overlap', status: 'inProgress' } } });
     if (request.method === 'turn/interrupt') {
       send({ id: request.id, result: {} });
@@ -189,6 +282,7 @@ test('interrupts a turn when cancellation arrives before turn/start responds', a
   let interruptCount = 0;
   const fake = fakeSpawn((request, send) => {
     if (request.method === 'initialize') send({ id: request.id, result: {} });
+    if (request.method === 'thread/resume') send({ id: request.id, result: {} });
     if (request.method === 'turn/start') {
       markTurnStartWritten();
       setTimeout(() => {
@@ -226,6 +320,29 @@ test('surfaces failed turns with the server error', async (t) => {
   t.after(() => client.close());
 
   await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'fail' }), /planned failure/);
+});
+
+test('keeps codexErrorInfo on a failed turn error', async (t) => {
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') return send({ id: request.id, result: { thread: { id: 'thread-limit' } } });
+    if (request.method === 'turn/start') {
+      send({ id: request.id, result: { turn: { id: 'turn-limit', status: 'inProgress' } } });
+      setImmediate(() => send({ method: 'turn/completed', params: { threadId: 'thread-limit', turn: {
+        id: 'turn-limit',
+        status: 'failed',
+        error: { message: 'usage limit', codexErrorInfo: 'usageLimitExceeded' },
+      } } }));
+    }
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'x' }), (error) => {
+    assert.equal(error.codexError.codexErrorInfo, 'usageLimitExceeded');
+    assert.equal(error.threadId, 'thread-limit');
+    return true;
+  });
 });
 
 test('fails pending requests after an unexpected subprocess exit', async (t) => {

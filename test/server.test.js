@@ -5,6 +5,12 @@ const assert = require('node:assert/strict');
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
 const { startServer, makeLeadExecutor, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts } = require('../src/server');
 const { makeLeadCard } = require('../src/server');
+const fs = require('node:fs');
+const { ResumeInputError } = require('../src/lead-orchestrator');
+const os = require('node:os');
+const path = require('node:path');
+const { ServerCallContext } = require('@a2a-js/sdk/server');
+const { openStateDatabase, createTaskStore } = require('../src/durable-store');
 
 test('startup requires a ChatGPT OAuth account and closes the app server on rejection', async () => {
   let closed = false;
@@ -177,6 +183,7 @@ test('port zero uses the actual bound port for A2A worker URLs without TCP in th
   let orchestratorOptions;
   const runtime = await startServer({
     port: 0,
+    stateFile: ':memory:',
     tokenFile: tokenPath,
     appServer: {
       async start() {},
@@ -210,6 +217,7 @@ test('startup closes App Server after role profile loading fails', async () => {
   const tokenPath = `${tokenDirectory}/a2a-token`;
   await assert.rejects(startServer({
     listen: false,
+    stateFile: ':memory:',
     profilesDir: `/tmp/missing-profiles-${process.pid}`,
     tokenFile: tokenPath,
     appServer: {
@@ -227,6 +235,7 @@ test('startup closes App Server after HTTP listen fails', async () => {
   const tokenDirectory = `/tmp/codex-a2a-listen-test-${process.pid}`;
   await assert.rejects(startServer({
     port: 3000,
+    stateFile: ':memory:',
     tokenFile: `${tokenDirectory}/a2a-token`,
     appServer: {
       async start() {},
@@ -253,6 +262,7 @@ test('shutdown interrupts active lead execution before draining HTTP requests', 
     async close() { events.push('app-server-close'); },
   };
   const runtime = await startServer({
+    stateFile: ':memory:',
     tokenFile: `${tokenDirectory}/a2a-token`,
     appServer,
     listenImpl(_app, _port, _host, callback) {
@@ -287,4 +297,509 @@ test('shutdown interrupts active lead execution before draining HTTP requests', 
   assert.ok(events.indexOf('app-server-close') < events.indexOf('http-close'));
   assert.equal(eventsSeen.at(-1).data.status.state, TaskState.TASK_STATE_FAILED);
   require('node:fs').rmSync(tokenDirectory, { recursive: true, force: true });
+});
+
+// ------------------------------------------------ durable state and pause/resume
+
+const CHATGPT_APP_SERVER = () => ({
+  async start() {},
+  async getAccount() { return { account: { type: 'chatgpt' } }; },
+  async run() {},
+  async close() {},
+});
+
+function tmpDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-server-test-'));
+}
+
+function userMessage(text, extra = {}) {
+  return {
+    messageId: `msg-${Math.random().toString(16).slice(2)}`,
+    contextId: '',
+    taskId: '',
+    role: 1,
+    parts: [{ content: { $case: 'text', value: text }, mediaType: 'text/plain', filename: '', metadata: undefined }],
+    metadata: undefined,
+    extensions: [],
+    referenceTaskIds: [],
+    ...extra,
+  };
+}
+
+function statusText(task) {
+  return task.status?.message?.parts?.map((part) => part.content?.value).join('\n') || '';
+}
+
+async function startLeadServer(orchestrator, dir, extra = {}) {
+  return startServer({
+    listen: false,
+    stateFile: ':memory:',
+    tokenFile: path.join(dir, 'token'),
+    appServer: CHATGPT_APP_SERVER(),
+    orchestratorFactory: () => orchestrator,
+    ...extra,
+  });
+}
+
+const CALL = () => new ServerCallContext({ tenant: '' });
+
+const HUMAN_PAUSE = {
+  kind: 'human_decision',
+  decisionId: 'run:h1',
+  reason: 'product_choice',
+  question: 'Which storage?',
+  options: [{ id: 'a', description: 'SQLite' }, { id: 'b', description: 'Postgres' }],
+  recommendation: 'a',
+  evidenceChecked: ['README'],
+  independentWork: 'none',
+  relatedDecisionIds: [],
+};
+
+test('startup passes checkpointer and journal to the orchestrator factory', async () => {
+  const dir = tmpDir();
+  let options;
+  const runtime = await startLeadServer({ async run() {} }, dir, { orchestratorFactory: (o) => { options = o; return { async run() {} }; } });
+  try {
+    assert.ok(options.checkpointer);
+    assert.equal(typeof options.journal.recordSubmitting, 'function');
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('startup reconciliation runs after listen and rewrites stale tasks', async () => {
+  const dir = tmpDir();
+  const stateFile = path.join(dir, 'state.sqlite');
+  const seed = await openStateDatabase({ filePath: stateFile });
+  const working = { state: TaskState.TASK_STATE_WORKING, timestamp: new Date().toISOString() };
+  await createTaskStore(seed, 'orchestrator').save({ id: 'lead-stale', contextId: 'c1', status: working, artifacts: [], history: [], metadata: {} }, CALL());
+  await createTaskStore(seed, 'orch-builder').save({ id: 'spec-stale', contextId: 'c2', status: working, artifacts: [], history: [], metadata: {} }, CALL());
+  await seed.close();
+
+  const events = [];
+  const runtime = await startServer({
+    port: 0,
+    stateFile,
+    tokenFile: path.join(dir, 'token'),
+    appServer: CHATGPT_APP_SERVER(),
+    orchestratorFactory: () => ({ async run() {} }),
+    listenImpl(_app, _port, _host, callback) {
+      events.push('listen');
+      const server = { address: () => ({ port: 43125 }), once() {}, close(done) { done(); } };
+      queueMicrotask(callback);
+      return server;
+    },
+  });
+  try {
+    assert.deepEqual(events, ['listen']);
+    const lead = await runtime.leadAgent.requestHandler.getTask({ id: 'lead-stale' }, CALL());
+    assert.equal(lead.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.equal(lead.metadata.pause.kind, 'restart');
+    const specialistStore = createTaskStore(runtime.state, 'orch-builder');
+    const specialist = await specialistStore.load('spec-stale', CALL());
+    assert.equal(specialist.status.state, TaskState.TASK_STATE_FAILED);
+    assert.equal(specialist.status.message.metadata.failureKind, 'interrupted');
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('close() closes the state database', async () => {
+  const dir = tmpDir();
+  const runtime = await startLeadServer({ async run() {} }, dir);
+  assert.equal(runtime.state.db.open, true);
+  await runtime.close();
+  assert.equal(runtime.state.db.open, false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a pause result becomes INPUT_REQUIRED with metadata.pause visible through getTask', async () => {
+  const dir = tmpDir();
+  const runs = [];
+  const runtime = await startLeadServer({
+    async run(args) { runs.push(args); return { runId: args.runId, status: 'input_required', text: '', rounds: 1, assignments: [], pause: HUMAN_PAUSE }; },
+    async getPause() { return HUMAN_PAUSE; },
+  }, dir);
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const task = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    assert.equal(runs[0].runId, task.id);
+    assert.equal(task.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    const stored = await handler.getTask({ id: task.id }, CALL());
+    assert.deepEqual(stored.metadata.pause, HUMAN_PAUSE);
+    const text = statusText(stored);
+    assert.match(text, /Which storage\?/);
+    assert.match(text, /a: SQLite/);
+    assert.match(text, /Recommendation: a/);
+    assert.match(text, /Decision ID: run:h1/);
+    assert.match(text, new RegExp(`npm run ask -- --task ${task.id} --decision run:h1 --choice <optionId> "<answer>"`));
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a follow-up message resumes the paused task and clears metadata.pause', async () => {
+  const dir = tmpDir();
+  const resumes = [];
+  const runtime = await startLeadServer({
+    async run(args) { return { runId: args.runId, status: 'input_required', text: '', rounds: 1, assignments: [], pause: HUMAN_PAUSE }; },
+    async getPause() { return HUMAN_PAUSE; },
+    async resume(args) { resumes.push(args); return { runId: args.runId, status: 'completed', text: 'Final answer', rounds: 2, assignments: ['orch-dev'] }; },
+  }, dir);
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const paused = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    const done = await handler.sendMessage({
+      message: userMessage('use sqlite', { taskId: paused.id, contextId: paused.contextId, metadata: { choice: 'a', decisionId: 'run:h1' } }),
+      configuration: {},
+    }, CALL());
+    assert.equal(resumes.length, 1);
+    assert.equal(resumes[0].runId, paused.id);
+    assert.deepEqual(resumes[0].input, { answer: 'use sqlite', choice: 'a', decisionId: 'run:h1' });
+    assert.equal(done.status.state, TaskState.TASK_STATE_COMPLETED);
+    const stored = await handler.getTask({ id: paused.id }, CALL());
+    assert.equal(stored.metadata.pause, null);
+    assert.equal(stored.artifacts.at(-1).parts[0].content.value, 'Final answer');
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a decisionId mismatch keeps INPUT_REQUIRED and does not resume', async () => {
+  const dir = tmpDir();
+  let resumed = 0;
+  const runtime = await startLeadServer({
+    async run(args) { return { runId: args.runId, status: 'input_required', text: '', rounds: 1, assignments: [], pause: HUMAN_PAUSE }; },
+    async getPause() { return HUMAN_PAUSE; },
+    async resume() { resumed += 1; return { status: 'completed', text: 'x' }; },
+  }, dir);
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const paused = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    const again = await handler.sendMessage({
+      message: userMessage('answer', { taskId: paused.id, contextId: paused.contextId, metadata: { decisionId: 'run:h9' } }),
+      configuration: {},
+    }, CALL());
+    assert.equal(resumed, 0);
+    assert.equal(again.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.match(statusText(again), /does not match the pending decision "run:h1"/);
+    const stored = await handler.getTask({ id: paused.id }, CALL());
+    assert.deepEqual(stored.metadata.pause, HUMAN_PAUSE);
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('restart and budget pauses resume with the plain answer and a completed task rejects messages', async () => {
+  const dir = tmpDir();
+  const resumes = [];
+  const budgetPause = { kind: 'waiting_for_budget', source: 'lead', message: 'usage limit', resetsAt: null };
+  const runtime = await startLeadServer({
+    async run(args) { return { runId: args.runId, status: 'waiting_for_budget', text: '', rounds: 0, assignments: [], pause: budgetPause }; },
+    async getPause() { return budgetPause; },
+    async resume(args) { resumes.push(args); return { runId: args.runId, status: 'completed', text: 'ok', rounds: 1, assignments: [] }; },
+  }, dir);
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const paused = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    assert.equal(paused.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.equal(paused.metadata.pause.kind, 'waiting_for_budget');
+    const done = await handler.sendMessage({ message: userMessage('retry', { taskId: paused.id, contextId: paused.contextId }), configuration: {} }, CALL());
+    assert.deepEqual(resumes[0].input, { answer: 'retry' });
+    assert.equal(done.status.state, TaskState.TASK_STATE_COMPLETED);
+    await assert.rejects(
+      handler.sendMessage({ message: userMessage('more', { taskId: paused.id, contextId: paused.contextId }), configuration: {} }, CALL()),
+      /terminal state/,
+    );
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lead executor resumes a restart pause with an empty message', async () => {
+  const seen = [];
+  const resumes = [];
+  const executor = makeLeadExecutor({
+    orchestrator: { async resume(args) { resumes.push(args); return { status: 'completed', text: 'back' }; } },
+  });
+  await executor.execute({
+    taskId: 't-restart',
+    contextId: 'ctx',
+    task: { id: 't-restart', contextId: 'ctx', status: { state: TaskState.TASK_STATE_INPUT_REQUIRED }, artifacts: [], history: [], metadata: { pause: { kind: 'restart' } } },
+    userMessage: { parts: [{ text: '' }] },
+  }, { publish: (event) => seen.push(event) });
+  assert.deepEqual(resumes[0], { runId: 't-restart', input: { answer: '' }, signal: resumes[0].signal });
+  assert.equal(seen.at(-1).data.status.state, TaskState.TASK_STATE_COMPLETED);
+});
+
+// ---------------------------------------------------- audit regression tests
+
+
+function pausedContext(taskId, pause, userMessage, extra = {}) {
+  return {
+    taskId,
+    contextId: 'ctx',
+    task: { id: taskId, contextId: 'ctx', status: { state: TaskState.TASK_STATE_INPUT_REQUIRED }, artifacts: [], history: [], metadata: { pause }, ...extra },
+    userMessage,
+  };
+}
+
+function lastStatus(seen) {
+  return seen.filter((event) => event.kind === 'statusUpdate').at(-1).data;
+}
+
+test('input problems on a paused task republish the same pause instead of failing', async () => {
+  const restart = { kind: 'restart' };
+  let resumes = 0;
+  const orchestrator = {
+    async getPause() { return null; },
+    async resume() { resumes += 1; return { status: 'completed', text: 'x' }; },
+  };
+  const human = { ...HUMAN_PAUSE };
+  const humanOrchestrator = { ...orchestrator, async getPause() { return human; } };
+  const cases = [
+    { orchestrator, pause: restart, message: { parts: [{ content: { $case: 'data', value: {} } }] }, note: /text parts only/ },
+    { orchestrator: humanOrchestrator, pause: human, message: { parts: [{ text: '  ' }] }, note: /non-empty text/ },
+  ];
+  for (const entry of cases) {
+    const seen = [];
+    const executor = makeLeadExecutor({ orchestrator: entry.orchestrator });
+    await executor.execute(pausedContext('t-input', entry.pause, entry.message), { publish: (event) => seen.push(event) });
+    const final = lastStatus(seen);
+    assert.equal(final.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.deepEqual(final.metadata.pause, entry.pause);
+    assert.match(statusText({ status: final.status }), entry.note);
+  }
+  assert.equal(resumes, 0);
+
+  for (const error of [new ResumeInputError('bad input'), new ResumeInputError('decisionId x does not match')]) {
+    const seen = [];
+    const executor = makeLeadExecutor({ orchestrator: { async getPause() { return human; }, async resume() { throw error; } } });
+    await executor.execute(pausedContext('t-throw', human, { parts: [{ text: 'answer' }] }), { publish: (event) => seen.push(event) });
+    const final = lastStatus(seen);
+    assert.equal(final.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.deepEqual(final.metadata.pause, human);
+  }
+});
+
+test('a resumable run error becomes an error pause and a follow-up retries; otherwise FAILED', async () => {
+  const seen = [];
+  const long = 'x'.repeat(5000);
+  const executor = makeLeadExecutor({ orchestrator: { async run() { throw Object.assign(new Error(long), { name: 'BoomError' }); }, async isResumable() { return true; } } });
+  await executor.execute({ taskId: 't-err', contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }] } }, { publish: (event) => seen.push(event) });
+  const final = lastStatus(seen);
+  assert.equal(final.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+  assert.equal(final.metadata.pause.kind, 'error');
+  assert.equal(final.metadata.pause.errorName, 'BoomError');
+  assert.equal(final.metadata.pause.message.length, 2000);
+  assert.match(statusText({ status: final.status }), /retry the failed step/);
+
+  const resumes = [];
+  const seen2 = [];
+  const retry = makeLeadExecutor({ orchestrator: { async getPause() { return null; }, async resume(args) { resumes.push(args); return { status: 'completed', text: 'ok' }; } } });
+  await retry.execute(pausedContext('t-err', final.metadata.pause, { parts: [{ text: 'try again' }] }), { publish: (event) => seen2.push(event) });
+  assert.deepEqual(resumes[0].input, { answer: 'try again' });
+  assert.equal(lastStatus(seen2).status.state, TaskState.TASK_STATE_COMPLETED);
+
+  const failing = [];
+  const notResumable = makeLeadExecutor({ orchestrator: { async run() { throw new Error('nope'); }, async isResumable() { return false; } } });
+  await notResumable.execute({ taskId: 't-fail', contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }] } }, { publish: (event) => failing.push(event) });
+  assert.equal(lastStatus(failing).status.state, TaskState.TASK_STATE_FAILED);
+
+  const canceled = [];
+  const unconfirmed = makeLeadExecutor({
+    orchestrator: {
+      run({ signal }) { return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('late')), { once: true })); },
+      async isResumable() { return true; },
+    },
+  });
+  const running = unconfirmed.execute({ taskId: 't-abort', contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }] } }, { publish: (event) => canceled.push(event) });
+  await new Promise((resolve) => setImmediate(resolve));
+  await unconfirmed.cancelTask('t-abort', { publish() {}, finished() {} });
+  await running;
+  assert.equal(lastStatus(canceled).status.state, TaskState.TASK_STATE_FAILED);
+});
+
+test('cancelTask on a paused lead task returns CANCELED promptly', async () => {
+  const dir = tmpDir();
+  const runtime = await startLeadServer({
+    async run(args) { return { runId: args.runId, status: 'input_required', text: '', rounds: 1, assignments: [], pause: HUMAN_PAUSE }; },
+    async getPause() { return HUMAN_PAUSE; },
+  }, dir);
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const paused = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    const canceled = await Promise.race([
+      handler.cancelTask({ id: paused.id }, CALL()),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('cancel hung')), 1000)),
+    ]);
+    assert.equal(canceled.status.state, TaskState.TASK_STATE_CANCELED);
+    assert.equal((await handler.getTask({ id: paused.id }, CALL())).metadata.pause, null);
+
+    // The executor itself ends a task when the SDK still hands it an event bus.
+    const published = [];
+    let finished = 0;
+    await runtime.leadAgent.executor.cancelTask('other-task', { publish: (event) => published.push(event), finished: () => { finished += 1; } });
+    assert.equal(published[0].data.status.state, TaskState.TASK_STATE_CANCELED);
+    assert.equal(published[0].data.metadata.pause, null);
+    assert.equal(finished, 1);
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the resume path follows the checkpoint pause, not stale task metadata', async () => {
+  const human = { ...HUMAN_PAUSE };
+  const resumes = [];
+  const orchestrator = { async getPause() { return human; }, async resume(args) { resumes.push(args); return { status: 'completed', text: 'ok' }; } };
+
+  const seen = [];
+  await makeLeadExecutor({ orchestrator }).execute(
+    pausedContext('t-stale', { kind: 'restart' }, { parts: [{ text: '' }] }),
+    { publish: (event) => seen.push(event) },
+  );
+  const final = lastStatus(seen);
+  assert.equal(final.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+  assert.deepEqual(final.metadata.pause, human);
+  assert.equal(resumes.length, 0);
+
+  const seen2 = [];
+  await makeLeadExecutor({ orchestrator }).execute(
+    pausedContext('t-stale', { kind: 'restart' }, { parts: [{ text: 'use a' }], metadata: { choice: 'a', decisionId: 'run:h1' } }),
+    { publish: (event) => seen2.push(event) },
+  );
+  assert.deepEqual(resumes[0].input, { answer: 'use a', choice: 'a', decisionId: 'run:h1' });
+  assert.equal(lastStatus(seen2).status.state, TaskState.TASK_STATE_COMPLETED);
+});
+
+test('a restart pause without a checkpoint starts a fresh run from the first user message', async () => {
+  const runs = [];
+  const orchestrator = {
+    async getPause() { return null; },
+    async resume() { throw Object.assign(new Error('No checkpoint'), { name: 'RunNotFoundError' }); },
+    async run(args) { runs.push(args); return { status: 'completed', text: 'fresh' }; },
+  };
+  const history = [{ messageId: 'm1', role: 1, parts: [{ content: { $case: 'text', value: 'Original goal' } }] }];
+  const seen = [];
+  await makeLeadExecutor({ orchestrator }).execute(
+    pausedContext('t-crash', { kind: 'restart' }, { parts: [{ text: '' }] }, { history }),
+    { publish: (event) => seen.push(event) },
+  );
+  assert.equal(runs[0].goal, 'Original goal');
+  assert.equal(runs[0].runId, 't-crash');
+  assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
+
+  const seen2 = [];
+  await makeLeadExecutor({ orchestrator }).execute(
+    pausedContext('t-nogoal', { kind: 'restart' }, { parts: [{ text: '' }] }),
+    { publish: (event) => seen2.push(event) },
+  );
+  const failed = lastStatus(seen2);
+  assert.equal(failed.status.state, TaskState.TASK_STATE_FAILED);
+  assert.match(statusText({ status: failed.status }), /original goal could not be recovered/);
+});
+
+test('a busy port rejects startup without reconciling or leaving a lock', async () => {
+  const dir = tmpDir();
+  const stateFile = path.join(dir, 'state.sqlite');
+  const seed = await openStateDatabase({ filePath: stateFile });
+  const working = { state: TaskState.TASK_STATE_WORKING, timestamp: new Date().toISOString() };
+  await createTaskStore(seed, 'orchestrator').save({ id: 'lead-busy', contextId: 'c1', status: working, artifacts: [], history: [], metadata: {} }, CALL());
+  await seed.close();
+  const blocker = require('node:net').createServer();
+  await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+  try {
+    await assert.rejects(startServer({
+      port: blocker.address().port,
+      stateFile,
+      tokenFile: path.join(dir, 'token'),
+      appServer: CHATGPT_APP_SERVER(),
+      orchestratorFactory: () => ({ async run() {} }),
+    }), /EADDRINUSE/);
+    assert.equal(fs.existsSync(`${stateFile}.lock`), false);
+    const probe = await openStateDatabase({ filePath: stateFile });
+    assert.equal((await createTaskStore(probe, 'orchestrator').load('lead-busy', CALL())).status.state, TaskState.TASK_STATE_WORKING);
+    await probe.close();
+  } finally {
+    await new Promise((resolve) => blocker.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a second server on a live state file is rejected and leaves the first untouched', async () => {
+  const dir = tmpDir();
+  const stateFile = path.join(dir, 'state.sqlite');
+  const options = { port: 0, listen: false, stateFile, tokenFile: path.join(dir, 'token'), appServer: CHATGPT_APP_SERVER(), orchestratorFactory: () => ({ async run() {} }) };
+  const first = await startServer(options);
+  try {
+    const working = { state: TaskState.TASK_STATE_WORKING, timestamp: new Date().toISOString() };
+    await createTaskStore(first.state, 'orchestrator').save({ id: 'lead-live', contextId: 'c1', status: working, artifacts: [], history: [], metadata: {} }, CALL());
+    await assert.rejects(startServer(options), new RegExp(`state file .* is in use by pid ${process.pid}`, 'i'));
+    const task = await createTaskStore(first.state, 'orchestrator').load('lead-live', CALL());
+    assert.equal(task.status.state, TaskState.TASK_STATE_WORKING);
+    assert.equal(first.state.db.open, true);
+  } finally {
+    await first.close();
+  }
+  assert.equal(fs.existsSync(`${stateFile}.lock`), false);
+
+  // A stale lock (dead pid) is replaced.
+  const dead = Number(require('node:child_process').spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']).stdout.toString());
+  fs.writeFileSync(`${stateFile}.lock`, `${dead}\n`);
+  const again = await startServer(options);
+  assert.equal(fs.readFileSync(`${stateFile}.lock`, 'utf8').trim(), String(process.pid));
+  await again.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('close() waits for the canceled lead run so its terminal state is persisted', async () => {
+  const dir = tmpDir();
+  const stateFile = path.join(dir, 'state.sqlite');
+  let markRunning;
+  const running = new Promise((resolve) => { markRunning = resolve; });
+  const runtime = await startLeadServer({
+    run({ signal }) {
+      return new Promise((resolve) => {
+        markRunning();
+        // Downstream cancellation takes a moment to confirm.
+        signal.addEventListener('abort', () => setTimeout(() => resolve({ status: 'canceled', text: 'stopped' }), 50), { once: true });
+      });
+    },
+  }, dir, { stateFile });
+  const sent = runtime.leadAgent.requestHandler.sendMessage({ message: userMessage('Long job'), configuration: {} }, CALL());
+  await running;
+  await runtime.close();
+  const done = await sent;
+  assert.equal(done.status.state, TaskState.TASK_STATE_CANCELED);
+  const reopened = await openStateDatabase({ filePath: stateFile });
+  try {
+    const stored = await createTaskStore(reopened, 'orchestrator').load(done.id, CALL());
+    assert.equal(stored.status.state, TaskState.TASK_STATE_CANCELED);
+  } finally {
+    await reopened.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a plain TypeError from a graph step during resume becomes an error pause, not the old pause', async () => {
+  const seen = [];
+  const executor = makeLeadExecutor({
+    orchestrator: {
+      async getPause() { return HUMAN_PAUSE; },
+      async resume() { throw new TypeError('graph step blew up'); },
+      async isResumable() { return true; },
+    },
+  });
+  await executor.execute(pausedContext('t-typeerr', HUMAN_PAUSE, { parts: [{ text: 'answer' }] }), { publish: (event) => seen.push(event) });
+  const final = lastStatus(seen);
+  assert.equal(final.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+  assert.equal(final.metadata.pause.kind, 'error');
+  assert.equal(final.metadata.pause.errorName, 'TypeError');
 });

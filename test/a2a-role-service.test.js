@@ -8,14 +8,16 @@ const express = require('express');
 const { AgentCard } = require('@a2a-js/sdk');
 const { ClientFactory, JsonRpcTransportFactory } = require('@a2a-js/sdk/client');
 const { ServerCallContext, UnauthenticatedUser } = require('@a2a-js/sdk/server');
+const { InMemoryTaskStore } = require('@a2a-js/sdk/server');
 const { registerRoleAgents } = require('../src/a2a-role-service');
+const { WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT } = require('../src/contracts');
 
 const roles = new Map([
   ['orch-planner', { name: 'Planner', description: 'Plans work.', instructions: 'Plan.', model: 'test', effort: 'low', sandbox: 'read-only' }],
   ['orch-reviewer', { name: 'Reviewer', description: 'Reviews work.', instructions: 'Review.', model: 'test', effort: 'low', sandbox: 'read-only' }],
 ]);
 
-function makeService(appServer) {
+function makeService(appServer, options = {}) {
   const app = express();
   const mounted = [];
   const originalUse = app.use.bind(app);
@@ -28,6 +30,7 @@ function makeService(appServer) {
     appServer,
     workspace: process.cwd(),
     baseUrl: 'http://127.0.0.1:7777',
+    ...options,
   });
   const context = new ServerCallContext({ user: new UnauthenticatedUser() });
   return { agents, context, mounted };
@@ -360,4 +363,65 @@ test('real A2A SDK client exchanges a role card and task over local HTTP', async
   const result = taskResult(await client.sendMessage(sendParams(message('check protocol'))));
   assert.equal(result.status.state, 3);
   assert.equal(result.artifacts[0].parts[0].content.value, 'orch-planner: check protocol');
+});
+
+test('passes the worker report schema and tags the result artifact with contract metadata', async () => {
+  const calls = [];
+  const { agents, context } = makeService({
+    async run(options) {
+      calls.push(options);
+      return { threadId: 'thread-7', status: 'completed', text: '{"raw":true}' };
+    },
+  });
+  const result = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('go')), context));
+  assert.equal(calls[0].outputSchema, WORKER_REPORT_SCHEMA);
+  const artifact = result.artifacts[0];
+  assert.equal(artifact.parts[0].content.value, '{"raw":true}');
+  assert.deepEqual(artifact.metadata, { contract: WORKER_REPORT_CONTRACT, threadId: 'thread-7' });
+
+  const { agents: other, context: otherContext } = makeService({ async run() { return { status: 'completed', text: 'x' }; } });
+  const noThread = taskResult(await other.get('orch-planner').handler.sendMessage(sendParams(message('go')), otherContext));
+  assert.equal(noThread.artifacts[0].metadata.threadId, null);
+});
+
+test('failed status messages carry failureKind and codexErrorInfo metadata', async () => {
+  const cases = [
+    { error: Object.assign(new Error('limit'), { codexError: { codexErrorInfo: 'usageLimitExceeded' } }), kind: 'usage_limit', info: 'usageLimitExceeded' },
+    { error: new Error('plain', { cause: { rpcData: { codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 429 } } } } }), kind: 'usage_limit', info: { httpConnectionFailed: { httpStatusCode: 429 } } },
+    { error: new Error('plain'), kind: 'other', info: null },
+  ];
+  for (const { error, kind, info } of cases) {
+    const { agents, context } = makeService({ async run() { throw error; } });
+    const failed = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('x')), context));
+    assert.equal(failed.status.state, 4);
+    assert.deepEqual(failed.status.message.metadata, { failureKind: kind, codexErrorInfo: info });
+  }
+
+  const { agents, context } = makeService({ async run() { return { status: 'interrupted', text: 'partial' }; } });
+  const nonCompleted = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('x')), context));
+  assert.deepEqual(nonCompleted.status.message.metadata, { failureKind: 'other', codexErrorInfo: null });
+
+  const { agents: parse, context: parseContext } = makeService({ async run() { return { status: 'completed', text: '' }; } });
+  const bad = taskResult(await parse.get('orch-planner').handler.sendMessage(sendParams(message('', [
+    { content: { $case: 'data', value: {} } },
+  ])), parseContext));
+  assert.deepEqual(bad.status.message.metadata, { failureKind: 'other', codexErrorInfo: null });
+});
+
+test('uses taskStoreFactory per role and defaults to an in-memory store', async () => {
+  const seen = [];
+  const stores = new Map();
+  const { agents } = makeService({ async run() { return { status: 'completed', text: '' }; } }, {
+    taskStoreFactory: (roleId) => {
+      seen.push(roleId);
+      const store = new InMemoryTaskStore();
+      stores.set(roleId, store);
+      return store;
+    },
+  });
+  assert.deepEqual(seen, ['orch-planner', 'orch-reviewer']);
+  assert.equal(agents.get('orch-planner').handler.taskStore, stores.get('orch-planner'));
+  assert.equal(agents.get('orch-reviewer').handler.taskStore, stores.get('orch-reviewer'));
+  const { agents: defaults } = makeService({ async run() { return { status: 'completed', text: '' }; } });
+  assert.ok(defaults.get('orch-planner').handler.taskStore instanceof InMemoryTaskStore);
 });

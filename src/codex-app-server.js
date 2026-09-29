@@ -23,6 +23,7 @@ class CodexAppServer {
     this.startPromise = null;
     this.closed = false;
     this.exitError = null;
+    this.loadedThreads = new Set();
   }
 
   async start() {
@@ -46,6 +47,7 @@ class CodexAppServer {
     this.child = child;
     this.closed = false;
     this.exitError = null;
+    this.loadedThreads = new Set();
 
     child.stdout.on('error', (error) => this._failAll(new CodexAppServerError('Codex App Server stdout failed', { cause: error })));
     child.stdin.on('error', (error) => this._failAll(new CodexAppServerError('Codex App Server stdin failed', { cause: error })));
@@ -79,6 +81,15 @@ class CodexAppServer {
     };
   }
 
+  async readRateLimits() {
+    try {
+      await this.start();
+      return await this._request('account/rateLimits/read', {});
+    } catch (_) {
+      return null;
+    }
+  }
+
   async run({ role, cwd, input, onEvent, signal, threadId: existingThreadId, outputSchema } = {}) {
     if (!role || !role.name) throw new TypeError('role.name is required');
     if (!cwd) throw new TypeError('cwd is required');
@@ -86,13 +97,29 @@ class CodexAppServer {
     if (signal?.aborted) throw abortError();
     await this.start();
 
-    const threadResult = existingThreadId ? null : await this._request('thread/start', {
-      model: role.model || null,
-      cwd,
-      developerInstructions: role.instructions || `You are the ${role.name} agent.`,
-      sandbox: normalizeSandbox(role.sandbox),
-      approvalPolicy: 'on-request',
-    }, { signal });
+    const developerInstructions = role.instructions || `You are the ${role.name} agent.`;
+    let threadResult = null;
+    if (!existingThreadId) {
+      threadResult = await this._request('thread/start', {
+        model: role.model || null,
+        cwd,
+        developerInstructions,
+        sandbox: normalizeSandbox(role.sandbox),
+        approvalPolicy: 'on-request',
+      }, { signal });
+      if (threadResult?.thread?.id) this.loadedThreads.add(threadResult.thread.id);
+    } else if (!this.loadedThreads.has(existingThreadId)) {
+      // A restarted App Server no longer has the thread loaded; resume it from disk.
+      await this._request('thread/resume', {
+        threadId: existingThreadId,
+        cwd,
+        approvalPolicy: 'on-request',
+        sandbox: normalizeSandbox(role.sandbox),
+        model: role.model || null,
+        developerInstructions,
+      }, { signal });
+      this.loadedThreads.add(existingThreadId);
+    }
 
     const threadId = existingThreadId || threadResult?.thread?.id;
     if (!threadId) throw new CodexAppServerError('Codex App Server did not return a thread ID');
@@ -153,6 +180,7 @@ class CodexAppServer {
   async close() {
     if (this.closed) return;
     this.closed = true;
+    this.loadedThreads.clear();
     this.reader?.close();
     this._failAll(new CodexAppServerError('Codex App Server client closed'));
     if (this.child && this.child.exitCode == null && !this.child.killed) {
@@ -328,6 +356,7 @@ class CodexAppServer {
 
   _failAll(error) {
     this.exitError = error;
+    this.loadedThreads.clear();
     for (const [id, pending] of this.pending) {
       pending.reject(error);
       this.pending.delete(id);

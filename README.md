@@ -55,10 +55,11 @@ The lead uses GPT-6 Sol at high effort in a read-only Codex thread. Specialist m
 ## Safety and current limits
 
 - Codex approval requests are declined by the local App Server client. A task that needs an additional permission must report that need; this service does not grant it silently.
-- A2A task stores are in memory. Restarting the server loses A2A task status, although Codex may retain its own thread history.
+- Runs are durable. LangGraph checkpoints, A2A tasks, and the dispatch journal live in `.runtime/state.sqlite` (override with `CODEX_A2A_STATE_DB`), and only one server may use a state file at a time. After a crash, the lead task shows `INPUT_REQUIRED` (pause `restart`). Worker tasks that were running show `FAILED` (`interrupted`), and the lead has to reconcile their workspace effects before it re-dispatches a writer.
+- Pauses: a usage limit (`waiting_for_budget`), a rare human decision (`human_decision`), a restart, or a resumable error leaves the lead task `INPUT_REQUIRED` with `metadata.pause`. Continue with `npm run ask -- --task <taskId> [--decision <id>] [--choice <optionId>] "<answer>"`. The CLI exits with code 3 while a task is paused.
 - The lead validates assigned file paths and passes allowed files to workers. The Codex workspace sandbox restricts writes to the workspace, but the per-file assignment is enforced by worker instructions, not by a separate filesystem boundary. Use a trusted local workspace.
 - A local bearer token protects the A2A JSON-RPC endpoints, and the server binds only to loopback. Agent Cards remain public for A2A discovery. Codex App Server is currently documented as experimental and unsupported for production workloads.
 
-The proposed LangGraph migration for durable runs, usage-limit pauses, and rare human decisions is in [resilient-orchestration.md](docs/resilient-orchestration.md). It is a design, not a feature of the current runtime.
+The durable-run design is in [resilient-orchestration.md](docs/resilient-orchestration.md). The implemented decisions and known limits are in [resilient-orchestration-spec.md](docs/resilient-orchestration-spec.md).
 
-Run `npm test` for the protocol and orchestration tests. The HTTP integration test skips when the environment forbids binding a local port.
+Run `npm test` for the protocol, orchestration, durability, and end-to-end tests. They use a fake App Server and never call Codex. The HTTP integration test skips when the environment forbids binding a local port.

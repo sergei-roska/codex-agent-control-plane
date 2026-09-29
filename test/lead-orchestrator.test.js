@@ -16,7 +16,21 @@ const brief = (role, allowedFiles = ['src/example.js']) => ({
   stopConditions: ['Stop if another file is required'],
 });
 
-const decision = (action, assignments = [], final = '') => JSON.stringify({ action, assignments, final });
+const decision = (action, assignments = [], final = '') => JSON.stringify({
+  action, assignments, final, resolutions: [], humanInput: null,
+});
+
+const workerReport = (summary, overrides = {}) => JSON.stringify({
+  outcome: 'completed',
+  summary,
+  filesChanged: [],
+  filesInspected: [],
+  checks: [],
+  risks: [],
+  scopeExpansion: [],
+  decisionRequest: null,
+  ...overrides,
+});
 
 function makeHarness({ decisions, taskSequence = [], pollIntervalMs = 0, sendMessageImpl, getTaskImpl, cancelTaskImpl, listTasksImpl, authToken = 'test-token', cancelTimeoutMs = 500, cancelRetryIntervalMs = 1 } = {}) {
   const calls = [];
@@ -98,7 +112,7 @@ function completedTask(roleName) {
     id: `${roleName}-task`,
     contextId: `${roleName}-context`,
     status: { state: TaskState.TASK_STATE_COMPLETED },
-    artifacts: [{ name: 'result', parts: [{ content: { $case: 'text', value: `${roleName} done` } }] }],
+    artifacts: [{ name: 'result', parts: [{ content: { $case: 'text', value: workerReport(`${roleName} done`) } }] }],
     history: [],
   };
 }
@@ -111,7 +125,8 @@ test('dispatches an authenticated A2A assignment and finishes on the same read-o
   assert.equal(result.text, 'Implemented successfully');
   assert.equal(result.rounds, 1);
   assert.equal(result.assignments[0].status, 'TASK_STATE_COMPLETED');
-  assert.equal(result.assignments[0].text, 'orch-builder done');
+  assert.equal(result.assignments[0].report.summary, 'orch-builder done');
+  assert.equal(result.assignments[0].reportError, null);
   const leadCalls = h.calls.filter((call) => call.type === 'lead');
   assert.equal(leadCalls.length, 2);
   assert.equal(leadCalls[0].role.sandbox, 'read-only');
@@ -122,7 +137,11 @@ test('dispatches an authenticated A2A assignment and finishes on the same read-o
   assert.deepEqual(sent.options.serviceParameters, { authorization: 'Bearer test-token' });
   assert.equal(sent.params.message.contextId.length > 0, true);
   assert.equal(Object.hasOwn(sent.params.message, 'taskId'), false);
-  assert.equal(JSON.parse(sent.params.message.parts[0].content.value).allowedFiles[0], 'src/example.js');
+  const briefText = JSON.parse(sent.params.message.parts[0].content.value);
+  assert.equal(briefText.allowedFiles[0], 'src/example.js');
+  assert.equal(briefText.assignmentId, result.assignments[0].assignmentId);
+  assert.equal(briefText.workspace, '/tmp/a2a-project');
+  assert.match(briefText.reportContract, /worker-report\/v1/);
   const cardRequest = h.calls.find((call) => call.type === 'client');
   assert.equal(cardRequest.cardPath, '');
   assert.equal(new URL(cardRequest.cardPath, cardRequest.url).href, 'http://127.0.0.1:4040/agents/orch-builder/agent-card.json');
@@ -269,4 +288,34 @@ test('throws an explicit error when abort cancellation cannot be confirmed', asy
   while (!h.calls.some((call) => call.type === 'send')) await new Promise((resolve) => setImmediate(resolve));
   controller.abort();
   await assert.rejects(pending, { name: 'UnconfirmedCancellationError' });
+});
+
+test('dispatches writable batches serially and read-only batches in parallel', async () => {
+  const order = [];
+  const pendingSends = [];
+  const serial = makeHarness({
+    decisions: [decision('dispatch', [brief('orch-builder', ['a.js']), brief('orch-builder', ['b.js'])]), decision('finish', [], 'Done')],
+    sendMessageImpl: ({ role: roleName, params }) => {
+      order.push(`send:${roleName}:${JSON.parse(params.message.parts[0].content.value).allowedFiles[0]}`);
+      return { task: { ...completedTask(roleName), id: `t${order.length}`, status: { state: TaskState.TASK_STATE_WORKING } } };
+    },
+    getTaskImpl: ({ params }) => { order.push(`get:${params.id}`); return { ...completedTask('orch-builder'), id: params.id }; },
+  });
+  await serial.orchestrator.run({ goal: 'Serial' });
+  assert.deepEqual(order, ['send:orch-builder:a.js', 'get:t1', 'send:orch-builder:b.js', 'get:t3']);
+
+  const parallel = makeHarness({
+    decisions: [decision('dispatch', [brief('orch-explorer', []), brief('orch-explorer', [])]), decision('finish', [], 'Done')],
+    sendMessageImpl: ({ role: roleName }) => {
+      pendingSends.push(roleName);
+      return { task: { ...completedTask(roleName), id: `p${pendingSends.length}`, status: { state: TaskState.TASK_STATE_WORKING } } };
+    },
+    getTaskImpl: ({ params }) => {
+      assert.equal(pendingSends.length, 2, 'all read-only sends happen before any poll');
+      return { ...completedTask('orch-explorer'), id: params.id };
+    },
+  });
+  const result = await parallel.orchestrator.run({ goal: 'Parallel' });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.assignments.length, 2);
 });

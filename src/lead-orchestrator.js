@@ -3,62 +3,21 @@
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { ClientFactory } = require('@a2a-js/sdk/client');
-const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
+const { TaskState } = require('@a2a-js/sdk');
+const { Command, MemorySaver } = require('@langchain/langgraph');
 const { createLeadRole } = require('./role-catalog');
+const { DECISION_SCHEMA, safeRelativePath } = require('./contracts');
+const { InMemoryDispatchJournal } = require('./durable-store');
+const { buildLeadGraph, isTerminalTask, pauseMessage } = require('./lead-graph');
 
-const MAX_ASSIGNMENTS = 4;
 const DEFAULT_MAX_ROUNDS = 6;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_CANCEL_TIMEOUT_MS = 10_000;
 const DEFAULT_CANCEL_RETRY_INTERVAL_MS = 250;
-const MAX_OUTCOME_TEXT_CHARS = 12_000;
-const MAX_STATUS_TEXT_CHARS = 2_000;
-const TERMINAL_STATES = new Set([
-  TaskState.TASK_STATE_COMPLETED,
-  TaskState.TASK_STATE_FAILED,
-  TaskState.TASK_STATE_CANCELED,
-  TaskState.TASK_STATE_REJECTED,
-]);
-const INTERRUPTED_STATES = new Set([
-  TaskState.TASK_STATE_INPUT_REQUIRED,
-  TaskState.TASK_STATE_AUTH_REQUIRED,
-]);
-
-const DECISION_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['action', 'assignments', 'final'],
-  properties: {
-    action: { type: 'string', enum: ['dispatch', 'finish'] },
-    assignments: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'],
-        properties: {
-          role: { type: 'string' },
-          objective: { type: 'string' },
-          allowedFiles: { type: 'array', items: { type: 'string' } },
-          inputs: { type: 'array', items: { type: 'string' } },
-          evidence: { type: 'array', items: { type: 'string' } },
-          acceptanceCriteria: { type: 'array', items: { type: 'string' } },
-          checks: { type: 'array', items: { type: 'string' } },
-          stopConditions: { type: 'array', items: { type: 'string' } },
-        },
-      },
-    },
-    final: { type: 'string' },
-  },
-};
-
-const STATE_NAMES = new Map(Object.entries(TaskState).map(([name, value]) => [value, name]));
-
-function abortError() {
-  const error = new Error('The operation was aborted');
-  error.name = 'AbortError';
-  return error;
-}
+// Effectively unbounded: rounds are limited by maxRounds, not by LangGraph steps.
+const RECURSION_LIMIT = 100_000;
+// Only returned when a test passes interruptAfter and the graph stops at that node boundary.
+const INTERRUPTED_FOR_TEST = 'interrupted_for_test';
 
 class UnconfirmedCancellationError extends Error {
   constructor(taskId, timeoutMs, options = {}) {
@@ -69,36 +28,19 @@ class UnconfirmedCancellationError extends Error {
   }
 }
 
-function throwIfAborted(signal) {
-  if (signal?.aborted) throw abortError();
+class RunNotFoundError extends Error {
+  constructor(runId) {
+    super(`No checkpoint exists for run ${runId}`);
+    this.name = 'RunNotFoundError';
+    this.runId = runId;
+  }
 }
 
-function abortable(promise, signal) {
-  throwIfAborted(signal);
-  if (!signal) return promise;
-  return new Promise((resolve, reject) => {
-    const onAbort = () => reject(abortError());
-    signal.addEventListener('abort', onAbort, { once: true });
-    Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
-  });
-}
-
-function wait(ms, signal) {
-  throwIfAborted(signal);
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(done, ms);
-    timer.unref?.();
-    function done() {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }
-    function onAbort() {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', onAbort);
-      reject(abortError());
-    }
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
+class ResumeInputError extends TypeError {
+  constructor(message) {
+    super(message);
+    this.name = 'ResumeInputError';
+  }
 }
 
 function delay(ms) {
@@ -112,69 +54,8 @@ function withTimeout(promise, timeoutMs) {
   });
 }
 
-function isTerminalTask(task) {
-  const state = task?.status?.state;
-  return TERMINAL_STATES.has(state) || [
-    'TASK_STATE_COMPLETED', 'TASK_STATE_FAILED', 'TASK_STATE_CANCELED', 'TASK_STATE_CANCELLED',
-    'TASK_STATE_REJECTED',
-    'COMPLETED', 'FAILED', 'CANCELED', 'CANCELLED', 'REJECTED',
-  ].includes(taskStateName(state));
-}
-
-function isTaskFinished(task) {
-  const state = task?.status?.state;
-  return isTerminalTask(task) || INTERRUPTED_STATES.has(state) || ['TASK_STATE_INPUT_REQUIRED', 'TASK_STATE_AUTH_REQUIRED', 'INPUT_REQUIRED', 'AUTH_REQUIRED'].includes(taskStateName(state));
-}
-
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
-}
-
-function extractTextParts(parts = []) {
-  return parts.map((part) => {
-    if (part?.content?.$case === 'text') return part.content.value || '';
-    if (typeof part?.text === 'string') return part.text;
-    return '';
-  }).filter(Boolean).join('\n');
-}
-
-function taskStateName(state) {
-  if (typeof state === 'string') return state;
-  return STATE_NAMES.get(state) || String(state ?? 'unknown');
-}
-
-function resultTask(result) {
-  if (result?.task) return result.task;
-  if (result?.id && result?.status) return result;
-  return null;
-}
-
-function safeRelativePath(file) {
-  if (!isNonEmptyString(file) || file.includes('\\') || file.includes('\0')) return false;
-  if (path.posix.isAbsolute(file) || path.win32.isAbsolute(file)) return false;
-  const segments = file.split('/');
-  return segments.every((segment) => segment !== '..' && segment !== '.' && segment !== '') && segments[0] !== '.';
-}
-
-function assignmentResult(task) {
-  const status = task?.status;
-  const statusMessage = extractTextParts(status?.message?.parts).slice(0, MAX_STATUS_TEXT_CHARS);
-  const artifacts = (task?.artifacts || []).slice(0, 20).map((artifact) => ({
-    name: artifact.name || '',
-    description: artifact.description || '',
-    text: extractTextParts(artifact.parts).slice(0, MAX_OUTCOME_TEXT_CHARS),
-  }));
-  const history = (task?.history || []).slice(-5).map((message) => extractTextParts(message.parts).slice(0, MAX_STATUS_TEXT_CHARS)).filter(Boolean);
-  const text = artifacts.map((artifact) => artifact.text).filter(Boolean).join('\n') || statusMessage || history.at(-1) || '';
-  return {
-    taskId: task?.id || null,
-    contextId: task?.contextId || null,
-    status: taskStateName(status?.state),
-    statusMessage,
-    artifacts,
-    history,
-    text: text.slice(0, MAX_OUTCOME_TEXT_CHARS),
-  };
 }
 
 class LeadOrchestrator {
@@ -190,6 +71,8 @@ class LeadOrchestrator {
     authToken,
     cancelTimeoutMs = DEFAULT_CANCEL_TIMEOUT_MS,
     cancelRetryIntervalMs = DEFAULT_CANCEL_RETRY_INTERVAL_MS,
+    checkpointer = new MemorySaver(),
+    journal = new InMemoryDispatchJournal(),
   } = {}) {
     if (!appServer || typeof appServer.run !== 'function') throw new TypeError('appServer.run is required');
     if (!(roles instanceof Map)) throw new TypeError('roles must be a Map');
@@ -215,162 +98,131 @@ class LeadOrchestrator {
     this.cancelTimeoutMs = cancelTimeoutMs;
     this.cancelRetryIntervalMs = cancelRetryIntervalMs;
     this.clients = new Map();
+    this.journal = journal;
+    this.checkpointer = checkpointer;
+    // Per-run runtime objects (signal, onEvent). Never checkpointed and never passed to LangGraph.
+    this.runtimes = new Map();
+    this.graph = buildLeadGraph({
+      appServer: this.appServer,
+      roles: this.roles,
+      leadRole: this.leadRole,
+      workspace: this.workspace,
+      maxRounds: this.maxRounds,
+      journal,
+      pollIntervalMs: this.pollIntervalMs,
+      runtimeFor: (runId) => this.runtimes.get(runId),
+      clientFor: (roleName) => this._clientFor(roleName),
+      authOptions: () => this._authRequestOptions(),
+      cancelUntilConfirmed: (client, taskId, contextId) => this._cancelUntilConfirmed(client, taskId, contextId),
+      emit: (onEvent, event) => this._emit(onEvent, event),
+      checkpointer,
+    });
   }
 
-  async run({ goal, signal, onEvent } = {}) {
+  _config(runId, interruptAfter) {
+    return {
+      configurable: { thread_id: runId },
+      recursionLimit: RECURSION_LIMIT,
+      ...(interruptAfter ? { interruptAfter } : {}),
+    };
+  }
+
+  async _snapshot(runId) {
+    return this.graph.getState({ configurable: { thread_id: runId } });
+  }
+
+  static _pendingInterrupt(snapshot) {
+    for (const task of snapshot.tasks || []) {
+      if (task.interrupts?.length) return task.interrupts[0].value;
+    }
+    return null;
+  }
+
+  static _exists(snapshot) {
+    return Object.keys(snapshot.values || {}).length > 0 || (snapshot.next || []).length > 0;
+  }
+
+  /** Pending interrupt value ({ kind: 'human_decision' | 'waiting_for_budget', ... }) or null. */
+  async getPause(runId) {
+    if (!isNonEmptyString(runId)) return null;
+    return LeadOrchestrator._pendingInterrupt(await this._snapshot(runId));
+  }
+
+  /** True when a checkpoint exists and the graph still has nodes to run (e.g. after a crashed step). */
+  async isResumable(runId) {
+    if (!isNonEmptyString(runId)) return false;
+    const snapshot = await this._snapshot(runId);
+    return LeadOrchestrator._exists(snapshot) && (snapshot.next || []).length > 0;
+  }
+
+  async run({ goal, runId = randomUUID(), signal, onEvent, interruptAfter } = {}) {
     if (!isNonEmptyString(goal)) throw new TypeError('goal must be a non-empty string');
-    const outcomes = [];
-    const assignments = [];
-    const attemptedRoles = new Set();
-    let threadId;
-    let rounds = 0;
+    if (!isNonEmptyString(runId)) throw new TypeError('runId must be a non-empty string');
+    if (LeadOrchestrator._exists(await this._snapshot(runId))) throw new Error(`A checkpoint already exists for run ${runId}; use resume()`);
+    return this._drive(runId, { goal, runId }, { signal, onEvent, interruptAfter, resumed: false });
+  }
 
-    try {
-      while (true) {
-        throwIfAborted(signal);
-        const prompt = this._decisionInput(goal, rounds, outcomes);
-        const leadResult = await this.appServer.run({
-          role: this.leadRole,
-          cwd: this.workspace,
-          input: prompt,
-          ...(threadId ? { threadId } : {}),
-          outputSchema: DECISION_SCHEMA,
-          signal,
-        });
-        threadId = leadResult.threadId || threadId;
-        const decision = this._parseDecision(leadResult.text);
-        this._validateDecision(decision, attemptedRoles, outcomes);
-        this._emit(onEvent, { type: 'decision', round: rounds + 1, action: decision.action });
-
-        if (decision.action === 'finish') {
-          return { status: 'completed', text: decision.final.trim(), rounds, assignments };
-        }
-        if (rounds >= this.maxRounds) {
-          return {
-            status: 'max_rounds',
-            text: decision.final.trim() || `Stopped after reaching the limit of ${this.maxRounds} dispatch rounds.`,
-            rounds,
-            assignments,
-          };
-        }
-
-        rounds += 1;
-        for (const assignment of decision.assignments) attemptedRoles.add(assignment.role);
-        const parallel = decision.assignments.every((assignment) => this.roles.get(assignment.role).sandbox === 'read-only');
-        const roundResults = parallel
-          ? await this._dispatchBatch(decision.assignments, signal)
-          : await this._dispatchSerially(decision.assignments, signal);
-        for (const result of roundResults) {
-          assignments.push(result);
-          outcomes.push(result);
-          this._emit(onEvent, { type: 'assignment', round: rounds, ...result });
-        }
-        this._emit(onEvent, { type: 'round', round: rounds, outcomes: roundResults });
-        if (signal?.aborted) return this._canceledResult(rounds, assignments);
+  async resume({ runId, input, signal, onEvent, interruptAfter } = {}) {
+    if (!isNonEmptyString(runId)) throw new TypeError('runId must be a non-empty string');
+    const snapshot = await this._snapshot(runId);
+    if (!LeadOrchestrator._exists(snapshot)) throw new RunNotFoundError(runId);
+    const pending = LeadOrchestrator._pendingInterrupt(snapshot);
+    if (!pending && (snapshot.next || []).length === 0) {
+      if (snapshot.values.result) return snapshot.values.result;
+      throw new RunNotFoundError(runId);
+    }
+    let graphInput = null;
+    if (pending?.kind === 'human_decision') {
+      if (!input || typeof input !== 'object' || !isNonEmptyString(input.answer)) {
+        throw new ResumeInputError('Resuming a human decision requires input { answer, choice?, decisionId? }');
       }
+      if (input.decisionId !== undefined && input.decisionId !== pending.decisionId) {
+        throw new ResumeInputError(`decisionId ${String(input.decisionId)} does not match the pending decision ${pending.decisionId}`);
+      }
+      graphInput = new Command({ resume: input });
+    } else if (pending) {
+      graphInput = new Command({ resume: input ?? true });
+    }
+    return this._drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed: true });
+  }
+
+  async _drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed }) {
+    this.runtimes.set(runId, { signal, onEvent, resumed, pendingNotes: [] });
+    try {
+      await this.graph.invoke(graphInput, this._config(runId, interruptAfter));
+      return await this._settle(runId, onEvent);
     } catch (error) {
-      if (error?.name === 'AbortError' && signal?.aborted) return this._canceledResult(rounds, assignments);
+      if (error?.name === 'AbortError' && signal?.aborted) {
+        const snapshot = await this._snapshot(runId);
+        return { runId, status: 'canceled', text: 'Canceled after all active A2A tasks were confirmed stopped.', rounds: snapshot.values.round || 0, assignments: snapshot.values.outcomes || [] };
+      }
       throw error;
+    } finally {
+      this.runtimes.delete(runId);
     }
   }
 
-  _canceledResult(rounds, assignments) {
-    return { status: 'canceled', text: 'Canceled after all active A2A tasks were confirmed stopped.', rounds, assignments };
-  }
-
-  _decisionInput(goal, rounds, outcomes) {
-    return [
-      'Plan and coordinate the requested work as the read-only team lead. Return only JSON matching the supplied schema.',
-      'The lead must not edit files. Delegate all changes through the A2A role agents.',
-      `User goal:\n${goal}`,
-      `Dispatch rounds already used: ${rounds}/${this.maxRounds}. A dispatch decision consumes one round.`,
-      'Available roles:\n' + JSON.stringify([...this.roles.values()].map(({ name, description, sandbox, model, effort }) => ({ name, description, sandbox, model, effort }))),
-      'Prior worker outcomes (including failures):\n' + JSON.stringify(outcomes),
-      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, and stopConditions. Writable roles require one or more explicit safe relative allowedFiles. Keep each brief bounded.',
-    ].join('\n\n');
-  }
-
-  _parseDecision(text) {
-    if (typeof text !== 'string' || !text.trim()) throw new Error('Lead returned an empty decision');
-    let decision;
-    try {
-      decision = JSON.parse(text);
-    } catch (error) {
-      throw new Error('Lead decision was not valid JSON', { cause: error });
+  async _settle(runId, onEvent) {
+    const snapshot = await this._snapshot(runId);
+    const values = snapshot.values;
+    const pending = LeadOrchestrator._pendingInterrupt(snapshot);
+    if (pending) {
+      const message = pending.message || pauseMessage(pending);
+      const pause = { ...pending, message };
+      this._emit(onEvent, { type: 'pause', round: values.round, pause });
+      return {
+        runId,
+        status: pending.kind === 'waiting_for_budget' ? 'waiting_for_budget' : 'input_required',
+        text: message,
+        rounds: values.round,
+        assignments: values.outcomes,
+        pause,
+      };
     }
-    if (!decision || typeof decision !== 'object' || Array.isArray(decision)) throw new Error('Lead decision must be a JSON object');
-    return decision;
-  }
-
-  _validateDecision(decision, attemptedRoles, outcomes) {
-    const keys = Object.keys(decision).sort();
-    if (keys.join(',') !== ['action', 'assignments', 'final'].sort().join(',')) throw new Error('Lead decision must contain only action, assignments, and final');
-    if (!['dispatch', 'finish'].includes(decision.action)) throw new Error(`Unsupported lead action: ${String(decision.action)}`);
-    if (!Array.isArray(decision.assignments)) throw new Error('Lead assignments must be an array');
-    if (typeof decision.final !== 'string') throw new Error('Lead final must be a string');
-    if (decision.action === 'finish') {
-      if (decision.assignments.length !== 0 || !decision.final.trim()) throw new Error('Finish decisions require no assignments and non-empty final text');
-      return;
+    if ((snapshot.next || []).length > 0) {
+      return { runId, status: INTERRUPTED_FOR_TEST, text: `Stopped before ${snapshot.next.join(', ')} (test breakpoint).`, rounds: values.round, assignments: values.outcomes };
     }
-    if (decision.assignments.length < 1 || decision.assignments.length > MAX_ASSIGNMENTS) {
-      throw new Error(`Dispatch must contain between 1 and ${MAX_ASSIGNMENTS} assignments`);
-    }
-    if (decision.final.trim()) throw new Error('Dispatch decisions must leave final empty');
-
-    for (const assignment of decision.assignments) {
-      const fields = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
-      if (!assignment || typeof assignment !== 'object' || Array.isArray(assignment)) throw new Error('Each assignment must be an object');
-      if (Object.keys(assignment).sort().join(',') !== fields.slice().sort().join(',')) {
-        throw new Error('Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, and stopConditions');
-      }
-      const role = this.roles.get(assignment.role);
-      if (!role) throw new Error(`Unknown role: ${String(assignment.role)}`);
-      if (!isNonEmptyString(assignment.objective)) throw new Error(`Assignment for ${role.name} needs an objective`);
-      for (const field of ['allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions']) {
-        if (!Array.isArray(assignment[field]) || assignment[field].some((value) => !isNonEmptyString(value))) {
-          throw new Error(`Assignment for ${role.name} needs a string array for ${field}`);
-        }
-        if (assignment[field].length > 20 || assignment[field].some((value) => value.length > 3_000)) {
-          throw new Error(`Assignment for ${role.name} exceeds the size limit for ${field}`);
-        }
-      }
-      if (assignment.inputs.length === 0) throw new Error(`Assignment for ${role.name} requires bounded inputs`);
-      if (assignment.evidence.length === 0) throw new Error(`Assignment for ${role.name} requires prior evidence`);
-      if (role.sandbox !== 'read-only' && assignment.allowedFiles.length === 0) {
-        throw new Error(`Writable role ${role.name} requires explicit allowedFiles`);
-      }
-      for (const file of assignment.allowedFiles) {
-        if (!safeRelativePath(file)) throw new Error(`Unsafe allowedFiles path for ${role.name}: ${file}`);
-      }
-      if (assignment.acceptanceCriteria.length === 0 || assignment.checks.length === 0 || assignment.stopConditions.length === 0) {
-        throw new Error(`Assignment for ${role.name} requires acceptanceCriteria, checks, and stopConditions`);
-      }
-      if (role.name === 'orch-repair-xhigh' && !attemptedRoles.has('orch-builder')) {
-        throw new Error('orch-repair-xhigh can only be dispatched after an orch-builder attempt');
-      }
-      if (role.name === 'orch-repair-sol' && !attemptedRoles.has('orch-repair-xhigh')) {
-        throw new Error('orch-repair-sol can only be dispatched after an orch-repair-xhigh attempt');
-      }
-      if (role.name === 'orch-architect') {
-        if (outcomes.length === 0) throw new Error('orch-architect requires inspected prior evidence');
-        if (assignment.objective.length > 240 || decision.assignments.length !== 1) {
-          throw new Error('orch-architect must receive one narrowly framed decision');
-        }
-      }
-    }
-  }
-
-  async _dispatchSerially(assignments, signal) {
-    const results = [];
-    for (const assignment of assignments) results.push(await this._dispatch(assignment, signal));
-    return results;
-  }
-
-  async _dispatchBatch(assignments, signal) {
-    const settled = await Promise.allSettled(assignments.map((assignment) => this._dispatch(assignment, signal)));
-    const failure = settled.find((result) => result.status === 'rejected');
-    if (failure) throw failure.reason;
-    return settled.map((result) => result.value);
+    return values.result;
   }
 
   async _clientFor(roleName) {
@@ -381,82 +233,6 @@ class LeadOrchestrator {
       this.clients.set(roleName, pending);
     }
     return this.clients.get(roleName);
-  }
-
-  async _dispatch(assignment, signal) {
-    throwIfAborted(signal);
-    const role = this.roles.get(assignment.role);
-    const client = await this._clientFor(assignment.role);
-    const text = JSON.stringify({ ...assignment, workspace: this.workspace });
-    let task;
-    const contextId = randomUUID();
-    let taskId;
-    const requestOptions = (includeSignal = true) => ({
-      ...(includeSignal && signal ? { signal } : {}),
-      ...(this.authToken ? { serviceParameters: { authorization: `Bearer ${this.authToken}` } } : {}),
-    });
-    throwIfAborted(signal);
-    try {
-      const submitted = await abortable(client.sendMessage({
-        message: {
-          messageId: randomUUID(),
-          contextId,
-          role: A2ARole.ROLE_USER,
-          parts: [{ content: { $case: 'text', value: text }, mediaType: 'text/plain' }],
-          metadata: {},
-          extensions: [],
-          referenceTaskIds: [],
-        },
-        configuration: { returnImmediately: true, acceptedOutputModes: ['text/plain', 'application/json'] },
-        metadata: {},
-      }, requestOptions()), signal);
-      task = resultTask(submitted);
-      taskId = task?.id || submitted?.taskId || null;
-      if (!task) {
-        if (submitted?.message) {
-          return { role: role.name, brief: assignment, taskId: null, status: 'completed', text: extractTextParts(submitted.message.parts), evidence: submitted };
-        }
-        throw new Error(`A2A role ${role.name} did not return a task ID`);
-      }
-
-      while (!isTaskFinished(task)) {
-        throwIfAborted(signal);
-        await wait(this.pollIntervalMs, signal);
-        task = await abortable(client.getTask({ id: taskId, historyLength: 20 }, requestOptions()), signal);
-      }
-      const result = assignmentResult(task);
-      return {
-        role: role.name,
-        brief: assignment,
-        ...result,
-        evidence: {
-          taskId: result.taskId,
-          status: result.status,
-          statusMessage: result.statusMessage,
-          artifactNames: result.artifacts.map((artifact) => artifact.name),
-        },
-      };
-    } catch (error) {
-      if (signal?.aborted || error?.name === 'AbortError') {
-        const stoppedTask = await this._cancelUntilConfirmed(client, taskId, contextId);
-        const result = assignmentResult(stoppedTask);
-        return {
-          role: role.name,
-          brief: assignment,
-          ...result,
-          status: taskStateName(stoppedTask?.status?.state),
-          evidence: { taskId: result.taskId || taskId, status: taskStateName(stoppedTask?.status?.state), cancellationConfirmed: true },
-        };
-      }
-      return {
-        role: role.name,
-        brief: assignment,
-        taskId,
-        status: 'dispatch_error',
-        text: (error?.message || String(error)).slice(0, MAX_STATUS_TEXT_CHARS),
-        failure: { name: error?.name || 'Error', message: (error?.message || String(error)).slice(0, MAX_STATUS_TEXT_CHARS) },
-      };
-    }
   }
 
   async _cancelUntilConfirmed(client, initialTaskId, contextId) {
@@ -514,4 +290,12 @@ class LeadOrchestrator {
   }
 }
 
-module.exports = { LeadOrchestrator, DECISION_SCHEMA, safeRelativePath };
+module.exports = {
+  LeadOrchestrator,
+  DECISION_SCHEMA,
+  safeRelativePath,
+  RunNotFoundError,
+  ResumeInputError,
+  UnconfirmedCancellationError,
+  INTERRUPTED_FOR_TEST,
+};

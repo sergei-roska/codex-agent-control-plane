@@ -53,7 +53,7 @@ Checks to run:
 Stop or escalate when:
 ```
 
-Each agent reports outcome, files inspected or changed, evidence and exact check results, remaining risks, and required scope expansion. End each worker report with `Scope expansion: none` or one `Scope expansion: <path> - <reason>` line per needed path. Do not claim unrun checks passed.
+Each A2A worker returns the JSON worker report (`worker-report/v1`) required by its output schema: outcome, summary, files changed and inspected, exact check results, remaining risks, required scope expansion as `scopeExpansion` entries, and a `decisionRequest` only for outcome `needs_decision`. Do not claim unrun checks passed.
 
 ## Orchestrator design decisions
 

@@ -4,6 +4,9 @@ const { AgentEvent, InMemoryTaskStore, DefaultRequestHandler } = require('@a2a-j
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
 const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/server/express');
 const express = require('express');
+const {
+  WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, classifyCodexError, findCodexErrorInfo,
+} = require('./contracts');
 
 function roleSlug(roleId) {
   if (!/^orch-[a-z0-9-]+$/.test(roleId)) {
@@ -30,6 +33,13 @@ function extractText(message) {
     }
   }
   return texts.join('\n');
+}
+
+function failureMetadata(error) {
+  return {
+    failureKind: error ? classifyCodexError(error) : 'other',
+    codexErrorInfo: error ? findCodexErrorInfo(error) : null,
+  };
 }
 
 function makeStatus(state, message) {
@@ -136,6 +146,7 @@ function makeExecutor({ roleId, role, appServer, workspace }) {
             taskId,
             role: 2,
             parts: [{ content: { $case: 'text', value: error.message } }],
+            metadata: { failureKind: 'other', codexErrorInfo: null },
           });
           return;
         }
@@ -156,6 +167,7 @@ function makeExecutor({ roleId, role, appServer, workspace }) {
           role: { id: roleId, ...role },
           cwd: workspace,
           input,
+          outputSchema: WORKER_REPORT_SCHEMA,
           signal: controller.signal,
         });
         const resultText = typeof result?.text === 'string' ? result.text : '';
@@ -170,7 +182,7 @@ function makeExecutor({ roleId, role, appServer, workspace }) {
               name: `${role.name} result`,
               description: role.description,
               parts: [{ content: { $case: 'text', value: resultText } }],
-              metadata: {},
+              metadata: { contract: WORKER_REPORT_CONTRACT, threadId: result.threadId || null },
               extensions: [],
             },
             append: false,
@@ -186,6 +198,7 @@ function makeExecutor({ roleId, role, appServer, workspace }) {
             taskId,
             role: 2,
             parts: [{ content: { $case: 'text', value: resultText || `Codex App Server returned status "${String(result?.status)}".` } }],
+            metadata: failureMetadata(result?.error),
           } : undefined,
         );
       } catch (error) {
@@ -198,6 +211,7 @@ function makeExecutor({ roleId, role, appServer, workspace }) {
             taskId,
             role: 2,
             parts: [{ content: { $case: 'text', value: error?.message || String(error) } }],
+            metadata: failureMetadata(error),
           },
         );
       } finally {
@@ -258,7 +272,9 @@ function rejectOverlappingTask(executor) {
 }
 
 /** Mount one independently stored A2A JSON-RPC agent per role. */
-function registerRoleAgents(app, { roles, appServer, workspace, baseUrl }) {
+function registerRoleAgents(app, {
+  roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(),
+}) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
     throw new TypeError('app must be an Express application');
   }
@@ -278,7 +294,7 @@ function registerRoleAgents(app, { roles, appServer, workspace, baseUrl }) {
     const executor = makeExecutor({ roleId, role, appServer, workspace });
     const handler = new DefaultRequestHandler(
       card,
-      new InMemoryTaskStore(),
+      taskStoreFactory(roleId),
       executor,
     );
     app.use(`${route}/agent-card.json`, agentCardHandler({

@@ -1,6 +1,6 @@
 # Resilient orchestration design
 
-Status: proposed. This document records the migration boundary before implementation.
+Status: implemented. See `resilient-orchestration-spec.md` for the chosen behavior, deviations, and known limits.
 
 ## Objective
 
