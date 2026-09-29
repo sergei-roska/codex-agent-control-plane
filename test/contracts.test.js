@@ -271,3 +271,27 @@ test('findCodexErrorInfo returns the raw value or null', () => {
   assert.equal(findCodexErrorInfo(new Error('x')), null);
   assert.equal(findCodexErrorInfo(undefined), null);
 });
+
+test('validateDecision refuses a writable dispatch while writer outcomes are unresolved', () => {
+  const roles = new Map([
+    ['orch-builder', { name: 'orch-builder', sandbox: 'workspace-write' }],
+    ['orch-explorer', { name: 'orch-explorer', sandbox: 'read-only' }],
+  ]);
+  const assignment = (role) => ({
+    role,
+    objective: 'Do it',
+    allowedFiles: ['src/a.js'],
+    inputs: ['x'],
+    evidence: ['y'],
+    acceptanceCriteria: ['z'],
+    checks: ['c'],
+    stopConditions: ['s'],
+  });
+  const dispatch = (role) => ({ action: 'dispatch', assignments: [assignment(role)], final: '', resolutions: [], humanInput: null });
+  const ctx = (unresolvedWriterCount) => ({
+    roles, attemptedRoles: new Set(), outcomeCount: 0, openDecisionIds: new Set(), unresolvedWriterCount,
+  });
+  assert.throws(() => validateDecision(dispatch('orch-builder'), ctx(2)), /Writable dispatch refused: 2 writer outcome\(s\) are unresolved/);
+  assert.doesNotThrow(() => validateDecision(dispatch('orch-builder'), ctx(0)));
+  assert.doesNotThrow(() => validateDecision(dispatch('orch-explorer'), ctx(2)));
+});

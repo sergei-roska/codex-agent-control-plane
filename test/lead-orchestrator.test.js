@@ -112,7 +112,11 @@ function completedTask(roleName) {
     id: `${roleName}-task`,
     contextId: `${roleName}-context`,
     status: { state: TaskState.TASK_STATE_COMPLETED },
-    artifacts: [{ name: 'result', parts: [{ content: { $case: 'text', value: workerReport(`${roleName} done`) } }] }],
+    artifacts: [{
+      name: 'result',
+      parts: [{ content: { $case: 'text', value: workerReport(`${roleName} done`) } }],
+      metadata: { writerExecution: { executionId: `${roleName}-exec`, state: 'released', delta: { known: true, headChanged: false, changedPaths: [] }, reason: null } },
+    }],
     history: [],
   };
 }
@@ -192,7 +196,7 @@ test('requires prior evidence and one narrow decision for the architect', async 
 test('returns failed task evidence to the lead for its next decision', async () => {
   const failed = {
     id: 'builder-task', contextId: 'context',
-    status: { state: TaskState.TASK_STATE_FAILED, message: { parts: [{ content: { $case: 'text', value: 'compile failed' } }] } },
+    status: { state: TaskState.TASK_STATE_FAILED, message: { parts: [{ content: { $case: 'text', value: 'compile failed' } }], metadata: { writerExecution: { executionId: 'e1', state: 'released', delta: null, reason: null } } } },
     artifacts: [], history: [],
   };
   const h = makeHarness({
@@ -318,4 +322,43 @@ test('dispatches writable batches serially and read-only batches in parallel', a
   const result = await parallel.orchestrator.run({ goal: 'Parallel' });
   assert.equal(result.status, 'completed');
   assert.equal(result.assignments.length, 2);
+});
+
+test('rejects a human choice outside pending options and preserves free-text resume', async () => {
+  const request = {
+    reason: 'product_choice',
+    question: 'Which implementation should be used?',
+    options: [
+      { id: 'minimal', description: 'Use the minimal implementation' },
+      { id: 'extended', description: 'Use the extended implementation' },
+    ],
+    recommendation: 'minimal',
+    evidenceChecked: ['The existing project structure'],
+    independentWork: '',
+    relatedDecisionIds: [],
+  };
+  const h = makeHarness({
+    decisions: [
+      JSON.stringify({ action: 'request_human_input', assignments: [], final: '', resolutions: [], humanInput: request }),
+      decision('finish', [], 'Decision received'),
+    ],
+  });
+  const paused = await h.orchestrator.run({ goal: 'Choose implementation', runId: 'human-choice-run' });
+  assert.equal(paused.status, 'input_required');
+  const pending = await h.orchestrator.getPause(paused.runId);
+
+  for (const choice of ['guess', '', null, 12]) {
+    await assert.rejects(
+      h.orchestrator.resume({ runId: paused.runId, input: { answer: 'Use the recommended approach', choice } }),
+      { name: 'ResumeInputError', message: 'choice must match one of the pending human decision option ids' },
+    );
+    assert.deepEqual(await h.orchestrator.getPause(paused.runId), pending);
+  }
+  assert.equal(h.calls.filter((call) => call.type === 'lead').length, 1);
+
+  const result = await h.orchestrator.resume({ runId: paused.runId, input: { answer: 'Proceed with a text-only answer' } });
+  assert.equal(result.status, 'completed');
+  const resumedLead = h.calls.filter((call) => call.type === 'lead')[1];
+  assert.match(resumedLead.input, /"answer":"Proceed with a text-only answer"/);
+  assert.equal(resumedLead.input.includes('"choice"'), false);
 });

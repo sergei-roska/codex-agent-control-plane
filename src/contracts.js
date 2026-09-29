@@ -313,7 +313,7 @@ function checkHumanInput(humanInput, openIds) {
 
 /**
  * Validate a parsed lead decision. Throws Error on violation.
- * ctx = { roles: Map, attemptedRoles: Set, outcomeCount: number, openDecisionIds: Set }
+ * ctx = { roles: Map, attemptedRoles: Set, outcomeCount: number, openDecisionIds: Set, unresolvedWriterCount?: number }
  */
 function validateDecision(decision, ctx) {
   if (!isPlainObject(decision)) throw new Error('Lead decision must be a JSON object');
@@ -352,6 +352,10 @@ function validateDecision(decision, ctx) {
     if (decision.final.trim()) throw new Error('Dispatch decisions must leave final empty');
     if (decision.humanInput !== null) throw new Error('Dispatch decisions must leave humanInput null');
     for (const assignment of decision.assignments) checkAssignment(assignment, decision, ctx);
+    const unresolved = ctx.unresolvedWriterCount || 0;
+    if (unresolved > 0 && decision.assignments.some((assignment) => ctx.roles.get(assignment.role)?.sandbox !== 'read-only')) {
+      throw new Error(`Writable dispatch refused: ${unresolved} writer outcome(s) are unresolved`);
+    }
   }
 
   const related = new Set(decision.action === 'request_human_input' ? decision.humanInput.relatedDecisionIds : []);

@@ -11,6 +11,10 @@ const os = require('node:os');
 const path = require('node:path');
 const { ServerCallContext } = require('@a2a-js/sdk/server');
 const { openStateDatabase, createTaskStore } = require('../src/durable-store');
+const { WriterAdmission } = require('../src/writer-admission');
+
+// Test files run in parallel processes; keep workspace locks private to this process.
+process.env.CODEX_A2A_WORKSPACE_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-ws-lock-'));
 
 test('startup requires a ChatGPT OAuth account and closes the app server on rejection', async () => {
   let closed = false;
@@ -205,6 +209,7 @@ test('port zero uses the actual bound port for A2A worker URLs without TCP in th
     assert.equal(orchestratorOptions.baseUrl, 'http://127.0.0.1:43123');
     assert.match(orchestratorOptions.authToken, /^[A-Za-z0-9_-]{43}$/);
     assert.equal(require('node:fs').readFileSync(tokenPath, 'utf8'), orchestratorOptions.authToken);
+    assert.equal(typeof orchestratorOptions.usageLedger.record, 'function');
   } finally {
     await runtime.close();
     require('node:fs').rmSync(tokenDirectory, { recursive: true, force: true });
@@ -713,22 +718,25 @@ test('a busy port rejects startup without reconciling or leaving a lock', async 
   const working = { state: TaskState.TASK_STATE_WORKING, timestamp: new Date().toISOString() };
   await createTaskStore(seed, 'orchestrator').save({ id: 'lead-busy', contextId: 'c1', status: working, artifacts: [], history: [], metadata: {} }, CALL());
   await seed.close();
-  const blocker = require('node:net').createServer();
-  await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
   try {
     await assert.rejects(startServer({
-      port: blocker.address().port,
+      port: 3000,
       stateFile,
       tokenFile: path.join(dir, 'token'),
       appServer: CHATGPT_APP_SERVER(),
       orchestratorFactory: () => ({ async run() {} }),
-    }), /EADDRINUSE/);
+      listenImpl(_app, _port, _host, callback) {
+        const server = { once() {} };
+        const error = Object.assign(new Error('Port already in use'), { code: 'EADDRINUSE' });
+        queueMicrotask(() => callback(error));
+        return server;
+      },
+    }), (error) => error.code === 'EADDRINUSE');
     assert.equal(fs.existsSync(`${stateFile}.lock`), false);
     const probe = await openStateDatabase({ filePath: stateFile });
     assert.equal((await createTaskStore(probe, 'orchestrator').load('lead-busy', CALL())).status.state, TaskState.TASK_STATE_WORKING);
     await probe.close();
   } finally {
-    await new Promise((resolve) => blocker.close(resolve));
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -802,4 +810,131 @@ test('a plain TypeError from a graph step during resume becomes an error pause, 
   assert.equal(final.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
   assert.equal(final.metadata.pause.kind, 'error');
   assert.equal(final.metadata.pause.errorName, 'TypeError');
+});
+
+test('a second server on the same workspace is rejected even with a different state file, and the lock is released', async () => {
+  const dir = tmpDir();
+  const workspace = path.join(dir, 'ws');
+  fs.mkdirSync(workspace);
+  const options = (name) => ({
+    port: 0, listen: false, workspace, stateFile: path.join(dir, `${name}.sqlite`), tokenFile: path.join(dir, 'token'),
+    appServer: CHATGPT_APP_SERVER(), orchestratorFactory: () => ({ async run() {} }),
+  });
+  const first = await startServer(options('one'));
+  try {
+    await assert.rejects(startServer(options('two')), /workspace .* is in use by pid/i);
+    assert.equal(fs.existsSync(path.join(dir, 'two.sqlite.lock')), false);
+  } finally {
+    await first.close();
+  }
+  const again = await startServer(options('two'));
+  await again.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('startup reconciles an active writer left behind by a dead process and passes admission to the orchestrator', async () => {
+  const dir = tmpDir();
+  const workspace = path.join(dir, 'ws');
+  fs.mkdirSync(workspace);
+  const stateFile = path.join(dir, 'state.sqlite');
+  const seed = await openStateDatabase({ filePath: stateFile });
+  const leftover = new WriterAdmission({ db: seed.db, workspace, snapshot: () => ({ kind: 'unavailable', reason: 'test' }) });
+  await leftover.acquire({ role: 'orch-builder', taskId: 'old-task', contextId: 'old-ctx' });
+  await seed.close();
+
+  let seenAdmission;
+  const server = await startServer({
+    port: 0, listen: false, workspace, stateFile, tokenFile: path.join(dir, 'token'),
+    appServer: CHATGPT_APP_SERVER(),
+    orchestratorFactory: (options) => { seenAdmission = options.admission; return { async run() {} }; },
+  });
+  try {
+    assert.ok(seenAdmission instanceof WriterAdmission);
+    // No turn/start was recorded, so nothing could still run: the row reconciles at startup.
+    assert.equal(seenAdmission.holder(), null);
+    assert.equal(seenAdmission.get('orch-builder:old-task').state, 'reconciled');
+  } finally {
+    await server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -------------------------------------------------------------- acceptance
+
+const validAcceptance = { requiredChecks: [{ id: 'unit', argv: ['npm', 'test'] }] };
+
+test('acceptance metadata on a new run is validated and passed as the contract', async () => {
+  const runs = [];
+  const seen = [];
+  const executor = makeLeadExecutor({ orchestrator: { async run(args) { runs.push(args); return { status: 'completed', text: 'Done' }; } } });
+  await executor.execute({
+    taskId: 't-acc', contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }], metadata: { acceptance: validAcceptance } },
+  }, { publish: (event) => seen.push(event) });
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0].contract, { requiredChecks: [{ id: 'unit', argv: ['npm', 'test'], timeoutMs: 600000 }] });
+  assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
+});
+
+test('an invalid acceptance contract fails the task and the run never starts', async () => {
+  let started = false;
+  const seen = [];
+  const executor = makeLeadExecutor({ orchestrator: { async run() { started = true; return { status: 'completed', text: 'x' }; } } });
+  await executor.execute({
+    taskId: 't-bad', contextId: 'ctx',
+    userMessage: { parts: [{ text: 'goal' }], metadata: { acceptance: { requiredChecks: [{ id: 'a', argv: [] }] } } },
+  }, { publish: (event) => seen.push(event) });
+  assert.equal(started, false);
+  const final = lastStatus(seen);
+  assert.equal(final.status.state, TaskState.TASK_STATE_FAILED);
+  assert.match(final.status.message.parts[0].content.value, /^Invalid acceptance contract: .*argv/);
+});
+
+test('the result artifact carries the acceptance record and starts with its disposition', async () => {
+  const acceptance = {
+    disposition: 'rejected', reasons: [{ code: 'check_failed', detail: 'Required check "unit" failed (exit 1).' }], issues: [],
+    candidate: { head: 'abc', fingerprint: 'f' }, checks: [],
+  };
+  const seen = [];
+  const executor = makeLeadExecutor({ orchestrator: { async run() { return { status: 'completed', text: 'All good', rounds: 1, assignments: [], acceptance }; } } });
+  await executor.execute({ taskId: 't-art', contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }] } }, { publish: (event) => seen.push(event) });
+  const artifact = seen.find((event) => event.kind === 'artifactUpdate').data.artifact;
+  assert.deepEqual(artifact.metadata.acceptance, acceptance);
+  assert.equal(artifact.parts[0].content.value, 'Acceptance: rejected\n- check_failed: Required check "unit" failed (exit 1).\n\nAll good');
+  assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
+
+  const accepted = [];
+  const ok = makeLeadExecutor({ orchestrator: { async run() { return { status: 'completed', text: 'Fine', acceptance: { disposition: 'accepted', reasons: [] } }; } } });
+  await ok.execute({ taskId: 't-ok', contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }] } }, { publish: (event) => accepted.push(event) });
+  assert.equal(accepted.find((event) => event.kind === 'artifactUpdate').data.artifact.parts[0].content.value, 'Acceptance: accepted\n\nFine');
+});
+
+test('a resume ignores acceptance metadata and says so', async () => {
+  const seen = [];
+  const resumes = [];
+  const executor = makeLeadExecutor({
+    orchestrator: { async getPause() { return { kind: 'writer_unresolved', attempts: [] }; }, async resume(args) { resumes.push(args); return { status: 'completed', text: 'back' }; } },
+  });
+  await executor.execute(pausedContext('t-res', { kind: 'writer_unresolved' }, {
+    parts: [{ text: 'retry' }], metadata: { acceptance: { requiredChecks: [{ id: 'evil', argv: ['true'] }] } },
+  }), { publish: (event) => seen.push(event) });
+  assert.equal(resumes.length, 1);
+  assert.equal('contract' in resumes[0], false);
+  const working = seen.filter((event) => event.kind === 'statusUpdate').find((event) => event.data.status.state === TaskState.TASK_STATE_WORKING);
+  assert.match(working.data.status.message.parts[0].content.value, /Acceptance metadata on a resume message is ignored/);
+});
+
+test('a restart fallback that starts over recovers the contract from the first user message', async () => {
+  const runs = [];
+  const executor = makeLeadExecutor({
+    orchestrator: {
+      async getPause() { return null; },
+      async resume() { throw Object.assign(new Error('none'), { name: 'RunNotFoundError' }); },
+      async run(args) { runs.push(args); return { status: 'completed', text: 'again' }; },
+    },
+  });
+  await executor.execute(pausedContext('t-fresh', { kind: 'restart' }, { parts: [{ text: '' }] }, {
+    history: [{ role: 1, parts: [{ text: 'original goal' }], metadata: { acceptance: validAcceptance } }],
+  }), { publish() {} });
+  assert.equal(runs[0].goal, 'original goal');
+  assert.equal(runs[0].contract.requiredChecks[0].id, 'unit');
 });

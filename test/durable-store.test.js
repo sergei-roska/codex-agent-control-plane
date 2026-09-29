@@ -235,3 +235,56 @@ test('state lock is exclusive for a live pid, replaces a stale one, and is relea
   assert.equal(fs.existsSync(lockPath), false);
   assert.equal(typeof acquireStateLock(':memory:'), 'function');
 });
+
+test('journal stores objective_sha256 and migrates an existing table without the column', async (t) => {
+  const Database = require('better-sqlite3');
+  const file = tempDb(t);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const old = new Database(file);
+  old.exec(`CREATE TABLE dispatch_journal (
+    attempt_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, assignment_id TEXT NOT NULL, role TEXT NOT NULL,
+    sandbox TEXT NOT NULL, context_id TEXT NOT NULL, task_id TEXT, state TEXT NOT NULL, result_json TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
+  old.prepare(`INSERT INTO dispatch_journal VALUES ('old:t1', 'r', 'old', 'orch-builder', 'workspace-write', 'c', NULL, 'submitting', NULL, 'n', 'n')`).run();
+  old.close();
+
+  const state = await openStateDatabase({ filePath: file });
+  t.after(() => state.close());
+  const columns = state.db.prepare("PRAGMA table_info('dispatch_journal')").all().map((column) => column.name);
+  assert.ok(columns.includes('objective_sha256'));
+  const journal = new DispatchJournal(state);
+  assert.equal(journal.get('old:t1').objectiveSha256, null);
+  const row = {
+    attemptId: 'new:t1', runId: 'r', assignmentId: 'new', role: 'orch-builder', sandbox: 'workspace-write', contextId: 'c2', objectiveSha256: 'abc',
+  };
+  assert.equal(journal.recordSubmitting(row).objectiveSha256, 'abc');
+  assert.equal(new InMemoryDispatchJournal().recordSubmitting(row).objectiveSha256, 'abc');
+});
+
+test('workspace lock is shared by every workspace in one repository and falls back for non-repository dirs', (t) => {
+  const { execFileSync } = require('node:child_process');
+  const { acquireWorkspaceLock } = require('../src/durable-store');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wslock-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'repo');
+  fs.mkdirSync(path.join(repo, 'sub'), { recursive: true });
+  execFileSync('git', ['-C', repo, 'init', '-q']);
+  const release = acquireWorkspaceLock(repo, { lockDir: null });
+  const lockFile = path.join(fs.realpathSync(repo), '.git', 'codex-a2a-writer.lock');
+  assert.equal(fs.readFileSync(lockFile, 'utf8').trim(), String(process.pid));
+  assert.throws(() => acquireWorkspaceLock(path.join(repo, 'sub'), { lockDir: null }), /in use by pid/);
+  release();
+  assert.equal(fs.existsSync(lockFile), false);
+  const inner = acquireWorkspaceLock(path.join(repo, 'sub'), { lockDir: null });
+  assert.throws(() => acquireWorkspaceLock(repo, { lockDir: null }), /in use by pid/);
+  inner();
+
+  const plain = path.join(root, 'plain');
+  fs.mkdirSync(plain);
+  const lockDir = path.join(root, 'locks');
+  const plainRelease = acquireWorkspaceLock(plain, { lockDir });
+  assert.equal(fs.readdirSync(lockDir).length, 1);
+  assert.throws(() => acquireWorkspaceLock(plain, { lockDir }), /in use by pid/);
+  plainRelease();
+  assert.equal(fs.readdirSync(lockDir).length, 0);
+});

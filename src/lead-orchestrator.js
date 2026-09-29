@@ -8,6 +8,7 @@ const { Command, MemorySaver } = require('@langchain/langgraph');
 const { createLeadRole } = require('./role-catalog');
 const { DECISION_SCHEMA, safeRelativePath } = require('./contracts');
 const { InMemoryDispatchJournal } = require('./durable-store');
+const { validateAcceptanceContract } = require('./acceptance');
 const { buildLeadGraph, isTerminalTask, pauseMessage } = require('./lead-graph');
 
 const DEFAULT_MAX_ROUNDS = 6;
@@ -73,6 +74,11 @@ class LeadOrchestrator {
     cancelRetryIntervalMs = DEFAULT_CANCEL_RETRY_INTERVAL_MS,
     checkpointer = new MemorySaver(),
     journal = new InMemoryDispatchJournal(),
+    admission = null,
+    reconcileWaitMs,
+    usageLedger = null,
+    runCheckImpl,
+    snapshot,
   } = {}) {
     if (!appServer || typeof appServer.run !== 'function') throw new TypeError('appServer.run is required');
     if (!(roles instanceof Map)) throw new TypeError('roles must be a Map');
@@ -110,6 +116,11 @@ class LeadOrchestrator {
       maxRounds: this.maxRounds,
       journal,
       pollIntervalMs: this.pollIntervalMs,
+      admission,
+      reconcileWaitMs,
+      usageLedger,
+      runCheckImpl,
+      snapshot,
       runtimeFor: (runId) => this.runtimes.get(runId),
       clientFor: (roleName) => this._clientFor(roleName),
       authOptions: () => this._authRequestOptions(),
@@ -142,7 +153,7 @@ class LeadOrchestrator {
     return Object.keys(snapshot.values || {}).length > 0 || (snapshot.next || []).length > 0;
   }
 
-  /** Pending interrupt value ({ kind: 'human_decision' | 'waiting_for_budget', ... }) or null. */
+  /** Pending interrupt value ({ kind: 'human_decision' | 'waiting_for_budget' | 'writer_unresolved', ... }) or null. */
   async getPause(runId) {
     if (!isNonEmptyString(runId)) return null;
     return LeadOrchestrator._pendingInterrupt(await this._snapshot(runId));
@@ -155,11 +166,13 @@ class LeadOrchestrator {
     return LeadOrchestrator._exists(snapshot) && (snapshot.next || []).length > 0;
   }
 
-  async run({ goal, runId = randomUUID(), signal, onEvent, interruptAfter } = {}) {
+  /** `contract` is the acceptance contract; it is pinned in graph state here and never changed afterwards. */
+  async run({ goal, runId = randomUUID(), contract, signal, onEvent, interruptAfter } = {}) {
     if (!isNonEmptyString(goal)) throw new TypeError('goal must be a non-empty string');
     if (!isNonEmptyString(runId)) throw new TypeError('runId must be a non-empty string');
+    const pinnedContract = validateAcceptanceContract(contract);
     if (LeadOrchestrator._exists(await this._snapshot(runId))) throw new Error(`A checkpoint already exists for run ${runId}; use resume()`);
-    return this._drive(runId, { goal, runId }, { signal, onEvent, interruptAfter, resumed: false });
+    return this._drive(runId, { goal, runId, contract: pinnedContract }, { signal, onEvent, interruptAfter, resumed: false });
   }
 
   async resume({ runId, input, signal, onEvent, interruptAfter } = {}) {
@@ -179,6 +192,10 @@ class LeadOrchestrator {
       if (input.decisionId !== undefined && input.decisionId !== pending.decisionId) {
         throw new ResumeInputError(`decisionId ${String(input.decisionId)} does not match the pending decision ${pending.decisionId}`);
       }
+      if (input.choice !== undefined
+        && (!isNonEmptyString(input.choice) || !(pending.options || []).some((option) => option.id === input.choice))) {
+        throw new ResumeInputError('choice must match one of the pending human decision option ids');
+      }
       graphInput = new Command({ resume: input });
     } else if (pending) {
       graphInput = new Command({ resume: input ?? true });
@@ -194,7 +211,7 @@ class LeadOrchestrator {
     } catch (error) {
       if (error?.name === 'AbortError' && signal?.aborted) {
         const snapshot = await this._snapshot(runId);
-        return { runId, status: 'canceled', text: 'Canceled after all active A2A tasks were confirmed stopped.', rounds: snapshot.values.round || 0, assignments: snapshot.values.outcomes || [] };
+        return { runId, status: 'canceled', text: 'Canceled after all active A2A tasks were confirmed stopped.', rounds: snapshot.values.round || 0, assignments: snapshot.values.outcomes || [], acceptance: snapshot.values.acceptance ?? null };
       }
       throw error;
     } finally {

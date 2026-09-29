@@ -100,7 +100,9 @@ from `codex app-server generate-ts` (`v2/CodexErrorInfo.ts`, codex-cli 0.159.0).
 
 A specialist that fails with `usage_limit` publishes FAILED with the status message
 `metadata: { failureKind: "usage_limit", codexErrorInfo }` (other failures:
-`failureKind: "other"`).
+`failureKind: "other"`). A transport failure or turn timeout during an active Codex turn
+marks the outcome as unknown; the specialist publishes `failureKind: "interrupted"` so the
+lead checks workspace effects before assigning another writer.
 
 ## Step 2 - durable IDs, storage, reconciliation (`src/durable-store.js`)
 
@@ -156,8 +158,9 @@ decide --(usage_limit on lead turn)--> budget_pause
     read-only: send again with the same contextId. Not found and writable: finish the attempt
     as `outcome_unknown` without sending;
   - `submitted` / `finished`: do not send.
-  - A thrown `sendMessage` error is reconciled with `listTasks` the same way. Not found gives
-    `dispatch_error`.
+  - A thrown `sendMessage` error is reconciled with `listTasks` the same way. If no task is
+    visible yet, a writable attempt becomes `outcome_unknown`: the server may still accept
+    the request after the lookup. A read-only attempt may become `dispatch_error`.
 - `collect`: poll the current attempts until each is finished (existing `isTaskFinished`).
   Task not found gives `outcome_unknown`. Abort uses the existing cancel-until-confirmed
   logic. Each finished attempt goes to `recordFinished`.
@@ -168,7 +171,8 @@ decide --(usage_limit on lead turn)--> budget_pause
   `failureKind: "usage_limit"` routes to `budget_pause` with `source: "worker"`.
 - `human_input`: `interrupt({ kind: "human_decision", decisionId, ...humanInput })`. The
   resume value `{ answer, choice?, decisionId? }` is appended to `humanAnswers`, and related
-  decisions are closed with `by: "human"`.
+  decisions are closed with `by: "human"`. A supplied `choice` must match a pending option
+  ID; a free-text answer without `choice` is allowed.
 - `budget_pause`: best-effort `appServer.readRateLimits?.()` for a `resetsAt` hint (only a
   hint; the protocol says not to infer recovery from it), then
   `interrupt({ kind: "waiting_for_budget", source, message, resetsAt })`.
@@ -199,11 +203,12 @@ role. Specialist briefs gain `assignmentId` and a line requiring the JSON report
   (`requestContext.task` present), and `run()` otherwise. `input_required` and
   `waiting_for_budget` publish `INPUT_REQUIRED` with `task.metadata.pause` and a readable
   message (question, options, recommendation, decision ID, how to answer). A `decisionId` in
-  message metadata that does not match the pending one keeps the task in `INPUT_REQUIRED`
-  with an explanatory message.
+  message metadata that does not match the pending one, or a `choice` outside the pending
+  option IDs, keeps the task in `INPUT_REQUIRED` with an explanatory message.
 - `CodexAppServer.run()` with a `threadId` not loaded in this process first calls
   `thread/resume`. `readRateLimits()` wraps `account/rateLimits/read` and returns `null` on
-  error.
+  error. After an unexpected child exit or turn timeout, a later call starts a replacement
+  App Server process; it does not replay the failed turn automatically.
 - CLI: `npm run ask -- --task <id> [--choice <optionId>] [--decision <decisionId>] "<answer>"`
   continues a paused task. An `INPUT_REQUIRED` result prints the pause and the resume command
   and exits 3.
@@ -226,6 +231,12 @@ All tests use fake App Server and fake A2A clients. Required scenarios:
   reconciliation rewrites stale tasks;
 - the server maps pauses to `INPUT_REQUIRED` and resumes through a message to the same task.
 
+Live adapter smoke test on 2026-09-29: Codex App Server 0.159.0 accepted
+`account/rateLimits/read` with `{}`, structured output, and `thread/resume` through a
+ChatGPT OAuth account. A deliberately stopped child was replaced on the next call, which
+continued the same thread. A live A2A request through the local server and CLI read
+`package.json`, returned the package name, and completed with exit code 0.
+
 ## Known limits left for review
 
 - A crash inside a lead Codex turn repeats that turn on resume (one extra lead turn).
@@ -234,4 +245,3 @@ All tests use fake App Server and fake A2A clients. Required scenarios:
 - Graceful shutdown still cancels active runs instead of leaving them resumable.
 - A crash before the first checkpoint restarts the run from the goal in the lead task history.
 - The SDK task-store migration DDL is replicated from the `a2a-db` CLI (not exported by the SDK); the migration name matches so the CLI treats it as applied.
-- `account/rateLimits/read` params (`{}`) were taken from the generated protocol types and not exercised against a live App Server.

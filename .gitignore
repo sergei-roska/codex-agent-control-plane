@@ -5,6 +5,7 @@
 *.log
 *.pid
 *.sock
+node_modules/
 
 # Codex and generated task data
 .codex/auth.json

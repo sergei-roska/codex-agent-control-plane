@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "ask": "node src/cli.js",
+    "usage": "node src/usage-report.js",
     "test": "node --test test/*.test.js"
   },
   "keywords": [],

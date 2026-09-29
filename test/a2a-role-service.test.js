@@ -9,7 +9,10 @@ const { AgentCard } = require('@a2a-js/sdk');
 const { ClientFactory, JsonRpcTransportFactory } = require('@a2a-js/sdk/client');
 const { ServerCallContext, UnauthenticatedUser } = require('@a2a-js/sdk/server');
 const { InMemoryTaskStore } = require('@a2a-js/sdk/server');
+const Database = require('better-sqlite3');
 const { registerRoleAgents } = require('../src/a2a-role-service');
+const { WriterAdmission } = require('../src/writer-admission');
+const { UsageLedger } = require('../src/usage-ledger');
 const { WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT } = require('../src/contracts');
 
 const roles = new Map([
@@ -377,7 +380,8 @@ test('passes the worker report schema and tags the result artifact with contract
   assert.equal(calls[0].outputSchema, WORKER_REPORT_SCHEMA);
   const artifact = result.artifacts[0];
   assert.equal(artifact.parts[0].content.value, '{"raw":true}');
-  assert.deepEqual(artifact.metadata, { contract: WORKER_REPORT_CONTRACT, threadId: 'thread-7' });
+  assert.equal(artifact.metadata.contract, WORKER_REPORT_CONTRACT);
+  assert.equal(artifact.metadata.threadId, 'thread-7');
 
   const { agents: other, context: otherContext } = makeService({ async run() { return { status: 'completed', text: 'x' }; } });
   const noThread = taskResult(await other.get('orch-planner').handler.sendMessage(sendParams(message('go')), otherContext));
@@ -388,24 +392,47 @@ test('failed status messages carry failureKind and codexErrorInfo metadata', asy
   const cases = [
     { error: Object.assign(new Error('limit'), { codexError: { codexErrorInfo: 'usageLimitExceeded' } }), kind: 'usage_limit', info: 'usageLimitExceeded' },
     { error: new Error('plain', { cause: { rpcData: { codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 429 } } } } }), kind: 'usage_limit', info: { httpConnectionFailed: { httpStatusCode: 429 } } },
+    { error: Object.assign(new Error('turn interrupted'), { outcomeUnknown: true }), kind: 'interrupted', info: null },
+    { error: Object.assign(new Error('turn interrupted at quota'), { outcomeUnknown: true, codexError: { codexErrorInfo: 'usageLimitExceeded' } }), kind: 'usage_limit', info: 'usageLimitExceeded' },
     { error: new Error('plain'), kind: 'other', info: null },
   ];
   for (const { error, kind, info } of cases) {
     const { agents, context } = makeService({ async run() { throw error; } });
     const failed = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('x')), context));
     assert.equal(failed.status.state, 4);
-    assert.deepEqual(failed.status.message.metadata, { failureKind: kind, codexErrorInfo: info });
+    const { failureKind, codexErrorInfo } = failed.status.message.metadata;
+    assert.deepEqual({ failureKind, codexErrorInfo }, { failureKind: kind, codexErrorInfo: info });
   }
 
   const { agents, context } = makeService({ async run() { return { status: 'interrupted', text: 'partial' }; } });
   const nonCompleted = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('x')), context));
-  assert.deepEqual(nonCompleted.status.message.metadata, { failureKind: 'other', codexErrorInfo: null });
+  assert.equal(nonCompleted.status.message.metadata.failureKind, 'other');
+  assert.equal(nonCompleted.status.message.metadata.codexErrorInfo, null);
 
   const { agents: parse, context: parseContext } = makeService({ async run() { return { status: 'completed', text: '' }; } });
   const bad = taskResult(await parse.get('orch-planner').handler.sendMessage(sendParams(message('', [
     { content: { $case: 'data', value: {} } },
   ])), parseContext));
   assert.deepEqual(bad.status.message.metadata, { failureKind: 'other', codexErrorInfo: null });
+});
+
+test('marks an active writable worker failure with unknown outcome as interrupted', async () => {
+  const writerRoles = new Map([
+    ['orch-writer', { name: 'Writer', description: 'Writes files.', instructions: 'Implement.', model: 'test', effort: 'low', sandbox: 'workspace-write' }],
+  ]);
+  const { agents, context } = makeService({
+    async run() {
+      throw Object.assign(new Error('Codex transport closed during the turn'), { outcomeUnknown: true });
+    },
+  }, { roles: writerRoles });
+
+  const failed = taskResult(await agents.get('orch-writer').handler.sendMessage(sendParams(message('write the change')), context));
+  assert.equal(failed.status.state, 4);
+  const { writerExecution, ...metadata } = failed.status.message.metadata;
+  assert.equal(metadata.failureKind, 'interrupted');
+  assert.equal(metadata.codexErrorInfo, null);
+  // No turn/start was recorded, so nothing could still be running and the writer reconciles.
+  assert.equal(writerExecution.state, 'reconciled');
 });
 
 test('uses taskStoreFactory per role and defaults to an in-memory store', async () => {
@@ -424,4 +451,304 @@ test('uses taskStoreFactory per role and defaults to an in-memory store', async 
   assert.equal(agents.get('orch-reviewer').handler.taskStore, stores.get('orch-reviewer'));
   const { agents: defaults } = makeService({ async run() { return { status: 'completed', text: '' }; } });
   assert.ok(defaults.get('orch-planner').handler.taskStore instanceof InMemoryTaskStore);
+});
+
+// ---------------------------------------------------------------- writer admission
+
+const writerRoles = new Map([
+  ['orch-writer-a', { name: 'Writer A', description: 'Writes.', instructions: 'Implement.', model: 'test', effort: 'low', sandbox: 'workspace-write' }],
+  ['orch-writer-b', { name: 'Writer B', description: 'Writes too.', instructions: 'Implement.', model: 'test', effort: 'low', sandbox: 'workspace-write' }],
+  ['orch-planner', roles.get('orch-planner')],
+]);
+
+const deferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+};
+const tick = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function makeAdmission(quiescence) {
+  return new WriterAdmission({
+    db: new Database(':memory:'),
+    workspace: process.cwd(),
+    snapshot: () => ({ kind: 'unavailable', reason: 'test' }),
+    quiescence,
+    settleMs: 0,
+  });
+}
+
+function writerMessage(text, ids = {}) {
+  return { ...message(text), ...ids };
+}
+
+const okResult = (text = 'done') => ({ threadId: 't', turnId: 'u', status: 'completed', text });
+
+test('a second writer on another role waits for the first; a read-only role runs concurrently', async () => {
+  const gate = deferred();
+  const started = [];
+  const { agents, context } = makeService({
+    async run(options) {
+      started.push(options.role.id);
+      if (options.role.id === 'orch-writer-a') await gate.promise;
+      return okResult(options.role.id);
+    },
+  }, { roles: writerRoles, admission: makeAdmission({}) });
+
+  const a = agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a')), context);
+  await tick();
+  const b = agents.get('orch-writer-b').handler.sendMessage(sendParams(writerMessage('b')), context);
+  const planner = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('plan')), context));
+  await tick();
+  assert.equal(planner.status.state, 3);
+  assert.deepEqual(started, ['orch-writer-a', 'orch-planner']);
+
+  gate.resolve();
+  const [doneA, doneB] = [taskResult(await a), taskResult(await b)];
+  assert.equal(doneA.status.state, 3);
+  assert.equal(doneB.status.state, 3);
+  assert.deepEqual(started, ['orch-writer-a', 'orch-planner', 'orch-writer-b']);
+  assert.equal(doneB.artifacts[0].metadata.writerExecution.state, 'released');
+});
+
+test('writers submitted under two different lead contexts and tasks are serialized workspace-wide', async () => {
+  // Imitates two lead runs at the role-endpoint level (each lead dispatches with its own context and task ids).
+  const gate = deferred();
+  let running = 0;
+  let maxRunning = 0;
+  const { agents, context } = makeService({
+    async run() {
+      running += 1;
+      maxRunning = Math.max(maxRunning, running);
+      await gate.promise;
+      running -= 1;
+      return okResult();
+    },
+  }, { roles: writerRoles, admission: makeAdmission({}) });
+
+  const first = agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('one', { contextId: 'lead-run-1' })), context);
+  const second = agents.get('orch-writer-b').handler.sendMessage(sendParams(writerMessage('two', { contextId: 'lead-run-2' })), context);
+  await tick(60);
+  assert.equal(running, 1);
+  gate.resolve();
+  assert.equal(taskResult(await first).status.state, 3);
+  assert.equal(taskResult(await second).status.state, 3);
+  assert.equal(maxRunning, 1);
+});
+
+test('an unknown writer outcome blocks the next writer until the process group is proven gone', async () => {
+  let gone = false;
+  const quiescence = {
+    isProcessGroupGone: () => gone,
+    killOrphanProcessGroup: () => false,
+  };
+  const admission = makeAdmission(quiescence);
+  let runs = 0;
+  const { agents, context } = makeService({
+    async run(options) {
+      runs += 1;
+      if (runs === 1) {
+        options.onTurnStart({ processIdentity: { pid: 1, pgid: 1, startTime: 'x' }, threadId: 'thr' });
+        throw Object.assign(new Error('timeout'), { outcomeUnknown: true, execution: { turnTerminal: false } });
+      }
+      return okResult();
+    },
+  }, { roles: writerRoles, admission, reconcileRetry: { intervalMs: 5, totalMs: 20 } });
+
+  const failed = taskResult(await agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a')), context));
+  assert.equal(failed.status.state, 4);
+  assert.equal(failed.status.message.metadata.failureKind, 'interrupted');
+  assert.equal(failed.status.message.metadata.writerExecution.state, 'unresolved');
+  assert.equal(admission.holder().state, 'unresolved');
+
+  const blocked = taskResult(await agents.get('orch-writer-b').handler.sendMessage(sendParams(writerMessage('b')), context));
+  assert.equal(blocked.status.state, 4);
+  assert.equal(blocked.status.message.metadata.failureKind, 'admission_blocked');
+  assert.equal(blocked.status.message.metadata.effects, 'none');
+  assert.equal(blocked.status.message.metadata.admission.holder.role, 'orch-writer-a');
+  assert.equal(runs, 1);
+
+  gone = true;
+  const admitted = taskResult(await agents.get('orch-writer-b').handler.sendMessage(sendParams(writerMessage('b2')), context));
+  assert.equal(admitted.status.state, 3);
+  assert.equal(runs, 2);
+  assert.equal(admission.holder(), null);
+});
+
+test('a fenced context is refused without running', async () => {
+  const admission = makeAdmission({});
+  admission.fence('ctx-fenced', 'lead gave up');
+  let runs = 0;
+  const { agents, context } = makeService({ async run() { runs += 1; return okResult(); } }, { roles: writerRoles, admission });
+  const failed = taskResult(await agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a', { contextId: 'ctx-fenced' })), context));
+  assert.equal(failed.status.state, 4);
+  assert.equal(failed.status.message.metadata.failureKind, 'fenced');
+  assert.equal(runs, 0);
+});
+
+test('canceling a writer while it waits for admission cancels it without running', async () => {
+  const gate = deferred();
+  const started = [];
+  const { agents, context } = makeService({
+    async run(options) {
+      started.push(options.role.id);
+      await gate.promise;
+      return okResult();
+    },
+  }, { roles: writerRoles, admission: makeAdmission({}) });
+
+  const a = agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a')), context);
+  await tick();
+  const submitted = taskResult(await agents.get('orch-writer-b').handler.sendMessage(
+    sendParams(writerMessage('b'), { returnImmediately: true }), context));
+  await tick();
+  await agents.get('orch-writer-b').handler.cancelTask({ id: submitted.id }, context);
+  await tick();
+  const canceled = await agents.get('orch-writer-b').handler.getTask({ id: submitted.id }, context);
+  assert.equal(canceled.status.state, 5);
+  assert.deepEqual(started, ['orch-writer-a']);
+  gate.resolve();
+  assert.equal(taskResult(await a).status.state, 3);
+});
+
+const sampleUsage = () => ({
+  model: 'test', effort: 'low', startedAt: '2026-01-01T00:00:00.000Z', elapsedMs: 42, turns: 1, modelRequests: null,
+  tokens: { inputTokens: 10, outputTokens: 2, totalTokens: 12 }, tokenSource: 'total_delta',
+  cumulativeTotal: { totalTokens: 12 }, appServerVersion: '1.2.3',
+});
+const sampleConfig = { sandbox: 'read-only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', cwd: process.cwd() };
+
+function ledgerDb() {
+  const db = new Database(':memory:');
+  return { db, usageLedger: new UsageLedger({ db }) };
+}
+
+test('records one worker usage row and attaches usage, permissionEvents, provenance to the artifact', async () => {
+  const { db, usageLedger } = ledgerDb();
+  const events = [{ type: 'tool', tool: 'commandExecution', status: 'declined' }];
+  const { agents, context } = makeService({
+    async run() {
+      return { ...okResult(), usage: sampleUsage(), permissionEvents: events, permissionConfig: sampleConfig };
+    },
+  }, { usageLedger });
+  const params = sendParams(message('go'));
+  const done = taskResult(await agents.get('orch-planner').handler.sendMessage(params, context));
+  assert.equal(done.status.state, 3);
+  const meta = done.artifacts[0].metadata;
+  assert.equal(meta.usage.elapsedMs, 42);
+  assert.deepEqual(meta.permissionEvents, events);
+  assert.deepEqual(meta.provenance, {
+    role: 'orch-planner', sandbox: 'read-only', taskId: done.id, contextId: done.contextId,
+    workspace: process.cwd(), permissionConfig: sampleConfig,
+  });
+  assert.equal(meta.contract, WORKER_REPORT_CONTRACT);
+  const rows = usageLedger.listByTask(done.id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].entryId, `orch-planner:${done.id}:u`);
+  assert.equal(rows[0].outcome, 'completed');
+  assert.deepEqual(rows[0].tokens, sampleUsage().tokens);
+  assert.equal(rows[0].retries, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM usage_ledger').get().n, 1);
+});
+
+test('a thrown run error still records a row and carries usage on the failure status', async () => {
+  const { usageLedger } = ledgerDb();
+  const { agents, context } = makeService({
+    async run() {
+      const error = new Error('boom');
+      error.usage = sampleUsage();
+      error.permissionEvents = [{ type: 'hook', status: 'blocked' }];
+      error.permissionConfig = sampleConfig;
+      throw error;
+    },
+  }, { usageLedger });
+  const failed = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('go')), context));
+  assert.equal(failed.status.state, 4);
+  const meta = failed.status.message.metadata;
+  assert.equal(meta.usage.turns, 1);
+  assert.equal(meta.permissionEvents[0].type, 'hook');
+  assert.equal(meta.provenance.taskId, failed.id);
+  assert.equal(meta.failureKind, 'other');
+  const [row] = usageLedger.listByTask(failed.id);
+  assert.equal(row.outcome, 'failed');
+});
+
+test('missing usage is recorded as nulls with token source unavailable; retries count the context', async () => {
+  const { usageLedger } = ledgerDb();
+  const { agents, context } = makeService({ async run() { return okResult(); } }, { usageLedger });
+  const ids = [];
+  for (let i = 0; i < 2; i += 1) {
+    const done = taskResult(await agents.get('orch-planner').handler.sendMessage(
+      sendParams(writerMessage('go', { contextId: 'ctx-u3' })), context));
+    ids.push(done.id);
+  }
+  const second = usageLedger.listByTask(ids[1])[0];
+  assert.equal(second.tokens, null);
+  assert.equal(second.elapsedMs, null);
+  assert.equal(second.tokenSource, 'unavailable');
+  assert.equal(second.retries, 1);
+  assert.equal(usageLedger.listByTask(ids[0])[0].retries, 0);
+});
+
+test('a ledger failure never changes the task outcome', async () => {
+  const usageLedger = {
+    workerRowsForContext() { return 0; },
+    record() { throw new Error('disk full'); },
+  };
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const { agents, context } = makeService({ async run() { return okResult(); } }, { usageLedger });
+    const done = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('go')), context));
+    assert.equal(done.status.state, 3);
+    assert.equal(done.artifacts[0].metadata.provenance.role, 'orch-planner');
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test('a turn/start rejected by the server (known outcome) releases the writer', async () => {
+  const admission = makeAdmission({});
+  const { agents, context } = makeService({
+    async run(options) {
+      options.onTurnStart({ processIdentity: { pid: 1, pgid: 1, startTime: 'x' }, threadId: 'thr' });
+      throw Object.assign(new Error('invalid request'), { execution: { turnStartSent: true, turnTerminal: false, turnStartRejected: true } });
+    },
+  }, { roles: writerRoles, admission, reconcileRetry: { intervalMs: 5, totalMs: 20 } });
+  const failed = taskResult(await agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a')), context));
+  assert.equal(failed.status.state, 4);
+  assert.equal(admission.holder(), null);
+});
+
+test('a release() that throws once falls back to unresolved + reconcile instead of leaving the row active', async () => {
+  const admission = makeAdmission({ isProcessGroupGone: () => true, killOrphanProcessGroup: () => false });
+  const realRelease = admission.release.bind(admission);
+  let throws = 1;
+  admission.release = (id) => {
+    if (throws-- > 0) throw new Error('SQLITE_BUSY');
+    return realRelease(id);
+  };
+  const { agents, context } = makeService({ async run() { return okResult(); } },
+    { roles: writerRoles, admission, reconcileRetry: { intervalMs: 5, totalMs: 20 } });
+  const done = taskResult(await agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a')), context));
+  assert.equal(done.status.state, 3);
+  assert.notEqual(admission.holder()?.state, 'active');
+});
+
+test('a second turn on the same A2A task is recorded under its own turn id', async () => {
+  const { usageLedger } = ledgerDb();
+  let n = 0;
+  const { agents, context } = makeService({
+    async run() { n += 1; return { ...okResult(), turnId: `turn-${n}`, execution: { turnId: `turn-${n}` } }; },
+  }, { usageLedger });
+  const first = taskResult(await agents.get('orch-planner').handler.sendMessage(
+    sendParams(writerMessage('go', { contextId: 'ctx-two' })), context));
+  await agents.get('orch-planner').handler.sendMessage(
+    sendParams(writerMessage('again', { contextId: 'ctx-two', taskId: first.id })), context).catch(() => {});
+  const ids = usageLedger.listByTask(first.id).map((row) => row.entryId);
+  assert.equal(ids[0], `orch-planner:${first.id}:turn-1`);
+  const { workerUsageEntry } = require('../src/a2a-role-service');
+  assert.equal(workerUsageEntry({ roleId: 'r', taskId: 't', source: {} }).entryId, 'r:t');
+  assert.equal(workerUsageEntry({ roleId: 'r', taskId: 't', source: { execution: { turnId: 'u' } } }).entryId, 'r:t:u');
 });

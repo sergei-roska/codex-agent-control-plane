@@ -9,7 +9,10 @@ const { CodexAppServer } = require('./codex-app-server');
 const { loadRoles, createLeadRole } = require('./role-catalog');
 const { registerRoleAgents } = require('./a2a-role-service');
 const { LeadOrchestrator, ResumeInputError } = require('./lead-orchestrator');
-const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock } = require('./durable-store');
+const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
+const { WriterAdmission } = require('./writer-admission');
+const { UsageLedger } = require('./usage-ledger');
+const { validateAcceptanceContract, formatAcceptance } = require('./acceptance');
 const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
 
 const HOST = '127.0.0.1';
@@ -70,6 +73,10 @@ function describePause(taskId, pause) {
     lines.push(`Waiting for budget (${pause.source || 'unknown source'}): ${pause.message || 'usage limit reached.'}`);
     if (pause.resetsAt) lines.push(`Reported reset hint: ${pause.resetsAt}`);
     lines.push('Send a message to this task to retry once quota is available.');
+  } else if (pause?.kind === 'writer_unresolved') {
+    lines.push('Earlier writer outcome(s) are unresolved: the server could not prove the writer stopped, so writable work is blocked.');
+    for (const attempt of pause.attempts || []) lines.push(`  - ${attempt.attemptId} (${attempt.role}): ${attempt.reason}`);
+    lines.push('Send any message to this task to retry reconciliation once the earlier writer is proven stopped.');
   } else if (pause?.kind === 'error') {
     lines.push(`The run stopped on an error${pause.errorName ? ` (${pause.errorName})` : ''}: ${pause.message || 'unknown error'}`);
     lines.push('Send a message to this task to retry the failed step.');
@@ -123,6 +130,17 @@ function firstUserGoal(task) {
     } catch (_) { /* skip messages without usable text */ }
   }
   return '';
+}
+
+/** Metadata of the first non-empty user message in a task history, or {}. */
+function firstUserMetadata(task) {
+  for (const message of task?.history || []) {
+    if (message?.role !== 1) continue;
+    try {
+      if (extractGoal(message, { allowEmpty: true })) return message.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+    } catch (_) { /* skip messages without usable text */ }
+  }
+  return {};
 }
 
 function isResumeInputError(error) {
@@ -185,6 +203,23 @@ function makeLeadExecutor({ orchestrator }) {
         return;
       }
 
+      // The acceptance contract is read from a new run only; a resume can never change it.
+      let contract;
+      if (!resuming) {
+        const raw = requestContext.userMessage?.metadata?.acceptance ?? requestContext.request?.metadata?.acceptance;
+        try {
+          contract = validateAcceptanceContract(raw);
+        } catch (error) {
+          eventBus.publish(AgentEvent.statusUpdate({
+            taskId,
+            contextId,
+            status: status(TaskState.TASK_STATE_FAILED, agentMessage(taskId, contextId, 'acceptance-error', `Invalid acceptance contract: ${error.message}`)),
+            metadata: {},
+          }));
+          return;
+        }
+      }
+
       let resumeInput;
       if (resuming) {
         const messageMeta = requestContext.userMessage?.metadata || {};
@@ -202,7 +237,10 @@ function makeLeadExecutor({ orchestrator }) {
       eventBus.publish(AgentEvent.statusUpdate({
         taskId,
         contextId,
-        status: status(TaskState.TASK_STATE_WORKING),
+        status: status(TaskState.TASK_STATE_WORKING,
+          resuming && requestContext.userMessage?.metadata?.acceptance !== undefined
+            ? agentMessage(taskId, contextId, `resume-note-${Date.now()}`, 'Resumed. Acceptance metadata on a resume message is ignored; the contract was pinned when the run started.')
+            : undefined),
         // Task metadata merges shallowly, so a cleared pause is null rather than absent.
         metadata: resuming ? { pause: null } : {},
       }));
@@ -215,10 +253,12 @@ function makeLeadExecutor({ orchestrator }) {
           // Crash before the first checkpoint: start over from the original goal.
           const original = firstUserGoal(task);
           if (!original) throw new Error('The run has no checkpoint and the original goal could not be recovered from the task history.');
-          result = await orchestrator.run({ goal: original, runId: taskId, signal: controller.signal });
+          let originalContract;
+          try { originalContract = validateAcceptanceContract(firstUserMetadata(task).acceptance); } catch (_) { originalContract = undefined; }
+          result = await orchestrator.run({ goal: original, runId: taskId, contract: originalContract, signal: controller.signal });
         }
       } else {
-        result = await orchestrator.run({ goal, runId: taskId, signal: controller.signal });
+        result = await orchestrator.run({ goal, runId: taskId, contract, signal: controller.signal });
       }
       const paused = (result?.status === 'input_required' || result?.status === 'waiting_for_budget') && !controller.signal.aborted;
       if (paused) {
@@ -240,6 +280,7 @@ function makeLeadExecutor({ orchestrator }) {
         ? 'Cancellation was requested, but downstream A2A cancellation could not be confirmed.'
         : typeof result?.text === 'string' ? result.text : '';
       if (completed) {
+        const acceptanceText = formatAcceptance(result?.acceptance);
         eventBus.publish(AgentEvent.artifactUpdate({
           taskId,
           contextId,
@@ -247,8 +288,12 @@ function makeLeadExecutor({ orchestrator }) {
             artifactId: `${taskId}-result`,
             name: 'Orchestrator result',
             description: 'Final result from the Codex Universal A2A team.',
-            parts: [textPart(output)],
-            metadata: { rounds: result?.rounds ?? 0, assignments: result?.assignments ?? [] },
+            parts: [textPart(acceptanceText ? `${acceptanceText}\n\n${output}` : output)],
+            metadata: {
+              rounds: result?.rounds ?? 0,
+              assignments: result?.assignments ?? [],
+              ...(result?.acceptance ? { acceptance: result.acceptance } : {}),
+            },
             extensions: [],
           },
           append: false,
@@ -395,6 +440,7 @@ async function startServer({
   orchestratorFactory = (options) => new LeadOrchestrator(options),
   stateFile,
   state: providedState,
+  workspaceLockDir,
 } = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new RangeError('port must be an integer from 0 to 65535');
   if (typeof workspace !== 'string' || !workspace || !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
@@ -404,6 +450,7 @@ async function startServer({
   let state = providedState || null;
   const ownsState = !providedState;
   let releaseLock = () => {};
+  let releaseWorkspaceLock = () => {};
   try {
     await appServer.start?.();
     const accountResult = await appServer.getAccount();
@@ -412,6 +459,7 @@ async function startServer({
 
     if (!state) state = await openStateDatabase(stateFile ? { filePath: stateFile } : undefined);
     if (ownsState) releaseLock = acquireStateLock(state.filePath);
+    releaseWorkspaceLock = acquireWorkspaceLock(workspace, workspaceLockDir ? { lockDir: workspaceLockDir } : undefined);
 
     const authToken = loadOrCreateAuthToken(tokenFile ? { filePath: tokenFile } : undefined);
     const authMiddleware = createAuthMiddleware(authToken);
@@ -426,15 +474,18 @@ async function startServer({
     }
     // Reconcile only once this process owns both the state file and the port.
     await reconcileInterruptedTasks(state, { leadNamespace: 'orchestrator' });
+    const admission = new WriterAdmission({ db: state.db, workspace });
+    await admission.reconcileStale();
     const actualPort = httpServer?.address()?.port ?? port;
     const baseUrl = `http://${HOST}:${actualPort}`;
     const leadRole = createLeadRole(profilesDir ? { profilesDir } : undefined);
+    const usageLedger = new UsageLedger({ db: state.db });
     const orchestrator = orchestratorFactory({
-      appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: new DispatchJournal(state),
+      appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger,
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
-      roles, appServer, workspace, baseUrl, taskStoreFactory: (roleId) => createTaskStore(state, roleId),
+      roles, appServer, workspace, baseUrl, admission, usageLedger, taskStoreFactory: (roleId) => createTaskStore(state, roleId),
     });
     const leadAgent = registerLead(app, {
       leadRole, orchestrator, baseUrl, authMiddleware, taskStore: createTaskStore(state, 'orchestrator'),
@@ -470,6 +521,7 @@ async function startServer({
             if (ownsState) await state.close();
           } finally {
             releaseLock();
+            releaseWorkspaceLock();
           }
         }
       },
@@ -479,6 +531,7 @@ async function startServer({
     if (httpServer) await closeHttpServer(httpServer);
     if (state && ownsState) { try { await state.close(); } catch (_) { /* Preserve the startup failure. */ } }
     releaseLock();
+    releaseWorkspaceLock();
     throw error;
   }
 }

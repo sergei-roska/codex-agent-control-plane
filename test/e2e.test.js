@@ -14,6 +14,9 @@ const { startServer } = require('../src/server');
 const { LeadOrchestrator } = require('../src/lead-orchestrator');
 const { DECISION_SCHEMA } = require('../src/contracts');
 
+// Test files run in parallel processes; keep workspace locks private to this process.
+process.env.CODEX_A2A_WORKSPACE_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-ws-lock-'));
+
 const BUILDER_FILE = 'src/feature.txt';
 
 function decision(overrides = {}) {
@@ -184,7 +187,7 @@ test('e2e real stack', async (suite) => {
     await withStack(t, appServer, async (stack) => {
       const task = await send(stack, { text: 'Explore the repo' });
       assert.equal(task.status.state, TaskState.TASK_STATE_COMPLETED);
-      assert.equal(artifactText(task), 'Feature explored and done.');
+      assert.equal(artifactText(task), 'Acceptance: not_required\n\nFeature explored and done.');
       assert.equal(appServer.workerCalls.length, 1);
       assert.equal(appServer.workerCalls[0].role, 'orch-explorer');
       assert.equal(appServer.leadCalls.length, 2);
@@ -210,7 +213,7 @@ test('e2e real stack', async (suite) => {
         metadata: { decisionId: pause.decisionId, choice: 'a' },
       });
       assert.equal(done.status.state, TaskState.TASK_STATE_COMPLETED);
-      assert.equal(artifactText(done), 'Went with A.');
+      assert.equal(artifactText(done), 'Acceptance: not_required\n\nWent with A.');
       assert.equal(appServer.leadCalls.length, 2);
       assert.match(appServer.leadCalls[1].input, /Please use flavour A because of reasons/);
       assert.match(appServer.leadCalls[1].input, /"choice":"a"/);
@@ -267,7 +270,7 @@ test('e2e real stack', async (suite) => {
 
       const done = await send(stack, { text: 'budget is back', taskId: paused.id, contextId: paused.contextId });
       assert.equal(done.status.state, TaskState.TASK_STATE_COMPLETED);
-      assert.equal(artifactText(done), 'Finished after budget returned.');
+      assert.equal(artifactText(done), 'Acceptance: not_required\n\nFinished after budget returned.');
       assert.equal(appServer.leadCalls.length, 2);
     });
   });
@@ -319,7 +322,9 @@ test('e2e real stack', async (suite) => {
 
       const done = await send(stackB, { text: 'resume', taskId: leadTask.id, contextId: leadTask.contextId });
       assert.equal(done.status.state, TaskState.TASK_STATE_COMPLETED);
-      assert.equal(artifactText(done), 'Recovered after restart.');
+      // Stack B uses a different workspace (rootB/workspace), so builder execution row from stack A is not visible; acceptance resolves as unverified.
+      assert.match(artifactText(done), /^Acceptance: unverified[\s\S]*Recovered after restart\.$/);
+
       assert.equal(serverB.leadCalls.length, 1);
       assert.match(serverB.leadCalls[0].input, /resumed after an interruption/);
       assert.match(serverB.leadCalls[0].input, /"failureKind":"interrupted"/);

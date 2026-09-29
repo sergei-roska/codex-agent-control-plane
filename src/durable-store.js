@@ -2,7 +2,9 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const Database = require('better-sqlite3');
 const { Kysely, Migrator, SqliteDialect, sql } = require('kysely');
 const { SqliteSaver } = require('@langchain/langgraph-checkpoint-sqlite');
@@ -101,10 +103,16 @@ function createJournalTable(db) {
       state TEXT NOT NULL,
       result_json TEXT,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      objective_sha256 TEXT
     );
     CREATE INDEX IF NOT EXISTS dispatch_journal_run_idx ON dispatch_journal (run_id, created_at);
   `);
+  // Existing state files predate objective_sha256.
+  const columns = db.prepare("PRAGMA table_info('dispatch_journal')").all();
+  if (!columns.some((column) => column.name === 'objective_sha256')) {
+    db.exec('ALTER TABLE dispatch_journal ADD COLUMN objective_sha256 TEXT');
+  }
 }
 
 async function openStateDatabase({ filePath } = {}) {
@@ -162,13 +170,10 @@ function pidAlive(pid) {
 }
 
 /**
- * Take an exclusive `<stateFile>.lock` (O_EXCL, holds our pid). A lock whose pid is dead is
- * stale and replaced; a live one fails with a clear error. Returns a release function.
- * In-memory state has nothing to protect and returns a no-op.
+ * Take an exclusive pid lock file (O_EXCL, holds our pid). A lock whose pid is dead is
+ * stale and replaced; a live one fails via inUseMessage(pid). Returns a release function.
  */
-function acquireStateLock(filePath) {
-  if (filePath === ':memory:') return () => {};
-  const lockPath = `${stateDbPath(filePath)}.lock`;
+function acquirePidLock(lockPath, inUseMessage) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       const fd = fs.openSync(lockPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
@@ -190,11 +195,55 @@ function acquireStateLock(filePath) {
       throw error;
     }
     if (Number.isInteger(holder) && holder > 0 && pidAlive(holder)) {
-      throw new Error(`State file ${stateDbPath(filePath)} is in use by pid ${holder}`);
+      throw new Error(inUseMessage(holder));
     }
     try { fs.unlinkSync(lockPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
-  throw new Error(`Could not acquire the state lock ${lockPath}`);
+  throw new Error(`Could not acquire the lock ${lockPath}`);
+}
+
+/**
+ * Take an exclusive `<stateFile>.lock`. In-memory state has nothing to protect and returns
+ * a no-op.
+ */
+function acquireStateLock(filePath) {
+  if (filePath === ':memory:') return () => {};
+  return acquirePidLock(`${stateDbPath(filePath)}.lock`, (holder) => `State file ${stateDbPath(filePath)} is in use by pid ${holder}`);
+}
+
+/**
+ * Take an exclusive per-workspace lock so two servers with different state files cannot
+ * share one workspace. In a repository the lock is `<common dir>/codex-a2a-writer.lock`, shared by every
+ * workspace in that repository; otherwise (or with `lockDir`) it lives in `lockDir` (default: the OS temp dir).
+ */
+function repoCommonDir(workspace) {
+  try {
+    const out = execFileSync('git', ['-C', workspace, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return out ? path.resolve(workspace, out) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function acquireWorkspaceLock(workspace, { lockDir = process.env.CODEX_A2A_WORKSPACE_LOCK_DIR || null } = {}) {
+  const canonical = fs.realpathSync(workspace);
+  if (!lockDir) {
+    // One lock per repository, so nested workspaces exclude each other and the lock does not depend on TMPDIR.
+    const common = repoCommonDir(canonical);
+    if (common && fs.existsSync(common)) {
+      return acquirePidLock(
+        path.join(fs.realpathSync(common), 'codex-a2a-writer.lock'),
+        (holder) => `Workspace ${canonical} is in use by pid ${holder}`,
+      );
+    }
+    lockDir = os.tmpdir();
+  }
+  const digest = crypto.createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 16);
+  fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+  return acquirePidLock(
+    path.join(lockDir, `codex-a2a-workspace-${digest}.lock`),
+    (holder) => `Workspace ${canonical} is in use by pid ${holder}`,
+  );
 }
 
 // ---------------------------------------------------------- task store
@@ -230,6 +279,7 @@ function fromRow(row) {
     taskId: row.task_id,
     state: row.state,
     result: parseResult(row.result_json),
+    objectiveSha256: row.objective_sha256 ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -248,8 +298,8 @@ class DispatchJournal {
     this.selectOne = this.db.prepare('SELECT * FROM dispatch_journal WHERE attempt_id = ?');
     this.insert = this.db.prepare(`
       INSERT OR IGNORE INTO dispatch_journal
-        (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id, state, result_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, 'submitting', NULL, ?, ?)`);
+        (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id, state, result_json, created_at, updated_at, objective_sha256)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, 'submitting', NULL, ?, ?, ?)`);
     this.markSubmitted = this.db.prepare(
       "UPDATE dispatch_journal SET task_id = ?, state = 'submitted', updated_at = ? WHERE attempt_id = ?");
     this.markFinished = this.db.prepare(
@@ -260,7 +310,7 @@ class DispatchJournal {
   recordSubmitting(row) {
     requireFields(row);
     const at = nowIso();
-    this.insert.run(row.attemptId, row.runId, row.assignmentId, row.role, row.sandbox, row.contextId, at, at);
+    this.insert.run(row.attemptId, row.runId, row.assignmentId, row.role, row.sandbox, row.contextId, at, at, row.objectiveSha256 ?? null);
     return this.get(row.attemptId);
   }
 
@@ -304,6 +354,7 @@ class InMemoryDispatchJournal {
         taskId: null,
         state: 'submitting',
         result: null,
+        objectiveSha256: row.objectiveSha256 ?? null,
         createdAt: at,
         updatedAt: at,
       });
@@ -388,7 +439,9 @@ async function reconcileInterruptedTasks(state, { leadNamespace = 'orchestrator'
 }
 
 module.exports = {
+  acquirePidLock,
   acquireStateLock,
+  acquireWorkspaceLock,
   DEFAULT_STATE_DB,
   DispatchJournal,
   InMemoryDispatchJournal,

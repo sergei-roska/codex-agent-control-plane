@@ -46,6 +46,7 @@ test('parseArgs reads leading flags then free text', () => {
   });
   assert.deepEqual(parseArgs(['--task=t1', 'ok']), { task: 't1', text: 'ok' });
   assert.deepEqual(parseArgs(['build it']), { text: 'build it' });
+  assert.deepEqual(parseArgs(['--check', 'npm test', '--check=node -v', 'goal']), { checks: ['npm test', 'node -v'], text: 'goal' });
   assert.throws(() => parseArgs(['--bogus', 'x', 'y']), /Unknown option/);
   assert.throws(() => parseArgs(['--task']), /requires a value/);
 });
@@ -139,4 +140,47 @@ test('failed task exits 1 and missing text exits 2', async () => {
   assert.equal((await run(['goal'], client, env)).code, 1);
   assert.equal((await run([], client, env)).code, 2);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('--check builds acceptance metadata for a new run', async () => {
+  const { dir, env } = setup();
+  const sent = [];
+  const client = {
+    async sendMessage(request) { sent.push(request); return { id: 't', status: { state: TaskState.TASK_STATE_COMPLETED } }; },
+  };
+  const result = await run(['--check', 'npm  test', '--check', 'node -v', 'ship it'], client, env);
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(result.code, 0);
+  assert.deepEqual(sent[0].message.metadata, {
+    acceptance: { requiredChecks: [{ id: 'check-1', argv: ['npm', 'test'] }, { id: 'check-2', argv: ['node', '-v'] }] },
+  });
+  assert.equal(sent[0].message.parts[0].content.value, 'ship it');
+});
+
+test('--check combined with --task is an error and sends nothing', async () => {
+  const { dir, env } = setup();
+  let sends = 0;
+  const client = { async getTask() { return { id: 't', contextId: 'c' }; }, async sendMessage() { sends += 1; return {}; } };
+  const result = await run(['--task', 't', '--check', 'npm test', 'answer'], client, env);
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(result.code, 2);
+  assert.match(result.err, /--check .* new run only/);
+  assert.equal(sends, 0);
+});
+
+test('the acceptance disposition is printed and rejected or unverifiable exit 4', async () => {
+  const { dir, env } = setup();
+  const task = (disposition, text = 'Text') => ({
+    id: 't', status: { state: TaskState.TASK_STATE_COMPLETED },
+    artifacts: [{ parts: [{ content: { $case: 'text', value: text } }], metadata: { acceptance: { disposition } } }],
+  });
+  const codes = {};
+  for (const disposition of ['accepted', 'rejected', 'unverifiable', 'unverified', 'not_required']) {
+    const client = { async sendMessage() { return task(disposition); } };
+    const result = await run(['goal'], client, env);
+    codes[disposition] = result.code;
+    assert.match(result.out, new RegExp(`Acceptance: ${disposition}`));
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.deepEqual(codes, { accepted: 0, rejected: 4, unverifiable: 4, unverified: 0, not_required: 0 });
 });

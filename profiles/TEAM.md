@@ -71,6 +71,8 @@ Choose LangGraph or another framework only after checking the concrete control-f
 
 Verify the exact artifact revision against task acceptance criteria. Check failed and interrupted runs, duplicate or late results, exhausted retries, cancellation, stale approvals, and conflicting outputs where relevant. For targeted reliability review, read `profiles/skills/orch-recovery-review/SKILL.md`. Keep mechanical checks independent of model verdicts.
 
+Prefer transparent, read-only repository commands for inspection, and use `jq` for JSON. If a hook blocks an inspection command, report the evidence gap; do not disguise the command through another interpreter.
+
 The lead reviews actual diffs, integrates only accepted outputs, runs the needed checks, and reports remaining limits. Prefer evidence from representative use cases over broad test volume.
 
 ## Pack layout

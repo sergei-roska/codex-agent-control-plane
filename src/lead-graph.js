@@ -10,8 +10,10 @@ const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
 const {
   DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, parseWorkerReport, classifyCodexError,
 } = require('./contracts');
+const { runAcceptance, assessWithoutChecks } = require('./acceptance');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
 
+const DEFAULT_RECONCILE_WAIT_MS = 30_000;
 const MAX_OUTCOME_TEXT_CHARS = 12_000;
 const MAX_STATUS_TEXT_CHARS = 2_000;
 const MAX_REPORT_CHARS = 100_000;
@@ -126,10 +128,14 @@ function assignmentResult(task) {
     name: artifact.name || '',
     description: artifact.description || '',
     text: extractTextParts(artifact.parts).slice(0, MAX_REPORT_CHARS),
+    metadata: artifact.metadata && typeof artifact.metadata === 'object' ? artifact.metadata : null,
   }));
   const history = (task?.history || []).slice(-5).map((message) => extractTextParts(message.parts).slice(0, MAX_STATUS_TEXT_CHARS)).filter(Boolean);
   const text = artifacts.map((artifact) => artifact.text).filter(Boolean).join('\n') || statusMessage || history.at(-1) || '';
   const failureKind = status?.message?.metadata?.failureKind;
+  const writerExecution = artifacts.map((artifact) => artifact.metadata?.writerExecution).find((entry) => entry && typeof entry === 'object')
+    || (status?.message?.metadata?.writerExecution && typeof status.message.metadata.writerExecution === 'object' ? status.message.metadata.writerExecution : null);
+  const effects = status?.message?.metadata?.effects;
   return {
     taskId: task?.id || null,
     contextId: task?.contextId || null,
@@ -139,6 +145,8 @@ function assignmentResult(task) {
     history,
     text: text.slice(0, MAX_REPORT_CHARS),
     ...(typeof failureKind === 'string' ? { failureKind } : {}),
+    ...(writerExecution ? { writerExecution } : {}),
+    ...(typeof effects === 'string' ? { effects } : {}),
   };
 }
 
@@ -197,14 +205,25 @@ function normalizeRel(file, workspace) {
   return path.posix.normalize(value).replace(/^\.\//, '');
 }
 
-// Reported filesChanged outside allowedFiles (exact file or directory prefix).
-function scopeViolations(report, allowedFiles, workspace) {
-  if (!report) return [];
+// Paths outside allowedFiles (exact file or directory prefix).
+function outsideAllowed(files, allowedFiles, workspace) {
   const allowed = allowedFiles.map((file) => normalizeRel(file, workspace).replace(/\/+$/, ''));
-  return report.filesChanged.filter((file) => {
+  return files.filter((file) => {
     const rel = normalizeRel(file, workspace);
     return !allowed.some((entry) => rel === entry || rel.startsWith(`${entry}/`));
   });
+}
+
+// Reported filesChanged outside allowedFiles.
+function scopeViolations(report, allowedFiles, workspace) {
+  if (!report) return [];
+  return outsideAllowed(report.filesChanged, allowedFiles, workspace);
+}
+
+// A writer outcome is settled when the server proved the execution ended or nothing ran.
+function isSettledWriter(result) {
+  const state = result?.writerExecution?.state;
+  return state === 'released' || state === 'reconciled' || result?.effects === 'none';
 }
 
 function resetsAtHint(limits) {
@@ -235,6 +254,14 @@ function pauseMessage(value) {
       'Answer by sending a message to this task with your answer, optionally naming a choice (option id) and the decision ID.',
     ].join('\n');
   }
+  if (value?.kind === 'writer_unresolved') {
+    const lines = (value.attempts || []).map((attempt) => `  - ${attempt.attemptId} (${attempt.role}): ${attempt.reason}`).join('\n');
+    return [
+      'Earlier writer outcome(s) are unresolved: the server could not prove that the writer stopped, so the workspace may still change.',
+      `Attempts:\n${lines}`,
+      'Send any message to this task to resume once the earlier writer is proven stopped; the run reconciles again before the lead continues.',
+    ].join('\n');
+  }
   const hint = value?.resetsAt ? ` The usage window may reset around ${value.resetsAt} (a hint only).` : '';
   return `Waiting for Codex usage budget (${value?.source || 'unknown'} turn hit a usage limit).${hint} Send a message to this task to resume once budget is available.`;
 }
@@ -259,6 +286,10 @@ const LeadState = Annotation.Root({
   humanAnswers: last(() => []),
   humanCount: last(() => 0),
   budget: last(() => null),
+  unresolvedWriters: last(() => []),
+  contract: last(() => ({ requiredChecks: [] })),
+  acceptanceAttempts: last(() => 0),
+  acceptance: last(() => null),
   status: last(() => null),
   text: last(() => ''),
   result: last(() => null),
@@ -270,7 +301,9 @@ const LeadState = Annotation.Root({
  *   runtimeFor(runId) -> { signal, onEvent, resumed },   // per-run, never checkpointed
  *   clientFor(roleName) -> A2A client, authOptions() -> request options,
  *   cancelUntilConfirmed(client, taskId, contextId) -> terminal task,
- *   emit(onEvent, event), checkpointer?
+ *   emit(onEvent, event), checkpointer?,
+ *   admission?: WriterAdmission, reconcileWaitMs?: number,
+ *   usageLedger?: UsageLedger, runCheckImpl?, snapshot?,
  * }
  * Returns the compiled graph when deps.checkpointer is given, else the StateGraph.
  */
@@ -278,6 +311,8 @@ function buildLeadGraph(deps) {
   const {
     appServer, roles, leadRole, workspace, maxRounds, journal, pollIntervalMs,
   } = deps;
+  const { admission } = deps;
+  const reconcileWaitMs = Number.isFinite(deps.reconcileWaitMs) ? deps.reconcileWaitMs : DEFAULT_RECONCILE_WAIT_MS;
 
   const runtimeOf = (config) => deps.runtimeFor(config?.configurable?.thread_id) || {};
   const requestOptions = (signal) => ({ ...(signal ? { signal } : {}), ...deps.authOptions() });
@@ -286,6 +321,9 @@ function buildLeadGraph(deps) {
     const result = item.result;
     const parsed = result.status === 'TASK_STATE_COMPLETED' ? parseWorkerReport(result.artifacts?.[0]?.text || result.text) : { report: null, error: null };
     const violations = scopeViolations(parsed.report, item.assignment.allowedFiles, workspace);
+    const writerExecution = result.writerExecution || null;
+    const attestedDelta = writerExecution?.delta || null;
+    const attestedPaths = Array.isArray(attestedDelta?.changedPaths) ? attestedDelta.changedPaths : [];
     return {
       assignmentId: item.assignmentId,
       attemptId: item.attemptId,
@@ -298,6 +336,10 @@ function buildLeadGraph(deps) {
       ...(parsed.report ? {} : { text: (result.text || '').slice(0, MAX_OUTCOME_TEXT_CHARS) }),
       failureKind: result.failureKind || null,
       scopeViolations: violations,
+      writerExecution,
+      effects: result.effects || null,
+      attestedScopeViolations: outsideAllowed(attestedPaths, item.assignment.allowedFiles, workspace),
+      attestedDeltaKnown: attestedDelta?.known === true,
       ...(result.failure ? { failure: result.failure } : {}),
     };
   }
@@ -313,6 +355,10 @@ function buildLeadGraph(deps) {
     ];
     if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
     sections.push('Open worker decisions (each must be resolved in resolutions, or listed in humanInput.relatedDecisionIds):\n' + JSON.stringify(openDecisions));
+    if (state.acceptance?.disposition === 'rejected' && state.acceptanceAttempts > 0 && !state.status) {
+      const issues = (state.acceptance.issues || []).map((issue) => `${issue.code}: ${issue.detail}`);
+      sections.push(`Acceptance note: the deterministic acceptance run for your finish decision was rejected (disposition ${state.acceptance.disposition}). You may dispatch fixes within the round limits, then finish again; a second rejection ends the run as rejected. Your final text never changes the disposition.\nIssues:\n${issues.map((line) => `- ${line}`).join('\n')}`);
+    }
     if (state.humanAnswers.length > 0) sections.push('Human answers (authoritative):\n' + JSON.stringify(state.humanAnswers));
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(state.outcomes));
     sections.push([
@@ -320,9 +366,43 @@ function buildLeadGraph(deps) {
       'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, and humanInput. Use empty arrays, an empty string, or null for unused fields.',
       'Worker decision requests: resolve them yourself (resolutions: decisionId, choice, rationale) whenever the evidence supports a choice. Worker reports are self-reported; check scopeViolations and reportError.',
       'Use request_human_input only for missing_authority, irreversible_or_external, or product_choice, and only after investigating: give options, a recommendation, the evidence checked, and the independent work that can proceed.',
-      'Reconciliation: an outcome with status outcome_unknown, failureKind interrupted, or failureKind usage_limit from a writable role means workspace effects are unknown. Before re-dispatching a writer, inspect the workspace state with a read-only role. dispatch_error means the submission failed and no A2A task was found for it.',
+      'Writer reconciliation is mechanical: before you decide, the server reconciles every writable outcome whose effects were unknown and lists the result as an outcome of kind reconciliation, with the attested changedPaths. attestedScopeViolations are changes the server observed outside allowedFiles; a report filesChanged list is self-reported and advisory. A writable dispatch is refused while any writer outcome is unresolved. For a read-only role, dispatch_error means the submission could not be matched to a task at lookup time; such a role cannot have workspace write effects.',
     ].join('\n'));
     return sections.join('\n\n');
+  }
+
+  function recordLeadTurn(state, source, outcome) {
+    if (!deps.usageLedger) return;
+    try {
+      const usage = source?.usage || null;
+      const threadId = source?.threadId || source?.execution?.threadId || state.threadId || null;
+      const turnId = source?.turnId || source?.execution?.turnId || null;
+      const entryId = turnId
+        ? `lead:${threadId || state.runId}:${turnId}`
+        : `lead:${state.runId}:r${state.round}:${usage?.startedAt || new Date().toISOString()}`;
+      deps.usageLedger.record({
+        entryId,
+        kind: 'lead_turn',
+        runId: state.runId,
+        role: leadRole?.name || 'lead',
+        taskId: null,
+        contextId: null,
+        attemptId: null,
+        model: usage?.model ?? null,
+        effort: usage?.effort ?? null,
+        startedAt: usage?.startedAt ?? null,
+        elapsedMs: usage?.elapsedMs ?? null,
+        turns: usage?.turns ?? null,
+        modelRequests: usage?.modelRequests ?? null,
+        retries: null,
+        tokens: usage?.tokens ?? null,
+        tokenSource: usage?.tokenSource ?? 'unavailable',
+        cumulativeTotal: usage?.cumulativeTotal ?? null,
+        appServerVersion: usage?.appServerVersion ?? null,
+        outcome,
+        permissionEvents: Array.isArray(source?.permissionEvents) ? source.permissionEvents : [],
+      });
+    } catch (_) { /* Usage recording never breaks a run. */ }
   }
 
   // ---- nodes
@@ -363,17 +443,21 @@ function buildLeadGraph(deps) {
         signal,
       });
     } catch (error) {
-      if (error?.name === 'AbortError' && signal?.aborted) return { ...update, status: 'canceled', text: CANCELED_TEXT };
-      if (classifyCodexError(error) === 'usage_limit') return { ...update, budget: { source: 'lead' } };
+      const kind = error?.name === 'AbortError' && signal?.aborted ? 'aborted' : classifyCodexError(error) === 'usage_limit' ? 'usage_limit' : 'error';
+      if (error?.usage || error?.execution) recordLeadTurn(state, error, kind);
+      if (kind === 'aborted') return { ...update, status: 'canceled', text: CANCELED_TEXT };
+      if (kind === 'usage_limit') return { ...update, budget: { source: 'lead' } };
       throw error;
     }
     update.threadId = leadResult.threadId || state.threadId;
+    recordLeadTurn(state, leadResult, leadResult.status || 'completed');
 
     const decision = parseDecision(leadResult.text);
     validateDecision(decision, {
       roles,
       attemptedRoles: new Set(state.attemptedRoles),
       outcomeCount: state.outcomes.length,
+      unresolvedWriterCount: state.unresolvedWriters.length,
       openDecisionIds: new Set(state.openDecisions.map((entry) => entry.id)),
     });
     deps.emit(runtime.onEvent, { type: 'decision', round: state.round + 1, action: decision.action });
@@ -436,7 +520,13 @@ function buildLeadGraph(deps) {
     if (signal?.aborted) return item;
     if (!row) {
       journal.recordSubmitting({
-        attemptId: item.attemptId, runId: item.runId, assignmentId: item.assignmentId, role: item.role, sandbox: item.sandbox, contextId: item.contextId,
+        attemptId: item.attemptId,
+        runId: item.runId,
+        assignmentId: item.assignmentId,
+        role: item.role,
+        sandbox: item.sandbox,
+        contextId: item.contextId,
+        objectiveSha256: sha256(String(item.assignment?.objective ?? '')),
       });
     } else {
       // Journal says "submitting": the send may or may not have reached the server.
@@ -481,8 +571,9 @@ function buildLeadGraph(deps) {
         journal.recordSubmitted(item.attemptId, found.id);
         return { ...item, state: 'submitted', taskId: found.id };
       }
-      if (reconcileFailed && item.sandbox !== 'read-only') {
-        return finishItem(item, syntheticResult('outcome_unknown', `Submission of ${role.name} failed (${errorText(error)}) and the A2A task lookup also failed; the role can write, so workspace effects are unknown.`, {
+      if (item.sandbox !== 'read-only') {
+        const lookup = reconcileFailed ? 'the A2A task lookup also failed' : 'the immediate A2A task lookup found no task';
+        return finishItem(item, syntheticResult('outcome_unknown', `Submission of ${role.name} failed (${errorText(error)}) and ${lookup}; a task may be accepted later, so workspace effects are unknown.`, {
           contextId: item.contextId, failure: { name: error?.name || 'Error', message: errorText(error) },
         }));
       }
@@ -493,6 +584,9 @@ function buildLeadGraph(deps) {
 
     const task = resultTask(submitted);
     if (!task) {
+      if (item.sandbox !== 'read-only') {
+        return finishItem(item, syntheticResult('outcome_unknown', `A2A role ${role.name} returned no task ID; it may have accepted the writable task, so workspace effects are unknown.`, { contextId: item.contextId }));
+      }
       if (submitted?.message) return finishItem(item, { ...syntheticResult('TASK_STATE_COMPLETED', ''), contextId: item.contextId, text: extractTextParts(submitted.message.parts).slice(0, MAX_REPORT_CHARS) });
       return finishItem(item, syntheticResult('dispatch_error', `A2A role ${role.name} did not return a task ID`, { contextId: item.contextId }));
     }
@@ -533,9 +627,38 @@ function buildLeadGraph(deps) {
       update.pendingAssignments = null;
     }
 
+    // Serial batch: once a finished writer of this batch is not provably settled, no further writer
+    // is submitted. Its workspace effects are unknown, so the rest are skipped and reconcile runs.
+    if (!batch.parallel && batch.items.some((item) => item.state === 'finished' && item.sandbox !== 'read-only' && !isSettledWriter(item.result))) {
+      batch = {
+        ...batch,
+        items: batch.items.map((item) => {
+          if (item.state !== 'pending' || item.sandbox === 'read-only') return item;
+          const row = journal.get(item.attemptId);
+          if (!row) {
+            journal.recordSubmitting({
+              attemptId: item.attemptId,
+              runId: item.runId,
+              assignmentId: item.assignmentId,
+              role: item.role,
+              sandbox: item.sandbox,
+              contextId: item.contextId,
+              objectiveSha256: sha256(String(item.assignment?.objective ?? '')),
+            });
+          }
+          return finishItem(item, {
+            ...syntheticResult('skipped_unresolved_writer', 'Not submitted: an earlier writer in this batch has an unresolved outcome, so the workspace may still change.', { contextId: item.contextId }),
+            effects: 'none',
+          });
+        }),
+      };
+    }
     const targets = batch.parallel
       ? batch.items.filter((item) => item.state === 'pending')
       : batch.items.filter((item) => item.state === 'pending').slice(0, 1);
+    if (state.unresolvedWriters.length > 0 && targets.some((item) => item.sandbox !== 'read-only')) {
+      throw new Error(`Writable dispatch refused: ${state.unresolvedWriters.length} writer outcome(s) are unresolved`);
+    }
     // An abort during submit leaves the item submitted with an unknown task so collect can cancel it.
     const settled = await Promise.allSettled(targets.map((item) => submitItem(item, signal).catch((error) => {
       if (error?.name === 'AbortError') return { ...item, state: 'submitted', taskId: null };
@@ -607,13 +730,97 @@ function buildLeadGraph(deps) {
     }
     for (const outcome of summaries) deps.emit(runtime.onEvent, { type: 'assignment', round: state.batch.round, ...outcome });
     deps.emit(runtime.onEvent, { type: 'round', round: state.batch.round, outcomes: summaries });
+    const unresolvedWriters = [...state.unresolvedWriters];
+    for (const item of finished) {
+      if (item.sandbox === 'read-only' || isSettledWriter(item.result)) continue;
+      if (unresolvedWriters.some((entry) => entry.attemptId === item.attemptId)) continue;
+      unresolvedWriters.push({
+        attemptId: item.attemptId,
+        assignmentId: item.assignmentId,
+        role: item.role,
+        contextId: item.result.contextId || item.contextId || null,
+        taskId: item.result.taskId || item.taskId || null,
+        allowedFiles: Array.isArray(item.assignment?.allowedFiles) ? item.assignment.allowedFiles : [],
+        cause: item.result.status === 'outcome_unknown' ? 'outcome_unknown'
+          : (item.result.failureKind || (item.result.writerExecution?.state ? `writer_${item.result.writerExecution.state}` : 'no_writer_execution')),
+      });
+    }
     const limited = summaries.some((outcome) => outcome.failureKind === 'usage_limit');
     return {
       outcomes: [...state.outcomes, ...summaries],
       openDecisions: open,
+      unresolvedWriters,
       batch: null,
       ...(limited ? { budget: { source: 'worker' } } : {}),
     };
+  }
+
+  // Deterministic settlement of one unresolved writer: no model, only admission facts.
+  async function settleEntry(entry, signal) {
+    const base = { kind: 'reconciliation', attemptId: entry.attemptId, assignmentId: entry.assignmentId, role: entry.role };
+    const unresolved = (reason) => ({ ...base, state: 'unresolved', changedPaths: [], deltaKnown: false, reason });
+    if (!admission) return unresolved('no_admission');
+    const settledRow = (row, reason) => ({
+      ...base,
+      state: 'reconciled',
+      changedPaths: Array.isArray(row.delta?.changedPaths) ? row.delta.changedPaths : [],
+      deltaKnown: row.delta?.known === true,
+      reason,
+    });
+    try {
+      let row = entry.contextId ? admission.findByContextId(entry.contextId) : null;
+      if (!row) {
+        if (!entry.contextId) return unresolved('no_context_id');
+        row = admission.fence(entry.contextId, 'lead_reconcile')?.execution || null;
+        if (!row) {
+          // A task existed but no execution row does (checkpoint predates writer admission): the writer may have run.
+          if (entry.taskId) return { ...base, state: 'legacy_unverified', changedPaths: [], deltaKnown: false, reason: 'no_execution_record' };
+          return { ...base, state: 'never_executed', changedPaths: [], deltaKnown: true, reason: 'fenced_before_execution' };
+        }
+      }
+      const deadline = Date.now() + reconcileWaitMs;
+      for (;;) {
+        throwIfAborted(signal);
+        row = admission.get(row.executionId) || row;
+        if (row.state === 'released' || row.state === 'reconciled') return settledRow(row, `execution ${row.state}`);
+        if (row.state === 'unresolved') {
+          const outcome = await admission.reconcile(row.executionId);
+          const after = admission.get(row.executionId);
+          if (after && (after.state === 'released' || after.state === 'reconciled')) return settledRow(after, 'reconciled by server');
+          return unresolved(outcome?.reason || after?.reason || 'quiescence_unproven');
+        }
+        if (row.state !== 'active') return unresolved(`unexpected_state_${row.state}`);
+        if (Date.now() >= deadline) return unresolved('still_active');
+        await wait(pollIntervalMs, signal);
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      return unresolved(`reconcile_error: ${errorText(error)}`);
+    }
+  }
+
+  async function reconcile(state, config) {
+    const runtime = runtimeOf(config);
+    // Everything before interrupt() re-runs on resume; settling is idempotent and outcomes are returned once.
+    for (;;) {
+      const results = [];
+      for (const entry of state.unresolvedWriters) results.push(await settleEntry(entry, runtime.signal));
+      const stuck = results.filter((result) => result.state === 'unresolved');
+      if (stuck.length === 0) {
+        const attested = results.map((result, index) => {
+          const allowed = state.unresolvedWriters[index].allowedFiles;
+          return {
+            ...result,
+            attestedScopeViolations: Array.isArray(allowed) ? outsideAllowed(result.changedPaths, allowed, workspace) : [],
+          };
+        });
+        for (const result of attested) deps.emit(runtime.onEvent, { type: 'reconciliation', round: state.round, ...result });
+        return { outcomes: [...state.outcomes, ...attested], unresolvedWriters: [] };
+      }
+      const value = { kind: 'writer_unresolved', attempts: stuck.map((result) => ({ attemptId: result.attemptId, role: result.role, reason: result.reason })) };
+      value.message = pauseMessage(value);
+      interrupt(value);
+    }
   }
 
   async function humanInput(state) {
@@ -642,7 +849,104 @@ function buildLeadGraph(deps) {
     return { budget: null };
   }
 
+  // One entry per writable attempt; a reconciliation outcome overrides the original delta.
+  function acceptanceWriters(state) {
+    const reconciled = new Map();
+    for (const outcome of state.outcomes) if (outcome.kind === 'reconciliation') reconciled.set(outcome.attemptId, outcome);
+    return state.outcomes.filter((outcome) => outcome.kind !== 'reconciliation' && outcome.sandbox !== 'read-only').map((outcome) => {
+      const later = reconciled.get(outcome.attemptId);
+      return {
+        attemptId: outcome.attemptId,
+        role: outcome.role,
+        // A reconciled execution row proves the writer ran even when its task carried no writerExecution.
+        ran: (outcome.writerExecution != null && outcome.effects !== 'none') || later?.state === 'reconciled' || later?.state === 'legacy_unverified',
+        completed: outcome.status === 'TASK_STATE_COMPLETED',
+        reportValid: outcome.report != null,
+        reportedScopeViolations: outcome.scopeViolations || [],
+        attestedScopeViolations: later ? (later.attestedScopeViolations || []) : (outcome.attestedScopeViolations || []),
+        deltaKnown: later ? later.deltaKnown === true : outcome.attestedDeltaKnown === true,
+      };
+    });
+  }
+
+  async function assess(state, signal) {
+    const writers = acceptanceWriters(state);
+    const unresolvedWriterCount = state.unresolvedWriters.length;
+    const snapshot = deps.snapshot;
+    const checks = state.contract?.requiredChecks || [];
+    if (checks.length === 0) {
+      return assessWithoutChecks({ workspace, writers, unresolvedWriterCount, ...(snapshot ? { snapshot } : {}) });
+    }
+    return runAcceptance({
+      workspace,
+      runId: state.runId,
+      attempt: state.acceptanceAttempts + 1,
+      contract: state.contract,
+      writers,
+      unresolvedWriterCount,
+      admission: deps.admission,
+      runCheckImpl: deps.runCheckImpl,
+      signal,
+      ...(snapshot ? { snapshot } : {}),
+    });
+  }
+
+  // Deterministic acceptance of a finish decision. The lead's final text never changes the disposition.
+  async function accept(state, config) {
+    const runtime = runtimeOf(config);
+    throwIfAborted(runtime.signal);
+    let acceptance;
+    try {
+      acceptance = await assess(state, runtime.signal);
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      const detail = errorText(error);
+      acceptance = {
+        disposition: 'unverifiable',
+        reasons: [{ code: 'acceptance_error', detail }],
+        issues: [{ code: 'acceptance_error', detail }],
+        candidate: { kind: null, head: null, fingerprint: null },
+        candidateAfter: { fingerprint: null },
+        checks: [],
+        requiredCheckIds: (state.contract?.requiredChecks || []).map((check) => check.id),
+        verifiedAt: new Date().toISOString(),
+        admissionHeld: false,
+      };
+    }
+    deps.emit(runtime.onEvent, { type: 'acceptance', round: state.round, disposition: acceptance.disposition, reasons: acceptance.reasons });
+    if (acceptance.disposition === 'rejected' && state.acceptanceAttempts < 1) {
+      return { acceptance, acceptanceAttempts: state.acceptanceAttempts + 1, status: null, text: '' };
+    }
+    return { acceptance };
+  }
+
   async function finish(state) {
+    let acceptance = state.acceptance;
+    if (!acceptance) {
+      // Canceled, max_rounds or failed before any acceptance run: report what is known without running checks.
+      const checks = state.contract?.requiredChecks || [];
+      if (checks.length > 0) {
+        const detail = 'The run ended before the required checks were run.';
+        acceptance = {
+          disposition: 'unverifiable',
+          reasons: [{ code: 'acceptance_not_run', detail }],
+          issues: [{ code: 'acceptance_not_run', detail }],
+          candidate: { kind: null, head: null, fingerprint: null },
+          candidateAfter: { fingerprint: null },
+          checks: [],
+          requiredCheckIds: checks.map((check) => check.id),
+          verifiedAt: new Date().toISOString(),
+          admissionHeld: false,
+        };
+      } else {
+        acceptance = assessWithoutChecks({
+          workspace,
+          writers: acceptanceWriters(state),
+          unresolvedWriterCount: state.unresolvedWriters.length,
+          ...(deps.snapshot ? { snapshot: deps.snapshot } : {}),
+        });
+      }
+    }
     return {
       result: {
         runId: state.runId,
@@ -650,16 +954,19 @@ function buildLeadGraph(deps) {
         text: state.text,
         rounds: state.round,
         assignments: state.outcomes,
+        acceptance,
       },
     };
   }
 
   const afterDecide = (state) => {
+    if (state.status === 'completed') return 'accept';
     if (state.status) return 'finish';
     if (state.budget) return 'budget_pause';
     if (state.humanRequest) return 'human_input';
     return 'dispatch';
   };
+  const afterAccept = (state) => (state.status ? 'finish' : 'decide');
   const afterCollect = (state) => {
     if (state.status === 'canceled') return 'verify';
     if (state.batch.items.some((item) => item.state === 'pending')) return 'dispatch';
@@ -667,9 +974,11 @@ function buildLeadGraph(deps) {
   };
   const afterVerify = (state) => {
     if (state.status === 'canceled') return 'finish';
+    if (state.unresolvedWriters.length > 0) return 'reconcile';
     if (state.budget) return 'budget_pause';
     return 'decide';
   };
+  const afterReconcile = (state) => (state.budget ? 'budget_pause' : 'decide');
 
   const graph = new StateGraph(LeadState)
     .addNode('intake', intake)
@@ -677,15 +986,19 @@ function buildLeadGraph(deps) {
     .addNode('dispatch', dispatch)
     .addNode('collect', collect)
     .addNode('verify', verify)
+    .addNode('reconcile', reconcile)
     .addNode('human_input', humanInput)
     .addNode('budget_pause', budgetPause)
+    .addNode('accept', accept)
     .addNode('finish', finish)
     .addEdge(START, 'intake')
     .addEdge('intake', 'decide')
-    .addConditionalEdges('decide', afterDecide, ['finish', 'budget_pause', 'human_input', 'dispatch'])
+    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'budget_pause', 'human_input', 'dispatch'])
+    .addConditionalEdges('accept', afterAccept, ['finish', 'decide'])
     .addEdge('dispatch', 'collect')
     .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify'])
-    .addConditionalEdges('verify', afterVerify, ['finish', 'budget_pause', 'decide'])
+    .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'decide'])
+    .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'decide'])
     .addEdge('human_input', 'decide')
     .addEdge('budget_pause', 'decide')
     .addEdge('finish', END);

@@ -3,22 +3,25 @@
 const { ClientFactory } = require('@a2a-js/sdk/client');
 const { TaskState } = require('@a2a-js/sdk');
 const { readAuthToken } = require('./local-auth');
+const { parseCheckCommand } = require('./acceptance');
 
-const USAGE = "Usage: node src/cli.js '<goal>'\n       node src/cli.js --task <id> [--decision <id>] [--choice <optionId>] '<answer>'\n";
+const USAGE = "Usage: node src/cli.js [--check '<command>']... '<goal>'\n       node src/cli.js --task <id> [--decision <id>] [--choice <optionId>] '<answer>'\n";
 const EXIT_INPUT_REQUIRED = 3;
+const EXIT_NOT_ACCEPTED = 4;
 const VALUE_FLAGS = new Map([['--task', 'task'], ['--choice', 'choice'], ['--decision', 'decision']]);
 
-// Leading --task/--choice/--decision flags (also --flag=value), then the free text.
+// Leading --task/--choice/--decision flags and repeatable --check (also --flag=value), then the free text.
 function parseArgs(argv) {
   const options = {};
   let index = 0;
   while (index < argv.length && argv[index].startsWith('--')) {
     const [flag, inline] = argv[index].split(/=(.*)/s, 2);
-    const key = VALUE_FLAGS.get(flag);
+    const key = flag === '--check' ? 'checks' : VALUE_FLAGS.get(flag);
     if (!key) throw new Error(`Unknown option: ${flag}`);
     const value = inline !== undefined ? inline : argv[index + 1];
     if (!value) throw new Error(`Option ${flag} requires a value.`);
-    options[key] = value;
+    if (key === 'checks') options.checks = [...(options.checks || []), value];
+    else options[key] = value;
     index += inline !== undefined ? 1 : 2;
   }
   return { ...options, text: argv.slice(index).join(' ').trim() };
@@ -45,6 +48,10 @@ async function main(argv = process.argv.slice(2), env = process.env, { clientFac
     parsed = parseArgs(argv);
   } catch (error) {
     process.stderr.write(`${error.message}\n${USAGE}`);
+    return 2;
+  }
+  if (parsed.checks && parsed.task) {
+    process.stderr.write(`--check applies to a new run only and cannot be combined with --task.\n${USAGE}`);
     return 2;
   }
   const goal = parsed.text;
@@ -77,6 +84,9 @@ async function main(argv = process.argv.slice(2), env = process.env, { clientFac
     const messageMetadata = {};
     if (parsed.choice !== undefined) messageMetadata.choice = parsed.choice;
     if (parsed.decision !== undefined) messageMetadata.decisionId = parsed.decision;
+    if (parsed.checks) {
+      messageMetadata.acceptance = { requiredChecks: parsed.checks.map((command, index) => parseCheckCommand(command, index)) };
+    }
     const result = await client.sendMessage({
       tenant: '',
       message: {
@@ -103,8 +113,10 @@ async function main(argv = process.argv.slice(2), env = process.env, { clientFac
     const artifact = result.artifacts?.at(-1);
     const text = artifact?.parts?.map((part) => part?.content?.$case === 'text' ? part.content.value : '').filter(Boolean).join('\n') || '';
     if (text) process.stdout.write(`${text}\n`);
+    const disposition = artifact?.metadata?.acceptance?.disposition;
+    if (typeof disposition === 'string' && !text.startsWith('Acceptance:')) process.stdout.write(`Acceptance: ${disposition}\n`);
     process.stdout.write('Task completed.\n');
-    return 0;
+    return disposition === 'rejected' || disposition === 'unverifiable' ? EXIT_NOT_ACCEPTED : 0;
   } catch (error) {
     process.stderr.write(`${error?.message || String(error)}\n`);
     return 1;

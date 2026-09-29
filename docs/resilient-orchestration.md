@@ -8,12 +8,13 @@ Keep A2A as the protocol between the lead and the eight role agents, and keep Co
 
 LangGraph does not extend account quotas. Its checkpoints occur at workflow boundaries, not inside an in-flight Codex turn. A failed or interrupted node may run again, so external effects must be reconciled before retry.
 
-## Current gaps
+## Gaps addressed by this implementation
 
-- `LeadOrchestrator.run()` keeps rounds, assignments, outcomes, and the lead thread ID in local memory.
-- A2A task stores are in memory. Restarting the server loses task status.
-- Codex App Server approval requests are declined and user questions receive empty answers. Their details are not routed to the Sol lead.
-- A worker's uncertainty reaches the lead only through free-form result text. There is no explicit decision or human-input state.
+- LangGraph checkpoints now persist rounds, assignments, outcomes, and the lead thread ID.
+- The A2A task store and dispatch journal now persist across server restarts.
+- Worker reports now carry an explicit decision request that the Sol lead can resolve or escalate through `INPUT_REQUIRED`.
+
+Codex App Server approval requests are still declined by the adapter. Workers report blocked work to the lead, which can use the A2A human decision path when authority is genuinely missing.
 
 ## Durable run state
 

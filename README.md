@@ -35,6 +35,8 @@ npm run ask -- "Inspect this repository and propose the next implementation step
 
 The default target workspace is the current directory. Set `CODEX_WORKSPACE=/absolute/path/to/project` to work on another local project and `PORT=3000` to choose the A2A listener port. Start the server from this project directory so it can load `profiles/`.
 
+Codex App Server RPC requests time out after 120 seconds. Model turns have a separate 10-minute completion timeout; set `CODEX_A2A_TURN_TIMEOUT_MS` to a positive integer number of milliseconds to change it.
+
 The lead Agent Card is at `http://127.0.0.1:3000/orchestrator/agent-card.json`. Each specialist has a card at `http://127.0.0.1:3000/agents/<role>/agent-card.json`; for example, `/agents/orch-explorer/agent-card.json`. A2A clients can discover these cards without credentials. Requests to the JSON-RPC endpoints require `Authorization: Bearer <token>`. The server creates the token at `.runtime/a2a-token` with owner-only access, and `npm run ask` reads it automatically. Keep that file private. For a custom client, read the token locally and send it as the bearer value. Set `CODEX_A2A_TOKEN_FILE` to use a different token path.
 
 ## Roles
@@ -52,11 +54,57 @@ The lead Agent Card is at `http://127.0.0.1:3000/orchestrator/agent-card.json`. 
 
 The lead uses GPT-6 Sol at high effort in a read-only Codex thread. Specialist model and effort settings are read from the bundled TOML profiles and can be changed for the signed-in Codex account.
 
+## Writer admission
+
+Every writable Codex turn passes through the role executor, which admits at most one writer per workspace (canonical path) using the state database.
+
+- Waits: a second writer stays `SUBMITTED` (FIFO) while the holder is `active`; canceling while waiting ends `CANCELED` with no effects. Read-only roles never take admission and run alongside a writer.
+- Blocks: while the holder is `unresolved` (its outcome is unknown), one reconciliation is attempted; if the process group cannot be proven gone, the new writer fails with `failureKind: "admission_blocked"` and no effects.
+- Workspace lock: a second server on the same workspace is refused by a lock file in the OS temp dir (`codex-a2a-workspace-<hash>.lock`).
+- Every writer records a before/after workspace snapshot (git); the server attests `changedPaths` (ignored files are invisible).
+
+### Reconciliation pause
+
+After a batch, the lead graph settles every writable outcome that is not provably finished, without asking a model. If quiescence cannot be proven, the lead task is `INPUT_REQUIRED` with pause `writer_unresolved`. Send any message to the task to retry once the earlier writer is stopped. Writable dispatch is refused while a writer is unresolved, and in a serial batch the remaining writers are skipped (`skipped_unresolved_writer`) after an unsettled one.
+
+## Acceptance
+
+Finishing a workflow is not acceptance. When the lead decides to finish, the server computes a disposition in code; the lead's final text never changes it.
+
+```bash
+npm run ask -- --check 'npm test' --check 'node --check src/server.js' "Implement the change"
+```
+
+`--check` is repeatable, split on whitespace into argv (no shell), and valid for a new run only. The checks are pinned when the run starts (resume messages cannot change them), run under writer admission in the workspace, and must leave the workspace snapshot unchanged. Dispositions:
+
+| Disposition | Meaning |
+| --- | --- |
+| `accepted` | Every check passed and no writer issue (invalid report, scope violation, unknown delta, unresolved writer). |
+| `rejected` | Checks exist and any condition failed. The lead gets one chance to dispatch fixes; the second rejection ends the run. |
+| `unverifiable` | Checks exist but no snapshot of the candidate is available. |
+| `unverified` | No checks, at least one writer ran. |
+| `not_required` | No checks and no writer ran. |
+
+The task stays `COMPLETED`; the result text starts with `Acceptance: <disposition>` and the artifact metadata carries `acceptance`. The CLI exits 4 for `rejected` and `unverifiable`. Direct A2A clients may send `metadata.acceptance = { requiredChecks: [{ id, argv, timeoutMs? }] }` on the first message.
+
+## Usage
+
+Every Codex turn (worker and lead) is recorded in the state database with model, effort, elapsed time, and tokens where known (unknown stays empty, never 0). Cost is not measured: it is subscription usage.
+
+```bash
+npm run usage -- --run <taskId>      # or --task <taskId>; optional --state <file> --price-table <json>
+```
+
+The report groups usage by run, role, and attempt, counts permission denials, and reports repeated assignment objectives. A price table adds a separately labeled hypothetical API cost.
+
+The design is in [hardening-spec.md](docs/hardening-spec.md); [efficiency-comparison.md](docs/efficiency-comparison.md) describes how to compare against native subagents.
+
 ## Safety and current limits
 
 - Codex approval requests are declined by the local App Server client. A task that needs an additional permission must report that need; this service does not grant it silently.
-- Runs are durable. LangGraph checkpoints, A2A tasks, and the dispatch journal live in `.runtime/state.sqlite` (override with `CODEX_A2A_STATE_DB`), and only one server may use a state file at a time. After a crash, the lead task shows `INPUT_REQUIRED` (pause `restart`). Worker tasks that were running show `FAILED` (`interrupted`), and the lead has to reconcile their workspace effects before it re-dispatches a writer.
-- Pauses: a usage limit (`waiting_for_budget`), a rare human decision (`human_decision`), a restart, or a resumable error leaves the lead task `INPUT_REQUIRED` with `metadata.pause`. Continue with `npm run ask -- --task <taskId> [--decision <id>] [--choice <optionId>] "<answer>"`. The CLI exits with code 3 while a task is paused.
+- Runs are durable. LangGraph checkpoints, A2A tasks, and the dispatch journal live in `.runtime/state.sqlite` (override with `CODEX_A2A_STATE_DB`), and only one server may use a state file at a time. After a crash, the lead task shows `INPUT_REQUIRED` (pause `restart`). Worker tasks that were running show `FAILED` (`interrupted`). On startup the server reconciles the interrupted writer mechanically (see Writer admission), so the lead sees attested effects instead of inspecting the workspace itself.
+- If the Codex App Server child exits or times out, the next request starts a replacement process. An interrupted writer may have changed files, so its outcome is unknown until the server proves the writer stopped (reconciliation); no new writer runs before that.
+- Pauses: a usage limit (`waiting_for_budget`), a rare human decision (`human_decision`), a restart, or a resumable error leaves the lead task `INPUT_REQUIRED` with `metadata.pause`. Continue with `npm run ask -- --task <taskId> [--decision <id>] [--choice <optionId>] "<answer>"`. The CLI exits with code 3 while a task is paused and 4 when acceptance is `rejected` or `unverifiable`.
 - The lead validates assigned file paths and passes allowed files to workers. The Codex workspace sandbox restricts writes to the workspace, but the per-file assignment is enforced by worker instructions, not by a separate filesystem boundary. Use a trusted local workspace.
 - A local bearer token protects the A2A JSON-RPC endpoints, and the server binds only to loopback. Agent Cards remain public for A2A discovery. Codex App Server is currently documented as experimental and unsupported for production workloads.
 

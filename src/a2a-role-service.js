@@ -4,9 +4,13 @@ const { AgentEvent, InMemoryTaskStore, DefaultRequestHandler } = require('@a2a-j
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
 const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/server/express');
 const express = require('express');
+const Database = require('better-sqlite3');
 const {
   WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, classifyCodexError, findCodexErrorInfo,
 } = require('./contracts');
+const { WriterAdmission } = require('./writer-admission');
+
+const DEFAULT_RECONCILE_RETRY = { intervalMs: 250, totalMs: 5000 };
 
 function roleSlug(roleId) {
   if (!/^orch-[a-z0-9-]+$/.test(roleId)) {
@@ -36,8 +40,11 @@ function extractText(message) {
 }
 
 function failureMetadata(error) {
+  const classified = error ? classifyCodexError(error) : 'other';
   return {
-    failureKind: error ? classifyCodexError(error) : 'other',
+    failureKind: classified === 'usage_limit'
+      ? classified
+      : error?.outcomeUnknown === true ? 'interrupted' : classified,
     codexErrorInfo: error ? findCodexErrorInfo(error) : null,
   };
 }
@@ -93,8 +100,75 @@ function makeRoleCard({ roleId, role, endpoint }) {
   };
 }
 
-function makeExecutor({ roleId, role, appServer, workspace }) {
+let ledgerWarned = false;
+
+// Build the worker-turn ledger entry from a run result or thrown error. Absent usage -> nulls.
+function workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries }) {
+  const usage = source?.usage || null;
+  const turnId = source?.execution?.turnId || source?.turnId || null;
+  return {
+    entryId: turnId ? `${roleId}:${taskId}:${turnId}` : `${roleId}:${taskId}`,
+    kind: 'worker_turn',
+    runId: null,
+    role: roleId,
+    taskId,
+    contextId,
+    attemptId: null,
+    model: usage?.model ?? null,
+    effort: usage?.effort ?? null,
+    startedAt: usage?.startedAt ?? null,
+    elapsedMs: usage?.elapsedMs ?? null,
+    turns: usage?.turns ?? null,
+    modelRequests: usage?.modelRequests ?? null,
+    retries,
+    tokens: usage?.tokens ?? null,
+    tokenSource: usage?.tokenSource ?? 'unavailable',
+    cumulativeTotal: usage?.cumulativeTotal ?? null,
+    appServerVersion: usage?.appServerVersion ?? null,
+    outcome,
+    permissionEvents: Array.isArray(source?.permissionEvents) ? source.permissionEvents : [],
+  };
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function makeExecutor({
+  roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null,
+}) {
+  const writable = role.sandbox !== 'read-only';
   const reservations = new Map();
+
+  // Release the workspace when the outcome is known; otherwise mark the writer unresolved and
+  // retry reconciliation while its process is being terminated. Returns writerExecution metadata.
+  const settleWriter = async (executionId, known, reason) => {
+    let outcome;
+    let released = false;
+    if (known) {
+      try {
+        outcome = admission.release(executionId);
+        released = true;
+      } catch (_) {
+        reason = 'release_failed'; // e.g. a sqlite error: fall back to the unresolved path
+      }
+    }
+    if (!released) {
+      admission.markUnresolved(executionId, reason);
+      const deadline = Date.now() + reconcileRetry.totalMs;
+      outcome = await admission.reconcile(executionId);
+      while (outcome.state === 'unresolved' && Date.now() < deadline) {
+        await sleep(reconcileRetry.intervalMs);
+        outcome = await admission.reconcile(executionId);
+      }
+    }
+    const record = admission.get(executionId);
+    return {
+      executionId,
+      state: record?.state ?? outcome.state,
+      delta: record?.delta ?? outcome.delta ?? null,
+      reason: record?.state === 'unresolved' ? (record.reason ?? outcome.reason ?? null) : null,
+    };
+  };
+
   const releaseReservation = (taskId, reservation) => {
     if (reservations.get(taskId) === reservation) reservations.delete(taskId);
   };
@@ -135,6 +209,42 @@ function makeExecutor({ roleId, role, appServer, workspace }) {
 
       // The SDK requires a task/message event before any status or artifact event.
       eventBus.publish(AgentEvent.task(task));
+      let execution = null;
+      let writer = null;
+      let settled = false;
+      // Set once appServer.run was reached: { usage, permissionEvents, provenance }.
+      let telemetry = null;
+      const failedMetadata = (error) => ({
+        ...failureMetadata(error),
+        ...(writer ? { writerExecution: writer } : {}),
+        ...(telemetry ? telemetry : {}),
+      });
+      const recordUsage = (source, outcome) => {
+        const usage = source?.usage ?? null;
+        const permissionEvents = Array.isArray(source?.permissionEvents) ? source.permissionEvents : [];
+        telemetry = {
+          usage,
+          permissionEvents,
+          provenance: {
+            role: roleId,
+            sandbox: role.sandbox,
+            taskId,
+            contextId,
+            workspace,
+            permissionConfig: source?.permissionConfig ?? null,
+          },
+        };
+        if (!usageLedger) return;
+        try {
+          const retries = usageLedger.workerRowsForContext(contextId);
+          usageLedger.record(workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries }));
+        } catch (error) {
+          if (!ledgerWarned) {
+            ledgerWarned = true;
+            console.warn(`usage ledger write failed: ${error?.message || error}`);
+          }
+        }
+      };
       try {
         let input;
         try {
@@ -151,6 +261,46 @@ function makeExecutor({ roleId, role, appServer, workspace }) {
           return;
         }
 
+        if (writable) {
+          if (admission.holder()) {
+            eventBus.publish(AgentEvent.statusUpdate({
+              taskId,
+              contextId,
+              status: makeStatus(TaskState.TASK_STATE_SUBMITTED, {
+                messageId: `${taskId}-admission-wait`,
+                contextId,
+                taskId,
+                role: 2,
+                parts: [{ content: { $case: 'text', value: 'Waiting for workspace writer admission' } }],
+              }),
+              metadata: {},
+            }));
+          }
+          try {
+            execution = await admission.acquire({ role: roleId, taskId, contextId, signal: controller.signal });
+          } catch (error) {
+            if (controller.signal.aborted) {
+              publishTerminalStatus(TaskState.TASK_STATE_CANCELED);
+              return;
+            }
+            if (error?.code !== 'fenced' && error?.code !== 'admission_blocked') throw error;
+            publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
+              messageId: `${taskId}-error`,
+              contextId,
+              taskId,
+              role: 2,
+              parts: [{ content: { $case: 'text', value: error.message } }],
+              metadata: {
+                failureKind: error.code,
+                codexErrorInfo: null,
+                effects: 'none',
+                admission: { code: error.code, holder: error.holder ?? null },
+              },
+            });
+            return;
+          }
+        }
+
         eventBus.publish(AgentEvent.statusUpdate({
           taskId,
           contextId,
@@ -160,16 +310,40 @@ function makeExecutor({ roleId, role, appServer, workspace }) {
 
         if (activeTask.cancelRequested) {
           controller.abort();
+          if (execution) {
+            await settleWriter(execution.executionId, true);
+            settled = true;
+          }
           publishTerminalStatus(TaskState.TASK_STATE_CANCELED);
           return;
         }
-        const result = await appServer.run({
-          role: { id: roleId, ...role },
-          cwd: workspace,
-          input,
-          outputSchema: WORKER_REPORT_SCHEMA,
-          signal: controller.signal,
-        });
+        let result;
+        let runError = null;
+        try {
+          result = await appServer.run({
+            role: { id: roleId, ...role },
+            cwd: workspace,
+            input,
+            outputSchema: WORKER_REPORT_SCHEMA,
+            signal: controller.signal,
+            ...(execution ? { onTurnStart: (info) => admission.recordTurnStart(execution.executionId, info) } : {}),
+          });
+        } catch (error) {
+          runError = error;
+        }
+        recordUsage(runError || result, runError
+          ? (controller.signal.aborted ? 'canceled' : runError.outcomeUnknown === true ? 'interrupted' : 'failed')
+          : controller.signal.aborted ? 'canceled' : String(result?.status ?? 'unknown'));
+        if (execution) {
+          // Known outcome: a result, or an error after a confirmed terminal (or before turn/start).
+          const turnStarted = Boolean(admission.get(execution.executionId)?.turnStart);
+          const known = !runError
+            || (runError.outcomeUnknown !== true
+              && (runError.execution?.turnTerminal === true || runError.execution?.turnStartRejected === true || !turnStarted));
+          writer = await settleWriter(execution.executionId, known, runError?.outcomeUnknown === true ? 'outcome_unknown' : 'turn_not_terminal');
+          settled = true;
+        }
+        if (runError) throw runError;
         const resultText = typeof result?.text === 'string' ? result.text : '';
         const canceled = controller.signal.aborted;
         const completed = result?.status === 'completed';
@@ -182,7 +356,12 @@ function makeExecutor({ roleId, role, appServer, workspace }) {
               name: `${role.name} result`,
               description: role.description,
               parts: [{ content: { $case: 'text', value: resultText } }],
-              metadata: { contract: WORKER_REPORT_CONTRACT, threadId: result.threadId || null },
+              metadata: {
+                contract: WORKER_REPORT_CONTRACT,
+                threadId: result.threadId || null,
+                ...(writer ? { writerExecution: writer } : {}),
+                ...(telemetry ? telemetry : {}),
+              },
               extensions: [],
             },
             append: false,
@@ -198,10 +377,15 @@ function makeExecutor({ roleId, role, appServer, workspace }) {
             taskId,
             role: 2,
             parts: [{ content: { $case: 'text', value: resultText || `Codex App Server returned status "${String(result?.status)}".` } }],
-            metadata: failureMetadata(result?.error),
+            metadata: failedMetadata(result?.error),
           } : undefined,
         );
       } catch (error) {
+        if (execution && !settled) {
+          // Never leave the workspace held by a writer that fell out of the normal flow.
+          settled = true;
+          try { writer = await settleWriter(execution.executionId, false, 'executor_error'); } catch (_) { /* keep the original error */ }
+        }
         const canceled = controller.signal.aborted;
         publishTerminalStatus(
           canceled ? TaskState.TASK_STATE_CANCELED : TaskState.TASK_STATE_FAILED,
@@ -211,7 +395,7 @@ function makeExecutor({ roleId, role, appServer, workspace }) {
             taskId,
             role: 2,
             parts: [{ content: { $case: 'text', value: error?.message || String(error) } }],
-            metadata: failureMetadata(error),
+            metadata: failedMetadata(error),
           },
         );
       } finally {
@@ -273,7 +457,7 @@ function rejectOverlappingTask(executor) {
 
 /** Mount one independently stored A2A JSON-RPC agent per role. */
 function registerRoleAgents(app, {
-  roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(),
+  roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger,
 }) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
     throw new TypeError('app must be an Express application');
@@ -284,6 +468,11 @@ function registerRoleAgents(app, {
   const origin = new URL(baseUrl);
   if (origin.hostname !== '127.0.0.1') throw new TypeError('baseUrl must use the 127.0.0.1 host');
 
+  if (!admission) {
+    // One in-memory admission per app keeps writers workspace-wide serialized across its roles.
+    admission = new WriterAdmission({ db: new Database(':memory:'), workspace });
+  }
+
   const registered = new Map();
   for (const [rawRoleId, role] of roles) {
     const roleId = roleSlug(rawRoleId);
@@ -291,7 +480,7 @@ function registerRoleAgents(app, {
     const route = `/agents/${roleId}`;
     const endpoint = new URL(route, `${origin.origin}/`).toString();
     const card = makeRoleCard({ roleId, role, endpoint });
-    const executor = makeExecutor({ roleId, role, appServer, workspace });
+    const executor = makeExecutor({ roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger });
     const handler = new DefaultRequestHandler(
       card,
       taskStoreFactory(roleId),
@@ -309,4 +498,4 @@ function registerRoleAgents(app, {
   return registered;
 }
 
-module.exports = { registerRoleAgents, extractText };
+module.exports = { registerRoleAgents, extractText, workerUsageEntry };
