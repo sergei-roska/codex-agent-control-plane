@@ -5,8 +5,9 @@ const POLL_BACKOFF_MS = 30000;
 const POLL_BACKOFF_AFTER_FAILURES = 3;
 
 class ApiError extends Error {
-  constructor(status, code, message, requestId) {
+  constructor(status, code, message, requestId, details) {
     super(message);
+    this.details = details === undefined ? null : details;
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
@@ -55,7 +56,7 @@ async function apiRequest(method, path, opts) {
   if (!res.ok) {
     const e = payload && payload.error ? payload.error : {};
     const err = new ApiError(res.status, e.code || 'http_' + res.status,
-      e.message || ('Request failed with HTTP ' + res.status), e.requestId);
+      e.message || ('Request failed with HTTP ' + res.status), e.requestId, e.details);
     if (res.status === 401 && !o.noUnpairedPanel) Conn.unpaired();
     throw err;
   }
@@ -63,6 +64,32 @@ async function apiRequest(method, path, opts) {
 }
 
 function apiGet(path, opts) { return apiRequest('GET', path, opts); }
+function apiPost(path, body, opts) { return apiRequest('POST', path, Object.assign({}, opts, { body })); }
+
+// Raw-body upload with progress (fetch cannot report upload progress). Resolves with the parsed JSON.
+function apiUploadFile(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', API_BASE + '/artifacts');
+    xhr.withCredentials = true;
+    xhr.responseType = 'text';
+    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+    xhr.onerror = () => reject(new ApiError(0, 'network_error', 'Cannot reach the orchestrator'));
+    xhr.onabort = () => reject(new ApiError(0, 'aborted', 'Upload cancelled'));
+    xhr.onload = () => {
+      let payload = null;
+      try { payload = JSON.parse(xhr.responseText); } catch (_) { payload = null; }
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(payload); return; }
+      const e = payload && payload.error ? payload.error : {};
+      if (xhr.status === 401) Conn.unpaired();
+      reject(new ApiError(xhr.status, e.code || 'http_' + xhr.status,
+        e.message || ('Upload failed with HTTP ' + xhr.status), e.requestId, e.details));
+    };
+    xhr.send(file);
+  });
+}
 
 // --- Not-paired panel ---
 function showNotPaired(message) {

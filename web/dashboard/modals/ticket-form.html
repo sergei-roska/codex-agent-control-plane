@@ -1,0 +1,118 @@
+<!-- M2: Create / Edit Direct Ticket Modal -->
+<div class="modal-backdrop" id="modal-add-ticket">
+  <div class="modal-box tf-box" role="dialog" aria-modal="true" aria-labelledby="modal-ticket-form-title">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-ticket-form-title">Create Ticket</span>
+      <button type="button" class="modal-close-btn" id="btn-ticket-form-close" aria-label="Close">x</button>
+    </div>
+    <form id="form-add-ticket" novalidate class="tf-form">
+      <div class="modal-body tf-body">
+        <div class="tf-facts">
+          <span><strong>Project:</strong> <span id="tf-project">unknown</span></span>
+          <span><strong>Source:</strong> Direct request</span>
+          <span><strong>Tracking:</strong> internal</span>
+          <span id="tf-revision-note"></span>
+        </div>
+
+        <div id="tf-error" class="tf-banner" role="alert" style="display: none;">
+          <span id="tf-error-text"></span>
+          <button type="button" class="btn btn-secondary" id="tf-reload" style="display: none;">Reload ticket</button>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-title-input">Title *</label>
+          <input type="text" id="ticket-title-input" class="input-text" maxlength="200" autocomplete="off" placeholder="e.g. Implement rate limiter MCP tool" style="width: 100%;">
+          <div class="tf-row-hint"><span class="tf-field-error" id="err-title"></span><span class="form-hint" id="ticket-title-counter">0 / 200</span></div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-desc-input">Description</label>
+          <textarea id="ticket-desc-input" class="form-textarea" rows="4" placeholder="Detailed objectives and context..." style="width: 100%; resize: vertical;"></textarea>
+          <span class="tf-field-error" id="err-description"></span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-ac-input">Acceptance Criteria</label>
+          <textarea id="ticket-ac-input" class="form-textarea" rows="3" placeholder="One criterion per line" style="width: 100%; resize: vertical;"></textarea>
+          <span class="form-hint">One criterion per line; empty lines are dropped.</span>
+          <span class="tf-field-error" id="err-criteria"></span>
+        </div>
+
+        <div class="tf-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="ticket-priority">Priority</label>
+            <select id="ticket-priority" class="select-input" style="width: 100%;">
+              <option value="low">Low</option>
+              <option value="normal" selected>Normal</option>
+              <option value="high">High</option>
+            </select>
+            <span class="tf-field-error" id="err-priority"></span>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="ticket-role">Requested specialty</label>
+            <select id="ticket-role" class="select-input" style="width: 100%;">
+              <option value="">No preference</option>
+            </select>
+            <span class="form-hint">Preference only - the PM coordinates who works on it</span>
+            <span class="tf-field-error" id="err-requestedSpecialty"></span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <span class="form-label">References</span>
+          <span class="form-hint">Saved as references; not fetched. One per line.</span>
+          <div class="tf-grid-2">
+            <div>
+              <label class="form-label tf-small" for="ticket-jira-issue">Jira issues</label>
+              <textarea id="ticket-jira-issue" class="form-textarea" rows="2" placeholder="PROJ-101 or https://jira.domain/browse/PROJ-101" style="width: 100%; resize: vertical;"></textarea>
+              <span class="tf-field-error" id="err-references.jiraIssues"></span>
+            </div>
+            <div>
+              <label class="form-label tf-small" for="ticket-jira-parents">Jira parents / epic</label>
+              <textarea id="ticket-jira-parents" class="form-textarea" rows="2" placeholder="EPIC-10" style="width: 100%; resize: vertical;"></textarea>
+              <span class="tf-field-error" id="err-references.jiraParents"></span>
+            </div>
+            <div>
+              <label class="form-label tf-small" for="ticket-confluence">Confluence</label>
+              <textarea id="ticket-confluence" class="form-textarea" rows="2" placeholder="https://confluence.../spec" style="width: 100%; resize: vertical;"></textarea>
+              <span class="tf-field-error" id="err-references.confluence"></span>
+            </div>
+            <div>
+              <label class="form-label tf-small" for="ticket-figma">Figma</label>
+              <textarea id="ticket-figma" class="form-textarea" rows="2" placeholder="https://figma.com/file/..." style="width: 100%; resize: vertical;"></textarea>
+              <span class="tf-field-error" id="err-references.figma"></span>
+            </div>
+          </div>
+          <label class="form-label tf-small" for="ticket-links">Other links</label>
+          <textarea id="ticket-links" class="form-textarea" rows="2" placeholder="https://..." style="width: 100%; resize: vertical;"></textarea>
+          <span class="tf-field-error" id="err-references.links"></span>
+          <span class="tf-field-error" id="err-references"></span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-attachments-input">Attachments</label>
+          <div class="tf-dropzone" id="ticket-dropzone">
+            <input type="file" id="ticket-attachments-input" multiple style="display: none;">
+            <button type="button" class="btn btn-secondary" id="btn-browse-attachments">Browse files</button>
+            <span class="form-hint">or drop files here</span>
+            <div class="form-hint" id="tf-policy-note"></div>
+          </div>
+          <div id="ticket-attachments-preview" class="tf-files"></div>
+          <span class="tf-field-error" id="err-artifactIds"></span>
+        </div>
+
+        <div class="tf-field-error" id="err-other"></div>
+      </div>
+      <div class="modal-footer tf-footer">
+        <div class="tf-submit-intake">
+          <button type="button" class="btn btn-secondary" id="btn-submit-intake" disabled aria-disabled="true" title="Intake arrives in M3">Submit to Intake</button>
+          <span class="form-hint">Intake arrives in M3</span>
+        </div>
+        <div style="display: flex; gap: 8px; margin-left: auto;">
+          <button type="button" class="btn btn-secondary" id="btn-ticket-form-cancel">Close</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-ticket" disabled>Create Ticket</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>

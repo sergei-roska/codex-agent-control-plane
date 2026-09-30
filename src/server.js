@@ -18,7 +18,10 @@ const { validateAcceptanceContract, formatAcceptance } = require('./acceptance')
 const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
 const { createDashboardAuth } = require('./dashboard-auth');
 const { createProjection } = require('./dashboard-projection');
-const { createDashboardApi, computeProjectId, sendError, newRequestId } = require('./dashboard-api');
+const { migrateProductSchema } = require('./product-migrations');
+const { ProductStore } = require('./product-store');
+const { ArtifactStore, defaultArtifactRoot } = require('./artifact-store');
+const { collectStaleStagedArtifacts, createDashboardApi, computeProjectId, sendError, newRequestId } = require('./dashboard-api');
 
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 3000;
@@ -34,17 +37,19 @@ function assertWebDirOutsideArtifacts(webDir) {
   }
 }
 
-function mountDashboard(app, { auth, authMiddleware, state, roles, leadRole, workspace, events }) {
+function mountDashboard(app, { auth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore }) {
   assertWebDirOutsideArtifacts(DASHBOARD_WEB_DIR);
-  const projectId = computeProjectId(workspace);
-  const projection = createProjection({ db: state.db, roleIds: [...roles.keys()], projectId });
+  const projection = createProjection({ db: state.db, roleIds: [...roles.keys()], projectId, productStore });
   const api = createDashboardApi({
     projection, events, roles, leadRole, workspace, projectId, startedAt: new Date().toISOString(), version: PACKAGE_VERSION,
+    auth, productStore, artifactStore,
   });
   app.use('/api/dashboard/v1', auth.hostGuard, auth.noStore);
   // Bearer only and deliberately no originGuard: the CLI sends no Origin header.
   app.post('/api/dashboard/v1/pairing-codes', auth.hostGuard, authMiddleware, auth.pairingCodeHandler);
-  app.use('/api/dashboard/v1', auth.sessionRouter());
+  // The session router parses 1 KiB JSON bodies; confine it to /session so ticket commands are not affected.
+  const sessionRouter = auth.sessionRouter();
+  app.use('/api/dashboard/v1', (req, res, next) => (req.path === '/session' ? sessionRouter(req, res, next) : next()));
   app.use('/api/dashboard/v1', auth.requireSession, api);
   app.use('/api/dashboard', (req, res) => sendError(res, 404, 'not_found', 'Not found', newRequestId()));
   app.use('/dashboard', auth.hostGuard, auth.securityHeaders,
@@ -504,6 +509,18 @@ async function startServer({
     if (ownsState) releaseLock = acquireStateLock(state.filePath);
     releaseWorkspaceLock = acquireWorkspaceLock(workspace, workspaceLockDir ? { lockDir: workspaceLockDir } : undefined);
 
+    // Product schema first: a failed migration or backup aborts startup before anything serves.
+    const migration = await migrateProductSchema({ db: state.db, filePath: state.filePath });
+    if (migration.backupPath) process.stderr.write(`Product schema migrated v${migration.fromVersion} -> v${migration.toVersion}; backup written to ${migration.backupPath}\n`);
+    const projectId = computeProjectId(workspace);
+    const artifactStore = new ArtifactStore({ root: defaultArtifactRoot(state.filePath) });
+    artifactStore.ensureRoot();
+    const productStore = new ProductStore({ db: state.db, projectId });
+    const staged = collectStaleStagedArtifacts(productStore, artifactStore);
+    if (staged.deleted || staged.failed) process.stderr.write(`Staged artifact cleanup: deleted ${staged.deleted}, failed ${staged.failed}\n`);
+    const swept = artifactStore.sweep({ olderThanMs: 24 * 60 * 60 * 1000, isKnown: (id) => Boolean(productStore.getArtifact(id)) });
+    if (swept.tmp || swept.orphans) process.stderr.write(`Artifact sweep: removed ${swept.tmp} temp files, ${swept.orphans} orphan files\n`);
+
     const authToken = loadOrCreateAuthToken(tokenFile ? { filePath: tokenFile } : undefined);
     const authMiddleware = createAuthMiddleware(authToken);
     const roles = loadRoles(profilesDir ? { profilesDir } : undefined);
@@ -551,7 +568,7 @@ async function startServer({
       leadRole, orchestrator, baseUrl, authMiddleware, taskStore: createTaskStore(state, 'orchestrator'), events,
     });
     const dashboardAuth = createDashboardAuth({ db: state.db, getPort: () => actualPort });
-    mountDashboard(app, { auth: dashboardAuth, authMiddleware, state, roles, leadRole, workspace, events });
+    mountDashboard(app, { auth: dashboardAuth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore });
     return {
       app,
       dashboardAuth,

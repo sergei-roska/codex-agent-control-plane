@@ -19,6 +19,8 @@ const MAX_USER_MESSAGES = 100;
 const MAX_PAUSE_STRING_CHARS = 2000;
 const NO_GOAL_TITLE = '(no goal text)';
 const CARD_ID_PREFIX = 'lr_';
+const TICKET_ID_PREFIX = 'tkt_';
+const TICKET_API_PATH = '/api/dashboard/v1/tickets/';
 const UNAVAILABLE_ACTIONS = ['pause', 'resume', 'stop', 'cancel', 'edit', 'return_to_backlog', 'review', 'commit', 'push']
   .map((action) => ({ action, reason: 'Operator commands are not available in this release', milestone: 'M7' }));
 
@@ -65,6 +67,9 @@ function encodeCardId({ namespace, tenant, taskId }) {
 }
 
 function decodeRaw(cardId) {
+  if (typeof cardId === 'string' && cardId.startsWith(TICKET_ID_PREFIX)) {
+    throw requestError('Card not found', 'not_found', { ticketUrl: `${TICKET_API_PATH}${encodeURIComponent(cardId)}` });
+  }
   if (typeof cardId !== 'string' || !cardId.startsWith(CARD_ID_PREFIX) || cardId.length > 2048) throw invalid('Invalid cardId');
   const body = cardId.slice(CARD_ID_PREFIX.length);
   if (!body || !/^[A-Za-z0-9_-]+$/.test(body)) throw invalid('Invalid cardId');
@@ -153,7 +158,7 @@ function isoFromMs(ms) {
   return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
 }
 
-function createProjection({ db, roleIds = [], projectId = null } = {}) {
+function createProjection({ db, roleIds = [], projectId = null, productStore = null } = {}) {
   if (!db || typeof db.prepare !== 'function') throw new TypeError('createProjection requires a better-sqlite3 db');
   const specialistRoles = [...new Set(roleIds)].filter((id) => typeof id === 'string' && id && id !== LEAD_ROLE);
   const knownRoles = [LEAD_ROLE, ...specialistRoles];
@@ -276,6 +281,35 @@ function createProjection({ db, roleIds = [], projectId = null } = {}) {
     };
   }
 
+  function buildTicketCard(ticket) {
+    const cancelled = ticket.status === 'cancelled';
+    return {
+      cardId: ticket.ticketId,
+      cardKind: 'ticket',
+      runtimeTaskRef: null,
+      projectId: ticket.projectId || projectId,
+      ticketId: ticket.ticketId,
+      title: ticket.title,
+      boardColumn: cancelled ? 'closed' : 'backlog',
+      executionStatus: null,
+      displayStatus: cancelled ? 'Cancelled' : 'Draft',
+      rawState: null,
+      acceptance: null,
+      humanReview: 'unknown',
+      waitReason: null,
+      primaryRole: null,
+      participatingRoles: [],
+      requestedSpecialty: ticket.requestedSpecialty ?? null,
+      priority: ticket.priority,
+      revisionOrdinal: ticket.revisionOrdinal,
+      attachmentCount: ticket.attachmentCount,
+      attemptCount: 0,
+      createdAt: ticket.createdAt,
+      updatedAt: ticket.updatedAt,
+      _updatedMs: Date.parse(ticket.updatedAt) || 0,
+    };
+  }
+
   function publicCard(card) {
     const { _updatedMs, ...rest } = card;
     return rest;
@@ -292,6 +326,7 @@ function createProjection({ db, roleIds = [], projectId = null } = {}) {
       cards.push(buildCard(row, summaryFor(row), { byRun }));
     }
     for (const [key, entry] of cache) if (!entry.seen) cache.delete(key);
+    if (productStore) for (const ticket of productStore.listTickets()) cards.push(buildTicketCard(ticket));
     cards.sort((a, b) => (b._updatedMs - a._updatedMs) || (a.cardId < b.cardId ? 1 : a.cardId > b.cardId ? -1 : 0));
     return cards;
   }
@@ -333,7 +368,8 @@ function createProjection({ db, roleIds = [], projectId = null } = {}) {
     }
     const needle = has(q) ? q.toLowerCase() : null;
     const scoped = cards.filter((card) => (!has(role) || card.participatingRoles.includes(role))
-      && (!needle || card.title.toLowerCase().includes(needle) || card.runtimeTaskRef.taskId.toLowerCase().includes(needle)));
+      && (!needle || card.title.toLowerCase().includes(needle)
+        || (card.runtimeTaskRef ? card.runtimeTaskRef.taskId : card.ticketId).toLowerCase().includes(needle)));
     const counts = Object.fromEntries(COLUMNS.map((name) => [name, 0]));
     for (const card of scoped) counts[card.boardColumn] += 1;
 

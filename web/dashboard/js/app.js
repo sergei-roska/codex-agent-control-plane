@@ -31,6 +31,7 @@ async function initApp() {
   initDocsEvents();
   initTicketDetailEvents();
   initNewTicketButton();
+  initTicketRecordEvents();
   initApprovalEvents();
   initProviderModalEvents();
   initBattlepassEvents();

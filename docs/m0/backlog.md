@@ -30,7 +30,7 @@ report a real model run separately if deliberately performed.
 
 | ID / state | Increment | Critical contract/gate |
 | --- | --- | --- |
-| M2 / planned | Durable direct drafts/revisions/files with migrations, create/edit UI | Save does not execute; duplicate/stale commands; extraction truth and limits |
+| M2 / complete | Durable direct drafts/revisions/files with migrations, create/edit UI | Save does not execute; duplicate/stale commands; extraction truth and limits |
 | M3 / planned | PM Intake, minimum persisted plan, serialized branch ownership, direct execution | One direct feature and bugfix reach evidence-based review; no protected commit/push |
 | M4 / planned | Separate nine-role delivery pack, preset registry and real Pipelines | Role capability cases, dependency/scope validation and bounded repair routing |
 | M5 / planned | Catalog-backed OpenAI defaults, account health and effective snapshots | New defaults cannot reconfigure active/resumed work; unsupported Fast unavailable |

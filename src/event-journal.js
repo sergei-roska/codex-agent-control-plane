@@ -10,6 +10,7 @@ const EVENT_TYPES = Object.freeze([
   'run_submitted', 'run_resumed', 'dispatch_submitting', 'dispatch_submitted',
   'dispatch_finished', 'run_paused', 'run_completed', 'run_failed',
   'run_canceled', 'run_error',
+  'ticket_created', 'ticket_revised', 'ticket_cancelled', 'artifact_staged',
 ]);
 
 const MAX_STRING = 500;
@@ -24,6 +25,7 @@ const PAYLOAD_FIELDS = Object.freeze([
   'executionId', 'count', 'assignmentId', 'sandbox', 'contextId', 'dispatchTaskId',
   'outcome', 'state', 'pauseKind', 'disposition', 'rounds', 'assignments',
   'errorName', 'message', 'resumed', 'restarted',
+  'ordinal', 'version', 'artifactCount', 'size', 'extraction',
 ]);
 
 function sanitizeValue(value, depth = 0) {
@@ -68,6 +70,7 @@ function fromRow(row) {
     runId: row.run_id,
     namespace: row.namespace,
     taskId: row.task_id,
+    ticketId: row.ticket_id ?? null,
     attemptId: row.attempt_id,
     role: row.role,
     causationId: row.causation_id,
@@ -109,6 +112,11 @@ class EventJournal {
         CREATE INDEX IF NOT EXISTS idx_runtime_events_run ON runtime_events (run_id, sequence);
         CREATE INDEX IF NOT EXISTS idx_runtime_events_task ON runtime_events (task_id, sequence);
       `);
+      const columns = this.db.prepare('PRAGMA table_info(runtime_events)').all();
+      if (!columns.some((column) => column.name === 'ticket_id')) {
+        this.db.exec('ALTER TABLE runtime_events ADD COLUMN ticket_id TEXT');
+      }
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_runtime_events_ticket ON runtime_events (ticket_id, sequence)');
       this.stmts = null;
       return true;
     } catch (_) {
@@ -121,15 +129,15 @@ class EventJournal {
     if (!this.stmts) {
       this.stmts = {
         insert: this.db.prepare(`INSERT INTO runtime_events
-          (event_id, occurred_at, type, run_id, namespace, task_id, attempt_id, role, causation_id, payload_json)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+          (event_id, occurred_at, type, run_id, namespace, task_id, attempt_id, role, causation_id, payload_json, ticket_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
       };
     }
     return this.stmts;
   }
 
   /** Never throws. Returns the sequence number, or null when nothing was recorded. */
-  record(type, { runId, namespace, taskId, attemptId, role, causationId, payload } = {}) {
+  record(type, { runId, namespace, taskId, ticketId, attemptId, role, causationId, payload } = {}) {
     try {
       if (!EVENT_TYPES.includes(type)) {
         this.fail();
@@ -138,7 +146,7 @@ class EventJournal {
       const info = this.prepared().insert.run(
         String(this.randomId()), String(this.now()), type,
         idOrNull(runId), idOrNull(namespace), idOrNull(taskId), idOrNull(attemptId), idOrNull(role), idOrNull(causationId),
-        JSON.stringify(sanitizePayload(payload)),
+        JSON.stringify(sanitizePayload(payload)), idOrNull(ticketId),
       );
       return Number(info.lastInsertRowid);
     } catch (_) {
@@ -165,6 +173,15 @@ class EventJournal {
     try {
       return this.db.prepare('SELECT * FROM runtime_events WHERE run_id = ? AND sequence > ? ORDER BY sequence LIMIT ?')
         .all(String(runId), Number(after) || 0, clampLimit(limit)).map(fromRow);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  listByTicket(ticketId, { after = 0, limit = DEFAULT_LIMIT } = {}) {
+    try {
+      return this.db.prepare('SELECT * FROM runtime_events WHERE ticket_id = ? AND sequence > ? ORDER BY sequence LIMIT ?')
+        .all(String(ticketId), Number(after) || 0, clampLimit(limit)).map(fromRow);
     } catch (_) {
       return [];
     }

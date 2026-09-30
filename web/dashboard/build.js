@@ -17,6 +17,8 @@ function assemble() {
   const connectionsTab = readFile('tabs/connections.html');
 
   const ticketDetailModal = readFile('modals/ticket-detail.html');
+  const ticketFormModal = readFile('modals/ticket-form.html');
+  const ticketRecordModal = readFile('modals/ticket-record.html');
   const approvalModal = readFile('modals/approval.html');
   const providerCreateModal = readFile('modals/provider-create.html');
   const battlepassModal = readFile('modals/battlepass.html');
@@ -66,7 +68,7 @@ function assemble() {
       <button class="btn-new-ticket" id="btn-open-new-ticket" title="Create New Ticket">
         <span>+</span><span class="btn-new-ticket-text"> New Ticket</span>
       </button>
-      <div class="sidebar-note btn-new-ticket-text">Direct tickets arrive in M2</div>
+      <div class="sidebar-note btn-new-ticket-text" id="new-ticket-note">Checking capabilities...</div>
     </div>
   </aside>
 
@@ -128,6 +130,10 @@ ${connectionsTab.split('\\n').map(l => '      ' + l).join('\\n')}
 <!-- Modals -->
 ${ticketDetailModal}
 
+${ticketRecordModal}
+
+${ticketFormModal}
+
 ${approvalModal}
 
 ${providerCreateModal}
@@ -150,6 +156,8 @@ ${notPairedPanel}
 <script src="js/tabs/docs.js"></script>
 <script src="js/tabs/connections.js"></script>
 <script src="js/modals/ticket-modal.js"></script>
+<script src="js/modals/ticket-form.js"></script>
+<script src="js/modals/ticket-record.js"></script>
 <script src="js/modals/approval.js"></script>
 <script src="js/modals/provider-modal.js"></script>
 <script src="js/modals/battlepass.js"></script>

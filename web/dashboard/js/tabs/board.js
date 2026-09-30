@@ -63,6 +63,7 @@ async function refreshBoard(signal) {
   boardData.truncated = Boolean(cursor) || boardData.cards.length < total;
   boardData.loaded = true;
   renderHeaderContext();
+  updateNewTicketButton();
   renderRoleFilterOptions();
   renderSidebarRoles();
   renderBoard();
@@ -83,7 +84,55 @@ function renderRoleFilterOptions() {
   select.value = boardData.roles.some(r => r.id === current) ? current : 'all';
 }
 
+function createDirectTicketCard(card) {
+  const closed = card.boardColumn === 'closed' || String(card.displayStatus || '').toLowerCase() === 'cancelled';
+  const ticketId = card.ticketId || card.cardId;
+  const el = h('div', {
+    class: 'ticket-card direct-ticket',
+    attrs: { 'data-id': card.cardId, tabindex: '0', role: 'button' },
+    title: card.title || ''
+  });
+  const header = h('div', { class: 'ticket-header' }, [
+    h('span', { class: 'ticket-id', text: '#' + String(ticketId).replace(/^tkt_/, '').slice(0, 8), title: String(ticketId) })
+  ]);
+  if (isNumber(card.revisionOrdinal)) {
+    header.appendChild(h('span', { class: 'badge', text: 'r' + card.revisionOrdinal, title: 'Revision ' + card.revisionOrdinal }));
+  }
+  el.appendChild(header);
+  el.appendChild(h('div', { class: 'ticket-title', text: card.title || '(untitled)' }));
+
+  const meta = h('div', { class: 'ticket-meta' }, [
+    h('span', { class: 'badge badge-status ' + (closed ? 'cancelled' : 'backlog'), text: card.displayStatus || (closed ? 'Cancelled' : 'Draft') })
+  ]);
+  if (card.priority) meta.appendChild(h('span', { class: 'badge', text: 'Priority: ' + card.priority }));
+  el.appendChild(meta);
+
+  const extra = h('div', { class: 'ticket-meta' });
+  if (card.requestedSpecialty) {
+    extra.appendChild(h('span', {
+      class: 'badge badge-role', text: 'Requested: ' + roleDisplayNameFor(card.requestedSpecialty),
+      title: 'Preference only - the PM coordinates who works on it'
+    }));
+  }
+  if (isNumber(card.attachmentCount) && card.attachmentCount > 0) {
+    extra.appendChild(h('span', { class: 'badge', text: card.attachmentCount + (card.attachmentCount === 1 ? ' attachment' : ' attachments') }));
+  }
+  if (extra.childNodes.length) el.appendChild(extra);
+
+  el.appendChild(h('div', {
+    class: 'ticket-time', text: 'Updated ' + formatRelative(card.updatedAt), title: formatAbsTime(card.updatedAt)
+  }));
+
+  const open = () => openTicketRecord(ticketId);
+  el.addEventListener('click', open);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+  });
+  return el;
+}
+
 function createTicketCard(card) {
+  if (card.cardKind === 'ticket') return createDirectTicketCard(card);
   const isStandalone = card.cardKind === 'standalone_execution';
   const el = h('div', {
     class: 'ticket-card' + (isStandalone ? ' standalone' : ''),
@@ -152,9 +201,9 @@ function renderBoardStatusLine() {
   if (!boardData.loaded) { el.textContent = 'Loading...'; return; }
   if (boardData.truncated) {
     el.textContent = 'Showing ' + boardData.cards.length + ' of ' + boardData.total
-      + ' executions (display limit ' + BOARD_MAX_CARDS + '). Narrow the search or role filter to see the rest.';
+      + ' cards (display limit ' + BOARD_MAX_CARDS + '). Narrow the search or role filter to see the rest.';
   } else {
-    el.textContent = boardData.total + (boardData.total === 1 ? ' execution' : ' executions');
+    el.textContent = boardData.total + (boardData.total === 1 ? ' card' : ' cards');
   }
 }
 
@@ -183,7 +232,7 @@ function renderBoard() {
       }
       if (cardsEl) {
         const scroll = cardsEl.scrollTop;
-        fillCardList(cardsEl, colCards, 'No executions');
+        fillCardList(cardsEl, colCards, 'No cards');
         cardsEl.scrollTop = scroll;
       }
     });
@@ -201,11 +250,11 @@ function renderBoard() {
     if (unassigned.cards.length) lanes.push(unassigned);
     lanes.forEach(lane => {
       const list = h('div', { class: 'role-lane-cards' });
-      fillCardList(list, lane.cards, 'No executions');
+      fillCardList(list, lane.cards, 'No cards');
       roleContainer.appendChild(h('div', { class: 'role-lane' }, [
         h('div', { class: 'role-lane-header' }, [
           h('span', { class: 'role-name', text: lane.name, attrs: { style: 'font-size: 14px;' } }),
-          h('span', { class: 'column-count', text: lane.cards.length + (boardData.truncated ? ' loaded' : (lane.cards.length === 1 ? ' execution' : ' executions')) })
+          h('span', { class: 'column-count', text: lane.cards.length + (boardData.truncated ? ' loaded' : (lane.cards.length === 1 ? ' card' : ' cards')) })
         ]),
         list
       ]));

@@ -402,12 +402,3 @@ function initTicketDetailEvents() {
     }
   });
 }
-
-// New Ticket is not available until M2; keep the button visible but inert.
-function initNewTicketButton() {
-  const btn = document.getElementById('btn-open-new-ticket');
-  if (!btn) return;
-  btn.disabled = true;
-  btn.setAttribute('aria-disabled', 'true');
-  btn.title = 'Direct tickets arrive in M2';
-}

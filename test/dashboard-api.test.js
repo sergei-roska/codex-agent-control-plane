@@ -128,7 +128,7 @@ test('dashboard api', async (suite) => {
     assert.equal(context.apiVersion, 1);
     assert.match(context.project.projectId, /^prj_[0-9a-f]{16}$/);
     assert.equal(context.project.displayName, 'workspace');
-    assert.deepEqual(context.capabilities, { mutations: false, liveStream: false, events: true });
+    assert.deepEqual(context.capabilities, { mutations: true, liveStream: false, events: true, ticketCommands: ['create', 'revise', 'cancel'] });
     assert.equal(context.health.eventJournal.status, 'ok');
     assert.equal(typeof context.lastEventSequence, 'number');
     assert.ok(context.server.startedAt && context.server.now);
