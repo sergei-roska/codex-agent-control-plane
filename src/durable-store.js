@@ -104,7 +104,8 @@ function createJournalTable(db) {
       result_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      objective_sha256 TEXT
+      objective_sha256 TEXT,
+      stage_id TEXT
     );
     CREATE INDEX IF NOT EXISTS dispatch_journal_run_idx ON dispatch_journal (run_id, created_at);
   `);
@@ -112,6 +113,10 @@ function createJournalTable(db) {
   const columns = db.prepare("PRAGMA table_info('dispatch_journal')").all();
   if (!columns.some((column) => column.name === 'objective_sha256')) {
     db.exec('ALTER TABLE dispatch_journal ADD COLUMN objective_sha256 TEXT');
+  }
+  // Older state files also predate stage_id (plan stage of a planned dispatch).
+  if (!columns.some((column) => column.name === 'stage_id')) {
+    db.exec('ALTER TABLE dispatch_journal ADD COLUMN stage_id TEXT');
   }
 }
 
@@ -274,6 +279,7 @@ function fromRow(row) {
     state: row.state,
     result: parseResult(row.result_json),
     objectiveSha256: row.objective_sha256 ?? null,
+    stageId: row.stage_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -292,8 +298,8 @@ class DispatchJournal {
     this.selectOne = this.db.prepare('SELECT * FROM dispatch_journal WHERE attempt_id = ?');
     this.insert = this.db.prepare(`
       INSERT OR IGNORE INTO dispatch_journal
-        (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id, state, result_json, created_at, updated_at, objective_sha256)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, 'submitting', NULL, ?, ?, ?)`);
+        (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id, state, result_json, created_at, updated_at, objective_sha256, stage_id)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, 'submitting', NULL, ?, ?, ?, ?)`);
     this.markSubmitted = this.db.prepare(
       "UPDATE dispatch_journal SET task_id = ?, state = 'submitted', updated_at = ? WHERE attempt_id = ?");
     this.markFinished = this.db.prepare(
@@ -304,7 +310,7 @@ class DispatchJournal {
   recordSubmitting(row) {
     requireFields(row);
     const at = nowIso();
-    this.insert.run(row.attemptId, row.runId, row.assignmentId, row.role, row.sandbox, row.contextId, at, at, row.objectiveSha256 ?? null);
+    this.insert.run(row.attemptId, row.runId, row.assignmentId, row.role, row.sandbox, row.contextId, at, at, row.objectiveSha256 ?? null, row.stageId ?? null);
     return this.get(row.attemptId);
   }
 
@@ -349,6 +355,7 @@ class InMemoryDispatchJournal {
         state: 'submitting',
         result: null,
         objectiveSha256: row.objectiveSha256 ?? null,
+        stageId: row.stageId ?? null,
         createdAt: at,
         updatedAt: at,
       });

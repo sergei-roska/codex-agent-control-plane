@@ -271,10 +271,13 @@ test('journal stores objective_sha256 and migrates an existing table without the
   const journal = new DispatchJournal(state);
   assert.equal(journal.get('old:t1').objectiveSha256, null);
   const row = {
-    attemptId: 'new:t1', runId: 'r', assignmentId: 'new', role: 'orch-builder', sandbox: 'workspace-write', contextId: 'c2', objectiveSha256: 'abc',
+    attemptId: 'new:t1', runId: 'r', assignmentId: 'new', role: 'orch-builder', sandbox: 'workspace-write', contextId: 'c2', objectiveSha256: 'abc', stageId: 'build',
   };
   assert.equal(journal.recordSubmitting(row).objectiveSha256, 'abc');
   assert.equal(new InMemoryDispatchJournal().recordSubmitting(row).objectiveSha256, 'abc');
+  assert.equal(journal.get('new:t1').stageId, 'build');
+  assert.equal(journal.get('old:t1').stageId, null);
+  assert.equal(new InMemoryDispatchJournal().recordSubmitting(row).stageId, 'build');
 });
 
 function lockRepo(t) {

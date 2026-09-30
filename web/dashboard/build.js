@@ -158,6 +158,7 @@ ${notPairedPanel}
 <script src="js/modals/ticket-modal.js"></script>
 <script src="js/modals/ticket-form.js"></script>
 <script src="js/modals/ticket-record.js"></script>
+<script src="js/modals/ticket-run.js"></script>
 <script src="js/modals/approval.js"></script>
 <script src="js/modals/provider-modal.js"></script>
 <script src="js/modals/battlepass.js"></script>

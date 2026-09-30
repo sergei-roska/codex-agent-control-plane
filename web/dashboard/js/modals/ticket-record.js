@@ -9,7 +9,8 @@ const TR_REF_LABELS = [
 ];
 
 // viewRevisionId is null while the current revision is shown.
-const tr = { ticketId: null, detail: null, events: null, eventsError: null, viewRevisionId: null, viewRevision: null, cancel: null, loadSeq: 0 };
+// cmds holds one retry-safe command slot per action; busy disables the action buttons while one is in flight.
+const tr = { ticketId: null, detail: null, events: null, eventsError: null, viewRevisionId: null, viewRevision: null, cmds: {}, busy: false, pollSig: null, loadSeq: 0 };
 
 function isTicketRecordOpen() {
   const modal = document.getElementById('modal-ticket-record');
@@ -31,6 +32,7 @@ function trClear(id) {
 function closeTicketRecord() {
   tr.ticketId = null;
   tr.loadSeq += 1;
+  trrReset();
   const modal = document.getElementById('modal-ticket-record');
   if (modal) modal.classList.remove('open');
 }
@@ -44,7 +46,10 @@ function openTicketRecord(ticketId) {
   tr.eventsError = null;
   tr.viewRevisionId = null;
   tr.viewRevision = null;
-  tr.cancel = null;
+  tr.cmds = {};
+  tr.busy = false;
+  tr.pollSig = null;
+  trrReset();
   trText('tr-title', 'Loading...');
   trText('tr-note', 'Loading ticket...');
   trText('tr-action-error', '');
@@ -76,6 +81,35 @@ async function loadTicketRecord() {
   tr.viewRevision = null;
   tr.events = events.status === 'fulfilled' && Array.isArray(events.value.events) ? events.value.events : null;
   tr.eventsError = events.status === 'rejected' ? events.reason.message : null;
+  tr.pollSig = null;
+  renderTicketRecord();
+  await trrFetchRun(ticketId, seq);
+}
+
+// Poller hook while the modal is open: refresh ticket, events and run; re-render only on change.
+async function refreshTicketRecordPoll(signal) {
+  if (!isTicketRecordOpen() || tr.busy) return;
+  const ticketId = tr.ticketId;
+  const seq = tr.loadSeq;
+  const base = '/tickets/' + encodeURIComponent(ticketId);
+  let detail;
+  try { detail = await apiGet(base, { signal }); } catch (err) { if (err && err.name === 'AbortError') throw err; return; }
+  if (seq !== tr.loadSeq || ticketId !== tr.ticketId) return;
+  const summary = trrSelectedRun(detail).run;
+  const settled = await Promise.allSettled([
+    apiGet(base + '/events', { signal, params: { limit: TR_EVENT_LIMIT } }),
+    summary ? apiGet('/runs/' + encodeURIComponent(summary.runId), { signal }) : Promise.resolve(null)
+  ]);
+  if (signal && signal.aborted) return;
+  if (seq !== tr.loadSeq || ticketId !== tr.ticketId || tr.busy) return;
+  const [events, run] = settled;
+  const sig = JSON.stringify([detail, events.status === 'fulfilled' ? events.value : null, run.status === 'fulfilled' ? run.value : null]);
+  if (sig === tr.pollSig) return;
+  tr.pollSig = sig;
+  tr.detail = detail;
+  if (events.status === 'fulfilled' && Array.isArray(events.value.events)) { tr.events = events.value.events; tr.eventsError = null; }
+  if (run.status === 'fulfilled' && run.value && summary) { trr.data = run.value; trr.dataRunId = summary.runId; trr.error = null; }
+  else if (run.status === 'rejected' && summary) { trr.error = run.reason && run.reason.message ? run.reason.message : 'Could not load the run'; }
   renderTicketRecord();
 }
 
@@ -114,13 +148,14 @@ function renderTicketRecord() {
   const current = d.revision || {};
   const shown = tr.viewRevision || current;
   const viewingOld = Boolean(tr.viewRevision);
-  const cancelled = ticket.status === 'cancelled';
+  const status = ticket.status || 'backlog';
 
   trText('tr-title', shown.title || ticket.title || '(untitled)');
   trText('tr-note', '');
   const badge = document.getElementById('tr-status-badge');
-  badge.className = 'badge badge-status ' + (cancelled ? 'cancelled' : 'backlog');
-  badge.textContent = cancelled ? 'Cancelled' : 'Draft';
+  badge.className = 'badge badge-status ' + ticketStatusClass(status);
+  badge.textContent = ticketStatusLabel(status);
+  badge.title = 'Ticket status: ' + status;
   trText('tr-revision-badge', isNumber(shown.ordinal) ? 'r' + shown.ordinal : '');
 
   const banner = document.getElementById('tr-old-banner');
@@ -146,6 +181,7 @@ function renderTicketRecord() {
   trText('tr-created', formatAbsTime(ticket.createdAt));
   trText('tr-updated', formatAbsTime(ticket.updatedAt));
   renderRevisionHistory(d, shown);
+  renderRunPanel();
   renderRecordActions(d);
 }
 
@@ -242,6 +278,7 @@ function renderRecordActions(d) {
   const available = (Array.isArray(d.availableActions) ? d.availableActions : []).map(actionName);
   const unavailable = Array.isArray(d.unavailableActions) ? d.unavailableActions : [];
   const cancelled = d.ticket.status === 'cancelled';
+  const hideReview = trrReviewBannerShown();
 
   const addButton = (key, label, enabled, reason, handler, danger) => {
     const btn = h('button', {
@@ -254,6 +291,7 @@ function renderRecordActions(d) {
       btn.setAttribute('aria-disabled', 'true');
       btn.appendChild(h('span', { class: 'btn-milestone', text: reason }));
     } else {
+      if (tr.busy) btn.disabled = true;
       btn.addEventListener('click', handler);
     }
     box.appendChild(btn);
@@ -265,19 +303,21 @@ function renderRecordActions(d) {
     const milestone = u.milestone ? (reason.includes(u.milestone) ? '' : ' (' + u.milestone + ')') : '';
     return reason + milestone;
   };
-  [['edit', 'Edit', openEditFromRecord, false], ['cancel', 'Cancel ticket', cancelTicketFromRecord, true]].forEach(([key, label, fn, danger]) => {
-    const can = available.includes(key);
-    addButton(key, label, can, reasonFor(key), fn, danger);
-  });
+  const submitAvailable = available.includes('submit');
+  addButton('edit', 'Edit', available.includes('edit'), reasonFor('edit'), openEditFromRecord, false);
+  if (submitAvailable) {
+    addButton('submit', d.ticket.status === 'blocked' ? 'Submit new run' : 'Submit to Intake', true, '', submitTicketFromRecord, false);
+  } else if (d.ticket.status === 'backlog' || unavailable.some(u => actionName(u) === 'submit')) {
+    addButton('submit', 'Submit to Intake', false, reasonFor('submit'), null, false);
+  }
+  addButton('cancel', 'Cancel ticket', available.includes('cancel'), reasonFor('cancel'), cancelTicketFromRecord, true);
   unavailable.forEach(u => {
     const key = actionName(u);
-    if (key === 'edit' || key === 'cancel' || !key) return;
-    const label = key === 'submit' ? 'Submit to Intake' : key.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+    if (key === 'edit' || key === 'cancel' || key === 'submit' || !key) return;
+    if (hideReview && /accept|correction|rework/.test(key)) return;
+    const label = key.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
     addButton(key, label, false, reasonFor(key));
   });
-  if (!unavailable.some(u => actionName(u) === 'submit')) {
-    addButton('submit', 'Submit to Intake', false, 'Intake arrives in M3');
-  }
 }
 
 function openEditFromRecord() {
@@ -285,37 +325,67 @@ function openEditFromRecord() {
   openTicketForm({ mode: 'edit', detail: tr.detail });
 }
 
+// Sends one guarded command. The commandId is reused for the same version and payload, so a retry after a
+// network failure cannot apply the command twice. Resolves true on success; onError receives the message.
+async function sendTicketCommand(slot, path, extra, onError) {
+  const d = tr.detail;
+  const ticketId = tr.ticketId;
+  if (!d || !ticketId) return false;
+  const version = d.ticket.version;
+  const sig = JSON.stringify(extra || {});
+  const cur = tr.cmds[slot];
+  if (!cur || cur.version !== version || cur.sig !== sig) tr.cmds[slot] = { version, sig, commandId: newCommandId() };
+  const body = Object.assign({ commandId: tr.cmds[slot].commandId, expectedVersion: version }, extra || {});
+  tr.busy = true;
+  renderRecordActions(d);
+  try {
+    await apiPost('/tickets/' + encodeURIComponent(ticketId) + path, body);
+    delete tr.cmds[slot];
+    tr.busy = false;
+    Poller.trigger();
+    if (ticketId === tr.ticketId) await loadTicketRecord();
+    return true;
+  } catch (err) {
+    tr.busy = false;
+    if (ticketId !== tr.ticketId) return false;
+    let message;
+    let reload = false;
+    if (err instanceof ApiError && err.status === 0) {
+      message = 'Cannot reach the orchestrator. Try again; the same request will not be applied twice.';
+    } else if (err instanceof ApiError && err.code === 'stale_version') {
+      delete tr.cmds[slot];
+      reload = true;
+      message = 'This ticket changed since you opened it. The latest version is shown; repeat the action if still wanted.';
+    } else if (err instanceof ApiError && err.code === 'stale_decision') {
+      delete tr.cmds[slot];
+      reload = true;
+      message = 'This question is no longer current (already answered or replaced). The latest state is shown.';
+    } else {
+      delete tr.cmds[slot];
+      message = (err && err.message ? err.message : 'Request failed') + (err && err.code ? ' (' + err.code + ')' : '');
+    }
+    if (reload) await loadTicketRecord();
+    if (ticketId !== tr.ticketId) return false;
+    onError(message);
+    renderTicketRecord();
+    return false;
+  }
+}
+
 async function cancelTicketFromRecord() {
   const d = tr.detail;
   if (!d) return;
-  if (!window.confirm('Cancel this ticket? Its revisions and attachments are kept, but it cannot be edited afterwards.')) return;
-  const ticketId = tr.ticketId;
-  const version = d.ticket.version;
-  // A network failure may still have applied the command: retry with the same id for the same version.
-  if (!tr.cancel || tr.cancel.version !== version) tr.cancel = { version, commandId: newCommandId() };
+  if (!window.confirm('Cancel this ticket? Its revisions, attachments and run history are kept, but it cannot be edited or run afterwards.')) return;
   trText('tr-action-error', '');
-  const buttons = document.querySelectorAll('#tr-actions button');
-  buttons.forEach(b => { b.disabled = true; });
-  try {
-    await apiPost('/tickets/' + encodeURIComponent(ticketId) + '/cancel', { commandId: tr.cancel.commandId, expectedVersion: version });
-    tr.cancel = null;
-    Poller.trigger();
-    if (ticketId === tr.ticketId) await loadTicketRecord();
-  } catch (err) {
-    if (ticketId !== tr.ticketId) return;
-    if (err instanceof ApiError && err.status === 0) {
-      trText('tr-action-error', 'Cannot reach the orchestrator. Confirm again to retry; the same request will not be applied twice.');
-    } else if (err instanceof ApiError && err.code === 'stale_version') {
-      tr.cancel = null;
-      trText('tr-action-error', 'This ticket changed since you opened it. Reloading the latest version.');
-      await loadTicketRecord();
-      trText('tr-action-error', 'This ticket changed since you opened it. The latest version is shown; cancel again if still wanted.');
-    } else {
-      tr.cancel = null;
-      trText('tr-action-error', (err && err.message ? err.message : 'Cancel failed') + (err && err.code ? ' (' + err.code + ')' : ''));
-    }
-    renderTicketRecord();
-  }
+  await sendTicketCommand('cancel', '/cancel', {}, (m) => trText('tr-action-error', m));
+}
+
+async function submitTicketFromRecord() {
+  const d = tr.detail;
+  if (!d) return;
+  if (!window.confirm('Submit this ticket to Intake?\n\nThe PM will read the ticket and the repository (read-only) and may ask you clarifying questions before planning. While a run is active the ticket cannot be edited.')) return;
+  trText('tr-action-error', '');
+  await sendTicketCommand('submit', '/submit', {}, (m) => trText('tr-action-error', m));
 }
 
 function initTicketRecordEvents() {

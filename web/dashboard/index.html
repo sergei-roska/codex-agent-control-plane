@@ -432,6 +432,13 @@
         <span id="tr-old-text"></span>
         <button type="button" class="btn btn-secondary" id="tr-back-current">Back to current revision</button>
       </div>
+      <div class="detail-section tr-run" id="tr-run-section" hidden>
+        <div class="detail-label">Run</div>
+        <div id="tr-run-head"></div>
+        <div id="tr-run-decisions"></div>
+        <div class="sub-tabs" id="tr-run-tabs" role="tablist" aria-label="Run details"></div>
+        <div id="tr-run-panel" class="tr-run-panel" role="tabpanel"></div>
+      </div>
       <div class="modal-detail-grid">
         <div class="detail-main">
           <h4 id="tr-ticket-title" style="margin-bottom: 10px; font-size: 15px;"></h4>
@@ -586,8 +593,8 @@
       </div>
       <div class="modal-footer tf-footer">
         <div class="tf-submit-intake">
-          <button type="button" class="btn btn-secondary" id="btn-submit-intake" disabled aria-disabled="true" title="Intake arrives in M3">Submit to Intake</button>
-          <span class="form-hint">Intake arrives in M3</span>
+          <button type="button" class="btn btn-secondary" id="btn-submit-intake" disabled aria-disabled="true" title="Save the ticket, then submit it from its detail view">Submit to Intake</button>
+          <span class="form-hint">Submit from the ticket detail after saving</span>
         </div>
         <div style="display: flex; gap: 8px; margin-left: auto;">
           <button type="button" class="btn btn-secondary" id="btn-ticket-form-cancel">Close</button>
@@ -922,6 +929,7 @@
 <script src="js/modals/ticket-modal.js"></script>
 <script src="js/modals/ticket-form.js"></script>
 <script src="js/modals/ticket-record.js"></script>
+<script src="js/modals/ticket-run.js"></script>
 <script src="js/modals/approval.js"></script>
 <script src="js/modals/provider-modal.js"></script>
 <script src="js/modals/battlepass.js"></script>

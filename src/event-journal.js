@@ -11,6 +11,9 @@ const EVENT_TYPES = Object.freeze([
   'dispatch_finished', 'run_paused', 'run_completed', 'run_failed',
   'run_canceled', 'run_error',
   'ticket_created', 'ticket_revised', 'ticket_cancelled', 'artifact_staged',
+  'run_queued', 'lease_acquired', 'intake_completed', 'decision_requested', 'decision_answered',
+  'plan_saved', 'branch_prepared', 'preflight_failed', 'engineering_started', 'candidate_captured',
+  'run_settled',
 ]);
 
 const MAX_STRING = 500;
@@ -26,6 +29,8 @@ const PAYLOAD_FIELDS = Object.freeze([
   'outcome', 'state', 'pauseKind', 'disposition', 'rounds', 'assignments',
   'errorName', 'message', 'resumed', 'restarted',
   'ordinal', 'version', 'artifactCount', 'size', 'extraction',
+  'code', 'codes', 'turn', 'readiness', 'classification', 'stageCount', 'phase', 'status',
+  'waitReason', 'kind', 'truncated', 'fileCount', 'created',
 ]);
 
 function sanitizeValue(value, depth = 0) {

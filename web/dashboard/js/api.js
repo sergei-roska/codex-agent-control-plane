@@ -63,6 +63,29 @@ async function apiRequest(method, path, opts) {
   return payload;
 }
 
+// Plain-text GET (candidate diff). Errors still arrive as the JSON error envelope.
+async function apiGetText(path, opts) {
+  const o = opts || {};
+  let res;
+  try {
+    res = await fetch(API_BASE + path + buildQuery(o.params), {
+      method: 'GET', credentials: 'same-origin', signal: o.signal, headers: { Accept: 'text/plain' }
+    });
+  } catch (err) {
+    if (err && err.name === 'AbortError') throw err;
+    throw new ApiError(0, 'network_error', 'Cannot reach the orchestrator');
+  }
+  if (!res.ok) {
+    let payload = null;
+    try { payload = await res.json(); } catch (_) { payload = null; }
+    const e = payload && payload.error ? payload.error : {};
+    if (res.status === 401) Conn.unpaired();
+    throw new ApiError(res.status, e.code || 'http_' + res.status,
+      e.message || ('Request failed with HTTP ' + res.status), e.requestId, e.details);
+  }
+  return res.text();
+}
+
 function apiGet(path, opts) { return apiRequest('GET', path, opts); }
 function apiPost(path, body, opts) { return apiRequest('POST', path, Object.assign({}, opts, { body })); }
 

@@ -168,6 +168,48 @@ test('e2e real stack', async (suite) => {
     });
   });
 
+  await suite.test('delivery metadata routes to the PM lead instance and a resume stays on it', async (t) => {
+    const plan = {
+      planRevisionId: 'plan-e2e',
+      classification: 'audit',
+      stages: [{ stageId: 'look', roleId: 'orch-auditor', objective: 'Look around', dependencies: [], allowedFiles: [], required: true }],
+      checkIds: [],
+    };
+    const appServer = makeFakeAppServer({
+      leadScript: [
+        humanDecision(),
+        decision({ action: 'dispatch', assignments: [assignment('orch-auditor', { stageId: 'look' })] }),
+        decision({ final: 'Delivered.' }),
+        decision({ final: 'Legacy done.' }),
+      ],
+    });
+    await withStack(t, appServer, async (stack) => {
+      const paused = await send(stack, { text: 'Deliver it', metadata: { delivery: { runId: 'delivery-1', plan } } });
+      assert.equal(paused.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+      assert.equal(paused.metadata.delivery.runId, 'delivery-1');
+
+      const done = await send(stack, {
+        text: 'Go with A',
+        taskId: paused.id,
+        contextId: paused.contextId,
+        metadata: { decisionId: paused.metadata.pause.decisionId, choice: 'a' },
+      });
+      assert.equal(done.status.state, TaskState.TASK_STATE_COMPLETED);
+      assert.equal(appServer.leadCalls.length, 3);
+      for (const call of appServer.leadCalls) {
+        assert.match(call.instructions, /product manager \(PM\)/);
+        assert.match(call.input, /Approved delivery plan/);
+      }
+      assert.equal(appServer.workerCalls.length, 1);
+
+      const legacy = await send(stack, { text: 'Plain goal' });
+      assert.equal(legacy.status.state, TaskState.TASK_STATE_COMPLETED);
+      const legacyCall = appServer.leadCalls[3];
+      assert.doesNotMatch(legacyCall.instructions, /Project Manager/);
+      assert.doesNotMatch(legacyCall.input, /Approved delivery plan/);
+    });
+  });
+
   await suite.test('wrong decisionId keeps the task waiting without calling the lead', async (t) => {
     const appServer = makeFakeAppServer({
       leadScript: [humanDecision(), decision({ final: 'Went with B.' })],

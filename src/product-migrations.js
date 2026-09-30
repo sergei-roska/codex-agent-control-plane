@@ -31,8 +31,49 @@ CREATE TABLE product_commands (
 );
 `;
 
+const MIGRATION_2_SQL = `
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL REFERENCES tickets(ticket_id),
+  revision_id TEXT NOT NULL, project_id TEXT NOT NULL, status TEXT NOT NULL, phase TEXT NOT NULL,
+  wait_reason TEXT, wait_detail_json TEXT, plan_revision_id TEXT, lead_task_id TEXT,
+  lead_context_id TEXT, branch_name TEXT, base_commit TEXT, candidate_id TEXT,
+  settings_snapshot_json TEXT NOT NULL, intake_turns INTEGER NOT NULL DEFAULT 0,
+  command_id TEXT NOT NULL, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX runs_one_active_per_ticket ON runs (ticket_id)
+  WHERE status IN ('queued','running','paused','interrupted');
+CREATE TABLE intake_results (
+  intake_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, turn INTEGER NOT NULL, output_json TEXT NOT NULL,
+  valid INTEGER NOT NULL, errors_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (run_id, turn)
+);
+CREATE TABLE plan_revisions (
+  plan_revision_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, parent_plan_revision_id TEXT,
+  classification TEXT NOT NULL, stages_json TEXT NOT NULL, check_ids_json TEXT NOT NULL,
+  checks_json TEXT NOT NULL, requirements_json TEXT NOT NULL, validator_version TEXT NOT NULL,
+  reason TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE decisions (
+  decision_id TEXT PRIMARY KEY, kind TEXT NOT NULL, ticket_id TEXT NOT NULL, run_id TEXT NOT NULL,
+  revision_id TEXT NOT NULL, plan_revision_id TEXT, state TEXT NOT NULL, request_json TEXT NOT NULL,
+  answer_json TEXT, actor TEXT, created_at TEXT NOT NULL, answered_at TEXT
+);
+CREATE TABLE candidates (
+  candidate_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, plan_revision_id TEXT NOT NULL,
+  base_commit TEXT NOT NULL, head TEXT NOT NULL, branch TEXT NOT NULL, head_moved INTEGER NOT NULL,
+  manifest_json TEXT NOT NULL, diff_artifact_id TEXT, truncated INTEGER NOT NULL,
+  acceptance_json TEXT, integrity_hash TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE repository_leases (
+  project_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, ticket_id TEXT NOT NULL, acquired_at TEXT NOT NULL
+);
+CREATE TABLE ticket_branches (
+  branch_name TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, project_id TEXT NOT NULL, created_at TEXT NOT NULL
+);
+`;
+
 const MIGRATIONS = [
   { version: 1, name: 'product_tickets', sql: MIGRATION_1_SQL },
+  { version: 2, name: 'delivery_runs', sql: MIGRATION_2_SQL },
 ];
 
 const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

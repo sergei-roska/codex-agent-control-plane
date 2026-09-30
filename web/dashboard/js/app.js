@@ -3,6 +3,7 @@
 async function pollTick(signal) {
   const jobs = [refreshBoard(signal)];
   if (isTicketModalOpen()) jobs.push(refreshTicketDetail(signal));
+  if (isTicketRecordOpen()) jobs.push(refreshTicketRecordPoll(signal));
   await Promise.all(jobs);
 }
 

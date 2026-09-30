@@ -8,6 +8,8 @@ const { test } = require('node:test');
 const Database = require('better-sqlite3');
 const { migrateProductSchema } = require('../src/product-migrations');
 const { ProductStore, ProductError, canonicalJson } = require('../src/product-store');
+const { DispatchJournal } = require('../src/durable-store');
+const { liveStages } = require('../src/dashboard-api');
 
 const tempDirs = [];
 process.on('exit', () => {
@@ -392,4 +394,277 @@ test('listTickets puts the most recently updated first', async () => {
   assert.deepEqual(listed.map((t) => t.ticketId), [a, b]);
   assert.equal(listed[0].revisionOrdinal, 2);
   assert.equal(listed[0].title, 'a2');
+});
+
+// ------------------------------------------------------------------ M3 runs
+
+const SNAPSHOT = { provider: 'openai', rolePack: 'legacy-orch', promptVersions: { intake: 'pm-intake-v1', lead: 'pm-lead-v1' } };
+const PLAN = {
+  stages: [
+    { stageId: 'build', roleId: 'orch-builder', objective: 'Build', dependencies: [], allowedFiles: ['a.js'], required: true },
+    { stageId: 'audit', roleId: 'orch-auditor', objective: 'Audit', dependencies: ['build'], allowedFiles: [], required: true },
+  ],
+  checkIds: ['unit'],
+};
+const NEEDS_INPUT = {
+  readiness: 'needs_input',
+  classification: 'feature',
+  requirements: { summary: 's', scope: [], outOfScope: [], unknowns: [], expectedOutcomes: [] },
+  questions: [{ id: 'q1', question: 'Which?', why: 'Because' }],
+  unsupportedReason: null,
+  plan: null,
+};
+
+function submitNew(store, title = 'Work') {
+  const created = store.createTicket(base({ title })).ticket;
+  const out = store.submitTicket(created.ticketId, { commandId: cmd(), expectedVersion: created.version }, SNAPSHOT);
+  return { ticketId: created.ticketId, runId: out.run.runId, out };
+}
+
+function toReview(store, runId) {
+  assert.equal(store.acquireLease(runId).acquired, true);
+  store.saveIntakePlan(runId, {
+    turn: 1, output: { ...NEEDS_INPUT, readiness: 'ready', questions: [], plan: PLAN }, classification: 'feature', plan: PLAN,
+    checks: [{ id: 'unit', argv: ['npm', 'test'], timeoutMs: 1000, description: '' }], requirements: NEEDS_INPUT.requirements,
+    validatorVersion: 'm3-plan-v1',
+  });
+  store.recordBranch(runId, { branchName: 'feature/work-abcdef', baseCommit: 'a'.repeat(40) });
+  store.recordLeadTask(runId, 'task-1', 'ctx-1');
+  store.moveToCandidate(runId);
+  return store.completeRun(runId, {
+    candidate: {
+      baseCommit: 'a'.repeat(40), head: 'a'.repeat(40), branch: 'feature/work-abcdef', headMoved: false,
+      manifest: [{ path: 'a.js', status: 'M', sha256: 'f'.repeat(64), size: 3 }], truncated: false,
+      acceptance: {
+        disposition: 'accepted', reasons: [], checks: [{ id: 'unit', exitCode: 0, timedOut: false, durationMs: 5, outputTail: 'ok' }],
+        stages: [{ stageId: 'build', status: 'succeeded', attemptIds: ['att-1'] }, { stageId: 'audit', status: 'failed', attemptIds: [] }],
+      },
+      integrityHash: 'h'.repeat(64),
+    },
+    diffArtifact: { artifactId: 'art_diff', displayName: 'candidate.diff', size: 10, sha256: 'd'.repeat(64), storageRef: 'ref/art_diff' },
+    outcome: 'review',
+  });
+}
+
+test('submit creates a queued run bound to the current revision and moves the ticket to pending', async () => {
+  const { store } = await makeStore();
+  const created = store.createTicket(base()).ticket;
+  const revised = store.reviseTicket(created.ticketId, { commandId: cmd(), expectedVersion: 1, title: 'Fix login v2' });
+  const command = { commandId: cmd(), expectedVersion: revised.ticket.version };
+  const out = store.submitTicket(created.ticketId, command, SNAPSHOT);
+  assert.equal(out.ticket.status, 'pending');
+  assert.equal(out.ticket.version, revised.ticket.version + 1);
+  assert.equal(out.run.status, 'queued');
+  assert.equal(out.run.phase, 'queued');
+  assert.equal(out.run.revisionId, revised.revision.revisionId);
+  assert.deepEqual(Object.keys(out.run).sort(), [
+    'baseCommit', 'branchName', 'candidateId', 'createdAt', 'finishedAt', 'phase', 'planRevisionId', 'revisionId', 'runId',
+    'startedAt', 'status', 'ticketId', 'updatedAt', 'waitDetail', 'waitReason']);
+  assert.deepEqual(store.getRun(out.run.runId).settings, SNAPSHOT);
+  const replay = store.submitTicket(created.ticketId, command, SNAPSHOT);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.run.runId, out.run.runId);
+  assert.equal(store.listRuns(created.ticketId).length, 1);
+  expectError(() => store.submitTicket(created.ticketId, { commandId: cmd(), expectedVersion: out.ticket.version }, SNAPSHOT), 'invalid_state');
+  expectError(() => store.submitTicket('tkt_missing', { commandId: cmd(), expectedVersion: 1 }, SNAPSHOT), 'not_found');
+  assert.throws(() => store.submitTicket(created.ticketId, { commandId: cmd(), expectedVersion: 1 }), TypeError);
+  const other = store.createTicket(base()).ticket;
+  expectError(() => store.submitTicket(other.ticketId, { commandId: cmd(), expectedVersion: 9 }, SNAPSHOT), 'stale_version');
+});
+
+test('the repository lease is FIFO, per ticket, and reports the holder as a dependency wait', async () => {
+  const { store } = await makeStore();
+  const first = submitNew(store, 'first');
+  const second = submitNew(store, 'second');
+  // No lease yet, but an older queued run goes first.
+  assert.equal(store.acquireLease(second.runId).acquired, false);
+  assert.equal(store.getRun(second.runId).waitDetail.message, 'Waiting for earlier queued work');
+  assert.equal(store.acquireLease(first.runId).acquired, true);
+  assert.equal(store.getLease().ticketId, first.ticketId);
+  assert.equal(store.acquireLease(second.runId).acquired, false);
+  const waiting = store.getRun(second.runId);
+  assert.equal(waiting.waitReason, 'dependency');
+  assert.equal(waiting.waitDetail.message, `Repository in use by ${first.ticketId}`);
+  const before = store.getTicket(second.ticketId).version;
+  store.acquireLease(second.runId);
+  assert.equal(store.getTicket(second.ticketId).version, before);
+  assert.equal(store.getTicket(first.ticketId).status, 'in_progress');
+  assert.equal(store.getRun(first.runId).phase, 'intake');
+});
+
+test('intake needs_input waits for an answer; answers are validated and a stale decision is refused', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  store.acquireLease(runId);
+  const decision = store.requestIntakeAnswer(runId, { turn: 1, output: NEEDS_INPUT });
+  assert.equal(decision.kind, 'intake_clarification');
+  assert.equal(store.getTicket(ticketId).status, 'waiting_human');
+  const run = store.getRun(runId);
+  assert.deepEqual([run.status, run.phase, run.waitReason, run.intakeTurns], ['paused', 'awaiting_answer', 'human_decision', 1]);
+
+  const version = store.getTicket(ticketId).version;
+  const answer = (extra) => ({ commandId: cmd(), expectedVersion: version, ...extra });
+  expectError(() => store.answerDecision(ticketId, decision.decisionId, answer({ answers: [] })), 'invalid_request');
+  expectError(() => store.answerDecision(ticketId, decision.decisionId, answer({ answers: [{ questionId: 'zz', answer: 'x' }] })), 'invalid_request');
+  expectError(() => store.answerDecision(ticketId, decision.decisionId, answer({ answer: 'x' })), 'invalid_request');
+  expectError(() => store.answerDecision(ticketId, 'dec_missing', answer({ answers: [] })), 'not_found');
+  expectError(() => store.answerDecision(ticketId, decision.decisionId, { ...answer({ answers: [{ questionId: 'q1', answer: 'x' }] }), expectedVersion: version + 5 }), 'stale_version');
+
+  const command = answer({ answers: [{ questionId: 'q1', answer: '  blue ' }] });
+  const out = store.answerDecision(ticketId, decision.decisionId, command);
+  assert.equal(out.ticket.status, 'in_progress');
+  assert.equal(out.decision.state, 'answered');
+  assert.deepEqual(out.decision.answer, { answers: [{ questionId: 'q1', answer: 'blue' }] });
+  const resumed = store.getRun(runId);
+  assert.deepEqual([resumed.status, resumed.phase, resumed.waitReason], ['running', 'intake', null]);
+  assert.equal(store.answerDecision(ticketId, decision.decisionId, command).replayed, true);
+  expectError(() => store.answerDecision(ticketId, decision.decisionId, { ...command, commandId: cmd(), expectedVersion: out.ticket.version }), 'stale_decision');
+  assert.equal(expectError(() => store.answerDecision(ticketId, decision.decisionId, { ...command, commandId: cmd(), expectedVersion: out.ticket.version }), 'stale_decision').status, 409);
+});
+
+test('lead decisions carry the lead pause payload, validate the choice and resume the run on answer', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  store.acquireLease(runId);
+  store.saveIntakePlan(runId, {
+    turn: 1, output: { ...NEEDS_INPUT, readiness: 'ready', questions: [], plan: PLAN }, classification: 'feature', plan: PLAN,
+    checks: [], requirements: NEEDS_INPUT.requirements, validatorVersion: 'm3-plan-v1',
+  });
+  const pause = { kind: 'human_decision', decisionId: 'lead-dec-1', question: 'Which?', reason: 'product_choice', options: [{ id: 'a', description: 'A' }], recommendation: 'a' };
+  // Not in the engineering phase yet: nothing is recorded.
+  assert.equal(store.requestLeadDecision(runId, pause), null);
+  store.recordBranch(runId, { branchName: null, baseCommit: 'a'.repeat(40) });
+  store.recordLeadTask(runId, 'task-1', 'ctx-1');
+  const decision = store.requestLeadDecision(runId, pause);
+  assert.equal(decision.kind, 'lead_decision');
+  assert.equal(store.requestLeadDecision(runId, pause).decisionId, decision.decisionId);
+  assert.equal(store.findLeadDecision(runId, 'lead-dec-1').decisionId, decision.decisionId);
+  assert.equal(store.getTicket(ticketId).status, 'waiting_human');
+  assert.deepEqual([store.getRun(runId).status, store.getRun(runId).waitReason], ['paused', 'human_decision']);
+  const view = store.getRunView(runId).decisions[0];
+  assert.deepEqual(Object.keys(view.request).sort(), ['options', 'question', 'reason', 'recommendation']);
+
+  const version = store.getTicket(ticketId).version;
+  expectError(() => store.answerDecision(ticketId, decision.decisionId, { commandId: cmd(), expectedVersion: version, answer: 'x', choice: 'zzz' }), 'invalid_request');
+  expectError(() => store.answerDecision(ticketId, decision.decisionId, { commandId: cmd(), expectedVersion: version, answer: 'no choice given' }), 'invalid_request');
+  expectError(() => store.answerDecision(ticketId, decision.decisionId, { commandId: cmd(), expectedVersion: version, answers: [] }), 'invalid_request');
+  expectError(() => store.answerDecision(ticketId, decision.decisionId, { commandId: cmd(), expectedVersion: version, answer: '   ' }), 'invalid_request');
+  const out = store.answerDecision(ticketId, decision.decisionId, { commandId: cmd(), expectedVersion: version, answer: 'Go with A', choice: 'a' });
+  assert.deepEqual(out.decision.answer, { answer: 'Go with A', choice: 'a' });
+  assert.equal(out.ticket.status, 'in_progress');
+  const run = store.getRun(runId);
+  assert.deepEqual([run.status, run.phase, run.waitReason], ['running', 'engineering', null]);
+});
+
+test('cancel: backlog as before, settled waiting_human/blocked tickets release the lease, active work is refused', async () => {
+  const { store, db } = await makeStore();
+  const pending = submitNew(store, 'pending');
+  const refusal = expectError(() => store.cancelTicket(pending.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(pending.ticketId).version }), 'invalid_state');
+  assert.equal(refusal.message, 'Stopping active work arrives in M7');
+  store.acquireLease(pending.runId);
+  assert.equal(expectError(() => store.cancelTicket(pending.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(pending.ticketId).version }), 'invalid_state').message, 'Stopping active work arrives in M7');
+
+  // A blocked ticket whose run is still marked running counts as active execution.
+  db.prepare("UPDATE tickets SET status = 'blocked' WHERE ticket_id = ?").run(pending.ticketId);
+  assert.equal(expectError(() => store.cancelTicket(pending.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(pending.ticketId).version }), 'invalid_state').message, 'Stopping active work arrives in M7');
+  store.settleRun(pending.runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', waitDetail: { code: 'x', message: 'y' } });
+  const cancelled = store.cancelTicket(pending.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(pending.ticketId).version });
+  assert.equal(cancelled.ticket.status, 'cancelled');
+  assert.equal(store.getLease(), null);
+  assert.equal(store.getRun(pending.runId).status, 'failed');
+
+  const review = submitNew(store, 'review');
+  toReview(store, review.runId);
+  assert.equal(store.getTicket(review.ticketId).status, 'waiting_human');
+  assert.equal(store.getLease().ticketId, review.ticketId);
+  const out = store.cancelTicket(review.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(review.ticketId).version });
+  assert.equal(out.ticket.status, 'cancelled');
+  assert.equal(store.getRun(review.runId).status, 'cancelled');
+  assert.equal(store.getLease(), null);
+  expectError(() => store.cancelTicket(review.ticketId, { commandId: cmd(), expectedVersion: out.ticket.version }), 'invalid_state');
+});
+
+test('a blocked ticket can be submitted again after a settled run and takes over its own lease', async () => {
+  const { store } = await makeStore();
+  const first = submitNew(store);
+  store.acquireLease(first.runId);
+  store.settleRun(first.runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', waitDetail: { code: 'intake_error', message: 'boom' } });
+  const ticket = store.getTicket(first.ticketId);
+  assert.equal(ticket.status, 'blocked');
+  const again = store.submitTicket(first.ticketId, { commandId: cmd(), expectedVersion: ticket.version }, SNAPSHOT);
+  assert.equal(again.ticket.status, 'pending');
+  assert.notEqual(again.run.runId, first.runId);
+  assert.equal(store.acquireLease(again.run.runId).acquired, true);
+  assert.equal(store.getLease().runId, again.run.runId);
+  assert.deepEqual(store.listRuns(first.ticketId).map((r) => r.runId), [again.run.runId, first.runId]);
+  assert.equal(store.getActiveRun(first.ticketId).runId, again.run.runId);
+});
+
+test('getRunView returns the pinned shapes and every ticket status change bumps the version', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  const versions = [store.getTicket(ticketId).version];
+  toReview(store, runId);
+  versions.push(store.getTicket(ticketId).version);
+  assert.ok(versions[1] > versions[0]);
+  const view = store.getRunView(runId);
+  assert.deepEqual(Object.keys(view).sort(), ['candidate', 'decisions', 'intake', 'leadTaskCardId', 'plan', 'run', 'settings', 'stages']);
+  assert.deepEqual([view.run.status, view.run.phase, view.run.waitReason], ['completed', 'settled', 'human_review']);
+  assert.equal(view.run.branchName, 'feature/work-abcdef');
+  assert.deepEqual(Object.keys(view.plan).sort(), ['checks', 'classification', 'createdAt', 'planRevisionId', 'requirements', 'stages', 'validatorVersion']);
+  assert.deepEqual(view.plan.checks, [{ id: 'unit', argv: ['npm', 'test'], timeoutMs: 1000, description: '' }]);
+  assert.deepEqual(Object.keys(view.intake[0]).sort(), ['classification', 'createdAt', 'errors', 'questions', 'readiness', 'requirements', 'turn', 'unsupportedReason', 'valid']);
+  assert.equal(view.intake[0].readiness, 'ready');
+  assert.deepEqual(Object.keys(view.candidate).sort(), [
+    'acceptance', 'baseCommit', 'branch', 'candidateId', 'createdAt', 'diffArtifactId', 'head', 'headMoved', 'integrityHash', 'manifest', 'truncated']);
+  assert.deepEqual(Object.keys(view.candidate.acceptance).sort(), ['checks', 'disposition', 'reasons']);
+  assert.equal(view.candidate.diffArtifactId, 'art_diff');
+  assert.equal(store.getArtifact('art_diff').kind, 'candidate_diff');
+  assert.deepEqual(store.listTicketArtifacts(ticketId), []);
+  assert.deepEqual(view.stages.map((s) => [s.stageId, s.roleId, s.required, s.status]), [['build', 'orch-builder', true, 'succeeded'], ['audit', 'orch-auditor', true, 'failed']]);
+  assert.deepEqual(view.stages[0].attempts, [{ attemptId: 'att-1', role: null, journalState: null, outcome: null }]);
+  assert.equal(view.leadTaskCardId, `lr_${Buffer.from('orchestrator\u0000\u0000task-1', 'utf8').toString('base64url')}`);
+  assert.deepEqual(view.settings, SNAPSHOT);
+  assert.equal(store.getRunView('run_missing'), null);
+  assert.deepEqual(store.getRunView(runId, { stages: [] }).stages, []);
+});
+
+test('at most one active run per ticket is enforced by the database', async () => {
+  const { store, db } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  const insert = () => db.prepare(
+    "INSERT INTO runs (run_id, ticket_id, revision_id, project_id, status, phase, settings_snapshot_json, command_id, created_at, updated_at) "
+    + "VALUES (?, ?, 'r', 'proj', ?, 'queued', '{}', 'c', 'now', 'now')",
+  );
+  assert.throws(() => insert().run('run_dup', ticketId, 'running'), /UNIQUE/);
+  store.acquireLease(runId);
+  store.settleRun(runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', waitDetail: { code: 'x', message: 'y' } });
+  insert().run('run_ok', ticketId, 'queued');
+});
+
+test('live stages map journal attempts by stageId, so two stages with one role stay separate', async () => {
+  const { db } = await makeStore();
+  const journal = new DispatchJournal(db);
+  const plan = {
+    stages: [
+      { stageId: 'build-a', roleId: 'orch-builder', dependencies: [], required: true },
+      { stageId: 'build-b', roleId: 'orch-builder', dependencies: ['build-a'], required: true },
+    ],
+  };
+  const base = { runId: 'lead-1', sandbox: 'workspace-write', contextId: 'c' };
+  journal.recordSubmitting({ ...base, attemptId: 'a1', assignmentId: 'a1', role: 'orch-builder', stageId: 'build-a' });
+  journal.recordSubmitted('a1', 't1');
+  journal.recordFinished('a1', { status: 'TASK_STATE_COMPLETED', report: { outcome: 'completed' } });
+  journal.recordSubmitting({ ...base, attemptId: 'a2', assignmentId: 'a2', role: 'orch-builder', stageId: 'build-b' });
+  journal.recordSubmitting({ ...base, attemptId: 'a3', assignmentId: 'a3', role: 'orch-builder' });
+  assert.equal(journal.get('a1').stageId, 'build-a');
+  assert.equal(journal.get('a3').stageId, null);
+  const stages = liveStages(db, { leadTaskId: 'lead-1' }, plan);
+  assert.deepEqual(stages.map((s) => [s.stageId, s.status, s.attempts.map((a) => a.attemptId)]), [
+    ['build-a', 'succeeded', ['a1']],
+    ['build-b', 'running', ['a2']],
+  ]);
+  // Legacy rows without a stage id are ignored for stage mapping.
+  const legacy = liveStages(db, { leadTaskId: 'nobody' }, plan);
+  assert.deepEqual(legacy.map((s) => [s.status, s.attempts.length]), [['eligible', 0], ['pending', 0]]);
 });

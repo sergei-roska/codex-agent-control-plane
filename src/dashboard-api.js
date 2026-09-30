@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
 const { MAX_ARTIFACT_BYTES, MAX_EXTRACTED_CHARS, ArtifactError, sanitizeDisplayName } = require('./artifact-store');
-const { LIMITS, SPECIALTIES } = require('./product-store');
+const { LIMITS, SPECIALTIES, ACTIVE_RUN_STATUSES } = require('./product-store');
 
 const MAX_EVENTS_LIMIT = 500;
 const DEFAULT_EVENTS_LIMIT = 100;
@@ -23,6 +23,7 @@ const STATUS_BY_CODE = Object.freeze({
   conflict: 409,
   staging_limit: 409,
   invalid_state: 409,
+  stale_decision: 409,
   payload_too_large: 413,
   unsupported_media_type: 415,
 });
@@ -46,9 +47,8 @@ const ATTACHMENT_FORMATS = Object.freeze([
     extraction: 'reference_only',
   },
 ]);
-const UNAVAILABLE_TICKET_ACTIONS = ['pause', 'resume', 'stop', 'return_to_backlog', 'review', 'commit', 'push']
+const UNAVAILABLE_TICKET_ACTIONS = ['accept', 'corrections', 'pause', 'resume', 'stop', 'return_to_backlog', 'commit', 'push']
   .map((action) => ({ action, reason: 'Operator commands are not available in this release', milestone: 'M7' }));
-const ALL_TICKET_ACTIONS = ['submit', 'edit', 'cancel', ...UNAVAILABLE_TICKET_ACTIONS.map((entry) => entry.action)];
 const MESSAGE_BY_CODE = Object.freeze({ invalid_request: 'Invalid request', not_found: 'Not found' });
 const SAFE_MESSAGE_ERRORS = new Set(['ProductError', 'ArtifactError']);
 
@@ -124,24 +124,78 @@ function contentDisposition(displayName) {
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
-function ticketActions(ticket) {
-  if (ticket.status === 'backlog') {
-    return {
-      availableActions: ['edit', 'cancel'],
-      unavailableActions: [
-        { action: 'submit', reason: 'Intake arrives in M3', milestone: 'M3' },
-        ...UNAVAILABLE_TICKET_ACTIONS.map((entry) => ({ ...entry })),
-      ],
-    };
+// Per-status actions (D-M3-7). `answer` is offered only while a decision is pending.
+function ticketActions(ticket, { latestRun, activeRun, pendingDecision }) {
+  const available = [];
+  const unavailable = [];
+  const blockedBy = (action, reason, milestone = null) => unavailable.push({ action, reason, milestone });
+  const statusReason = `Ticket is ${ticket.status}`;
+  if (ticket.status === 'backlog') available.push('edit');
+  else blockedBy('edit', statusReason);
+  if (ticket.status === 'backlog' || (ticket.status === 'blocked' && !activeRun && latestRun)) available.push('submit');
+  else blockedBy('submit', statusReason);
+  if (pendingDecision) available.push('answer');
+  const activeExecution = ticket.status === 'pending' || ticket.status === 'in_progress' || (latestRun && latestRun.status === 'running');
+  if (ticket.status === 'backlog' || ((ticket.status === 'waiting_human' || ticket.status === 'blocked') && !activeExecution)) {
+    available.push('cancel');
+  } else if (activeExecution && ticket.status !== 'cancelled' && ticket.status !== 'done') {
+    blockedBy('cancel', 'Stopping active work arrives in M7', 'M7');
+  } else {
+    blockedBy('cancel', statusReason);
   }
   return {
-    availableActions: [],
-    unavailableActions: ALL_TICKET_ACTIONS.map((action) => ({ action, reason: `Ticket is ${ticket.status}`, milestone: null })),
+    availableActions: available,
+    unavailableActions: [...unavailable, ...UNAVAILABLE_TICKET_ACTIONS.map((entry) => ({ ...entry }))],
   };
 }
 
+// Stage list for a run whose candidate does not exist yet: plan stages with journal attempts matched by stageId.
+function liveStages(db, run, plan) {
+  let rows = [];
+  try {
+    rows = db.prepare('SELECT attempt_id, role, state, result_json, stage_id FROM dispatch_journal WHERE run_id = ? ORDER BY created_at, rowid')
+      .all(String(run.leadTaskId));
+  } catch (_) { rows = []; }
+  const parse = (text) => { try { return JSON.parse(text); } catch (_) { return null; } };
+  const byStage = new Map();
+  for (const row of rows) {
+    if (!row.stage_id) continue;
+    if (!byStage.has(row.stage_id)) byStage.set(row.stage_id, []);
+    byStage.get(row.stage_id).push(row);
+  }
+  const stageRows = plan.stages.map((stage) => ({ stage, mine: byStage.get(stage.stageId) || [] }));
+  const succeeded = new Set();
+  const statusOf = ({ mine }) => {
+    if (mine.length === 0) return null;
+    const last = mine[mine.length - 1];
+    if (last.state !== 'finished') return 'running';
+    const result = parse(last.result_json) || {};
+    return result.status === 'TASK_STATE_COMPLETED' && result.report && result.report.outcome === 'completed' ? 'succeeded' : 'failed';
+  };
+  const statuses = stageRows.map((entry) => statusOf(entry));
+  stageRows.forEach((entry, index) => { if (statuses[index] === 'succeeded') succeeded.add(entry.stage.stageId); });
+  return stageRows.map((entry, index) => {
+    const { stage, mine } = entry;
+    let status = statuses[index];
+    if (status === null) status = stage.dependencies.every((dep) => succeeded.has(dep)) ? 'eligible' : 'pending';
+    return {
+      stageId: stage.stageId,
+      roleId: stage.roleId,
+      required: stage.required,
+      status,
+      attempts: mine.map((row) => {
+        const result = parse(row.result_json);
+        const outcome = result && typeof result === 'object'
+          ? (['outcome', 'status', 'state'].map((key) => result[key]).find((value) => typeof value === 'string') || null)
+          : null;
+        return { attemptId: row.attempt_id, role: row.role, journalState: row.state, outcome };
+      }),
+    };
+  });
+}
+
 function createDashboardApi({
-  projection, events, roles, leadRole, workspace, projectId, startedAt, version, auth, productStore, artifactStore,
+  projection, events, roles, leadRole, workspace, projectId, startedAt, version, auth, productStore, artifactStore, deliveryController,
 } = {}) {
   if (!projection || !events) throw new TypeError('createDashboardApi requires projection and events');
   const resolvedProjectId = projectId || computeProjectId(workspace);
@@ -234,7 +288,15 @@ function createDashboardApi({
       if (!result.replayed) {
         events.record(type, { ticketId: result.ticket.ticketId, payload: payload(result) });
       }
-      res.status(result.replayed ? 200 : 201).json({ ticket: result.ticket, revision: result.revision, replayed: result.replayed });
+      const body = { ticket: result.ticket, revision: result.revision, replayed: result.replayed };
+      if (result.run) body.run = result.run;
+      if (result.decision) body.decision = result.decision;
+      res.status(result.replayed ? 200 : 201).json(body);
+    };
+    // Wakes the delivery loop after a committed command; its failures never reach the caller.
+    const poke = () => {
+      if (!deliveryController) return;
+      try { Promise.resolve(deliveryController.poke()).catch(() => {}); } catch (_) { /* best effort */ }
     };
     const revisionPayload = (result) => ({
       ordinal: result.revision.ordinal,
@@ -254,16 +316,44 @@ function createDashboardApi({
       } catch (error) { next(error); }
     });
 
-    router.post('/tickets/:ticketId/cancel', auth.originGuard, jsonBody, (req, res, next) => {
+    router.post('/tickets/:ticketId/cancel', auth.originGuard, jsonBody, async (req, res, next) => {
       try {
-        commandResult(res, productStore.cancelTicket(req.params.ticketId, req.body), 'ticket_cancelled',
-          (result) => ({ ordinal: result.revision.ordinal, version: result.ticket.version }));
+        const result = deliveryController
+          ? await deliveryController.cancelTicket(req.params.ticketId, req.body)
+          : productStore.cancelTicket(req.params.ticketId, req.body);
+        commandResult(res, result, 'ticket_cancelled',
+          (r) => ({ ordinal: r.revision.ordinal, version: r.ticket.version }));
+        poke();
       } catch (error) { next(error); }
     });
+
+    if (deliveryController) {
+      router.post('/tickets/:ticketId/submit', auth.originGuard, jsonBody, (req, res, next) => {
+        try {
+          const result = productStore.submitTicket(req.params.ticketId, req.body, deliveryController.settingsSnapshot());
+          commandResult(res, result, 'ticket_submitted', (r) => ({ version: r.ticket.version }));
+          poke();
+        } catch (error) { next(error); }
+      });
+
+      router.post('/tickets/:ticketId/decisions/:decisionId/answer', auth.originGuard, jsonBody, (req, res, next) => {
+        try {
+          const result = productStore.answerDecision(req.params.ticketId, req.params.decisionId, req.body);
+          commandResult(res, result, 'ticket_answered', (r) => ({ version: r.ticket.version }));
+          poke();
+        } catch (error) { next(error); }
+      });
+    }
 
     router.get('/tickets/:ticketId', handle((req) => {
       const ticket = requireTicket(req.params.ticketId);
       const revision = productStore.getRevision(ticket.ticketId, ticket.currentRevisionId);
+      const runs = productStore.listRuns(ticket.ticketId);
+      const activeRun = productStore.getActiveRun(ticket.ticketId);
+      const latestRun = productStore.latestRunOf(ticket.ticketId);
+      const pendingDecision = latestRun
+        ? productStore.listDecisions(latestRun.runId).some((decision) => decision.state === 'pending' && ACTIVE_RUN_STATUSES.includes(latestRun.status))
+        : false;
       return {
         ticket,
         revision,
@@ -275,9 +365,52 @@ function createDashboardApi({
           parentRevisionId: entry.parentRevisionId,
         })),
         artifacts: artifactsOf(revision),
-        ...ticketActions(ticket),
+        runs,
+        activeRun: activeRun ? runs.find((entry) => entry.runId === activeRun.runId) : null,
+        ...ticketActions(ticket, { latestRun, activeRun, pendingDecision }),
       };
     }));
+
+    router.get('/runs/:runId', handle((req) => {
+      const run = productStore.getRun(req.params.runId);
+      if (!run) throw Object.assign(new Error('Run not found'), { code: 'not_found' });
+      let stages;
+      if (run.leadTaskId && !run.candidateId && run.planRevisionId) {
+        const plan = productStore.getPlanRevision(run.planRevisionId);
+        if (plan) stages = liveStages(productStore.db, run, plan);
+      }
+      return productStore.getRunView(run.runId, { stages });
+    }));
+
+    router.get('/runs/:runId/candidate/diff', (req, res, next) => {
+      let artifact;
+      let stream;
+      try {
+        const run = productStore.getRun(req.params.runId);
+        const candidate = run && run.candidateId ? productStore.getCandidate(run.candidateId) : null;
+        artifact = candidate && candidate.diffArtifactId ? productStore.getArtifact(candidate.diffArtifactId) : null;
+        if (!artifact) throw Object.assign(new Error('Candidate diff not found'), { code: 'not_found' });
+        stream = artifactStore.createReadStream(artifact.storageRef);
+      } catch (error) {
+        return next(error);
+      }
+      stream.once('error', (error) => {
+        if (res.headersSent) return res.destroy(error);
+        return next(error.code === 'ENOENT' ? Object.assign(new Error('Candidate diff not found'), { code: 'not_found' }) : error);
+      });
+      stream.once('open', () => {
+        res.set({
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Length': String(artifact.size),
+          'Content-Disposition': 'inline',
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': "sandbox; default-src 'none'",
+        });
+        stream.pipe(res);
+      });
+      res.once('close', () => stream.destroy());
+      return undefined;
+    });
 
     router.get('/tickets/:ticketId/revisions/:revisionId', handle((req) => {
       const ticket = requireTicket(req.params.ticketId);
@@ -380,4 +513,4 @@ function createDashboardApi({
   return router;
 }
 
-module.exports = { collectStaleStagedArtifacts, createDashboardApi, computeProjectId, sendError, newRequestId };
+module.exports = { collectStaleStagedArtifacts, createDashboardApi, liveStages, computeProjectId, sendError, newRequestId };

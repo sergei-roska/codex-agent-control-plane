@@ -61,3 +61,56 @@ function formatMaybeDuration(ms) {
   if (s < 120) return s.toFixed(1) + ' s';
   return (s / 60).toFixed(1) + ' min';
 }
+
+// --- M3: ticket/run vocabulary shared by the board and the ticket detail ---
+const TICKET_STATUS_LABELS = {
+  backlog: 'Draft', pending: 'Pending', in_progress: 'In progress', paused: 'Needs attention',
+  waiting_human: 'Needs attention', blocked: 'Needs attention', done: 'Done', cancelled: 'Cancelled'
+};
+const WAIT_REASON_LABELS = {
+  human_decision: 'Waiting for your decision', human_review: 'Waiting for your review', budget: 'Budget limit reached',
+  restart: 'Interrupted by a restart', dependency: 'Prerequisite not met', execution_error: 'Execution error',
+  writer_unresolved: 'Unresolved writer state', operator_pause: 'Paused by operator', run_stopped: 'Run stopped'
+};
+const RUN_PHASE_LABELS = {
+  queued: 'Queued', intake: 'Intake', awaiting_answer: 'Awaiting your answer', branch: 'Branch',
+  engineering: 'Engineering', candidate: 'Candidate', settled: 'Settled'
+};
+
+// Unknown stored statuses keep their raw text and read as needing attention; never coerced to done.
+function ticketStatusLabel(status) {
+  if (!status) return 'Unknown';
+  return TICKET_STATUS_LABELS[status] || String(status);
+}
+
+function ticketStatusClass(status) {
+  return TICKET_STATUS_LABELS[status] ? cssToken(status) : 'blocked';
+}
+
+function waitReasonLabel(reason) {
+  if (!reason) return '';
+  return WAIT_REASON_LABELS[reason] || String(reason);
+}
+
+function runPhaseLabel(phase) {
+  if (!phase) return '';
+  return RUN_PHASE_LABELS[phase] || String(phase);
+}
+
+// tone: ok (green) only for accepted, or not_required on a read-only audit plan.
+function dispositionInfo(disposition, classification) {
+  const d = String(disposition === null || disposition === undefined ? '' : disposition);
+  if (d === 'accepted') return { label: 'Accepted', tone: 'ok', passing: true };
+  if (d === 'not_required') {
+    return classification === 'audit'
+      ? { label: 'Not required (read-only audit)', tone: 'ok', passing: true }
+      : { label: 'Not required', tone: 'neutral', passing: false };
+  }
+  if (d === 'rejected') return { label: 'Rejected', tone: 'bad', passing: false };
+  if (d === 'unverifiable' || d === 'unverified') return { label: 'Unverified', tone: 'warn', passing: false };
+  return { label: d || 'Unknown', tone: 'warn', passing: false };
+}
+
+function shortSha(sha) {
+  return sha ? String(sha).slice(0, 7) : 'unknown';
+}

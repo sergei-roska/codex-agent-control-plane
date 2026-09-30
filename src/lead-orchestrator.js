@@ -149,6 +149,34 @@ class LeadOrchestrator {
     return null;
   }
 
+  static _planState(plan) {
+    const stages = plan?.stages;
+    if (!Array.isArray(stages) || stages.length === 0) throw new TypeError('plan.stages must be a non-empty array');
+    for (const stage of stages) {
+      if (!stage || !isNonEmptyString(stage.stageId) || !isNonEmptyString(stage.roleId)
+        || !Array.isArray(stage.dependencies) || !Array.isArray(stage.allowedFiles)) {
+        throw new TypeError('each plan stage needs stageId, roleId, dependencies, and allowedFiles');
+      }
+    }
+    const pinned = JSON.parse(JSON.stringify({
+      planRevisionId: plan.planRevisionId ?? null,
+      classification: plan.classification ?? null,
+      stages: stages.map((stage) => ({
+        stageId: stage.stageId,
+        roleId: stage.roleId,
+        objective: stage.objective ?? '',
+        dependencies: stage.dependencies,
+        allowedFiles: stage.allowedFiles,
+        required: stage.required === true,
+      })),
+      checkIds: Array.isArray(plan.checkIds) ? plan.checkIds : [],
+    }));
+    return {
+      plan: pinned,
+      stageStatuses: Object.fromEntries(pinned.stages.map((stage) => [stage.stageId, { status: 'pending', attemptIds: [] }])),
+    };
+  }
+
   static _exists(snapshot) {
     return Object.keys(snapshot.values || {}).length > 0 || (snapshot.next || []).length > 0;
   }
@@ -166,13 +194,17 @@ class LeadOrchestrator {
     return LeadOrchestrator._exists(snapshot) && (snapshot.next || []).length > 0;
   }
 
-  /** `contract` is the acceptance contract; it is pinned in graph state here and never changed afterwards. */
-  async run({ goal, runId = randomUUID(), contract, signal, onEvent, interruptAfter } = {}) {
+  /**
+   * `contract` is the acceptance contract; it is pinned in graph state here and never changed afterwards.
+   * `plan` (optional, already validated by the caller) is pinned the same way and constrains dispatch; null = legacy.
+   */
+  async run({ goal, runId = randomUUID(), contract, plan = null, signal, onEvent, interruptAfter } = {}) {
     if (!isNonEmptyString(goal)) throw new TypeError('goal must be a non-empty string');
     if (!isNonEmptyString(runId)) throw new TypeError('runId must be a non-empty string');
     const pinnedContract = validateAcceptanceContract(contract);
     if (LeadOrchestrator._exists(await this._snapshot(runId))) throw new Error(`A checkpoint already exists for run ${runId}; use resume()`);
-    return this._drive(runId, { goal, runId, contract: pinnedContract }, { signal, onEvent, interruptAfter, resumed: false });
+    const planState = plan == null ? {} : LeadOrchestrator._planState(plan);
+    return this._drive(runId, { goal, runId, contract: pinnedContract, ...planState }, { signal, onEvent, interruptAfter, resumed: false });
   }
 
   async resume({ runId, input, signal, onEvent, interruptAfter } = {}) {

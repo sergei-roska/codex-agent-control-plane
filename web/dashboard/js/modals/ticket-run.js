@@ -1,0 +1,801 @@
+// --- M3: RUN PANEL IN THE TICKET DETAIL (GET /runs/:runId, decisions, plan, candidate, settings) ---
+// Every server string is untrusted and rendered with textContent only. The diff is text in a <pre>.
+const TRR_STEPS = [
+  { key: 'queued', label: 'Queued' },
+  { key: 'intake', label: 'Intake' },
+  { key: 'plan', label: 'Plan' },
+  { key: 'branch', label: 'Branch' },
+  { key: 'engineering', label: 'Engineering' },
+  { key: 'candidate', label: 'Candidate' },
+  { key: 'review', label: 'Review' }
+];
+const TRR_TABS = [
+  { key: 'requirements', label: 'Requirements' },
+  { key: 'plan', label: 'Plan' },
+  { key: 'candidate', label: 'Candidate' },
+  { key: 'settings', label: 'Settings' },
+  { key: 'execution', label: 'Execution' }
+];
+const TRR_DIFF_CHUNK = 2000;
+const TRR_ANSWER_MAX = 4000;
+const TRR_TERMINAL = ['completed', 'failed', 'stopped', 'cancelled'];
+
+// sigs: per-section render signatures so polling never rebuilds (and so never resets) an untouched section.
+const trr = {
+  pick: null, runId: null, data: null, dataRunId: null, error: null, tab: 'requirements',
+  sigs: {}, drafts: {}, answering: null, answerError: {}, diff: null
+};
+
+function trrReset() {
+  trr.pick = null;
+  trr.runId = null;
+  trr.data = null;
+  trr.dataRunId = null;
+  trr.error = null;
+  trr.tab = 'requirements';
+  trr.sigs = {};
+  trr.drafts = {};
+  trr.answering = null;
+  trr.answerError = {};
+  trr.diff = null;
+}
+
+function trrSelectedRun(d) {
+  const runs = Array.isArray(d.runs) ? d.runs : [];
+  const run = runs.find(r => r.runId === trr.pick)
+    || (d.activeRun ? runs.find(r => r.runId === d.activeRun.runId) : null)
+    || runs[0] || d.activeRun || null;
+  return { runs, run };
+}
+
+function trrData(run) {
+  return run && trr.data && trr.dataRunId === run.runId ? trr.data : null;
+}
+
+async function trrFetchRun(ticketId, seq) {
+  const d = tr.detail;
+  if (!d) return;
+  const summary = trrSelectedRun(d).run;
+  if (!summary) return;
+  try {
+    const res = await apiGet('/runs/' + encodeURIComponent(summary.runId));
+    if (seq !== tr.loadSeq || ticketId !== tr.ticketId) return;
+    trr.data = res;
+    trr.dataRunId = summary.runId;
+    trr.error = null;
+  } catch (err) {
+    if (seq !== tr.loadSeq || ticketId !== tr.ticketId) return;
+    trr.error = err && err.message ? err.message : 'Could not load the run';
+  }
+  renderRunPanel();
+  renderRecordActions(tr.detail);
+}
+
+// True when the "ready for review" banner (with its disabled M7 buttons) is on screen.
+function trrReviewBannerShown() {
+  const d = tr.detail;
+  if (!d) return false;
+  const run = trrSelectedRun(d).run;
+  return Boolean(run && d.ticket.status === 'waiting_human' && run.waitReason === 'human_review');
+}
+
+function trrGuard(key, sig, el, build) {
+  if (!el || trr.sigs[key] === sig) return;
+  trr.sigs[key] = sig;
+  el.textContent = '';
+  build(el);
+}
+
+function trrKv(rows) {
+  const box = h('div', { class: 'tr-kv' });
+  rows.forEach(([k, v]) => {
+    box.appendChild(h('div', { class: 'kv-row' }, [
+      h('span', { class: 'kv-key', text: k }),
+      h('span', { class: 'kv-value', text: v === null || v === undefined || v === '' ? 'none' : String(v) })
+    ]));
+  });
+  return box;
+}
+
+function trrList(items, emptyText) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return h('span', { class: 'detail-empty', text: emptyText || 'None.' });
+  const ul = h('ul', { class: 'detail-list' });
+  list.forEach(i => ul.appendChild(h('li', { text: i })));
+  return ul;
+}
+
+function trrSection(title, node) {
+  return h('div', { class: 'tr-sub' }, [h('div', { class: 'tr-sub-title', text: title }), node]);
+}
+
+// ---------- render entry ----------
+
+function renderRunPanel() {
+  const d = tr.detail;
+  const section = document.getElementById('tr-run-section');
+  if (!d || !section) return;
+  const { runs, run: summary } = trrSelectedRun(d);
+  if (!summary) { section.hidden = true; return; }
+  section.hidden = false;
+  if (trr.runId !== summary.runId) {
+    trr.runId = summary.runId;
+    trr.diff = null;
+    trr.sigs = {};
+  }
+  const data = trrData(summary);
+  const run = data && data.run ? Object.assign({}, summary, data.run) : summary;
+
+  trrGuard('head', JSON.stringify([d.ticket.status, d.ticket.version, runs.map(r => r.runId), trr.pick, run,
+    data ? [data.plan && data.plan.classification, data.candidate && data.candidate.acceptance, data.intake && data.intake.length] : null,
+    trr.error, tr.busy]),
+    document.getElementById('tr-run-head'), (el) => trrBuildHead(el, d, runs, run, data));
+  trrGuard('decisions', JSON.stringify([data ? data.decisions : null, trr.answering, trr.answerError, tr.busy]),
+    document.getElementById('tr-run-decisions'), (el) => trrBuildDecisions(el, run, data));
+  renderRunTabs(d, run, data);
+}
+
+// ---------- head: status, step indicator, wait info, truthfulness banner ----------
+
+function trrStepStates(d, run, data) {
+  const states = TRR_STEPS.map(() => ({ state: 'pending', note: '' }));
+  const candidate = data && data.candidate;
+  const cls = data && data.plan ? data.plan.classification : null;
+  const disp = candidate && candidate.acceptance ? dispositionInfo(candidate.acceptance.disposition, cls) : null;
+  const hasPlan = Boolean(run.planRevisionId);
+  const settled = run.phase === 'settled' || TRR_TERMINAL.includes(run.status);
+  const markDone = (n) => { for (let i = 0; i < n; i += 1) states[i].state = 'done'; };
+
+  if (settled) {
+    if (run.status === 'completed' && candidate) {
+      markDone(6);
+      states[5].state = disp && disp.passing ? 'done-ok' : 'stopped';
+      if (!(disp && disp.passing)) states[5].note = 'checks did not pass';
+      if (disp && disp.passing) {
+        if (d.ticket.status === 'done') states[6].state = 'done';
+        else if (d.ticket.status === 'waiting_human') { states[6].state = 'current'; states[6].note = 'ready for you'; }
+      }
+      return states;
+    }
+    let reached = 0;
+    if (candidate || run.candidateId) reached = 5;
+    else if (run.baseCommit || run.branchName) reached = 4;
+    else if (hasPlan) reached = 3;
+    else if ((data && data.intake && data.intake.length) || run.phase === 'intake') reached = 1;
+    markDone(reached);
+    states[reached].state = 'stopped';
+    states[reached].note = run.status === 'cancelled' ? 'cancelled' : (run.status === 'stopped' ? 'stopped' : 'did not finish');
+    return states;
+  }
+
+  let cur = 0;
+  if (run.phase === 'intake' || run.phase === 'awaiting_answer') cur = hasPlan && run.phase === 'intake' ? 2 : 1;
+  else if (run.phase === 'branch') cur = 3;
+  else if (run.phase === 'engineering') cur = 4;
+  else if (run.phase === 'candidate') cur = 5;
+  markDone(cur);
+  const paused = run.status === 'paused' || run.status === 'interrupted' || d.ticket.status === 'blocked';
+  states[cur].state = paused ? 'stopped' : 'current';
+  if (run.phase === 'awaiting_answer') states[cur].note = 'waiting for your answer';
+  else if (paused) states[cur].note = run.status === 'running' || run.status === 'queued' ? 'blocked' : run.status;
+  else if (run.phase === 'queued') states[cur].note = 'waiting for the repository';
+  else states[cur].note = 'in progress';
+  return states;
+}
+
+function trrBanner(d, run, data) {
+  const status = d.ticket.status;
+  const candidate = data && data.candidate;
+  const cls = data && data.plan ? data.plan.classification : null;
+  const dispRaw = (run.waitDetail && run.waitDetail.disposition) || (candidate && candidate.acceptance && candidate.acceptance.disposition) || null;
+  const disp = dispRaw ? dispositionInfo(dispRaw, cls) : null;
+
+  if (status === 'waiting_human' && run.waitReason === 'human_review') {
+    if (disp && !disp.passing) {
+      return { tone: 'bad', text: 'Checks did not pass - not ready for review', review: false };
+    }
+    if (!data) return { tone: 'neutral', text: 'Loading review evidence...', review: false };
+    if (!disp) {
+      return { tone: 'neutral', text: 'Ready for your review - accept/corrections arrive in M7 (no acceptance evidence was recorded for this candidate)', review: true };
+    }
+    return { tone: 'ok', text: 'Ready for your review - accept/corrections arrive in M7', review: true };
+  }
+  if (status === 'blocked' || status === 'paused') {
+    if (disp && !disp.passing) return { tone: 'bad', text: 'Checks did not pass - not ready for review', review: false };
+    const why = (run.waitDetail && run.waitDetail.message) || waitReasonLabel(run.waitReason) || 'The run cannot continue';
+    return { tone: 'warn', text: (status === 'paused' ? 'Paused: ' : 'Blocked: ') + why, review: false };
+  }
+  if (status === 'waiting_human') {
+    return { tone: 'info', text: waitReasonLabel(run.waitReason) || 'Waiting for you', review: false };
+  }
+  return null;
+}
+
+function trrCopyText(text, btn) {
+  const done = () => {
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, () => { btn.textContent = 'Select and copy manually'; });
+  } else {
+    btn.textContent = 'Select and copy manually';
+  }
+}
+
+function trrBuildHead(el, d, runs, run, data) {
+  if (runs.length > 1) {
+    const select = h('select', { class: 'form-select tr-run-select', attrs: { 'aria-label': 'Choose run' } });
+    runs.forEach((r, i) => {
+      const opt = h('option', {
+        text: 'Run ' + (runs.length - i) + ' - ' + r.status + ' - ' + formatAbsTime(r.createdAt),
+        attrs: { value: r.runId }
+      });
+      if (r.runId === run.runId) opt.selected = true;
+      select.appendChild(opt);
+    });
+    select.addEventListener('change', () => {
+      trr.pick = select.value;
+      trr.data = null;
+      trr.dataRunId = null;
+      trr.diff = null;
+      trr.sigs = {};
+      renderRunPanel();
+      trrFetchRun(tr.ticketId, tr.loadSeq);
+    });
+    el.appendChild(h('div', { class: 'tr-run-pick' }, [select]));
+  }
+
+  const meta = h('div', { class: 'tr-run-meta' }, [
+    h('span', { class: 'badge tr-run-status ' + cssToken(run.status), text: 'Run: ' + (run.status || 'unknown') })
+  ]);
+  if (run.phase) meta.appendChild(h('span', { class: 'badge', text: 'Phase: ' + runPhaseLabel(run.phase), title: run.phase }));
+  if (run.waitReason) meta.appendChild(h('span', { class: 'badge badge-status blocked', text: waitReasonLabel(run.waitReason), title: run.waitReason }));
+  meta.appendChild(h('span', { class: 'tr-marker', text: 'run ' + String(run.runId).slice(0, 12), title: String(run.runId) }));
+  meta.appendChild(h('span', { class: 'tr-marker', text: 'updated ' + formatAbsTime(run.updatedAt) }));
+  el.appendChild(meta);
+
+  const banner = trrBanner(d, run, data);
+  if (banner) {
+    const box = h('div', { class: 'tr-banner tone-' + banner.tone, attrs: { role: 'status' } }, [h('span', { text: banner.text })]);
+    if (banner.review) {
+      const btns = h('span', { class: 'tr-banner-actions' });
+      ['Accept result', 'Request corrections'].forEach(label => {
+        const b = h('button', { class: 'btn btn-secondary', title: 'Arrives in M7', attrs: { type: 'button', 'aria-disabled': 'true' } }, [
+          h('span', { text: label }), h('span', { class: 'btn-milestone', text: 'Arrives in M7' })
+        ]);
+        b.disabled = true;
+        btns.appendChild(b);
+      });
+      box.appendChild(btns);
+    }
+    el.appendChild(box);
+  }
+
+  const steps = trrStepStates(d, run, data);
+  const ol = h('ol', { class: 'tr-steps', attrs: { 'aria-label': 'Run progress' } });
+  steps.forEach((s, i) => {
+    const li = h('li', { class: 'tr-step ' + s.state }, [
+      h('span', { class: 'tr-step-dot', text: String(i + 1) }),
+      h('span', { class: 'tr-step-label', text: TRR_STEPS[i].label }),
+      s.note ? h('span', { class: 'tr-step-note', text: s.note }) : null
+    ]);
+    if (s.state === 'current' || s.state === 'stopped') li.setAttribute('aria-current', 'step');
+    ol.appendChild(li);
+  });
+  el.appendChild(ol);
+
+  if (run.branchName || run.baseCommit) {
+    el.appendChild(trrKv([
+      ['branch', run.branchName || 'not created'],
+      ['base', run.baseCommit ? shortSha(run.baseCommit) : 'unknown']
+    ]));
+  }
+
+  const wd = run.waitDetail;
+  if (wd && typeof wd === 'object') {
+    const box = h('div', { class: 'tr-wait detail-block' });
+    box.appendChild(h('div', { class: 'tr-wait-title', text: (waitReasonLabel(run.waitReason) || 'Wait detail') + (wd.code ? ' [' + wd.code + ']' : '') }));
+    if (wd.message) box.appendChild(h('div', { text: wd.message }));
+    if (wd.disposition) {
+      const di = dispositionInfo(wd.disposition, data && data.plan ? data.plan.classification : null);
+      box.appendChild(h('div', {}, [h('span', { class: 'tr-disp-chip tone-' + di.tone, text: 'Disposition: ' + di.label })]));
+    }
+    if (Array.isArray(wd.problems) && wd.problems.length) {
+      const ul = h('ul', { class: 'detail-list' });
+      wd.problems.forEach(p => ul.appendChild(h('li', {}, [
+        h('span', { class: 'tr-token', text: p && p.code ? p.code : 'problem' }),
+        h('span', { text: ' ' + (p && p.message ? p.message : '') })
+      ])));
+      box.appendChild(ul);
+    }
+    if (wd.resumeCommand) {
+      const pre = h('pre', { class: 'tr-cmd', text: String(wd.resumeCommand) });
+      const copy = h('button', { class: 'btn btn-secondary tr-copy', text: 'Copy', attrs: { type: 'button' } });
+      copy.addEventListener('click', () => trrCopyText(String(wd.resumeCommand), copy));
+      box.appendChild(h('div', { class: 'tr-cmd-row' }, [pre, copy]));
+      box.appendChild(h('div', { class: 'form-hint', text: 'Resume from the dashboard arrives in M7. Until then run this command on the orchestrator host.' }));
+    }
+    el.appendChild(box);
+  }
+  if (trr.error) el.appendChild(h('div', { class: 'tf-field-error', text: 'Run details unavailable: ' + trr.error, attrs: { role: 'alert' } }));
+}
+
+// ---------- decisions ----------
+
+function trrAnswersFor(decision) {
+  const a = decision.answer;
+  if (!a) return { list: [], choice: null, note: null };
+  if (Array.isArray(a)) return { list: a, choice: null, note: null };
+  return { list: Array.isArray(a.answers) ? a.answers : [], choice: a.choice || null, note: typeof a.answer === 'string' ? a.answer : null };
+}
+
+function trrDraft(decisionId) {
+  if (!trr.drafts[decisionId]) trr.drafts[decisionId] = { answers: {}, choice: null, note: '' };
+  return trr.drafts[decisionId];
+}
+
+function trrBuildDecisions(el, run, data) {
+  if (!data) return;
+  const all = Array.isArray(data.decisions) ? data.decisions : [];
+  const pending = all.filter(x => x.state === 'pending');
+  const history = all.filter(x => x.state !== 'pending');
+  pending.forEach(dec => {
+    if (dec.kind === 'intake_clarification') el.appendChild(trrIntakeForm(dec));
+    else if (dec.kind === 'lead_decision') el.appendChild(trrLeadForm(dec));
+    else el.appendChild(h('div', { class: 'tr-decision detail-block' }, [
+      h('div', { class: 'tr-sub-title', text: 'Unrecognized pending decision (' + dec.kind + ')' }),
+      h('div', { class: 'detail-empty', text: 'This dashboard cannot answer this decision kind.' })
+    ]));
+  });
+  if (history.length) {
+    const box = h('details', { class: 'tr-history' }, [h('summary', { text: 'Decision history (' + history.length + ')' })]);
+    history.forEach(dec => box.appendChild(trrHistoryItem(dec)));
+    el.appendChild(box);
+  }
+}
+
+function trrDecisionFrame(dec, title, sub) {
+  const box = h('div', { class: 'tr-decision detail-block', attrs: { 'data-decision': dec.decisionId } });
+  box.appendChild(h('div', { class: 'tr-sub-title', text: title }));
+  if (sub) box.appendChild(h('div', { class: 'form-hint', text: sub }));
+  return box;
+}
+
+function trrAnswerFooter(dec, button, hint) {
+  const err = trr.answerError[dec.decisionId];
+  const row = h('div', { class: 'tr-answer-foot' }, [button]);
+  if (hint) row.appendChild(h('span', { class: 'form-hint', text: hint }));
+  const out = [row];
+  if (err) out.push(h('div', { class: 'tf-field-error', text: err, attrs: { role: 'alert' } }));
+  return out;
+}
+
+function trrIntakeForm(dec) {
+  const questions = dec.request && Array.isArray(dec.request.questions) ? dec.request.questions : [];
+  const draft = trrDraft(dec.decisionId);
+  const box = trrDecisionFrame(dec, 'The PM needs your answers before planning',
+    'Answer each question. Answers are saved with the run and the PM plans from them.');
+  const busy = trr.answering === dec.decisionId;
+  const areas = [];
+  questions.forEach((q, i) => {
+    const id = 'trr-q-' + cssToken(dec.decisionId) + '-' + i;
+    const ta = h('textarea', {
+      class: 'form-textarea tr-answer-input',
+      attrs: { id, rows: '3', 'data-question': String(q.id) }
+    });
+    ta.value = draft.answers[q.id] || '';
+    if (busy) ta.disabled = true;
+    ta.addEventListener('input', () => { draft.answers[q.id] = ta.value; });
+    const fieldErr = h('div', { class: 'tf-field-error', attrs: { role: 'alert' } });
+    areas.push({ q, ta, fieldErr });
+    box.appendChild(h('div', { class: 'form-group tr-question' }, [
+      h('label', { class: 'form-label', text: (i + 1) + '. ' + (q.question || ''), attrs: { for: id } }),
+      q.why ? h('div', { class: 'form-hint', text: 'Why it matters: ' + q.why }) : null,
+      ta, fieldErr
+    ]));
+  });
+  if (!questions.length) box.appendChild(h('div', { class: 'detail-empty', text: 'No questions were recorded for this decision.' }));
+  const btn = h('button', { class: 'btn btn-primary', text: busy ? 'Sending...' : 'Answer', attrs: { type: 'button' } });
+  btn.disabled = busy || !questions.length;
+  btn.addEventListener('click', () => {
+    let bad = false;
+    areas.forEach(a => {
+      const v = a.ta.value.trim();
+      a.fieldErr.textContent = !v ? 'An answer is required.' : (v.length > TRR_ANSWER_MAX ? 'Answers are limited to ' + TRR_ANSWER_MAX + ' characters (now ' + v.length + ').' : '');
+      if (a.fieldErr.textContent) bad = true;
+    });
+    if (bad) return;
+    trrSubmitAnswer(dec, { answers: areas.map(a => ({ questionId: a.q.id, answer: a.ta.value.trim() })) });
+  });
+  trrAnswerFooter(dec, btn, 'Every question needs an answer (1-' + TRR_ANSWER_MAX + ' characters).').forEach(n => box.appendChild(n));
+  return box;
+}
+
+function trrLeadForm(dec) {
+  const req = dec.request || {};
+  const options = Array.isArray(req.options) ? req.options : [];
+  const draft = trrDraft(dec.decisionId);
+  const busy = trr.answering === dec.decisionId;
+  const box = trrDecisionFrame(dec, 'Decision needed from you', null);
+  box.appendChild(h('div', { class: 'tr-question-text', text: req.question || '(no question text)' }));
+  if (req.reason) box.appendChild(h('div', { class: 'form-hint', text: 'Reason: ' + req.reason }));
+  const recId = req.recommendation;
+  const group = h('div', { class: 'tr-options', attrs: { role: 'radiogroup', 'aria-label': 'Options' } });
+  const name = 'trr-opt-' + cssToken(dec.decisionId);
+  options.forEach((o, i) => {
+    const id = name + '-' + i;
+    const radio = h('input', { attrs: { type: 'radio', name, id, value: String(o.id) } });
+    radio.checked = draft.choice === o.id;
+    if (busy) radio.disabled = true;
+    radio.addEventListener('change', () => { draft.choice = o.id; });
+    const label = h('label', { class: 'tr-option', attrs: { for: id } }, [
+      radio,
+      h('span', { class: 'tr-option-body' }, [
+        h('span', { class: 'tr-token', text: String(o.id) }),
+        h('span', { text: ' ' + (o.description || '') }),
+        o.id === recId ? h('span', { class: 'tr-recommended', text: 'Recommended' }) : null
+      ])
+    ]);
+    group.appendChild(label);
+  });
+  box.appendChild(group);
+  if (!options.length) box.appendChild(h('div', { class: 'detail-empty', text: 'No options were offered.' }));
+  const noteId = 'trr-note-' + cssToken(dec.decisionId);
+  const note = h('textarea', { class: 'form-textarea tr-answer-input', attrs: { id: noteId, rows: '2' } });
+  note.value = draft.note || '';
+  if (busy) note.disabled = true;
+  note.addEventListener('input', () => { draft.note = note.value; });
+  const choiceErr = h('div', { class: 'tf-field-error', attrs: { role: 'alert' } });
+  const noteErr = h('div', { class: 'tf-field-error', attrs: { role: 'alert' } });
+  box.appendChild(choiceErr);
+  box.appendChild(h('div', { class: 'form-group' }, [
+    h('label', { class: 'form-label', text: 'Note (optional)', attrs: { for: noteId } }), note, noteErr
+  ]));
+  const btn = h('button', { class: 'btn btn-primary', text: busy ? 'Sending...' : 'Send decision', attrs: { type: 'button' } });
+  btn.disabled = busy || !options.length;
+  btn.addEventListener('click', () => {
+    const opt = options.find(o => o.id === draft.choice);
+    const text = (note.value || '').trim();
+    choiceErr.textContent = opt ? '' : 'Pick an option to continue.';
+    noteErr.textContent = text.length > TRR_ANSWER_MAX ? 'The note is limited to ' + TRR_ANSWER_MAX + ' characters (now ' + text.length + ').' : '';
+    if (!opt || noteErr.textContent) return;
+    // The lead resume needs non-empty text: an empty note becomes an explicit statement of the selection.
+    const answer = text || ('Selected option ' + opt.id + ': ' + (opt.description || '')).slice(0, TRR_ANSWER_MAX);
+    trrSubmitAnswer(dec, { choice: opt.id, answer });
+  });
+  trrAnswerFooter(dec, btn, 'Pick an option; a note is optional.').forEach(n => box.appendChild(n));
+  return box;
+}
+
+async function trrSubmitAnswer(dec, payload) {
+  const ticketId = tr.ticketId;
+  const id = dec.decisionId;
+  trr.answering = id;
+  trr.answerError[id] = '';
+  trr.sigs.decisions = null;
+  renderRunPanel();
+  const path = '/decisions/' + encodeURIComponent(id) + '/answer';
+  const ok = await sendTicketCommand('answer:' + id, path, payload, (m) => { trr.answerError[id] = m; });
+  if (ticketId !== tr.ticketId) return;
+  trr.answering = null;
+  if (ok) delete trr.drafts[id];
+  trr.sigs.decisions = null;
+  renderRunPanel();
+}
+
+function trrHistoryItem(dec) {
+  const kind = dec.kind === 'intake_clarification' ? 'PM clarification' : (dec.kind === 'lead_decision' ? 'Decision' : String(dec.kind));
+  const stateText = dec.state === 'answered' ? 'answered ' + formatAbsTime(dec.answeredAt) : (dec.state === 'stale' ? 'superseded (no longer current)' : String(dec.state));
+  const box = h('div', { class: 'tr-hist-item' }, [
+    h('div', { class: 'tr-sub-title', text: kind + ' - ' + stateText })
+  ]);
+  const req = dec.request || {};
+  const ans = trrAnswersFor(dec);
+  if (dec.kind === 'intake_clarification') {
+    (Array.isArray(req.questions) ? req.questions : []).forEach(q => {
+      const a = ans.list.find(x => x && x.questionId === q.id);
+      box.appendChild(h('div', { class: 'tr-qa' }, [
+        h('div', { class: 'tr-qa-q', text: q.question || '' }),
+        h('div', { class: 'tr-qa-a', text: a ? a.answer : (dec.state === 'answered' ? '(no answer recorded)' : '(unanswered)') })
+      ]));
+    });
+  } else {
+    box.appendChild(h('div', { class: 'tr-qa-q', text: req.question || '' }));
+    const opt = (Array.isArray(req.options) ? req.options : []).find(o => o.id === ans.choice);
+    if (ans.choice) box.appendChild(h('div', { class: 'tr-qa-a', text: 'Chosen: ' + ans.choice + (opt && opt.description ? ' - ' + opt.description : '') }));
+    if (ans.note) box.appendChild(h('div', { class: 'tr-qa-a', text: 'Note: ' + ans.note }));
+    if (!ans.choice && dec.state === 'answered') box.appendChild(h('div', { class: 'detail-empty', text: 'No answer details recorded.' }));
+  }
+  return box;
+}
+
+// ---------- tabs ----------
+
+function renderRunTabs(d, run, data) {
+  const tabs = document.getElementById('tr-run-tabs');
+  const panel = document.getElementById('tr-run-panel');
+  trrGuard('tabs', JSON.stringify([trr.tab]), tabs, (el) => {
+    TRR_TABS.forEach(t => {
+      const btn = h('button', {
+        class: 'sub-tab-btn tr-tab-btn' + (t.key === trr.tab ? ' active' : ''), text: t.label,
+        attrs: { type: 'button', role: 'tab', 'aria-selected': t.key === trr.tab ? 'true' : 'false' }
+      });
+      btn.addEventListener('click', () => {
+        trr.tab = t.key;
+        trr.sigs.tabs = null;
+        trr.sigs.panel = null;
+        renderRunPanel();
+      });
+      el.appendChild(btn);
+    });
+  });
+  const candidate = data ? data.candidate : null;
+  if (trr.tab === 'candidate' && candidate) trrEnsureDiff(candidate);
+  const sig = JSON.stringify([trr.tab, run.runId, data ? { i: data.intake, p: data.plan, s: data.stages, c: data.candidate, st: data.settings, l: data.leadTaskCardId } : null,
+    trr.diff ? [trr.diff.key, trr.diff.state, trr.diff.error] : null, trr.error]);
+  trrGuard('panel', sig, panel, (el) => {
+    if (!data) { el.appendChild(h('div', { class: 'detail-empty', text: trr.error ? 'Run details unavailable.' : 'Loading run details...' })); return; }
+    if (trr.tab === 'requirements') trrTabRequirements(el, data);
+    else if (trr.tab === 'plan') trrTabPlan(el, data);
+    else if (trr.tab === 'candidate') trrTabCandidate(el, data);
+    else if (trr.tab === 'settings') trrTabSettings(el, data);
+    else trrTabExecution(el, data);
+  });
+}
+
+function trrTabRequirements(el, data) {
+  const intake = (Array.isArray(data.intake) ? data.intake : []).slice().sort((a, b) => a.turn - b.turn);
+  const valid = intake.filter(x => x.valid && x.requirements);
+  const latest = valid.length ? valid[valid.length - 1] : null;
+  if (!latest) {
+    el.appendChild(h('div', { class: 'detail-empty', text: intake.length ? 'No valid Intake result yet.' : 'Intake has not produced a result yet.' }));
+  } else {
+    const r = latest.requirements || {};
+    const meta = h('div', { class: 'tr-run-meta' }, [
+      h('span', { class: 'badge', text: 'Turn ' + latest.turn }),
+      latest.classification ? h('span', { class: 'badge badge-role', text: 'Classification: ' + latest.classification }) : null,
+      latest.readiness ? h('span', { class: 'badge', text: 'Readiness: ' + latest.readiness }) : null
+    ]);
+    el.appendChild(meta);
+    el.appendChild(trrSection('Summary', h('div', { class: 'detail-block detail-pre', text: r.summary || 'No summary.' })));
+    el.appendChild(trrSection('Scope', trrList(r.scope, 'Nothing listed.')));
+    el.appendChild(trrSection('Out of scope', trrList(r.outOfScope, 'Nothing listed.')));
+    el.appendChild(trrSection('Unknowns', trrList(r.unknowns, 'No open unknowns.')));
+    el.appendChild(trrSection('Expected outcomes', trrList(r.expectedOutcomes, 'Nothing listed.')));
+    if (latest.unsupportedReason) el.appendChild(trrSection('Unsupported', h('div', { class: 'detail-block', text: latest.unsupportedReason })));
+  }
+  const invalid = intake.filter(x => !x.valid);
+  if (invalid.length) {
+    const box = h('div', { class: 'tr-invalid' });
+    invalid.forEach(x => {
+      box.appendChild(h('div', { class: 'tr-sub-title', text: 'Turn ' + x.turn + ' was rejected (' + formatAbsTime(x.createdAt) + ')' }));
+      const errs = Array.isArray(x.errors) ? x.errors : [];
+      const ul = h('ul', { class: 'detail-list' });
+      errs.forEach(e => ul.appendChild(h('li', {}, [
+        h('span', { class: 'tr-token', text: e && e.path ? e.path : '(root)' }),
+        h('span', { text: ' ' + (e && e.message ? e.message : '') })
+      ])));
+      if (!errs.length) ul.appendChild(h('li', { text: 'No error details recorded.' }));
+      box.appendChild(ul);
+    });
+    el.appendChild(trrSection('Invalid Intake turns', box));
+  }
+}
+
+function trrStageStatusClass(status) {
+  return 'tr-stage-' + cssToken(status || 'pending');
+}
+
+function trrTabPlan(el, data) {
+  const plan = data.plan;
+  if (!plan) { el.appendChild(h('div', { class: 'detail-empty', text: 'No plan has been saved for this run yet.' })); return; }
+  el.appendChild(h('div', { class: 'tr-run-meta' }, [
+    h('span', { class: 'badge badge-role', text: 'Classification: ' + plan.classification }),
+    h('span', { class: 'tr-marker', text: 'plan ' + String(plan.planRevisionId).slice(0, 12) + ' - ' + (plan.validatorVersion || 'unknown validator') }),
+    h('span', { class: 'tr-marker', text: formatAbsTime(plan.createdAt) })
+  ]));
+  const live = Array.isArray(data.stages) ? data.stages : [];
+  const table = h('table', { class: 'attempts-table tr-table' });
+  table.appendChild(h('thead', {}, [h('tr', {}, ['Stage', 'Role', 'Required', 'Depends on', 'Allowed files', 'Status', 'Attempts'].map(t => h('th', { text: t })))]));
+  const body = h('tbody');
+  (Array.isArray(plan.stages) ? plan.stages : []).forEach(st => {
+    const ls = live.find(x => x.stageId === st.stageId) || null;
+    const status = ls ? ls.status : 'pending';
+    const attempts = ls && Array.isArray(ls.attempts) ? ls.attempts : [];
+    const files = Array.isArray(st.allowedFiles) ? st.allowedFiles : [];
+    const deps = Array.isArray(st.dependencies) ? st.dependencies : [];
+    const attemptCell = h('td', {}, [h('span', { text: String(attempts.length) })]);
+    attempts.forEach(a => attemptCell.appendChild(h('div', { class: 'tr-marker', text: [a.role, a.journalState, a.outcome].filter(Boolean).join(' / ') })));
+    body.appendChild(h('tr', {}, [
+      h('td', {}, [h('div', { class: 'tr-token', text: st.stageId }), h('div', { class: 'tr-stage-obj', text: st.objective || '' })]),
+      h('td', {}, [h('span', { class: 'tr-token', text: st.roleId || '' })]),
+      h('td', { text: st.required ? 'required' : 'optional' }),
+      h('td', { text: deps.length ? deps.join(', ') : 'none' }),
+      h('td', {}, files.length ? files.map(f => h('div', { class: 'tr-token tr-block', text: f })) : [h('span', { class: 'detail-empty', text: 'read-only' })]),
+      h('td', {}, [h('span', { class: 'badge tr-stage ' + trrStageStatusClass(status), text: status })]),
+      attemptCell
+    ]));
+  });
+  table.appendChild(body);
+  el.appendChild(h('div', { class: 'attempts-table-wrapper' }, [table]));
+  if (!live.length) el.appendChild(h('div', { class: 'form-hint', text: 'Stage progress is not available yet; all stages show as pending.' }));
+
+  const checks = Array.isArray(plan.checks) ? plan.checks : [];
+  const box = h('div', { class: 'tr-checks' });
+  checks.forEach(c => {
+    const argv = Array.isArray(c.argv) ? c.argv : [];
+    box.appendChild(h('div', { class: 'tr-check' }, [
+      h('div', {}, [h('span', { class: 'tr-token', text: c.id }), h('span', { text: ' ' + (c.description || '') }),
+        h('span', { class: 'tr-marker', text: ' timeout ' + formatMaybeDuration(c.timeoutMs) })]),
+      h('div', { class: 'tr-argv' }, argv.map(a => h('span', { class: 'tr-token tr-argv-token', text: a === '' ? '(empty)' : a })))
+    ]));
+  });
+  el.appendChild(trrSection('Acceptance checks', checks.length ? box : h('span', { class: 'detail-empty', text: 'No checks in this plan.' })));
+}
+
+// Diff fetch: cached per candidate; late responses for a different candidate are dropped.
+function trrEnsureDiff(candidate) {
+  const key = candidate.candidateId + '|' + (candidate.integrityHash || '');
+  if (trr.diff && trr.diff.key === key) return;
+  if (!candidate.diffArtifactId) { trr.diff = { key, state: 'none' }; return; }
+  const entry = { key, state: 'loading', text: '', error: null };
+  trr.diff = entry;
+  const ticketId = tr.ticketId;
+  const runId = trr.runId;
+  apiGetText('/runs/' + encodeURIComponent(runId) + '/candidate/diff').then(text => {
+    if (ticketId !== tr.ticketId || trr.diff !== entry) return;
+    entry.state = 'ready';
+    entry.text = text;
+    trr.sigs.panel = null;
+    renderRunPanel();
+  }, err => {
+    if (ticketId !== tr.ticketId || trr.diff !== entry) return;
+    entry.state = 'error';
+    entry.error = err && err.message ? err.message : 'Could not load the diff';
+    trr.sigs.panel = null;
+    renderRunPanel();
+  });
+}
+
+function trrDiffLineClass(line, ctx) {
+  if (line.startsWith('diff ')) { ctx.inHunk = false; return 'file'; }
+  if (line.startsWith('@@')) { ctx.inHunk = true; return 'hunk'; }
+  if (!ctx.inHunk) return 'meta';
+  if (line.startsWith('+')) return 'add';
+  if (line.startsWith('-')) return 'del';
+  return 'ctx';
+}
+
+function trrRenderDiff(text) {
+  const wrap = h('div', { class: 'tr-diff', attrs: { tabindex: '0', role: 'region', 'aria-label': 'Candidate diff' } });
+  const lines = text.split('\n');
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  if (!lines.length) { wrap.appendChild(h('div', { class: 'detail-empty', text: 'The stored diff is empty.' })); return wrap; }
+  const pre = h('pre', { class: 'tr-diff-pre' });
+  const ctx = { inHunk: false, shown: 0 };
+  const more = h('button', { class: 'btn btn-secondary tr-diff-more', attrs: { type: 'button' } });
+  const addChunk = () => {
+    const frag = document.createDocumentFragment();
+    const end = Math.min(lines.length, ctx.shown + TRR_DIFF_CHUNK);
+    for (let i = ctx.shown; i < end; i += 1) {
+      frag.appendChild(h('span', { class: 'tr-diff-line ' + trrDiffLineClass(lines[i], ctx), text: lines[i] }));
+    }
+    ctx.shown = end;
+    pre.appendChild(frag);
+    if (ctx.shown >= lines.length) more.style.display = 'none';
+    else more.textContent = 'Show more (' + (lines.length - ctx.shown) + ' lines remaining)';
+  };
+  more.addEventListener('click', addChunk);
+  addChunk();
+  wrap.appendChild(pre);
+  wrap.appendChild(more);
+  return wrap;
+}
+
+function trrTabCandidate(el, data) {
+  const c = data.candidate;
+  if (!c) { el.appendChild(h('div', { class: 'detail-empty', text: 'No candidate has been captured yet.' })); return; }
+  const cls = data.plan ? data.plan.classification : null;
+  el.appendChild(h('div', { class: 'form-hint', text: 'The candidate is uncommitted changes on the task branch. Nothing is committed or pushed.' }));
+  el.appendChild(trrKv([
+    ['branch', c.branch],
+    ['base -> head', shortSha(c.baseCommit) + ' -> ' + shortSha(c.head)],
+    ['captured', formatAbsTime(c.createdAt)],
+    ['integrity', c.integrityHash ? String(c.integrityHash).slice(0, 16) : 'unavailable']
+  ]));
+  if (c.headMoved) {
+    el.appendChild(h('div', { class: 'tr-banner tone-warn', attrs: { role: 'alert' } }, [
+      h('span', { text: 'The branch head moved while this candidate was produced. The diff is shown against the recorded base; review it with that in mind.' })
+    ]));
+  }
+
+  const acc = c.acceptance;
+  if (acc) {
+    const di = dispositionInfo(acc.disposition, cls);
+    const box = h('div', { class: 'tr-accept' }, [
+      h('div', { class: 'tr-disp-big tone-' + di.tone, text: di.label, attrs: { role: 'status' } })
+    ]);
+    const reasons = Array.isArray(acc.reasons) ? acc.reasons : [];
+    if (reasons.length) box.appendChild(trrList(reasons.map(r => (r && typeof r === 'object') ? (r.message || r.code || JSON.stringify(r)) : r)));
+    (Array.isArray(acc.checks) ? acc.checks : []).forEach(ch => {
+      const ok = ch.exitCode === 0 && !ch.timedOut;
+      const row = h('div', { class: 'tr-check-result' }, [
+        h('div', {}, [
+          h('span', { class: 'tr-token', text: ch.id }),
+          h('span', { class: 'badge tr-exit ' + (ok ? 'ok' : 'bad'), text: ch.timedOut ? 'timed out' : ('exit ' + (ch.exitCode === null || ch.exitCode === undefined ? 'unknown' : ch.exitCode)) }),
+          h('span', { class: 'tr-marker', text: formatMaybeDuration(ch.durationMs) })
+        ])
+      ]);
+      if (ch.outputTail) row.appendChild(h('pre', { class: 'tr-output', text: ch.outputTail }));
+      box.appendChild(row);
+    });
+    el.appendChild(trrSection('Acceptance evidence', box));
+  } else {
+    el.appendChild(trrSection('Acceptance evidence', h('div', { class: 'tr-disp-big tone-warn', text: 'No acceptance result recorded' })));
+  }
+
+  const manifest = Array.isArray(c.manifest) ? c.manifest : [];
+  const table = h('table', { class: 'attempts-table tr-table' });
+  table.appendChild(h('thead', {}, [h('tr', {}, ['Path', 'Status', 'Size', 'sha256'].map(t => h('th', { text: t })))]));
+  const body = h('tbody');
+  manifest.forEach(m => body.appendChild(h('tr', {}, [
+    h('td', {}, [h('span', { class: 'tr-token', text: m.path })]),
+    h('td', { text: m.status }),
+    h('td', { text: isNumber(m.size) ? formatBytes(m.size) : 'n/a' }),
+    h('td', {}, [h('span', { class: 'tr-marker', text: m.sha256 ? String(m.sha256).slice(0, 12) : 'n/a', title: m.sha256 || '' })])
+  ])));
+  table.appendChild(body);
+  el.appendChild(trrSection('Changed files (' + manifest.length + ')', manifest.length
+    ? h('div', { class: 'attempts-table-wrapper' }, [table]) : h('span', { class: 'detail-empty', text: 'No changed files.' })));
+
+  const diffBox = h('div');
+  if (c.truncated) {
+    diffBox.appendChild(h('div', { class: 'tr-banner tone-warn', attrs: { role: 'alert' } }, [
+      h('span', { text: 'Diff truncated: the stored diff was cut at its size limit. The file manifest above lists every changed file.' })
+    ]));
+  }
+  const dd = trr.diff;
+  if (!dd || dd.state === 'loading') diffBox.appendChild(h('div', { class: 'detail-empty', text: 'Loading diff...' }));
+  else if (dd.state === 'none') diffBox.appendChild(h('div', { class: 'detail-empty', text: 'No diff was stored for this candidate.' }));
+  else if (dd.state === 'error') diffBox.appendChild(h('div', { class: 'tf-field-error', text: 'Diff unavailable: ' + dd.error, attrs: { role: 'alert' } }));
+  else diffBox.appendChild(trrRenderDiff(dd.text));
+  el.appendChild(trrSection('Diff', diffBox));
+}
+
+function trrFlatten(value, prefix, out) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const keys = Object.keys(value);
+    if (!keys.length && prefix) out.push([prefix, '{}']);
+    keys.forEach(k => trrFlatten(value[k], prefix ? prefix + '.' + k : k, out));
+  } else if (Array.isArray(value)) {
+    out.push([prefix, value.map(v => (v && typeof v === 'object') ? JSON.stringify(v) : String(v)).join(', ')]);
+  } else {
+    out.push([prefix, value === null || value === undefined ? 'null' : String(value)]);
+  }
+  return out;
+}
+
+function trrTabSettings(el, data) {
+  if (!data.settings || typeof data.settings !== 'object') {
+    el.appendChild(h('div', { class: 'detail-empty', text: 'No settings snapshot recorded for this run.' }));
+    return;
+  }
+  el.appendChild(h('div', { class: 'form-hint', text: 'Settings pinned when the run was submitted. Later changes do not affect this run.' }));
+  el.appendChild(h('div', { class: 'detail-block' }, [trrKv(trrFlatten(data.settings, '', []))]));
+}
+
+function trrTabExecution(el, data) {
+  if (!data.leadTaskCardId) {
+    el.appendChild(h('div', { class: 'detail-empty', text: 'Engineering has not started, so there is no execution to open.' }));
+    return;
+  }
+  el.appendChild(h('div', { class: 'form-hint', text: 'The lead execution behind this run, with its events, attempts and usage.' }));
+  const btn = h('button', { class: 'btn btn-secondary', text: 'Open execution detail', attrs: { type: 'button' } });
+  btn.addEventListener('click', () => {
+    const cardId = data.leadTaskCardId;
+    closeTicketRecord();
+    openTicketDetailModal(cardId);
+  });
+  el.appendChild(btn);
+}

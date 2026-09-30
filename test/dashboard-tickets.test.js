@@ -201,15 +201,16 @@ test('dashboard tickets', async (suite) => {
     assert.equal(revised.ticket.title, 'Revised title');
 
     const detail = await api.json(`/tickets/${ticket.ticketId}`);
-    assert.deepEqual(Object.keys(detail).sort(), ['artifacts', 'availableActions', 'revision', 'revisions', 'ticket', 'unavailableActions']);
+    assert.deepEqual(Object.keys(detail).sort(), ['activeRun', 'artifacts', 'availableActions', 'revision', 'revisions', 'runs', 'ticket', 'unavailableActions']);
     assert.equal(detail.revisions.length, 2);
     assert.deepEqual(Object.keys(detail.revisions[0]).sort(), ['actor', 'createdAt', 'parentRevisionId', 'ordinal', 'revisionId'].sort());
     assert.equal(detail.revision.revisionId, revised.revision.revisionId);
-    assert.deepEqual(detail.availableActions, ['edit', 'cancel']);
-    const submit = detail.unavailableActions.find((a) => a.action === 'submit');
-    assert.deepEqual(submit, { action: 'submit', reason: 'Intake arrives in M3', milestone: 'M3' });
-    assert.ok(detail.unavailableActions.every((a) => a.action && a.reason && a.milestone));
-    assert.ok(!detail.unavailableActions.some((a) => a.action === 'edit' || a.action === 'cancel'));
+    assert.deepEqual(detail.availableActions, ['edit', 'submit', 'cancel']);
+    assert.deepEqual(detail.runs, []);
+    assert.equal(detail.activeRun, null);
+    assert.deepEqual(detail.unavailableActions.map((a) => a.action),
+      ['accept', 'corrections', 'pause', 'resume', 'stop', 'return_to_backlog', 'commit', 'push']);
+    assert.ok(detail.unavailableActions.every((a) => a.action && a.reason && a.milestone === 'M7'));
 
     const old = await api.json(`/tickets/${ticket.ticketId}/revisions/${revision.revisionId}`);
     assert.deepEqual(Object.keys(old).sort(), ['artifacts', 'revision']);
@@ -325,8 +326,8 @@ test('dashboard tickets', async (suite) => {
     assert.equal(res.headers.get('content-type'), 'image/png');
     assert.deepEqual(Buffer.from(await res.arrayBuffer()), PNG);
 
-    const text = Buffer.from('café notes\n', 'utf8');
-    const named = await api.stage('отчёт "q".txt', text);
+    const text = Buffer.from('caf\u00e9 notes\n', 'utf8');
+    const named = await api.stage('\u043e\u0442\u0447\u0451\u0442 "q".txt', text);
     const dl = await api.get(`/artifacts/${named.artifactId}/content`);
     assert.equal(dl.status, 200);
     const disposition = dl.headers.get('content-disposition');

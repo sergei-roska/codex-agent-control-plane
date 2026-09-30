@@ -3,8 +3,9 @@
 const express = require('express');
 const fs = require('node:fs');
 const path = require('node:path');
-const { AgentEvent, InMemoryTaskStore, DefaultRequestHandler } = require('@a2a-js/sdk/server');
+const { AgentEvent, InMemoryTaskStore, DefaultRequestHandler, ServerCallContext } = require('@a2a-js/sdk/server');
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
+const { ClientFactory } = require('@a2a-js/sdk/client');
 const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/server/express');
 const { CodexAppServer } = require('./codex-app-server');
 const { loadRoles, createLeadRole } = require('./role-catalog');
@@ -21,6 +22,11 @@ const { createProjection } = require('./dashboard-projection');
 const { migrateProductSchema } = require('./product-migrations');
 const { ProductStore } = require('./product-store');
 const { ArtifactStore, defaultArtifactRoot } = require('./artifact-store');
+const { createPmLeadRole } = require('./intake');
+const { validatePlan } = require('./plan-validator');
+const { loadProjectConfig, defaultProjectConfigPath } = require('./project-config');
+const { createGitAdapter } = require('./git-adapter');
+const { createDeliveryController, computeRolePackHash, LEAD_PROMPT_VERSION } = require('./delivery-controller');
 const { collectStaleStagedArtifacts, createDashboardApi, computeProjectId, sendError, newRequestId } = require('./dashboard-api');
 
 const HOST = '127.0.0.1';
@@ -37,12 +43,12 @@ function assertWebDirOutsideArtifacts(webDir) {
   }
 }
 
-function mountDashboard(app, { auth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore }) {
+function mountDashboard(app, { auth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController }) {
   assertWebDirOutsideArtifacts(DASHBOARD_WEB_DIR);
   const projection = createProjection({ db: state.db, roleIds: [...roles.keys()], projectId, productStore });
   const api = createDashboardApi({
     projection, events, roles, leadRole, workspace, projectId, startedAt: new Date().toISOString(), version: PACKAGE_VERSION,
-    auth, productStore, artifactStore,
+    auth, productStore, artifactStore, deliveryController,
   });
   app.use('/api/dashboard/v1', auth.hostGuard, auth.noStore);
   // Bearer only and deliberately no originGuard: the CLI sends no Origin header.
@@ -185,7 +191,22 @@ function isResumeInputError(error) {
   return error instanceof ResumeInputError;
 }
 
-function makeLeadExecutor({ orchestrator, events = NOOP_EVENTS }) {
+/** { runId, plan } from message metadata.delivery, or null when absent. Throws on a malformed value. */
+function readDelivery(raw) {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw) || typeof raw.runId !== 'string' || !raw.runId.trim()
+    || !raw.plan || typeof raw.plan !== 'object' || Array.isArray(raw.plan)) {
+    throw new Error('delivery metadata must be { runId, plan }');
+  }
+  return {
+    runId: raw.runId,
+    plan: raw.plan,
+    ...(typeof raw.planRevisionId === 'string' && raw.planRevisionId ? { planRevisionId: raw.planRevisionId } : {}),
+    ...(typeof raw.planHash === 'string' && raw.planHash ? { planHash: raw.planHash } : {}),
+  };
+}
+
+function makeLeadExecutor({ orchestrator: defaultOrchestrator, deliveryOrchestrator = null, events = NOOP_EVENTS, projectConfig = null }) {
   const controllers = new Map();
   const reservations = new Set();
   const inflight = new Set();
@@ -205,6 +226,20 @@ function makeLeadExecutor({ orchestrator, events = NOOP_EVENTS }) {
       metadata: {},
     };
     const resuming = requestContext.task?.status?.state === TaskState.TASK_STATE_INPUT_REQUIRED;
+    // Delivery runs are pinned to the PM lead instance: new runs by message metadata, resumes by task metadata.
+    let delivery = null;
+    let deliveryError = null;
+    if (resuming) {
+      const stored = requestContext.task.metadata?.delivery?.runId ? requestContext.task.metadata.delivery : firstUserMetadata(task).delivery;
+      delivery = stored && typeof stored === 'object' && stored.runId ? stored : null;
+    } else {
+      try {
+        delivery = readDelivery(requestContext.userMessage?.metadata?.delivery ?? requestContext.request?.metadata?.delivery);
+      } catch (error) {
+        deliveryError = error;
+      }
+    }
+    const orchestrator = delivery && deliveryOrchestrator ? deliveryOrchestrator : defaultOrchestrator;
     const emit = (type, payload) => events.record(type, { runId: taskId, namespace: 'orchestrator', taskId, role: 'orch-lead', payload });
     let effectivePause = null;
     const republishPause = (pause, explanation, suffix) => {
@@ -240,6 +275,36 @@ function makeLeadExecutor({ orchestrator, events = NOOP_EVENTS }) {
           metadata: {},
         }));
         return;
+      }
+
+      if (!resuming && (deliveryError || (delivery && !deliveryOrchestrator))) {
+        eventBus.publish(AgentEvent.statusUpdate({
+          taskId,
+          contextId,
+          status: status(TaskState.TASK_STATE_FAILED, agentMessage(taskId, contextId, 'delivery-error', deliveryError ? `Invalid delivery metadata: ${deliveryError.message}` : 'Delivery runs are not available on this server.')),
+          metadata: {},
+        }));
+        return;
+      }
+
+      // The server never trusts the caller's plan: re-validate it against the project policy before any run starts.
+      if (!resuming && delivery) {
+        const checked = validatePlan(delivery.plan, {
+          classification: delivery.plan.classification,
+          projectCheckIds: ((projectConfig && projectConfig.checks) || []).map((check) => check.id),
+        });
+        if (!checked.ok) {
+          const listed = checked.errors.map((entry) => `- ${entry.path}: ${entry.message}`).join('\n');
+          eventBus.publish(AgentEvent.statusUpdate({
+            taskId,
+            contextId,
+            status: status(TaskState.TASK_STATE_FAILED, agentMessage(taskId, contextId, 'plan-error', `Invalid delivery plan:\n${listed}`)),
+            metadata: {},
+          }));
+          return;
+        }
+        // Run the normalized plan, never the raw metadata plan.
+        delivery = { ...delivery, plan: checked.plan };
       }
 
       // The acceptance contract is read from a new run only; a resume can never change it.
@@ -281,7 +346,7 @@ function makeLeadExecutor({ orchestrator, events = NOOP_EVENTS }) {
             ? agentMessage(taskId, contextId, `resume-note-${Date.now()}`, 'Resumed. Acceptance metadata on a resume message is ignored; the contract was pinned when the run started.')
             : undefined),
         // Task metadata merges shallowly, so a cleared pause is null rather than absent.
-        metadata: resuming ? { pause: null } : {},
+        metadata: resuming ? { pause: null } : delivery ? { delivery: { runId: delivery.runId, ...(delivery.planRevisionId ? { planRevisionId: delivery.planRevisionId } : {}), ...(delivery.planHash ? { planHash: delivery.planHash } : {}) } } : {},
       }));
       let result;
       if (resuming) emit('run_resumed', { pauseKind });
@@ -296,10 +361,11 @@ function makeLeadExecutor({ orchestrator, events = NOOP_EVENTS }) {
           if (!original) throw new Error('The run has no checkpoint and the original goal could not be recovered from the task history.');
           let originalContract;
           try { originalContract = validateAcceptanceContract(firstUserMetadata(task).acceptance); } catch (_) { originalContract = undefined; }
-          result = await orchestrator.run({ goal: original, runId: taskId, contract: originalContract, signal: controller.signal });
+          const originalDelivery = delivery?.plan ? delivery : (() => { try { return readDelivery(firstUserMetadata(task).delivery); } catch (_) { return null; } })();
+          result = await orchestrator.run({ goal: original, runId: taskId, contract: originalContract, ...(originalDelivery?.plan ? { plan: originalDelivery.plan } : {}), signal: controller.signal });
         }
       } else {
-        result = await orchestrator.run({ goal, runId: taskId, contract, signal: controller.signal });
+        result = await orchestrator.run({ goal, runId: taskId, contract, ...(delivery?.plan ? { plan: delivery.plan } : {}), signal: controller.signal });
       }
       const paused = (result?.status === 'input_required' || result?.status === 'waiting_for_budget') && !controller.signal.aborted;
       if (paused) {
@@ -338,6 +404,7 @@ function makeLeadExecutor({ orchestrator, events = NOOP_EVENTS }) {
               rounds: result?.rounds ?? 0,
               assignments: result?.assignments ?? [],
               ...(result?.acceptance ? { acceptance: result.acceptance } : {}),
+              ...(Array.isArray(result?.stages) ? { stages: result.stages } : {}),
             },
             extensions: [],
           },
@@ -430,6 +497,81 @@ function makeLeadExecutor({ orchestrator, events = NOOP_EVENTS }) {
   };
 }
 
+/**
+ * In-process A2A JSON-RPC client to this server's own /orchestrator endpoint (bearer token, same request
+ * shape as src/cli.js). A new run sends goal + acceptance + delivery; a resume sends taskId + answer metadata.
+ */
+function createLeadClient({ origin, authToken }) {
+  let clientPromise = null;
+  const getClient = () => {
+    if (!clientPromise) {
+      clientPromise = new ClientFactory().createFromUrl(origin, '/orchestrator/agent-card.json').catch((error) => {
+        clientPromise = null;
+        throw error;
+      });
+    }
+    return clientPromise;
+  };
+  const requestOptions = { serviceParameters: { Authorization: `Bearer ${authToken}` } };
+  let sequence = 0;
+  return {
+    async send({ goal, acceptance, delivery, taskId, contextId, decisionId, choice, answer } = {}) {
+      const client = await getClient();
+      let resolvedContext = contextId || '';
+      if (taskId && !resolvedContext) {
+        const existing = await client.getTask({ tenant: '', id: taskId }, requestOptions);
+        resolvedContext = existing?.contextId || '';
+      }
+      const metadata = {};
+      if (acceptance !== undefined) metadata.acceptance = acceptance;
+      if (delivery !== undefined) metadata.delivery = delivery;
+      if (decisionId !== undefined) metadata.decisionId = decisionId;
+      if (choice !== undefined) metadata.choice = choice;
+      sequence += 1;
+      const text = answer !== undefined ? answer : goal;
+      const result = await client.sendMessage({
+        tenant: '',
+        message: {
+          messageId: `delivery-${process.pid}-${Date.now()}-${sequence}`,
+          contextId: resolvedContext,
+          taskId: taskId || '',
+          role: 1,
+          parts: [{ content: { $case: 'text', value: text }, mediaType: 'text/plain', filename: '', metadata: undefined }],
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+          extensions: [],
+          referenceTaskIds: [],
+        },
+        configuration: { acceptedOutputModes: ['text/plain'], returnImmediately: true },
+        metadata: undefined,
+      }, requestOptions);
+      const id = result?.id || result?.taskId;
+      if (!id) throw new Error('The lead endpoint returned no task');
+      return { taskId: id, contextId: result.contextId || resolvedContext };
+    },
+    async cancel(taskId) {
+      const client = await getClient();
+      return client.cancelTask({ tenant: '', id: taskId }, requestOptions);
+    },
+  };
+}
+
+/** Reads orchestrator tasks straight from the durable task store. */
+function createLeadTaskReader({ state, taskStore }) {
+  const context = new ServerCallContext({ tenant: '' });
+  return {
+    async get(taskId) {
+      return (await taskStore.load(taskId, context)) || null;
+    },
+    // A lead task created for a delivery run, found by the runId pinned in its task metadata.
+    async findByRun(runId) {
+      const row = state.db.prepare(
+        "SELECT id, context_id FROM tasks WHERE owner = 'orchestrator' AND json_extract(metadata, '$.delivery.runId') = ? LIMIT 1",
+      ).get(String(runId));
+      return row ? { taskId: row.id, contextId: row.context_id } : null;
+    },
+  };
+}
+
 function rejectOverlappingLeadTask(executor) {
   return function rejectOverlappingLeadTaskMiddleware(req, res, next) {
     if (req.method !== 'POST' || req.body?.method !== 'SendMessage') return next();
@@ -452,10 +594,10 @@ function rejectOverlappingLeadTask(executor) {
   };
 }
 
-function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), events }) {
+function registerLead(app, { leadRole, orchestrator, deliveryOrchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), events, projectConfig }) {
   const endpoint = new URL('/orchestrator', `${baseUrl}/`).toString();
   const card = makeLeadCard({ leadRole, endpoint });
-  const executor = makeLeadExecutor({ orchestrator, events });
+  const executor = makeLeadExecutor({ orchestrator, deliveryOrchestrator, events, projectConfig });
   const requestHandler = new DefaultRequestHandler(card, taskStore, executor);
   app.use('/orchestrator/agent-card.json', agentCardHandler({ agentCardProvider: async () => AgentCard.toJSON(card) }));
   app.use('/orchestrator', authMiddleware, express.json(), rejectOverlappingLeadTask(executor), jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));
@@ -489,6 +631,8 @@ async function startServer({
   stateFile,
   state: providedState,
   workspaceLockDir,
+  projectConfigFile,
+  deliveryTickMs,
 } = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new RangeError('port must be an integer from 0 to 65535');
   if (typeof workspace !== 'string' || !workspace || !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
@@ -499,6 +643,7 @@ async function startServer({
   const ownsState = !providedState;
   let releaseLock = () => {};
   let releaseWorkspaceLock = () => {};
+  let deliveryController = null;
   try {
     await appServer.start?.();
     const accountResult = await appServer.getAccount();
@@ -512,6 +657,10 @@ async function startServer({
     // Product schema first: a failed migration or backup aborts startup before anything serves.
     const migration = await migrateProductSchema({ db: state.db, filePath: state.filePath });
     if (migration.backupPath) process.stderr.write(`Product schema migrated v${migration.fromVersion} -> v${migration.toVersion}; backup written to ${migration.backupPath}\n`);
+    // Operator-owned project policy (base ref, branch prefixes, approved checks), read once at startup.
+    const projectConfigPath = projectConfigFile || (state.filePath === ':memory:' ? null : defaultProjectConfigPath(state.filePath));
+    const projectConfig = loadProjectConfig({ filePath: projectConfigPath || undefined });
+    process.stderr.write(`Project policy: ${projectConfig.source === 'file' ? projectConfigPath : 'defaults (no project config file)'} (revision ${projectConfig.revision.slice(0, 12)}, ${projectConfig.checks.length} approved check(s))\n`);
     const projectId = computeProjectId(workspace);
     const artifactStore = new ArtifactStore({ root: defaultArtifactRoot(state.filePath) });
     artifactStore.ensureRoot();
@@ -535,6 +684,7 @@ async function startServer({
     // Reconcile only once this process owns both the state file and the port.
     const events = new EventJournal({ db: state.db });
     events.ensureSchema();
+    productStore.events = events;
     const reconciledTasks = await reconcileInterruptedTasks(state, { leadNamespace: 'orchestrator' });
     const admission = new WriterAdmission({ db: state.db, workspace });
     const reconciledWriters = await admission.reconcileStale();
@@ -560,15 +710,39 @@ async function startServer({
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger,
     });
+    const deliveryOrchestrator = orchestratorFactory({
+      appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger, leadRole: { ...createPmLeadRole(leadRole), promptVersion: LEAD_PROMPT_VERSION },
+    });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
       roles, appServer, workspace, baseUrl, admission, usageLedger, taskStoreFactory: (roleId) => createTaskStore(state, roleId),
     });
+    const leadTaskStore = createTaskStore(state, 'orchestrator');
     const leadAgent = registerLead(app, {
-      leadRole, orchestrator, baseUrl, authMiddleware, taskStore: createTaskStore(state, 'orchestrator'), events,
+      leadRole, orchestrator, deliveryOrchestrator, baseUrl, authMiddleware, taskStore: leadTaskStore, events, projectConfig,
     });
+    if (httpServer) {
+      deliveryController = createDeliveryController({
+        store: productStore,
+        artifactStore,
+        gitAdapterFactory: () => createGitAdapter({ workspace }),
+        projectConfig,
+        appServer,
+        leadRole,
+        roles,
+        leadClient: createLeadClient({ origin: baseUrl, authToken }),
+        taskReader: createLeadTaskReader({ state, taskStore: leadTaskStore }),
+        usageLedger,
+        events,
+        workspace,
+        tickMs: deliveryTickMs,
+        rolePackHash: computeRolePackHash(path.resolve(profilesDir || path.join(__dirname, '..', 'profiles'))),
+        appServerVersion: typeof appServer.version === 'string' ? appServer.version : null,
+      });
+    }
     const dashboardAuth = createDashboardAuth({ db: state.db, getPort: () => actualPort });
-    mountDashboard(app, { auth: dashboardAuth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore });
+    mountDashboard(app, { auth: dashboardAuth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController });
+    deliveryController?.start();
     return {
       app,
       dashboardAuth,
@@ -579,9 +753,14 @@ async function startServer({
       roles,
       specialistAgents,
       leadAgent,
+      productStore,
+      projectConfig,
+      deliveryController,
       host: HOST,
       port: actualPort,
       async close() {
+        // Stop the controller first so it never reacts to the cancellations that follow.
+        await deliveryController?.stop();
         leadAgent.executor.cancelAll();
         // Let canceled runs confirm downstream and persist their terminal state first.
         await bounded(leadAgent.executor.settled(), SHUTDOWN_TIMEOUT_MS);
@@ -608,6 +787,7 @@ async function startServer({
       },
     };
   } catch (error) {
+    try { await deliveryController?.stop(); } catch (_) { /* Preserve the startup failure. */ }
     try { await bounded(appServer.close?.(), SHUTDOWN_TIMEOUT_MS); } catch (_) { /* Preserve the startup failure. */ }
     if (httpServer) await closeHttpServer(httpServer);
     if (state && ownsState) { try { await state.close(); } catch (_) { /* Preserve the startup failure. */ } }
@@ -655,4 +835,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { startServer, describePause, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts };
+module.exports = { startServer, createLeadClient, createLeadTaskReader, describePause, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts };

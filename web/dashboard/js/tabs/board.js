@@ -101,11 +101,23 @@ function createDirectTicketCard(card) {
   el.appendChild(header);
   el.appendChild(h('div', { class: 'ticket-title', text: card.title || '(untitled)' }));
 
+  const status = card.ticketStatus;
   const meta = h('div', { class: 'ticket-meta' }, [
-    h('span', { class: 'badge badge-status ' + (closed ? 'cancelled' : 'backlog'), text: card.displayStatus || (closed ? 'Cancelled' : 'Draft') })
+    h('span', {
+      class: 'badge badge-status ' + ticketStatusClass(status),
+      text: ticketStatusLabel(status), title: 'Ticket status: ' + status
+    })
   ]);
+  if (card.phase && card.phase !== 'settled' && (status === 'pending' || status === 'in_progress')) {
+    meta.appendChild(h('span', { class: 'badge', text: 'Phase: ' + runPhaseLabel(card.phase), title: card.phase }));
+  }
+  if (card.disposition) {
+    const di = dispositionInfo(card.disposition, card.classification);
+    meta.appendChild(h('span', { class: 'badge badge-accept tone-' + di.tone, text: 'Checks: ' + di.label, title: 'Acceptance disposition: ' + card.disposition }));
+  }
   if (card.priority) meta.appendChild(h('span', { class: 'badge', text: 'Priority: ' + card.priority }));
   el.appendChild(meta);
+  if (card.waitReason) el.appendChild(h('div', { class: 'ticket-wait', text: 'Waiting: ' + (card.waitMessage || waitReasonLabel(card.waitReason)), title: card.waitReason }));
 
   const extra = h('div', { class: 'ticket-meta' });
   if (card.requestedSpecialty) {

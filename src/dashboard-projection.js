@@ -44,6 +44,18 @@ const STATE_TABLE = {
 };
 const UNKNOWN_STATE = ['needs_attention', 'unknown', 'Unknown state'];
 
+// Contract ticket status -> [boardColumn, displayStatus] (D-M3-7). Unknown statuses need attention.
+const TICKET_STATE_TABLE = {
+  backlog: ['backlog', 'Draft'],
+  pending: ['pending', 'Pending'],
+  in_progress: ['in_progress', 'In progress'],
+  paused: ['needs_attention', 'Paused'],
+  waiting_human: ['needs_attention', 'Waiting for you'],
+  blocked: ['needs_attention', 'Blocked'],
+  done: ['closed', 'Done'],
+  cancelled: ['closed', 'Cancelled'],
+};
+
 function requestError(message, code = 'invalid_request', details) {
   const error = new Error(message);
   error.code = code;
@@ -281,8 +293,35 @@ function createProjection({ db, roleIds = [], projectId = null, productStore = n
     };
   }
 
+  // Run-derived card fields: active (else latest) run for phase/waitReason, latest valid intake, latest candidate.
+  function ticketRunFields(ticketId) {
+    const out = { phase: null, classification: null, disposition: null, waitReason: null, waitMessage: null };
+    if (!productStore || typeof productStore.latestRunOf !== 'function') return out;
+    try {
+      const active = productStore.getActiveRun(ticketId);
+      const latest = active || productStore.latestRunOf(ticketId);
+      if (active) out.phase = active.phase;
+      if (latest) out.waitReason = latest.waitReason || null;
+      if (active && active.waitDetail && typeof active.waitDetail.message === 'string' && active.waitDetail.message) out.waitMessage = active.waitDetail.message;
+      const runs = productStore.listRuns(ticketId);
+      for (const summary of runs) {
+        if (out.classification === null) {
+          const records = productStore.listIntakeRecords(summary.runId).filter((record) => record.valid && record.output && typeof record.output.classification === 'string');
+          if (records.length) out.classification = records[records.length - 1].output.classification;
+        }
+        if (out.disposition === null && summary.candidateId) {
+          const candidate = productStore.getCandidate(summary.candidateId);
+          if (candidate && candidate.acceptance && typeof candidate.acceptance.disposition === 'string') out.disposition = candidate.acceptance.disposition;
+        }
+        if (out.classification !== null && out.disposition !== null) break;
+      }
+    } catch (_) { /* run tables are absent before migration 2; fall back to bare fields */ }
+    return out;
+  }
+
   function buildTicketCard(ticket) {
-    const cancelled = ticket.status === 'cancelled';
+    const [boardColumn, displayStatus] = TICKET_STATE_TABLE[ticket.status] || ['needs_attention', String(ticket.status)];
+    const runFields = ticketRunFields(ticket.ticketId);
     return {
       cardId: ticket.ticketId,
       cardKind: 'ticket',
@@ -290,13 +329,18 @@ function createProjection({ db, roleIds = [], projectId = null, productStore = n
       projectId: ticket.projectId || projectId,
       ticketId: ticket.ticketId,
       title: ticket.title,
-      boardColumn: cancelled ? 'closed' : 'backlog',
+      boardColumn,
       executionStatus: null,
-      displayStatus: cancelled ? 'Cancelled' : 'Draft',
+      displayStatus,
       rawState: null,
       acceptance: null,
       humanReview: 'unknown',
-      waitReason: null,
+      waitReason: runFields.waitReason,
+      waitMessage: runFields.waitMessage,
+      ticketStatus: ticket.status,
+      phase: runFields.phase,
+      classification: runFields.classification,
+      disposition: runFields.disposition,
       primaryRole: null,
       participatingRoles: [],
       requestedSpecialty: ticket.requestedSpecialty ?? null,
@@ -315,13 +359,25 @@ function createProjection({ db, roleIds = [], projectId = null, productStore = n
     return rest;
   }
 
+  // Lead tasks owned by a product run are shown inside the ticket, not as separate cards.
+  function linkedLeadTaskIds() {
+    if (!productStore) return new Set();
+    try {
+      return new Set(db.prepare('SELECT lead_task_id FROM runs WHERE lead_task_id IS NOT NULL').all().map((row) => row.lead_task_id));
+    } catch (_) {
+      return new Set();
+    }
+  }
+
   function allCards() {
     const info = readJournal();
     const { byRun } = info;
     for (const entry of cache.values()) entry.seen = false;
     const cards = [];
+    const linked = linkedLeadTaskIds();
     for (const row of selectLight.all()) {
       if (!knownNamespaces.has(row.owner)) continue;
+      if (row.owner === LEAD_NAMESPACE && linked.has(row.id)) continue;
       if (row.owner !== LEAD_NAMESPACE && isChild(row, info)) continue;
       cards.push(buildCard(row, summaryFor(row), { byRun }));
     }

@@ -124,3 +124,46 @@ test('a state database with one task row is backed up', async () => {
   assert.equal(fs.statSync(result.backupPath).mode & 0o777, 0o600);
   state.db.close();
 });
+
+const DELIVERY_TABLES = ['runs', 'intake_results', 'plan_revisions', 'decisions', 'candidates', 'repository_leases', 'ticket_branches'];
+
+test('migration 2 creates the delivery tables and the one-active-run index', async () => {
+  const db = new Database(':memory:');
+  const result = await migrateProductSchema({ db, now: fixedNow });
+  assert.equal(result.toVersion, 2);
+  assert.deepEqual(MIGRATIONS.map((m) => [m.version, m.name]), [[1, 'product_tickets'], [2, 'delivery_runs']]);
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
+  for (const name of DELIVERY_TABLES) assert.ok(tables.includes(name), name);
+  const index = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'runs_one_active_per_ticket'").get();
+  assert.match(index.sql, /UNIQUE INDEX/);
+  assert.match(index.sql, /'queued','running','paused','interrupted'/);
+  assert.deepEqual(db.prepare('PRAGMA table_info(runs)').all().map((c) => c.name), [
+    'run_id', 'ticket_id', 'revision_id', 'project_id', 'status', 'phase', 'wait_reason', 'wait_detail_json', 'plan_revision_id',
+    'lead_task_id', 'lead_context_id', 'branch_name', 'base_commit', 'candidate_id', 'settings_snapshot_json', 'intake_turns',
+    'command_id', 'created_at', 'started_at', 'finished_at', 'updated_at']);
+  assert.equal(db.prepare("SELECT dflt_value FROM pragma_table_info('runs') WHERE name = 'intake_turns'").get().dflt_value, '0');
+  db.close();
+});
+
+test('a version 1 database is backed up and upgraded to version 2 with its tickets intact', async () => {
+  const { file } = tempFile();
+  const db = new Database(file);
+  db.exec(MIGRATIONS[0].sql);
+  db.exec('CREATE TABLE product_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+  db.prepare('INSERT INTO product_schema_migrations (version, name, applied_at) VALUES (1, ?, ?)').run('product_tickets', 'then');
+  db.prepare(
+    "INSERT INTO tickets (ticket_id, project_id, source, title, priority, status, current_revision_id, version, created_at, updated_at, created_by) "
+    + "VALUES ('t1', 'p', 'direct', 'Keep me', 'normal', 'backlog', 'r1', 1, 'a', 'a', 'operator')",
+  ).run();
+  const result = await migrateProductSchema({ db, filePath: file, now: fixedNow });
+  assert.deepEqual([result.fromVersion, result.toVersion], [1, 2]);
+  assert.equal(result.backupPath, `${file}.bak-v1-20260930T123456Z`);
+  assert.equal(fs.statSync(result.backupPath).mode & 0o777, 0o600);
+  const backup = new Database(result.backupPath, { readonly: true });
+  assert.equal(backup.prepare("SELECT 1 FROM sqlite_master WHERE name = 'runs'").get(), undefined);
+  assert.equal(backup.prepare("SELECT title FROM tickets WHERE ticket_id = 't1'").get().title, 'Keep me');
+  backup.close();
+  assert.equal(db.prepare("SELECT title FROM tickets WHERE ticket_id = 't1'").get().title, 'Keep me');
+  assert.equal(db.prepare('SELECT COUNT(*) AS c FROM runs').get().c, 0);
+  db.close();
+});

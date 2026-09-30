@@ -88,8 +88,9 @@ const DECISION_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ASSIGNMENT_FIELDS,
+        required: [...ASSIGNMENT_FIELDS, 'stageId'],
         properties: {
+          stageId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
           role: { type: 'string' },
           objective: { type: 'string' },
           allowedFiles: stringArray,
@@ -256,9 +257,12 @@ function parseWorkerReport(text) {
 
 function checkAssignment(assignment, decision, ctx) {
   if (!isPlainObject(assignment)) throw new Error('Each assignment must be an object');
-  if (!sameKeys(assignment, ASSIGNMENT_FIELDS)) {
-    throw new Error('Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, and stopConditions');
+  // stageId is optional here (legacy callers omit it); the plan check in the graph requires it.
+  const { stageId, ...fields } = assignment;
+  if (!sameKeys(fields, ASSIGNMENT_FIELDS)) {
+    throw new Error('Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and stageId');
   }
+  if (stageId !== undefined && stageId !== null && !isNonEmptyString(stageId)) throw new Error('Assignment stageId must be a string or null');
   const role = ctx.roles.get(assignment.role);
   if (!role) throw new Error(`Unknown role: ${String(assignment.role)}`);
   if (!isNonEmptyString(assignment.objective)) throw new Error(`Assignment for ${role.name} needs an objective`);

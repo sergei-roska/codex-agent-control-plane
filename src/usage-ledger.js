@@ -3,7 +3,7 @@
 // Per-turn usage ledger in the state database. Rows are keyed by a stable entry id so resume and
 // re-collection can never double count. Unknown values stay null; nothing is coerced to 0.
 
-const KINDS = new Set(['worker_turn', 'lead_turn']);
+const KINDS = new Set(['worker_turn', 'lead_turn', 'intake_turn']);
 
 function createUsageLedgerTable(db) {
   db.exec(`

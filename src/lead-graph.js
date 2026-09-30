@@ -18,6 +18,10 @@ const MAX_OUTCOME_TEXT_CHARS = 12_000;
 const MAX_STATUS_TEXT_CHARS = 2_000;
 const MAX_REPORT_CHARS = 100_000;
 const PROJECT_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'];
+const REPORT_SUCCESS_OUTCOME = 'completed';
+const PLAN_MAX_ROUNDS_CAP = 16;
+const PLAN_MIN_ROUNDS = 6;
+const PLAN_VIOLATION_LIMIT = 2;
 const CANCELED_TEXT = 'Canceled after all active A2A tasks were confirmed stopped.';
 const REPORT_CONTRACT_LINE = `Reply with a single JSON object matching the ${WORKER_REPORT_CONTRACT} report schema `
   + '(outcome, summary, filesChanged, filesInspected, checks, risks, scopeExpansion, decisionRequest). '
@@ -214,6 +218,34 @@ function outsideAllowed(files, allowedFiles, workspace) {
   });
 }
 
+// ---- plan helpers (pure)
+
+function isRepairRole(roleName) {
+  return roleName === 'orch-repair-xhigh' || roleName === 'orch-repair-sol';
+}
+
+function planRoundLimit(plan, fallback) {
+  if (!plan) return fallback;
+  return Math.min(PLAN_MAX_ROUNDS_CAP, Math.max(PLAN_MIN_ROUNDS, 2 * plan.stages.length));
+}
+
+function stageStatusOf(state, stageId) {
+  return state.stageStatuses?.[stageId]?.status || 'pending';
+}
+
+function eligibleStages(state) {
+  return state.plan.stages.filter((stage) => stageStatusOf(state, stage.stageId) !== 'succeeded'
+    && stage.dependencies.every((dep) => stageStatusOf(state, dep) === 'succeeded'));
+}
+
+// Stage success: a completed task whose valid worker report says outcome completed, with no scope violations.
+function isStageSuccess(outcome) {
+  return outcome.status === 'TASK_STATE_COMPLETED'
+    && outcome.report?.outcome === REPORT_SUCCESS_OUTCOME
+    && (outcome.scopeViolations || []).length === 0
+    && (outcome.attestedScopeViolations || []).length === 0;
+}
+
 // Reported filesChanged outside allowedFiles.
 function scopeViolations(report, allowedFiles, workspace) {
   if (!report) return [];
@@ -288,6 +320,10 @@ const LeadState = Annotation.Root({
   budget: last(() => null),
   unresolvedWriters: last(() => []),
   contract: last(() => ({ requiredChecks: [] })),
+  plan: last(() => null),
+  stageStatuses: last(() => ({})),
+  planViolations: last(() => 0),
+  planRetry: last(() => false),
   acceptanceAttempts: last(() => 0),
   acceptance: last(() => null),
   status: last(() => null),
@@ -353,6 +389,20 @@ function buildLeadGraph(deps) {
       `Dispatch rounds already used: ${state.round}/${maxRounds}. A dispatch decision consumes one round.`,
       'Available roles:\n' + JSON.stringify([...roles.values()].map(({ name, description, sandbox, model, effort }) => ({ name, description, sandbox, model, effort }))),
     ];
+    if (state.plan) {
+      const eligible = eligibleStages(state).map((stage) => stage.stageId);
+      sections.push('Approved delivery plan (binding):\n' + JSON.stringify({
+        classification: state.plan.classification,
+        checkIds: state.plan.checkIds,
+        stages: state.plan.stages.map((stage) => ({
+          ...stage,
+          status: stageStatusOf(state, stage.stageId),
+          attemptIds: state.stageStatuses?.[stage.stageId]?.attemptIds || [],
+        })),
+      }));
+      sections.push(`Next eligible stages: ${eligible.length > 0 ? eligible.join(', ') : 'none'}.`);
+      sections.push('Plan rules: every assignment must set stageId to an eligible stage (dependencies succeeded, stage not yet succeeded), use that stage role (a repair role may retry an attempted orch-builder stage), and keep allowedFiles within the stage allowedFiles. You may finish only when every required stage has succeeded. A decision that breaks these rules is discarded and counts as a round; two in a row end the run as plan_violation.');
+    }
     if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
     sections.push('Open worker decisions (each must be resolved in resolutions, or listed in humanInput.relatedDecisionIds):\n' + JSON.stringify(openDecisions));
     if (state.acceptance?.disposition === 'rejected' && state.acceptanceAttempts > 0 && !state.status) {
@@ -362,7 +412,9 @@ function buildLeadGraph(deps) {
     if (state.humanAnswers.length > 0) sections.push('Human answers (authoritative):\n' + JSON.stringify(state.humanAnswers));
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(state.outcomes));
     sections.push([
-      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, and stopConditions. Writable roles require one or more explicit safe relative allowedFiles. Keep each brief bounded.',
+      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and stageId'
+        + (state.plan ? ' (the plan stage id).' : ' (use null; there is no plan).')
+        + ' Writable roles require one or more explicit safe relative allowedFiles. Keep each brief bounded.',
       'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, and humanInput. Use empty arrays, an empty string, or null for unused fields.',
       'Worker decision requests: resolve them yourself (resolutions: decisionId, choice, rationale) whenever the evidence supports a choice. Worker reports are self-reported; check scopeViolations and reportError.',
       'Use request_human_input only for missing_authority, irreversible_or_external, or product_choice, and only after investigating: give options, a recommendation, the evidence checked, and the independent work that can proceed.',
@@ -424,6 +476,7 @@ function buildLeadGraph(deps) {
     const notes = [...(runtime.pendingNotes || [])];
     runtime.pendingNotes = [];
     const update = {};
+    if (state.planRetry) update.planRetry = false;
     if (runtime.resumed) {
       runtime.resumed = false;
       notes.push('This run was resumed after an interruption (restart, pause, or usage limit). A previous lead turn may have been repeated. Outcomes marked interrupted or outcome_unknown have unknown workspace effects.');
@@ -452,6 +505,7 @@ function buildLeadGraph(deps) {
     update.threadId = leadResult.threadId || state.threadId;
     recordLeadTurn(state, leadResult, leadResult.status || 'completed');
 
+    const roundLimit = planRoundLimit(state.plan, maxRounds);
     const decision = parseDecision(leadResult.text);
     validateDecision(decision, {
       roles,
@@ -462,6 +516,51 @@ function buildLeadGraph(deps) {
     });
     deps.emit(runtime.onEvent, { type: 'decision', round: state.round + 1, action: decision.action });
 
+    if (state.plan && (decision.action === 'finish' || decision.action === 'dispatch')) {
+      const violations = planViolationsOf(state, decision);
+      if (violations.length > 0) {
+        const count = state.planViolations + 1;
+        const round = state.round + 1;
+        deps.emit(runtime.onEvent, { type: 'plan_violation', round, violations });
+        // The decision is discarded; resolutions in it are not applied.
+        const base = { round, planViolations: count };
+        if (count >= PLAN_VIOLATION_LIMIT) {
+          return {
+            ...update,
+            ...base,
+            status: 'plan_violation',
+            text: `The lead broke the approved plan in ${count} consecutive decisions: ${violations.join('; ')}`,
+          };
+        }
+        runtime.pendingNotes = [...(runtime.pendingNotes || []), `Plan violation, decision discarded (counts as a round): ${violations.join('; ')}. Follow the approved plan.`];
+        return { ...update, ...base, planRetry: true };
+      }
+      update.planViolations = 0;
+      if (decision.action === 'dispatch' && state.acceptance?.disposition === 'rejected') {
+        // Repair after rejected acceptance: reopen each re-dispatched succeeded builder stage and its transitive dependents.
+        const reopen = new Set();
+        for (const assignment of decision.assignments) {
+          const stage = state.plan.stages.find((entry) => entry.stageId === assignment.stageId);
+          if (stage && stage.roleId === 'orch-builder' && stageStatusOf(state, stage.stageId) === 'succeeded') reopen.add(stage.stageId);
+        }
+        if (reopen.size > 0) {
+          let grew = true;
+          while (grew) {
+            grew = false;
+            for (const stage of state.plan.stages) {
+              if (!reopen.has(stage.stageId) && stage.dependencies.some((dep) => reopen.has(dep))) {
+                reopen.add(stage.stageId);
+                grew = true;
+              }
+            }
+          }
+          const stageStatuses = { ...state.stageStatuses };
+          for (const id of reopen) stageStatuses[id] = { status: 'pending', attemptIds: stageStatuses[id]?.attemptIds || [] };
+          update.stageStatuses = stageStatuses;
+        }
+      }
+    }
+
     const resolved = new Map(decision.resolutions.map((entry) => [entry.decisionId, entry]));
     update.openDecisions = state.openDecisions.filter((entry) => !resolved.has(entry.id));
     update.closedDecisions = [...state.closedDecisions, ...decision.resolutions.map((entry) => ({ id: entry.decisionId, by: 'lead', choice: entry.choice }))];
@@ -471,14 +570,45 @@ function buildLeadGraph(deps) {
       const decisionId = `${state.runId}:h${state.humanCount + 1}`;
       return { ...update, humanCount: state.humanCount + 1, humanRequest: { decisionId, ...decision.humanInput } };
     }
-    if (state.round >= maxRounds) {
+    if (state.round >= roundLimit) {
       return {
         ...update,
         status: 'max_rounds',
-        text: decision.final.trim() || `Stopped after reaching the limit of ${maxRounds} dispatch rounds.`,
+        text: decision.final.trim() || `Stopped after reaching the limit of ${roundLimit} dispatch rounds.`,
       };
     }
     return { ...update, pendingAssignments: decision.assignments };
+  }
+
+  // Violations of the pinned plan by a validated decision; empty when it is allowed.
+  function planViolationsOf(state, decision) {
+    const problems = [];
+    if (decision.action === 'finish') {
+      const open = state.plan.stages.filter((stage) => stage.required && stageStatusOf(state, stage.stageId) !== 'succeeded');
+      if (open.length > 0) problems.push(`finish is not allowed until every required stage has succeeded (open: ${open.map((stage) => stage.stageId).join(', ')})`);
+      return problems;
+    }
+    const seen = new Set();
+    for (const assignment of decision.assignments) {
+      const id = assignment.stageId;
+      const stage = typeof id === 'string' ? state.plan.stages.find((entry) => entry.stageId === id) : null;
+      if (!stage) {
+        problems.push(`assignment for ${assignment.role} names no plan stage (stageId ${JSON.stringify(id ?? null)})`);
+        continue;
+      }
+      if (seen.has(id)) problems.push(`stage ${id} is assigned more than once in one decision`);
+      seen.add(id);
+      const repairReopen = state.acceptance?.disposition === 'rejected' && stage.roleId === 'orch-builder';
+      if (stageStatusOf(state, id) === 'succeeded' && !repairReopen) problems.push(`stage ${id} has already succeeded`);
+      const unmet = stage.dependencies.filter((dep) => stageStatusOf(state, dep) !== 'succeeded');
+      if (unmet.length > 0) problems.push(`stage ${id} is not eligible: dependencies not succeeded (${unmet.join(', ')})`);
+      const attempted = (state.stageStatuses?.[id]?.attemptIds || []).length > 0;
+      const repairOk = stage.roleId === 'orch-builder' && isRepairRole(assignment.role) && attempted;
+      if (assignment.role !== stage.roleId && !repairOk) problems.push(`stage ${id} requires role ${stage.roleId}, not ${assignment.role}`);
+      const extra = outsideAllowed(assignment.allowedFiles, stage.allowedFiles, workspace);
+      if (extra.length > 0) problems.push(`assignment for stage ${id} widens allowedFiles beyond the stage (${extra.join(', ')})`);
+    }
+    return problems;
   }
 
   function parseDecision(text) {
@@ -527,6 +657,7 @@ function buildLeadGraph(deps) {
         sandbox: item.sandbox,
         contextId: item.contextId,
         objectiveSha256: sha256(String(item.assignment?.objective ?? '')),
+        stageId: typeof item.assignment?.stageId === 'string' ? item.assignment.stageId : undefined,
       });
     } else {
       // Journal says "submitting": the send may or may not have reached the server.
@@ -540,8 +671,9 @@ function buildLeadGraph(deps) {
       }
     }
 
+    const { stageId: _stageId, ...workerAssignment } = item.assignment;
     const text = JSON.stringify({
-      ...item.assignment,
+      ...workerAssignment,
       assignmentId: item.assignmentId,
       workspace,
       reportContract: REPORT_CONTRACT_LINE,
@@ -644,6 +776,7 @@ function buildLeadGraph(deps) {
               sandbox: item.sandbox,
               contextId: item.contextId,
               objectiveSha256: sha256(String(item.assignment?.objective ?? '')),
+              stageId: typeof item.assignment?.stageId === 'string' ? item.assignment.stageId : undefined,
             });
           }
           return finishItem(item, {
@@ -746,7 +879,20 @@ function buildLeadGraph(deps) {
       });
     }
     const limited = summaries.some((outcome) => outcome.failureKind === 'usage_limit');
+    let stageUpdate = {};
+    if (state.plan) {
+      const stageStatuses = { ...state.stageStatuses };
+      finished.forEach((item, index) => {
+        const stageId = item.assignment?.stageId;
+        if (typeof stageId !== 'string' || !state.plan.stages.some((stage) => stage.stageId === stageId)) return;
+        const entry = stageStatuses[stageId] || { status: 'pending', attemptIds: [] };
+        const attemptIds = entry.attemptIds.includes(item.attemptId) ? entry.attemptIds : [...entry.attemptIds, item.attemptId];
+        stageStatuses[stageId] = { status: isStageSuccess(summaries[index]) ? 'succeeded' : 'failed', attemptIds };
+      });
+      stageUpdate = { stageStatuses };
+    }
     return {
+      ...stageUpdate,
       outcomes: [...state.outcomes, ...summaries],
       openDecisions: open,
       unresolvedWriters,
@@ -955,6 +1101,13 @@ function buildLeadGraph(deps) {
         rounds: state.round,
         assignments: state.outcomes,
         acceptance,
+        ...(state.plan ? {
+          stages: state.plan.stages.map((stage) => ({
+            stageId: stage.stageId,
+            status: stageStatusOf(state, stage.stageId),
+            attemptIds: state.stageStatuses?.[stage.stageId]?.attemptIds || [],
+          })),
+        } : {}),
       },
     };
   }
@@ -962,6 +1115,7 @@ function buildLeadGraph(deps) {
   const afterDecide = (state) => {
     if (state.status === 'completed') return 'accept';
     if (state.status) return 'finish';
+    if (state.planRetry) return 'decide';
     if (state.budget) return 'budget_pause';
     if (state.humanRequest) return 'human_input';
     return 'dispatch';
@@ -993,7 +1147,7 @@ function buildLeadGraph(deps) {
     .addNode('finish', finish)
     .addEdge(START, 'intake')
     .addEdge('intake', 'decide')
-    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'budget_pause', 'human_input', 'dispatch'])
+    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'decide', 'budget_pause', 'human_input', 'dispatch'])
     .addConditionalEdges('accept', afterAccept, ['finish', 'decide'])
     .addEdge('dispatch', 'collect')
     .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify'])
