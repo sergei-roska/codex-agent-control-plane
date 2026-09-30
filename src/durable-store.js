@@ -160,62 +160,52 @@ async function openStateDatabase({ filePath } = {}) {
 
 // ------------------------------------------------------------ instance lock
 
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code !== 'ESRCH';
-  }
-}
-
 /**
- * Take an exclusive pid lock file (O_EXCL, holds our pid). A lock whose pid is dead is
- * stale and replaced; a live one fails via inUseMessage(pid). Returns a release function.
+ * Take a kernel-held exclusive lock: a small SQLite file with `BEGIN EXCLUSIVE` kept open for
+ * the holder's lifetime. The kernel drops it when the process dies, so nothing is ever stale
+ * and there is no takeover. A second holder (any process or connection) gets SQLITE_BUSY and
+ * fails via inUseMessage(lockPath). Returns a release function.
  */
-function acquirePidLock(lockPath, inUseMessage) {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    try {
-      const fd = fs.openSync(lockPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
-      try { fs.writeSync(fd, `${process.pid}\n`); } finally { fs.closeSync(fd); }
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        try {
-          if (Number.parseInt(fs.readFileSync(lockPath, 'utf8'), 10) === process.pid) fs.unlinkSync(lockPath);
-        } catch (_) { /* already gone */ }
-      };
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+function acquireKernelLock(lockPath, inUseMessage) {
+  let db = null;
+  try {
+    db = new Database(lockPath, { timeout: 0 });
+    // A read-only lock file still grants BEGIN EXCLUSIVE to several processes: refuse it.
+    if (db.readonly) throw new Error(`Cannot hold lock ${lockPath}: lock file is not writable`);
+    try { fs.accessSync(lockPath, fs.constants.W_OK); } catch (_) {
+      throw new Error(`Cannot hold lock ${lockPath}: lock file is not writable`);
     }
-    let holder = Number.NaN;
-    try { holder = Number.parseInt(fs.readFileSync(lockPath, 'utf8'), 10); } catch (error) {
-      if (error.code === 'ENOENT') continue;
-      throw error;
-    }
-    if (Number.isInteger(holder) && holder > 0 && pidAlive(holder)) {
-      throw new Error(inUseMessage(holder));
-    }
-    try { fs.unlinkSync(lockPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    db.pragma('busy_timeout = 0');
+    try { db.pragma('journal_mode = DELETE'); } catch (error) { if (!/^SQLITE_BUSY/.test(error.code || '')) throw error; }
+    db.exec('CREATE TABLE IF NOT EXISTS holder(x)');
+    db.exec('BEGIN EXCLUSIVE');
+    // A real write under the exclusive lock: a connection that cannot write fails here, not later.
+    db.exec('INSERT INTO holder VALUES (1)');
+  } catch (error) {
+    try { if (db) db.close(); } catch (_) { /* ignore */ }
+    if (/^SQLITE_BUSY|^SQLITE_LOCKED/.test(error.code || '')) throw new Error(inUseMessage(lockPath));
+    if (/^Cannot hold lock /.test(error.message)) throw error;
+    throw new Error(`Cannot open lock ${lockPath}: ${error.message}`, { cause: error });
   }
-  throw new Error(`Could not acquire the lock ${lockPath}`);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    try { db.exec('ROLLBACK'); } catch (_) { /* connection already closed */ }
+    try { db.close(); } catch (_) { /* ignore */ }
+  };
 }
 
 /**
- * Take an exclusive `<stateFile>.lock`. In-memory state has nothing to protect and returns
- * a no-op.
+ * Take an exclusive `<stateFile>.lockdb`. In-memory state has nothing to protect and returns
+ * a no-op. An old `<stateFile>.lock` text file is ignored.
  */
 function acquireStateLock(filePath) {
   if (filePath === ':memory:') return () => {};
-  return acquirePidLock(`${stateDbPath(filePath)}.lock`, (holder) => `State file ${stateDbPath(filePath)} is in use by pid ${holder}`);
+  const lockPath = `${stateDbPath(filePath)}.lockdb`;
+  return acquireKernelLock(lockPath, (held) => `State file ${stateDbPath(filePath)} is in use (lock held: ${held})`);
 }
 
-/**
- * Take an exclusive per-workspace lock so two servers with different state files cannot
- * share one workspace. In a repository the lock is `<common dir>/codex-a2a-writer.lock`, shared by every
- * workspace in that repository; otherwise (or with `lockDir`) it lives in `lockDir` (default: the OS temp dir).
- */
 function repoCommonDir(workspace) {
   try {
     const out = execFileSync('git', ['-C', workspace, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -225,25 +215,29 @@ function repoCommonDir(workspace) {
   }
 }
 
+/**
+ * Take an exclusive per-workspace lock so two servers with different state files cannot
+ * share one workspace. The lock identity is the realpath of the git common dir (one lock per
+ * repository, so nested workspaces exclude each other) or, outside git, the canonical
+ * workspace. The file is `<common dir>/codex-a2a-writer.lockdb` by default; with `lockDir` it
+ * is `<lockDir>/codex-a2a-writer-<hash of identity>.lockdb`; non-git without `lockDir` uses
+ * the OS temp dir.
+ */
 function acquireWorkspaceLock(workspace, { lockDir = process.env.CODEX_A2A_WORKSPACE_LOCK_DIR || null } = {}) {
   const canonical = fs.realpathSync(workspace);
-  if (!lockDir) {
-    // One lock per repository, so nested workspaces exclude each other and the lock does not depend on TMPDIR.
-    const common = repoCommonDir(canonical);
-    if (common && fs.existsSync(common)) {
-      return acquirePidLock(
-        path.join(fs.realpathSync(common), 'codex-a2a-writer.lock'),
-        (holder) => `Workspace ${canonical} is in use by pid ${holder}`,
-      );
-    }
-    lockDir = os.tmpdir();
+  const common = repoCommonDir(canonical);
+  const isRepo = Boolean(common && fs.existsSync(common));
+  const identity = isRepo ? fs.realpathSync(common) : canonical;
+  let lockPath;
+  if (!lockDir && isRepo) {
+    lockPath = path.join(identity, 'codex-a2a-writer.lockdb');
+  } else {
+    const digest = crypto.createHash('sha256').update(identity, 'utf8').digest('hex').slice(0, 16);
+    const dir = lockDir || os.tmpdir();
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    lockPath = path.join(dir, `codex-a2a-writer-${digest}.lockdb`);
   }
-  const digest = crypto.createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 16);
-  fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 });
-  return acquirePidLock(
-    path.join(lockDir, `codex-a2a-workspace-${digest}.lock`),
-    (holder) => `Workspace ${canonical} is in use by pid ${holder}`,
-  );
+  return acquireKernelLock(lockPath, (held) => `Workspace ${canonical} is in use (lock held: ${held})`);
 }
 
 // ---------------------------------------------------------- task store
@@ -439,7 +433,7 @@ async function reconcileInterruptedTasks(state, { leadNamespace = 'orchestrator'
 }
 
 module.exports = {
-  acquirePidLock,
+  acquireKernelLock,
   acquireStateLock,
   acquireWorkspaceLock,
   DEFAULT_STATE_DB,

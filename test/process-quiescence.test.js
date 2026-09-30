@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const {
-  readProcessIdentity, isProcessGroupGone, killOrphanProcessGroup, parseProcStat,
+  readProcessIdentity, isProcessGroupGone, killOrphanProcessGroup, parseProcStat, listGroupMembers,
 } = require('../src/process-quiescence');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -55,7 +55,7 @@ test('isProcessGroupGone is false while alive and true after the group dies', as
   assert.equal(isProcessGroupGone(identity), true);
 });
 
-test('a grandchild keeps the group alive after the leader dies; orphan kill removes it', async (t) => {
+test('a grandchild keeps the group alive after the leader dies; orphan kill refuses (fail closed)', async (t) => {
   const code = "const { spawn } = require('node:child_process');"
     + "const g = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });"
     + 'console.log(g.pid); setInterval(()=>{},1000)';
@@ -67,9 +67,11 @@ test('a grandchild keeps the group alive after the leader dies; orphan kill remo
   process.kill(leader.pid, 'SIGKILL'); // leader only, not the group
   await exited;
   assert.equal(isProcessGroupGone(identity), false, 'grandchild still holds the group');
-  assert.equal(killOrphanProcessGroup(identity), true);
-  assert.equal(await waitFor(() => isProcessGroupGone(identity)), true);
   assert.equal(killOrphanProcessGroup(identity), false);
+  assert.equal(isProcessGroupGone(identity), false, 'group must survive the refused kill');
+  assert.ok(listGroupMembers(identity.pgid).length >= 1);
+  process.kill(-identity.pgid, 'SIGKILL'); // test-spawned group: clean up ourselves
+  assert.equal(await waitFor(() => isProcessGroupGone(identity)), true);
 });
 
 test('killOrphanProcessGroup refuses a group led by our own child', async (t) => {
@@ -131,4 +133,52 @@ test('killOrphanProcessGroup never kills when /proc is unreadable', () => {
   const fsImpl = { readFileSync() { throw Object.assign(new Error('nope'), { code: 'EACCES' }); } };
   assert.equal(killOrphanProcessGroup({ pid: 4242, pgid: 4242, startTime: '1' }, { killImpl, fsImpl }), false);
   assert.equal(calls.some(([, signal]) => signal === 'SIGKILL'), false);
+});
+
+function fakeProc(procs) {
+  // procs: { pid: { ppid, pgid, startTime, comm } }
+  const stat = (pid, p) => {
+    const fields = ['S', p.ppid, p.pgid, ...Array(16).fill(0), p.startTime, 0]; // start time = overall field 22
+    return `${pid} (${p.comm || 'x'}) ${fields.join(' ')}`;
+  };
+  return {
+    readdirSync: () => ['self', ...Object.keys(procs)],
+    readFileSync(file) {
+      if (file === '/proc/self/stat') return stat(1, { ppid: 0, pgid: 1, startTime: '1' });
+      const m = /^\/proc\/(\d+)\/stat$/.exec(file);
+      if (m && procs[m[1]]) return stat(m[1], procs[m[1]]);
+      throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+    },
+  };
+}
+
+test('PGID reuse: leader alive with another start time is not signaled and the group counts as gone', () => {
+  const calls = [];
+  const killImpl = (pid, signal) => { calls.push([pid, signal]); };
+  const fsImpl = fakeProc({ 5000: { ppid: 2, pgid: 5000, startTime: '999' } });
+  const identity = { pid: 5000, pgid: 5000, startTime: '100' };
+  assert.equal(isProcessGroupGone(identity, { killImpl, fsImpl }), true);
+  assert.equal(killOrphanProcessGroup(identity, { killImpl, fsImpl }), false);
+  assert.equal(calls.some(([, signal]) => signal === 'SIGKILL'), false);
+});
+
+test('leader dead but group answers: no signal', () => {
+  const calls = [];
+  const killImpl = (pid, signal) => { calls.push([pid, signal]); };
+  const fsImpl = fakeProc({ 5001: { ppid: 1, pgid: 5000, startTime: '7', comm: 'sleep' } });
+  const identity = { pid: 5000, pgid: 5000, startTime: '100' };
+  assert.equal(isProcessGroupGone(identity, { killImpl, fsImpl }), false);
+  assert.equal(killOrphanProcessGroup(identity, { killImpl, fsImpl }), false);
+  assert.equal(calls.some(([, signal]) => signal === 'SIGKILL'), false);
+  assert.deepEqual(listGroupMembers(5000, { fsImpl }), [{ pid: 5001, ppid: 1, startTime: '7', comm: 'sleep' }]);
+});
+
+test('killOrphanProcessGroup signals only a live leader with the matching start time', () => {
+  const calls = [];
+  const killImpl = (pid, signal) => { calls.push([pid, signal]); };
+  const fsImpl = fakeProc({ 5000: { ppid: 2, pgid: 5000, startTime: '100' } });
+  assert.equal(killOrphanProcessGroup({ pid: 5000, pgid: 5000, startTime: null }, { killImpl, fsImpl }), false);
+  assert.equal(calls.some(([, signal]) => signal === 'SIGKILL'), false);
+  assert.equal(killOrphanProcessGroup({ pid: 5000, pgid: 5000, startTime: '100' }, { killImpl, fsImpl }), true);
+  assert.deepEqual(calls.filter(([, signal]) => signal === 'SIGKILL'), [[-5000, 'SIGKILL']]);
 });

@@ -79,7 +79,7 @@ test('unknown outcome keeps the workspace held; admission_blocked until quiescen
   const a = await admission.acquire(req(1));
   admission.recordTurnStart(a.executionId, { processIdentity: IDENTITY, threadId: 'thr' });
   admission.markUnresolved(a.executionId, 'outcome_unknown');
-  assert.deepEqual(await admission.reconcile(a.executionId), { state: 'unresolved', reason: 'quiescence_unproven' });
+  assert.deepEqual(await admission.reconcile(a.executionId), { state: 'unresolved', reason: 'quiescence_unproven', survivors: [] });
   assert.equal(quiescence.kills, 1);
 
   await assert.rejects(admission.acquire(req(2)), (error) => (
@@ -164,5 +164,17 @@ test('a turn start with a null process identity keeps quiescence unproven', asyn
   const a = await admission.acquire(req(1));
   admission.recordTurnStart(a.executionId, { processIdentity: null, threadId: null });
   admission.markUnresolved(a.executionId, 'server_restart');
-  assert.deepEqual(await admission.reconcile(a.executionId), { state: 'unresolved', reason: 'quiescence_unproven' });
+  assert.deepEqual(await admission.reconcile(a.executionId), { state: 'unresolved', reason: 'quiescence_unproven', survivors: [] });
+});
+
+test('unresolved reconcile lists surviving group members', async () => {
+  const quiescence = fakeQuiescence();
+  quiescence.listGroupMembers = (pgid) => (pgid === IDENTITY.pgid ? [{ pid: 4300, ppid: 1, comm: 'sleep', startTime: '9' }] : []);
+  const { admission } = make({ quiescence });
+  const a = await admission.acquire(req(1));
+  admission.recordTurnStart(a.executionId, { processIdentity: IDENTITY, threadId: 'thr' });
+  admission.markUnresolved(a.executionId, 'outcome_unknown');
+  assert.deepEqual(await admission.reconcile(a.executionId), {
+    state: 'unresolved', reason: 'quiescence_unproven', survivors: [{ pid: 4300, comm: 'sleep' }],
+  });
 });

@@ -155,3 +155,36 @@ test('a workspace below the repository root reports workspace-relative paths and
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a first commit in an unborn repository reports the committed paths, including out-of-scope ones', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'snapshot-first-'));
+  try {
+    sh(dir, 'init', '-q');
+    fs.mkdirSync(path.join(dir, 'sub'));
+    const sub = path.join(dir, 'sub');
+    const beforeRoot = takeSnapshot(dir);
+    const beforeSub = takeSnapshot(sub);
+    assert.equal(beforeRoot.head, null);
+    fs.writeFileSync(path.join(dir, 'outside.txt'), 'x\n');
+    fs.writeFileSync(path.join(sub, 'in.txt'), 'y\n');
+    sh(dir, 'add', '.');
+    sh(dir, 'commit', '-q', '-m', 'first');
+    const root = diffSnapshots(beforeRoot, takeSnapshot(dir), dir);
+    assert.equal(root.known, true);
+    assert.equal(root.headChanged, true);
+    assert.deepEqual(root.changedPaths, ['outside.txt', 'sub/in.txt']);
+    assert.deepEqual(diffSnapshots(beforeSub, takeSnapshot(sub), sub).changedPaths, ['in.txt']);
+    // A failing ls-tree makes the delta unknown.
+    const broken = { ...takeSnapshot(dir), head: '0'.repeat(40) };
+    assert.equal(diffSnapshots(beforeRoot, broken, dir).known, false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('HEAD going from born to unborn (checkout --orphan) is an unknown delta', () => {
+  const dir = makeRepo();
+  try {
+    const result = delta(dir, () => sh(dir, 'checkout', '-q', '--orphan', 'fresh'));
+    assert.equal(result.known, false);
+    assert.equal(result.headChanged, true);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

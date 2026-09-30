@@ -22,7 +22,12 @@ async function fixture() {
   };
   add(1, {});
   add(2, { tokens: null, tokenSource: 'unavailable', model: 'mystery', outcome: 'failed',
-    permissionEvents: [{ type: 'hook' }, { type: 'tool' }] });
+    permissionEvents: [
+      { type: 'hook', status: 'blocked' }, { type: 'tool', status: 'failed', denial: true },
+      { type: 'hook', status: 'failed' }, { type: 'tool', status: 'failed', denial: false },
+      { type: 'tool', status: 'declined' }, { type: 'approval_request_declined' },
+      { type: 'approval_review', status: 'denied' }, { type: 'approval_review', status: 'approved' },
+    ] });
   add(3, { model: 'mystery' });
   return state;
 }
@@ -36,7 +41,8 @@ test('totals are partial when some rows have unknown tokens; cost stays null', a
   assert.equal(report.totals.tokensUnknownRows, 1);
   assert.equal(report.totals.tokensPartial, true);
   assert.equal(report.totals.tokens.totalTokens, 3000000);
-  assert.equal(report.totals.permissionDenials.total, 2);
+  assert.equal(report.totals.permissionDenials.total, 5);
+  assert.deepEqual(report.totals.permissionDenials.byType, { hook: 1, tool: 2, approval_request_declined: 1, approval_review: 1 });
   assert.deepEqual(report.totals.outcomes, { completed: 2, failed: 1 });
   assert.equal(report.attempts.find((a) => a.taskId === 'task-2').tokens, null);
   assert.equal(report.repeatedAssignments, 0);

@@ -237,6 +237,18 @@ class WriterAdmission {
     return this.waitGone(identity);
   }
 
+  /** Members still in the recorded process group, so an operator can act on them. */
+  survivorsOf(record) {
+    const pgid = record.turnStart?.processIdentity?.pgid;
+    const { listGroupMembers } = this.quiescence;
+    if (!Number.isInteger(pgid) || typeof listGroupMembers !== 'function') return [];
+    try {
+      return listGroupMembers(pgid).map(({ pid, comm }) => ({ pid, comm }));
+    } catch (_) {
+      return [];
+    }
+  }
+
   /** Release an unresolved holder only once its process group is proven gone. */
   reconcile(executionId) {
     if (!this.reconciling.has(executionId)) {
@@ -250,7 +262,9 @@ class WriterAdmission {
     const record = this.get(executionId);
     if (!record) throw new Error(`Unknown writer execution "${executionId}"`);
     if (record.state !== 'unresolved') return { state: record.state, delta: record.delta };
-    if (!(await this.isQuiescent(record))) return { state: 'unresolved', reason: 'quiescence_unproven' };
+    if (!(await this.isQuiescent(record))) {
+      return { state: 'unresolved', reason: 'quiescence_unproven', survivors: this.survivorsOf(record) };
+    }
     return this.finish(executionId, 'reconciled');
   }
 

@@ -216,24 +216,40 @@ test('graph checkpoints persist across reopen and resume in a new instance', asy
   assert.deepEqual(done.log, ['first', 'answer:yes']);
 });
 
-test('state lock is exclusive for a live pid, replaces a stale one, and is released', (t) => {
+test('state lock is exclusive, released on release, and ignores an old text lock', (t) => {
   const file = tempDb(t);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const lockPath = `${file}.lock`;
+  fs.writeFileSync(`${file}.lock`, '999999\n');
   const release = acquireStateLock(file);
-  assert.equal(fs.readFileSync(lockPath, 'utf8').trim(), String(process.pid));
-  assert.throws(() => acquireStateLock(file), new RegExp(`in use by pid ${process.pid}`));
+  assert.throws(() => acquireStateLock(file), /is in use \(lock held: .*\.lockdb\)/);
   release();
-  assert.equal(fs.existsSync(lockPath), false);
-
-  const child = require('node:child_process').spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']);
-  const deadPid = Number(child.stdout.toString());
-  fs.writeFileSync(lockPath, `${deadPid}\n`);
+  release();
   const second = acquireStateLock(file);
-  assert.equal(fs.readFileSync(lockPath, 'utf8').trim(), String(process.pid));
   second();
-  assert.equal(fs.existsSync(lockPath), false);
   assert.equal(typeof acquireStateLock(':memory:'), 'function');
+});
+
+const notRoot = typeof process.getuid === 'function' && process.getuid() === 0 ? 'root ignores file modes' : false;
+
+test('a read-only lock file is refused, in this process and in another', { skip: notRoot }, (t) => {
+  const { execFileSync } = require('node:child_process');
+  const file = tempDb(t);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  acquireStateLock(file)();
+  const lockPath = `${file}.lockdb`;
+  fs.chmodSync(lockPath, 0o444);
+  assert.throws(() => acquireStateLock(file), (error) => error.message.includes(lockPath) && /lock file is not writable/.test(error.message));
+  const script = `try { require(${JSON.stringify(path.resolve(__dirname, '../src/durable-store'))}).acquireStateLock(${JSON.stringify(file)}); console.log('held'); } catch (e) { console.log('refused:' + e.message); }`;
+  assert.match(execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' }), /^refused:.*not writable/);
+});
+
+test('a read-only lock directory reports the lock path', { skip: notRoot }, (t) => {
+  const file = tempDb(t);
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.chmodSync(dir, 0o555);
+  t.after(() => { try { fs.chmodSync(dir, 0o755); } catch (_) { /* already removed */ } });
+  assert.throws(() => acquireStateLock(file), (error) => error.message.startsWith(`Cannot open lock ${file}.lockdb: `) && Boolean(error.cause));
 });
 
 test('journal stores objective_sha256 and migrates an existing table without the column', async (t) => {
@@ -261,30 +277,74 @@ test('journal stores objective_sha256 and migrates an existing table without the
   assert.equal(new InMemoryDispatchJournal().recordSubmitting(row).objectiveSha256, 'abc');
 });
 
-test('workspace lock is shared by every workspace in one repository and falls back for non-repository dirs', (t) => {
+function lockRepo(t) {
   const { execFileSync } = require('node:child_process');
-  const { acquireWorkspaceLock } = require('../src/durable-store');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wslock-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = path.join(root, 'repo');
   fs.mkdirSync(path.join(repo, 'sub'), { recursive: true });
   execFileSync('git', ['-C', repo, 'init', '-q']);
+  return { root, repo };
+}
+
+test('workspace lock is shared by nested workspaces in one repository, with and without a lock dir', (t) => {
+  const { acquireWorkspaceLock } = require('../src/durable-store');
+  const { root, repo } = lockRepo(t);
+  const sub = path.join(repo, 'sub');
   const release = acquireWorkspaceLock(repo, { lockDir: null });
-  const lockFile = path.join(fs.realpathSync(repo), '.git', 'codex-a2a-writer.lock');
-  assert.equal(fs.readFileSync(lockFile, 'utf8').trim(), String(process.pid));
-  assert.throws(() => acquireWorkspaceLock(path.join(repo, 'sub'), { lockDir: null }), /in use by pid/);
+  assert.ok(fs.existsSync(path.join(fs.realpathSync(repo), '.git', 'codex-a2a-writer.lockdb')));
+  assert.throws(() => acquireWorkspaceLock(sub, { lockDir: null }), /is in use \(lock held: /);
   release();
-  assert.equal(fs.existsSync(lockFile), false);
-  const inner = acquireWorkspaceLock(path.join(repo, 'sub'), { lockDir: null });
-  assert.throws(() => acquireWorkspaceLock(repo, { lockDir: null }), /in use by pid/);
+  const inner = acquireWorkspaceLock(sub, { lockDir: null });
+  assert.throws(() => acquireWorkspaceLock(repo, { lockDir: null }), /is in use/);
   inner();
 
+  const lockDir = path.join(root, 'locks');
+  const outer = acquireWorkspaceLock(repo, { lockDir });
+  assert.throws(() => acquireWorkspaceLock(sub, { lockDir }), /is in use/);
+  const lockFiles = fs.readdirSync(lockDir).filter((name) => !name.endsWith('-journal'));
+  assert.equal(lockFiles.length, 1);
+  assert.match(lockFiles[0], /^codex-a2a-writer-[0-9a-f]{16}\.lockdb$/);
+  outer();
+  acquireWorkspaceLock(sub, { lockDir })();
+});
+
+test('workspace lock falls back for non-repository dirs and simultaneous acquisition has one winner', async (t) => {
+  const { acquireWorkspaceLock } = require('../src/durable-store');
+  const { root, repo } = lockRepo(t);
   const plain = path.join(root, 'plain');
   fs.mkdirSync(plain);
-  const lockDir = path.join(root, 'locks');
+  const lockDir = path.join(root, 'plocks');
   const plainRelease = acquireWorkspaceLock(plain, { lockDir });
-  assert.equal(fs.readdirSync(lockDir).length, 1);
-  assert.throws(() => acquireWorkspaceLock(plain, { lockDir }), /in use by pid/);
+  assert.throws(() => acquireWorkspaceLock(plain, { lockDir }), /is in use/);
   plainRelease();
-  assert.equal(fs.readdirSync(lockDir).length, 0);
+  acquireWorkspaceLock(plain, { lockDir })();
+
+  const attempts = await Promise.all([1, 2].map(async () => {
+    try { return acquireWorkspaceLock(repo, { lockDir: null }); } catch (error) { return error; }
+  }));
+  const winners = attempts.filter((entry) => typeof entry === 'function');
+  assert.equal(winners.length, 1);
+  assert.equal(attempts.filter((entry) => entry instanceof Error).length, 1);
+  winners[0]();
+});
+
+test('a lock held by a child process blocks the parent and is dropped when the child is killed', async (t) => {
+  const { spawn } = require('node:child_process');
+  const { acquireWorkspaceLock } = require('../src/durable-store');
+  const { repo } = lockRepo(t);
+  const script = `const d = require(${JSON.stringify(require.resolve('../src/durable-store'))});
+d.acquireWorkspaceLock(${JSON.stringify(repo)}, { lockDir: null }); process.stdout.write('held\\n'); setInterval(() => {}, 1000);`;
+  const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => child.kill('SIGKILL'));
+  await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', () => reject(new Error('child exited early')));
+    child.stdout.once('data', resolve);
+  });
+  assert.throws(() => acquireWorkspaceLock(repo, { lockDir: null }), /is in use/);
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  child.kill('SIGKILL');
+  await exited;
+  acquireWorkspaceLock(repo, { lockDir: null })();
 });

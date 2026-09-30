@@ -92,10 +92,12 @@ test('performs initialize handshake and completes a turn', async (t) => {
   const threadStart = sent.find(({ method }) => method === 'thread/start');
   assert.equal(threadStart.params.developerInstructions, role.instructions);
   assert.equal(threadStart.params.approvalPolicy, 'on-request');
+  assert.equal(threadStart.params.approvalsReviewer, 'user');
   const turnStart = sent.find(({ method }) => method === 'turn/start');
   assert.equal(turnStart.params.effort, role.effort);
   assert.deepEqual(turnStart.params.outputSchema, outputSchema);
   assert.deepEqual(turnStart.params.sandboxPolicy, { type: 'workspaceWrite' });
+  assert.equal(turnStart.params.approvalsReviewer, 'user');
 });
 
 test('routes concurrent turns to their owning run', async (t) => {
@@ -138,6 +140,7 @@ test('resumes an unknown thread once, then reuses it', async (t) => {
     threadId: 'old-thread',
     cwd: '/tmp/project',
     approvalPolicy: 'on-request',
+    approvalsReviewer: 'user',
     sandbox: 'workspace-write',
     model: 'gpt-6-sol',
     developerInstructions: role.instructions,
@@ -765,10 +768,48 @@ test('records declined and hook-blocked tool items', async (t) => {
   t.after(() => client.close());
   const { permissionEvents: events } = await client.run({ role, cwd: '/w', input: 'go' });
   assert.equal(events.length, 3);
-  assert.deepEqual(events[0], { type: 'tool', tool: 'commandExecution', status: 'declined', command: 'rm -rf x', cwd: '/w', blockedByHook: false, reasonText: null });
+  assert.deepEqual(events[0], { type: 'tool', tool: 'commandExecution', status: 'declined', command: 'rm -rf x', cwd: '/w', blockedByHook: false, denial: true, reasonText: null });
   assert.equal(events[1].blockedByHook, true);
   assert.equal(events[1].reasonText, 'Command blocked by PreToolUse hook: lead only');
-  assert.deepEqual(events[2], { type: 'tool', tool: 'fileChange', status: 'failed', paths: ['/w/a.txt'], blockedByHook: false, reasonText: null });
+  assert.deepEqual(events[2], { type: 'tool', tool: 'fileChange', status: 'failed', paths: ['/w/a.txt'], blockedByHook: false, denial: true, reasonText: null });
+  assert.equal(events[1].denial, true);
+});
+
+test('a failed command without a hook block or sandbox denial is not a permission event', async (t) => {
+  const fake = fakeSpawn(permissionHandler([
+    { method: 'item/completed', params: { threadId: 'thread-perm', item: { type: 'commandExecution', command: 'rg nomatch', cwd: '/w', status: 'failed', aggregatedOutput: '' } } },
+    { method: 'item/completed', params: { threadId: 'thread-perm', item: { type: 'commandExecution', command: 'touch x', cwd: '/w', status: 'failed', aggregatedOutput: 'touch: cannot touch x: Read-only file system' } } },
+    { method: 'item/completed', params: { threadId: 'thread-perm', item: { type: 'commandExecution', command: 'cat y', cwd: '/w', status: 'failed', aggregatedOutput: 'cat: y: Permission denied' } } },
+    { method: 'item/completed', params: { threadId: 'thread-perm', item: { type: 'commandExecution', command: 'kill 1', cwd: '/w', status: 'failed', aggregatedOutput: 'kill: Operation not permitted' } } },
+    completedTurn,
+  ]));
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const { permissionEvents: events } = await client.run({ role, cwd: '/w', input: 'go' });
+  assert.deepEqual(events.map((e) => e.command), ['touch x', 'cat y', 'kill 1']);
+  assert.ok(events.every((e) => e.denial === true));
+});
+
+test('legacy approval requests get the schema decline and are recorded', async (t) => {
+  const fake = fakeSpawn(permissionHandler([completedTurn], {
+    onTurn: (send) => {
+      send({ id: 'server-7', method: 'applyPatchApproval', params: { conversationId: 'thread-perm', callId: 'c', fileChanges: {}, reason: null, grantRoot: null } });
+      send({ id: 'server-8', method: 'execCommandApproval', params: { conversationId: 'thread-perm', callId: 'd', command: ['ls'], cwd: '/w', reason: null, parsedCmd: [] } });
+      send({ id: 'server-9', method: 'somethingElse', params: {} });
+    },
+  }));
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const { permissionEvents: events } = await client.run({ role, cwd: '/w', input: 'go' });
+  await new Promise((resolve) => setImmediate(resolve));
+  const replies = fake.getChild().sent.filter((m) => String(m.id).startsWith('server-') && !m.method);
+  assert.equal(replies.length, 3);
+  for (const reply of replies.slice(0, 2)) assert.deepEqual(Object.keys(reply.result.decision), ['denied']);
+  assert.equal(typeof replies[0].result.decision.denied.rejection, 'string');
+  assert.ok(replies[2].error);
+  assert.deepEqual(events.map((e) => [e.type, e.method]), [
+    ['approval_request_declined', 'applyPatchApproval'], ['approval_request_declined', 'execCommandApproval'],
+  ]);
 });
 
 test('records declined approval requests and non-approved auto reviews', async (t) => {
@@ -791,7 +832,7 @@ test('records declined approval requests and non-approved auto reviews', async (
 test('truncates, redacts and caps permission events', async (t) => {
   const long = 'x'.repeat(2000);
   const notes = [
-    { method: 'item/completed', params: { threadId: 'thread-perm', item: { type: 'commandExecution', command: `curl -H "Authorization: Bearer abc.def" ${long}`, cwd: '/w', status: 'failed', aggregatedOutput: `key sk-abcdefghijkl1234 ${long}` } } },
+    { method: 'item/completed', params: { threadId: 'thread-perm', item: { type: 'commandExecution', command: `curl -H "Authorization: Bearer abc.def" ${long}`, cwd: '/w', status: 'failed', aggregatedOutput: `Permission denied key sk-abcdefghijkl1234 ${long}` } } },
   ];
   for (let i = 0; i < 60; i += 1) notes.push({ method: 'hook/completed', params: { threadId: 'thread-perm', run: hookRun({ id: `c${i}` }) } });
   notes.push(completedTurn);
@@ -812,10 +853,10 @@ test('reports permissionConfig for read-only and workspace-write roles', async (
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
   const ro = await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/ro', input: 'go' });
-  assert.deepEqual(ro.permissionConfig, { sandbox: 'read-only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', cwd: '/ro' });
+  assert.deepEqual(ro.permissionConfig, { sandbox: 'read-only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', approvalsReviewer: 'user', cwd: '/ro' });
   assert.deepEqual(ro.permissionEvents, []);
   const rw = await client.run({ role, cwd: '/rw', input: 'go', threadId: 'thread-perm' });
-  assert.deepEqual(rw.permissionConfig, { sandbox: 'workspace-write', sandboxPolicy: 'workspaceWrite', approvalPolicy: 'on-request', cwd: '/rw' });
+  assert.deepEqual(rw.permissionConfig, { sandbox: 'workspace-write', sandboxPolicy: 'workspaceWrite', approvalPolicy: 'on-request', approvalsReviewer: 'user', cwd: '/rw' });
 });
 
 test('attaches permission events to thrown errors', async (t) => {
@@ -928,3 +969,159 @@ for (const [name, trigger, pattern] of failurePaths) {
     assert.ok(kills.calls.some((c) => c.pid === -4200 && c.signal === 'SIGTERM'), 'group signalled');
   });
 }
+
+// The fake child's kill() emits an exit; these cases model a leader that never reports one.
+function noHandleKill(spawnImpl) {
+  return (...args) => {
+    const child = spawnImpl(...args);
+    child.kill = () => true;
+    return child;
+  };
+}
+
+async function delayedKillCase(t, identityNow) {
+  const kills = groupKills();
+  let reads = 0;
+  const readImpl = (pid) => { reads += 1; return reads <= 2 ? identityOf(pid) : identityNow(pid); };
+  const survivors = [{ pid: 4001, ppid: 1, comm: 'sleep', startTime: '5' }];
+  const fake = fakeSpawn(hangingHandler(), { pidBase: 4000 });
+  const client = new CodexAppServer({
+    spawnImpl: noHandleKill(fake.spawnImpl), turnTimeoutMs: 20, killImpl: kills.killImpl,
+    readProcessIdentityImpl: readImpl, listGroupMembersImpl: () => survivors,
+  });
+  t.after(() => client.close());
+  const pending = client.run({ role, cwd: '/tmp/p', input: 'hang' });
+  pending.catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  return { kills, client, survivors };
+}
+
+test('delayed SIGKILL after the leader exited does not signal by number', async (t) => {
+  const { kills, client, survivors } = await delayedKillCase(t, (pid) => ({ pid, pgid: pid, startTime: null }));
+  assert.deepEqual(kills.calls.map((c) => c.signal), ['SIGTERM']);
+  assert.deepEqual(client.lastTermination.survivors, survivors);
+  assert.equal(client.lastTermination.identity.pid, 4000);
+});
+
+test('delayed SIGKILL after pid reuse (different start time) does not signal', async (t) => {
+  const { kills } = await delayedKillCase(t, (pid) => ({ pid, pgid: pid, startTime: '999' }));
+  assert.deepEqual(kills.calls.map((c) => c.signal), ['SIGTERM']);
+});
+
+test('delayed SIGKILL with the leader alive and the same start time signals the group', async (t) => {
+  const { kills, client } = await delayedKillCase(t, identityOf);
+  assert.deepEqual(kills.calls, [{ pid: -4000, signal: 'SIGTERM' }, { pid: -4000, signal: 'SIGKILL' }]);
+  assert.equal(client.lastTermination, null);
+});
+
+test('a null start time identity never signals by number', async (t) => {
+  const calls = [];
+  const fake = fakeSpawn(hangingHandler(), { pidBase: 4100 });
+  const client = new CodexAppServer({
+    spawnImpl: noHandleKill(fake.spawnImpl), turnTimeoutMs: 20, killImpl: (pid, signal) => calls.push({ pid, signal }),
+    readProcessIdentityImpl: (pid) => ({ pid, pgid: pid, startTime: null }), listGroupMembersImpl: () => [],
+  });
+  t.after(() => client.close());
+  client.run({ role, cwd: '/tmp/p', input: 'hang' }).catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  assert.deepEqual(calls, []);
+});
+
+test('pins approvalsReviewer to user on thread/start, thread/resume, and turn/start for both roles', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/ro', input: 'go' });
+  await client.run({ role, cwd: '/rw', input: 'go' });
+  client.loadedThreads.clear();
+  await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/ro', input: 'go', threadId: 'thread-old' });
+  await client.run({ role, cwd: '/rw', input: 'go', threadId: 'thread-old2' });
+  const sent = fake.getChild().sent;
+  for (const method of ['thread/start', 'thread/resume', 'turn/start']) {
+    const calls = sent.filter((m) => m.method === method);
+    assert.equal(calls.length, method === 'thread/start' ? 2 : method === 'thread/resume' ? 2 : 4, method);
+    for (const call of calls) assert.equal(call.params.approvalsReviewer, 'user', method);
+  }
+});
+
+// --- own-group signaling ---
+
+test('close() with a leader exiting on SIGTERM SIGKILLs the group from the exit handler', async (t) => {
+  const kills = groupKills();
+  let alive = true;
+  const fake = fakeSpawn(baseHandler(), { pidBase: 5000 });
+  const client = new CodexAppServer({
+    spawnImpl: fake.spawnImpl, killImpl: (pid, signal) => { kills.calls.push({ pid, signal }); },
+    readProcessIdentityImpl: (pid) => (alive ? identityOf(pid) : { pid, pgid: pid, startTime: null }),
+    listGroupMembersImpl: () => [],
+  });
+  await client.start();
+  const child = fake.getChild();
+  await client.close();
+  assert.deepEqual(kills.calls, [{ pid: -5000, signal: 'SIGTERM' }]);
+  alive = false;
+  child.emit('exit', null, 'SIGTERM');
+  assert.deepEqual(kills.calls, [{ pid: -5000, signal: 'SIGTERM' }, { pid: -5000, signal: 'SIGKILL' }]);
+});
+
+test('_signalOwnGroup decisions: stale exit, reused pid, mismatched identity, unreadable /proc', () => {
+  const calls = [];
+  const gone = (pid) => ({ pid, pgid: pid, startTime: null });
+  const make = (readProcessIdentityImpl) => new CodexAppServer({ killImpl: (pid, signal) => calls.push({ pid, signal }), readProcessIdentityImpl });
+  const id = { pid: 6000, pgid: 6000, startTime: '10' };
+  // Leader absent, exit observed just now: signal.
+  assert.equal(make(gone)._signalOwnGroup(id, 'SIGKILL', { exitAt: Date.now() - 100 }), true);
+  assert.deepEqual(calls.splice(0), [{ pid: -6000, signal: 'SIGKILL' }]);
+  // Exit observed more than 5 s ago: no signal.
+  assert.equal(make(gone)._signalOwnGroup(id, 'SIGKILL', { exitAt: Date.now() - 6000 }), false);
+  // Leader absent and no exit observed: no signal.
+  assert.equal(make(gone)._signalOwnGroup(id, 'SIGKILL'), false);
+  // Reused pid (different start time): no signal.
+  assert.equal(make((pid) => ({ pid, pgid: pid, startTime: '99' }))._signalOwnGroup(id, 'SIGKILL', { exitAt: Date.now() }), false);
+  // Leader alive but no longer its own group leader: no signal.
+  assert.equal(make((pid) => ({ pid, pgid: 1, startTime: '10' }))._signalOwnGroup(id, 'SIGTERM'), false);
+  // Identity without a start time (/proc unreadable): never by number.
+  assert.equal(make(gone)._signalOwnGroup({ pid: 6000, pgid: 6000, startTime: null }, 'SIGTERM', { exitAt: Date.now() }), false);
+  assert.deepEqual(calls, []);
+  // The child handle is still signalled when the group is not.
+  let handleSignal = null;
+  const child = { exitCode: null, signalCode: null, kill: (sig) => { handleSignal = sig; } };
+  make(gone)._signalOwnGroup({ pid: 6000, pgid: 6000, startTime: null }, 'SIGTERM', { child });
+  assert.equal(handleSignal, 'SIGTERM');
+});
+
+test('SIGTERM with a mismatching childIdentity sends no numeric signal', async (t) => {
+  const kills = groupKills();
+  const fake = fakeSpawn(baseHandler(), { pidBase: 7000 });
+  const client = new CodexAppServer({
+    spawnImpl: fake.spawnImpl, killImpl: kills.killImpl,
+    readProcessIdentityImpl: (pid) => ({ pid, pgid: pid, startTime: '555' }),
+  });
+  await client.start();
+  client.childIdentity = { pid: 7000, pgid: 7000, startTime: '123' };
+  await client.close();
+  assert.deepEqual(kills.calls, []);
+});
+
+test('survivors of a termination are attached to the failed run error', async (t) => {
+  const survivors = [{ pid: 4001, ppid: 1, comm: 'sleep', startTime: '5' }];
+  const fake = fakeSpawn(hangingHandler(), { pidBase: 4300 });
+  const client = new CodexAppServer({
+    spawnImpl: fake.spawnImpl, turnTimeoutMs: 20,
+    killImpl: () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); },
+    readProcessIdentityImpl: (pid) => (client.childExitAt == null ? identityOf(pid) : { pid, pgid: pid, startTime: null }),
+    listGroupMembersImpl: () => survivors,
+  });
+  t.after(() => client.close());
+  const pending = client.run({ role, cwd: '/tmp/p', input: 'hang' });
+  const outcome = pending.then(() => null, (error) => error);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  fake.getChild().exitCode = 0;
+  fake.getChild().emit('exit', null, 'SIGTERM');
+  const error = await outcome;
+  assert.equal(error.outcomeUnknown, true);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  assert.deepEqual(error.termination.survivors, survivors);
+  assert.equal(error.termination.identity.pid, 4300);
+  assert.deepEqual(client.lastTermination.survivors, survivors);
+});

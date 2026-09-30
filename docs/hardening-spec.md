@@ -14,7 +14,7 @@ Status: implementation spec, written by the reviewing lead (Claude). It extends
 | Waiting | A writer waits FIFO while the holder is `active`. It stays `SUBMITTED` until admitted. Cancel while waiting ends `CANCELED` with no effects. |
 | Blocked | While the holder is `unresolved`, the executor tries one reconciliation; if it fails, the new writer ends `FAILED` with `failureKind: "admission_blocked"` and `effects: "none"`. |
 | Release | Only when the turn ended with a confirmed terminal (`turn/completed` observed) or never reached `turn/start`. A task marked failed with an unknown outcome is not a release. |
-| Cross-process | A second server on the same workspace is refused by a workspace lock. In a git repository the lock is `<git common dir>/codex-a2a-writer.lock`, shared by every workspace in that repository (nested workspaces such as `/repo` and `/repo/sub` exclude each other); a non-git workspace uses `codex-a2a-workspace-<hash>.lock` in the OS temp dir. `CODEX_A2A_WORKSPACE_LOCK_DIR` forces the directory-based lock. |
+| Cross-process | A second server on the same workspace is refused by a workspace lock. The lock is a kernel-held SQLite exclusive transaction (`BEGIN EXCLUSIVE`, `busy_timeout = 0`) kept open for the holder's lifetime; the kernel drops it when the process dies, so there is no stale-lock takeover. The lock identity is the realpath of `git rev-parse --git-common-dir` (non-git: the canonical workspace). Default file: `<git common dir>/codex-a2a-writer.lockdb`, shared by every workspace in the repository (nested workspaces such as `/repo` and `/repo/sub` exclude each other). With `CODEX_A2A_WORKSPACE_LOCK_DIR` the file is `<dir>/codex-a2a-writer-<sha256(identity)[0:16]>.lockdb`, so nested workspaces still collide; non-git without an override uses the OS temp dir. The state lock is `<stateFile>.lockdb`. Old `*.lock` text files are ignored. |
 
 Every writer execution records a workspace snapshot before and after
 (`src/workspace-snapshot.js`: git HEAD, porcelain status, content hash of every dirty or
@@ -123,11 +123,15 @@ by `session_meta.originator`) and name the guard and rule in the deny reason. Th
 does not change permissions, does not disable or bypass the guard, and does not change how
 workers identify themselves.
 
+The client pins `approvalsReviewer: "user"` on thread/start, thread/resume, and turn/start so
+an `auto_review` reviewer in the user's Codex config cannot approve sandbox escalations; the
+client declines every approval request.
+
 What this repository adds is observability. The App Server client records sanitized
 `permissionEvents` per turn (`hook/completed` runs that block or report stop, feedback, or
 error; declined or failed tool items; output starting with "Command blocked by PreToolUse
 hook:"; non-approved auto reviews; approval requests the client declined), together with
-`permissionConfig` (sandbox, sandbox policy type, approval policy, cwd). The role executor
+`permissionConfig` (sandbox, sandbox policy type, approval policy, approvals reviewer, cwd). The role executor
 attaches both, with role, task, context, and workspace, to the worker task metadata and the
 usage ledger. `listHooks(cwd)` exposes the App Server hook inventory (`hooks/list`). Whether
 `hook/*` notifications arrive without the `experimentalApi` capability has not been verified
@@ -154,10 +158,17 @@ live.
 
 - A tool process that leaves the App Server process group (setsid, setpgid, daemonizing)
   escapes the quiescence proof.
+- An orphaned process group whose leader died is never killed automatically (the group id
+  may have been reused). The writer stays unresolved (`quiescence_unproven`) and reconcile
+  returns the surviving members (`survivors`: pid, comm) for the operator to act on.
 - Ignored files are invisible to workspace snapshots.
-- Stale-lock takeover is racy: two servers starting in the same instant after a crash can
-  both take over a dead holder's lock. Documented, not fixed.
-- The workspace lock needs a shared filesystem view of the repository's git dir.
+- The workspace and state locks need a filesystem with working POSIX locks (not some
+  network filesystems) and a shared view of the repository's git dir.
+- Deleting a lock file while it is held defeats the lock (inherent to file locks). A lock
+  file that is read-only or unwritable is refused at acquire.
+- `CODEX_A2A_WORKSPACE_LOCK_DIR` and the default location (`codex-a2a-writer.lockdb` in the
+  repository's common dir) are different files, so all servers for one repository must use
+  the same setting.
 - Acceptance argv runs on the host outside the Codex sandbox. Keep the bearer token file
   outside the workspace (`CODEX_A2A_TOKEN_FILE`) when workers can read the workspace.
 - `legacy_unverified` outcomes from checkpoints that predate writer admission cannot be

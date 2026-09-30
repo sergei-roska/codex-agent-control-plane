@@ -87,12 +87,25 @@ function diffSnapshots(before, after, workspace) {
     if (was.get(file) !== now.get(file)) changed.add(file);
   }
   const headChanged = before.head !== after.head;
-  if (headChanged && before.head && after.head && workspace) {
+  // Born -> unborn (checkout --orphan): the old tree vanished from HEAD and nothing can be diffed.
+  if (before.head && !after.head) return { known: false, headChanged, changedPaths: [] };
+  if (headChanged && after.head && workspace) {
     try {
-      for (const file of runGit(workspace, ['diff', '--name-only', '--relative', '-z', before.head, after.head]).split('\0')) {
-        if (file) changed.add(file);
+      if (before.head) {
+        for (const file of runGit(workspace, ['diff', '--name-only', '--relative', '-z', before.head, after.head]).split('\0')) {
+          if (file) changed.add(file);
+        }
+      } else {
+        // First commit in a repository that had none: every committed path in the subtree is new.
+        const prefix = runGit(workspace, ['rev-parse', '--show-prefix']).trim();
+        for (const file of runGit(workspace, ['ls-tree', '-r', '--name-only', '-z', '--full-tree', after.head]).split('\0')) {
+          if (!file || (prefix && !file.startsWith(prefix))) continue;
+          changed.add(prefix ? file.slice(prefix.length) : file);
+        }
       }
-    } catch (_) { /* the HEAD change is still reported through headChanged */ }
+    } catch (_) {
+      return { known: false, headChanged, changedPaths: [] };
+    }
   }
   return { known: true, headChanged, changedPaths: [...changed].sort() };
 }

@@ -74,6 +74,35 @@ function isProcessGroupGone(identity, { killImpl = process.kill.bind(process), f
   return false;
 }
 
+function listGroupMembers(pgid, { fsImpl = fs } = {}) {
+  // Linux /proc scan: every process whose process group is pgid.
+  const members = [];
+  let entries;
+  try {
+    entries = fsImpl.readdirSync('/proc');
+  } catch (_) {
+    return members;
+  }
+  for (const entry of entries) {
+    if (!/^[0-9]+$/.test(entry)) continue;
+    let text;
+    try {
+      text = fsImpl.readFileSync(`/proc/${entry}/stat`, 'utf8');
+    } catch (_) {
+      continue;
+    }
+    const stat = parseProcStat(text);
+    if (!stat || stat.pgid !== pgid) continue;
+    members.push({
+      pid: Number(entry),
+      ppid: stat.ppid,
+      startTime: stat.startTime,
+      comm: text.slice(text.indexOf('(') + 1, text.lastIndexOf(')')),
+    });
+  }
+  return members;
+}
+
 function killOrphanProcessGroup(identity, { killImpl = process.kill.bind(process), fsImpl = fs } = {}) {
   // Our App Server child always leads its own group, so pgid must equal pid.
   if (!validPgid(identity?.pgid) || identity.pgid !== identity.pid) return false;
@@ -81,15 +110,13 @@ function killOrphanProcessGroup(identity, { killImpl = process.kill.bind(process
   if (isProcessGroupGone(identity, { killImpl, fsImpl })) return false;
   const { answers, leader } = groupState(identity, killImpl, fsImpl);
   if (!answers) return false;
-  let allowed = false;
-  if (leader) {
-    allowed = identity.startTime != null
-      && leader.startTime === identity.startTime
-      && leader.ppid !== process.pid;
-  } else {
-    allowed = true; // leader dead, but the group (grandchildren) still answers
-  }
-  if (!allowed) return false;
+  // Fail closed: signal only a leader proven to be the original process. A dead
+  // leader leaves the group unprovable (the ids may be reused), so never kill it.
+  if (!leader) return false;
+  if (identity.startTime == null
+    || leader.startTime !== identity.startTime
+    || leader.pgid !== identity.pid
+    || leader.ppid === process.pid) return false;
   try {
     killImpl(-identity.pgid, 'SIGKILL');
   } catch (error) {
@@ -98,4 +125,4 @@ function killOrphanProcessGroup(identity, { killImpl = process.kill.bind(process
   return true;
 }
 
-module.exports = { readProcessIdentity, isProcessGroupGone, killOrphanProcessGroup, parseProcStat };
+module.exports = { readProcessIdentity, isProcessGroupGone, killOrphanProcessGroup, listGroupMembers, parseProcStat };

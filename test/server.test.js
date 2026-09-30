@@ -749,20 +749,16 @@ test('a second server on a live state file is rejected and leaves the first unto
   try {
     const working = { state: TaskState.TASK_STATE_WORKING, timestamp: new Date().toISOString() };
     await createTaskStore(first.state, 'orchestrator').save({ id: 'lead-live', contextId: 'c1', status: working, artifacts: [], history: [], metadata: {} }, CALL());
-    await assert.rejects(startServer(options), new RegExp(`state file .* is in use by pid ${process.pid}`, 'i'));
+    await assert.rejects(startServer(options), /state file .* is in use \(lock held: .*\.lockdb\)/i);
     const task = await createTaskStore(first.state, 'orchestrator').load('lead-live', CALL());
     assert.equal(task.status.state, TaskState.TASK_STATE_WORKING);
     assert.equal(first.state.db.open, true);
   } finally {
     await first.close();
   }
-  assert.equal(fs.existsSync(`${stateFile}.lock`), false);
-
-  // A stale lock (dead pid) is replaced.
-  const dead = Number(require('node:child_process').spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']).stdout.toString());
-  fs.writeFileSync(`${stateFile}.lock`, `${dead}\n`);
+  // The lock is kernel-held: released on close, and an old text lock file is ignored.
+  fs.writeFileSync(`${stateFile}.lock`, '999999\n');
   const again = await startServer(options);
-  assert.equal(fs.readFileSync(`${stateFile}.lock`, 'utf8').trim(), String(process.pid));
   await again.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -822,8 +818,7 @@ test('a second server on the same workspace is rejected even with a different st
   });
   const first = await startServer(options('one'));
   try {
-    await assert.rejects(startServer(options('two')), /workspace .* is in use by pid/i);
-    assert.equal(fs.existsSync(path.join(dir, 'two.sqlite.lock')), false);
+    await assert.rejects(startServer(options('two')), /workspace .* is in use \(lock held: /i);
   } finally {
     await first.close();
   }

@@ -25,11 +25,24 @@ function countBy(values) {
   return out;
 }
 
+// A permission event is a denial only when something was actually refused: a blocking hook, a
+// declined or sandbox-denied tool item, a declined approval request, or a non-approved review.
+function isDenial(event) {
+  switch (event?.type) {
+    case 'hook': return event.status === 'blocked';
+    case 'tool': return event.denial === true || event.status === 'declined';
+    case 'approval_request_declined': return true;
+    case 'approval_review': return event.status !== 'approved';
+    default: return false;
+  }
+}
+
 function denialCounts(rows) {
   const byType = {};
   let total = 0;
   for (const row of rows) {
     for (const event of row.permissionEvents || []) {
+      if (!isDenial(event)) continue;
       total += 1;
       const type = event?.type || 'unknown';
       byType[type] = (byType[type] || 0) + 1;

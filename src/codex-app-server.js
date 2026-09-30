@@ -1,11 +1,14 @@
 const { spawn } = require('node:child_process');
 const readline = require('node:readline');
-const { readProcessIdentity } = require('./process-quiescence');
+const { readProcessIdentity, listGroupMembers } = require('./process-quiescence');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_TURN_TIMEOUT_MS = 600_000;
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 10_000;
 const TOKEN_FIELDS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens', 'totalTokens'];
+// Pin the approvals reviewer to the client so every approval request reaches
+// _declineServerRequest instead of a Codex auto-reviewer that could approve escalations.
+const APPROVALS_REVIEWER = 'user';
 const ZERO_TOTAL = Object.freeze(Object.fromEntries(TOKEN_FIELDS.map((key) => [key, 0])));
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_PERMISSION_EVENTS = 50;
@@ -31,6 +34,11 @@ class CodexAppServerError extends Error {
   }
 }
 
+// A group id still answering right after our leader exited is our own group (the kernel does not
+// reuse a pid while it is a live PGID); a pid wrap inside this window is not realistic.
+const OWN_GROUP_EXIT_WINDOW_MS = 5_000;
+const SANDBOX_DENIAL_PATTERN = /Read-only file system|Operation not permitted|Permission denied/i;
+
 class CodexAppServer {
   constructor({
     codexPath = 'codex',
@@ -40,6 +48,7 @@ class CodexAppServer {
     interruptTimeoutMs = DEFAULT_INTERRUPT_TIMEOUT_MS,
     killImpl = process.kill.bind(process),
     readProcessIdentityImpl = readProcessIdentity,
+    listGroupMembersImpl = listGroupMembers,
   } = {}) {
     this.codexPath = codexPath;
     this.spawnImpl = spawnImpl;
@@ -48,7 +57,11 @@ class CodexAppServer {
     this.interruptTimeoutMs = interruptTimeoutMs;
     this.killImpl = killImpl;
     this.readProcessIdentityImpl = readProcessIdentityImpl;
+    this.listGroupMembersImpl = listGroupMembersImpl;
+    this.lastTermination = null;
     this.childIdentity = null;
+    this.childExitAt = null;
+    this.childExitTimes = new WeakMap();
     this.terminatedChildren = new WeakSet();
     this.threadTotals = new Map();
     this.appServerVersion = null;
@@ -108,7 +121,9 @@ class CodexAppServer {
     this.loadedThreads = new Set();
     this.threadTotals = new Map();
     this.hookInventories = new Map();
-    this.childIdentity = typeof child.pid === 'number' ? this.readProcessIdentityImpl(child.pid) : null;
+    const identity = typeof child.pid === 'number' ? this.readProcessIdentityImpl(child.pid) : null;
+    this.childIdentity = identity;
+    this.childExitAt = null;
     this.childExited = false;
     this.childExitPromise = new Promise((resolve) => { this.resolveChildExit = resolve; });
 
@@ -122,10 +137,13 @@ class CodexAppServer {
       if (this._isCurrentChild(child, generation)) this._failAll(new CodexAppServerError('Could not start Codex App Server', { cause: error }));
     });
     child.on('exit', (code, signal) => {
+      const exitAt = Date.now();
+      this.childExitTimes.set(child, exitAt);
+      if (this._isCurrentChild(child, generation)) this.childExitAt = exitAt;
       this._markChildExited(child, generation);
+      // The leader is gone; make sure no member of its group outlives it (also after close()).
+      this._signalOwnGroup(identity, 'SIGKILL', { child, exitAt });
       if (this._isCurrentChild(child, generation) && !this.closed) {
-        // The leader is gone; make sure no member of its group outlives it.
-        if (typeof child.pid === 'number') this._signalGroup(child, 'SIGKILL');
         const error = new CodexAppServerError(`Codex App Server exited unexpectedly (${signal || code})`, { code, signal });
         this.exitError = error;
         this._failAll(error);
@@ -245,6 +263,7 @@ class CodexAppServer {
         sandbox: normalizeSandbox(role.sandbox),
         sandboxPolicy: sandboxPolicy(role.sandbox).type,
         approvalPolicy: 'on-request',
+        approvalsReviewer: APPROVALS_REVIEWER,
         cwd,
       },
     };
@@ -274,6 +293,7 @@ class CodexAppServer {
         developerInstructions,
         sandbox: normalizeSandbox(role.sandbox),
         approvalPolicy: 'on-request',
+        approvalsReviewer: APPROVALS_REVIEWER,
       }, { signal });
       if (threadResult?.thread?.id) {
         this.loadedThreads.add(threadResult.thread.id);
@@ -289,6 +309,7 @@ class CodexAppServer {
         threadId: existingThreadId,
         cwd,
         approvalPolicy: 'on-request',
+        approvalsReviewer: APPROVALS_REVIEWER,
         sandbox: normalizeSandbox(role.sandbox),
         model: role.model || null,
         developerInstructions,
@@ -329,6 +350,7 @@ class CodexAppServer {
         cwd,
         sandboxPolicy: sandboxPolicy(role.sandbox),
         approvalPolicy: 'on-request',
+        approvalsReviewer: APPROVALS_REVIEWER,
         ...(outputSchema ? { outputSchema } : {}),
       }, { onWritten: () => { ctx.turnStartSent = true; } });
       let turnResult;
@@ -360,8 +382,10 @@ class CodexAppServer {
       let cause = error;
       // A fail-safe error (child terminated) is the authoritative outcome.
       if (run.failSafeError && error.name !== 'AbortError') cause = run.failSafeError;
+      const termination = cause.outcomeUnknown && !cause.termination && this.lastTermination?.survivors?.length ? this.lastTermination : null;
+      if (termination) cause.termination = termination;
       if (run.abortRequested && cause.name !== 'AbortError') {
-        throw abortError({ threadId, turnId: run.turnId, cause, ...(cause.outcomeUnknown ? { outcomeUnknown: true } : {}) });
+        throw abortError({ threadId, turnId: run.turnId, cause, ...(cause.outcomeUnknown ? { outcomeUnknown: true } : {}), ...(cause.termination ? { termination: cause.termination } : {}) });
       }
       throw cause;
     } finally {
@@ -536,14 +560,19 @@ class CodexAppServer {
 
   _declineServerRequest(message) {
     const { id, method, params = {} } = message;
-    const owner = (typeof params.threadId === 'string' ? this.runs.get(params.threadId) : null)
+    const threadKey = typeof params.threadId === 'string' ? params.threadId : params.conversationId;
+    const owner = (typeof threadKey === 'string' ? this.runs.get(threadKey) : null)
       || (this.runs.size === 1 ? [...this.runs.values()][0] : null);
-    if (owner && /requestApproval$/.test(method)) {
+    const legacy = method === 'applyPatchApproval' || method === 'execCommandApproval';
+    if (owner && (/requestApproval$/.test(method) || legacy)) {
       pushPermissionEvent(owner.ctx, { type: 'approval_request_declined', method, reason: 'client_declines_all' });
     }
     let result;
     if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval') {
       result = { decision: 'decline' };
+    } else if (legacy) {
+      // Legacy ReviewDecision: the schema's decline is the `denied` variant.
+      result = { decision: { denied: { rejection: 'Declined by client: approvals are not available' } } };
     } else if (method === 'item/permissions/requestApproval') {
       result = { permissions: {}, scope: 'turn' };
     } else if (method === 'mcpServer/elicitation/request') {
@@ -612,18 +641,54 @@ class CodexAppServer {
     }
   }
 
-  _signalGroup(child, signal) {
-    if (typeof child.pid === 'number') {
-      try {
-        this.killImpl(-child.pid, signal);
-        return true;
-      } catch (error) {
-        if (error && error.code === 'ESRCH') return false;
+  /**
+   * Signal the process group we spawned, never a group that merely shares its number.
+   * - Leader alive with the spawn-time start time and pgid === pid: signal -pgid.
+   * - Leader alive with another start time: the number was reused, do not signal.
+   * - Leader absent: signal -pgid only if our child's exit was observed under 5 s ago (a pid
+   *   cannot be reallocated while it is still a live PGID, so an answering group is ours).
+   * - No start time (/proc unreadable at spawn): never signal by number.
+   * The child handle is signalled whenever the group was not, since the handle cannot hit a stranger.
+   * Returns true when the group was signalled.
+   */
+  _signalOwnGroup(identity, signal, { child = null, exitAt = null } = {}) {
+    const viaHandle = () => {
+      if (child && child.exitCode == null && child.signalCode == null) {
+        try { child.kill(signal); } catch (_) { /* already gone */ }
       }
+      return false;
+    };
+    if (!identity || identity.startTime == null || !Number.isInteger(identity.pid) || identity.pgid !== identity.pid) return viaHandle();
+    const now = this.readProcessIdentityImpl(identity.pid);
+    let own = false;
+    if (now && now.startTime != null) {
+      own = now.startTime === identity.startTime && now.pgid === identity.pid;
+    } else {
+      own = exitAt != null && Date.now() - exitAt < OWN_GROUP_EXIT_WINDOW_MS;
     }
-    if (child.exitCode != null) return false;
-    try { child.kill(signal); } catch (_) { /* already gone */ }
-    return true;
+    if (!own) return viaHandle();
+    try {
+      this.killImpl(-identity.pgid, signal);
+      return true;
+    } catch (error) {
+      if (error && error.code === 'ESRCH') return false;
+      return viaHandle();
+    }
+  }
+
+  _delayedKill(child, identity, termination = null) {
+    const exitAt = this.childExitTimes.get(child) ?? null;
+    if (this._signalOwnGroup(identity, 'SIGKILL', { child, exitAt })) return;
+    if (!identity || typeof identity.pid !== 'number') return;
+    let survivors = [];
+    try { survivors = this.listGroupMembersImpl(identity.pgid); } catch (_) { /* diagnostics only */ }
+    const at = new Date().toISOString();
+    // The record is shared with the errors of the runs this termination failed (their copies
+    // hold the same object), so they learn what outlived it.
+    const record = termination || { identity, survivors: [], at };
+    record.survivors = survivors;
+    record.at = at;
+    this.lastTermination = record;
   }
 
   _terminateProcess() {
@@ -631,10 +696,16 @@ class CodexAppServer {
     if (!child || this.terminatedChildren.has(child)) return;
     if (typeof child.pid !== 'number' && (child.exitCode != null || child.killed)) return;
     this.terminatedChildren.add(child);
-    this._signalGroup(child, 'SIGTERM');
+    const identity = this.childIdentity;
+    const termination = { identity, survivors: [], at: new Date().toISOString() };
+    for (const run of this.runs.values()) {
+      const error = run.failSafeError || this.exitError;
+      if (error && error.outcomeUnknown) error.termination = termination;
+    }
+    this._signalOwnGroup(identity, 'SIGTERM', { child, exitAt: this.childExitTimes.get(child) ?? null });
     clearTimeout(this.forceKillTimer);
     // Not cleared on child exit: grandchildren in the group may outlive the leader.
-    this.forceKillTimer = setTimeout(() => this._signalGroup(child, 'SIGKILL'), 1_000);
+    this.forceKillTimer = setTimeout(() => this._delayedKill(child, identity, termination), 1_000);
     this.forceKillTimer.unref?.();
   }
 
@@ -731,6 +802,9 @@ function recordPermissionEvent(ctx, method, params) {
     const output = typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : '';
     const blockedByHook = output.startsWith(HOOK_BLOCK_PREFIX);
     if (!blockedByHook && item.status !== 'declined' && item.status !== 'failed') return;
+    // A failed command is a permission event only when a hook blocked it or the sandbox refused
+    // it; an ordinary non-zero exit (e.g. rg with no match) is not a denial. Declined items stay.
+    if (!blockedByHook && item.status === 'failed' && item.type === 'commandExecution' && !SANDBOX_DENIAL_PATTERN.test(output)) return;
     const event = { type: 'tool', tool: item.type, status: clean(item.status) };
     if (item.type === 'commandExecution') {
       event.command = clean(item.command, MAX_COMMAND_CHARS);
@@ -739,6 +813,7 @@ function recordPermissionEvent(ctx, method, params) {
       event.paths = (Array.isArray(item.changes) ? item.changes : []).slice(0, 20).map((change) => clean(change?.path));
     }
     event.blockedByHook = blockedByHook;
+    event.denial = blockedByHook || item.status === 'declined' || item.status === 'failed';
     event.reasonText = output ? clean(output) : null;
     pushPermissionEvent(ctx, event);
   } else if (method === 'item/autoApprovalReview/completed' && params.review && params.review.status !== 'approved') {

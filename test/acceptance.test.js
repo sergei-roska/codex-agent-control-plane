@@ -339,3 +339,28 @@ test('abort while waiting for admission is unverifiable with acceptance_canceled
   assert.equal(result.issues[0].code, 'acceptance_canceled');
   admission.release(holder.executionId);
 });
+
+test('a first commit of an out-of-scope file in an unborn repository is not accepted', () => {
+  const { diffSnapshots } = require('../src/workspace-snapshot');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'accept-unborn-'));
+  try {
+    vcs(dir, 'init', '-q');
+    vcs(dir, 'config', 'user.email', 't@example.com');
+    vcs(dir, 'config', 'user.name', 't');
+    const before = takeSnapshot(dir);
+    fs.writeFileSync(path.join(dir, 'secret.txt'), 'x\n');
+    vcs(dir, 'add', '.');
+    vcs(dir, 'commit', '-q', '-m', 'first');
+    const after = takeSnapshot(dir);
+    const delta = diffSnapshots(before, after, dir);
+    assert.equal(delta.known, true);
+    const outside = delta.changedPaths.filter((file) => !file.startsWith('src/'));
+    assert.deepEqual(outside, ['secret.txt']);
+    const result = computeDisposition({
+      requiredChecks: [{ id: 'x', argv: ['x'] }], checkResults: [{ id: 'x', result: 'passed' }],
+      snapshotBefore: before, snapshotAfter: after, writers: [okWriter({ attestedScopeViolations: outside })], unresolvedWriterCount: 0,
+    });
+    assert.notEqual(result.disposition, 'accepted');
+    assert.ok(codes(result).includes('attested_scope_violation'));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
