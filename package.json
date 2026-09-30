@@ -1,5 +1,5 @@
 {
-  "name": "codex-universal-a2a",
+  "name": "codex-universal-a2a-orchestrator",
   "version": "1.0.0",
   "description": "Codex Universal roles exposed over the A2A protocol",
   "main": "src/server.js",
