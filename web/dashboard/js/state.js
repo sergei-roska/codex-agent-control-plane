@@ -1,4 +1,4 @@
-// --- ROLES ROSTER & ICONS ---
+// --- PREVIEW-ONLY ROLE ROSTER & ICONS (prototype tabs; Board/Sidebar use GET /roles) ---
 const ROLES = [
   "project-manager",
   "architect",
@@ -48,20 +48,10 @@ const ROLE_COLORS = {
 };
 
 // --- STATE MANAGEMENT ---
+// Fixture data below (tickets, pipelines, logs, decisions, ...) feeds only the prototype preview tabs.
 const state = {
   activeTab: 'tab-board',
   boardView: 'status',
-  roleSessions: {
-    "project-manager": true,
-    "architect": true,
-    "developer": true,
-    "devops": true,
-    "performance": true,
-    "qa": true,
-    "reviewer": true,
-    "security": true,
-    "tech-writer": true
-  },
   providers: [
     { id: 'claude', name: 'Claude (Anthropic)', status: 'connected', tag: 'Flagship / Reasoning', method: 'oauth', endpoint: 'https://api.anthropic.com/v1' },
     { id: 'codex', name: 'Codex (OpenAI)', status: 'connected', tag: 'Flagship / o-Series', method: 'oauth', endpoint: 'https://api.openai.com/v1' },
@@ -639,26 +629,6 @@ const state = {
 };
 
 // --- HELPER LOGIC ---
-function getStatusGroup(status) {
-  if (['backlog', 'new'].includes(status)) return 'backlog';
-  if (['pending', 'claimed', 'queued'].includes(status)) return 'pending';
-  if (['in_progress', 'waiting_role'].includes(status)) return 'in_progress';
-  if (['in_review', 'waiting_human', 'blocked', 'paused'].includes(status)) return 'needs_attention';
-  if (['done', 'cancelled', 'stopped', 'superseded'].includes(status)) return 'closed';
-  return 'backlog';
-}
-
-function getRoleTicketCounts(role) {
-  const roleTickets = state.tickets.filter(t => t.role === role);
-  return {
-    backlog: roleTickets.filter(t => getStatusGroup(t.status) === 'backlog').length,
-    pending: roleTickets.filter(t => getStatusGroup(t.status) === 'pending').length,
-    active: roleTickets.filter(t => getStatusGroup(t.status) === 'in_progress').length,
-    attention: roleTickets.filter(t => getStatusGroup(t.status) === 'needs_attention').length,
-    closed: roleTickets.filter(t => getStatusGroup(t.status) === 'closed').length
-  };
-}
-
 const MODEL_DISPLAY_NAMES = {
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
   'gemini-2.5-flash': 'Gemini 2.5 Flash',
@@ -690,43 +660,6 @@ function formatModelName(modelId) {
     return `${MODEL_DISPLAY_NAMES[attemptMatch[1]]}${attemptMatch[2]}`;
   }
   return modelId;
-}
-
-function getLastModelAttempt(role) {
-  const roleTickets = state.tickets.filter(t => t.role === role);
-  for (let t of roleTickets) {
-    if (t.attempts && t.attempts.length > 0) {
-      const last = t.attempts[t.attempts.length - 1];
-      const modelName = formatModelName(last.model);
-      const prov = (last.provider || '').includes('(') ? last.provider.split('(')[1].replace(')', '').trim() : (last.provider || 'Google');
-      return `${modelName} (${prov})`;
-    }
-  }
-  const def = state.roleDefaults && state.roleDefaults[role];
-  if (def) {
-    const modelName = formatModelName(def.model);
-    const prov = (def.provider || '').includes('(') ? def.provider.split('(')[1].replace(')', '').trim() : (def.provider || 'Google');
-    return `${modelName} (${prov})`;
-  }
-  return "Gemini 2.5 Pro (Google)";
-}
-
-function formatModelChip(ticket) {
-  if (!ticket.attempts || ticket.attempts.length === 0) {
-    const def = state.roleDefaults && state.roleDefaults[ticket.role];
-    if (def) {
-      return `<span class="model-chip">${formatModelName(def.model || 'gemini-2.5-pro')} · ${def.tier}</span>`;
-    }
-    return `<span class="model-chip" style="opacity:0.5;">No attempts yet</span>`;
-  }
-  const providers = [...new Set(ticket.attempts.map(a => (a.provider || '').includes('(') ? a.provider.split('(')[0].trim() : a.provider))];
-  const lastAttempt = ticket.attempts[ticket.attempts.length - 1];
-  const friendlyModel = formatModelName(lastAttempt.model || lastAttempt.provider);
-  let text = `${friendlyModel} · ${lastAttempt.tier}`;
-  if (providers.length > 1) {
-    text += ` +${providers.length - 1}`;
-  }
-  return `<span class="model-chip">${text}</span>`;
 }
 
 function escapeHtml(text) {

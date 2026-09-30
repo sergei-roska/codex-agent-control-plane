@@ -1,120 +1,130 @@
-<!-- M1: Ticket Detail Modal -->
+<!-- M1: Ticket Detail Modal (read-only) -->
 <div class="modal-backdrop" id="modal-ticket-detail">
   <div class="modal-box large">
     <div class="modal-header">
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <span class="modal-title" id="m1-title">Ticket Detail</span>
+      <div style="display: flex; align-items: center; gap: 12px; min-width: 0;">
+        <span class="modal-title" id="m1-title">Execution detail</span>
         <span class="badge" id="m1-status-badge"></span>
       </div>
-      <button class="modal-close-btn" data-close="modal-ticket-detail">x</button>
+      <button class="modal-close-btn" data-close="modal-ticket-detail" aria-label="Close">x</button>
     </div>
 
     <div class="modal-body">
+      <div id="m1-load-note" class="detail-note" role="status"></div>
+
       <div class="sub-tabs">
         <button class="sub-tab-btn active" data-subtab="m1-overview">Overview</button>
-        <button class="sub-tab-btn" data-subtab="m1-runlog">Run Log</button>
-        <button class="sub-tab-btn" data-subtab="m1-turns">Turns (ReAct)</button>
-        <button class="sub-tab-btn" data-subtab="m1-attempts">Attempts (Audit Trail)</button>
-        <button class="sub-tab-btn" data-subtab="m1-metrics">Tokens &amp; Cost</button>
+        <button class="sub-tab-btn" data-subtab="m1-runlog">Events</button>
+        <button class="sub-tab-btn" data-subtab="m1-attempts">Attempts</button>
+        <button class="sub-tab-btn" data-subtab="m1-metrics">Usage</button>
       </div>
 
       <div id="m1-overview" class="sub-tab-pane active">
         <div class="modal-detail-grid">
-          <div>
+          <div class="detail-main">
             <h4 id="m1-ticket-title" style="margin-bottom: 10px; font-size: 15px;"></h4>
-            <p id="m1-ticket-desc" style="color: var(--text-secondary); font-size: 13px; line-height: 1.6; white-space: pre-wrap; margin-bottom: 14px;"></p>
-            
-            <div id="m1-ac-wrapper" style="display: none; margin-bottom: 14px; background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); padding: 12px; border-radius: 12px;">
-              <strong style="font-size: 12px; color: var(--accent-cyan); display: block; margin-bottom: 6px;">Acceptance Criteria:</strong>
-              <div id="m1-ticket-ac" style="font-size: 12px; color: var(--text-secondary); white-space: pre-wrap; line-height: 1.5;"></div>
+            <div class="detail-section">
+              <div class="detail-label">Goal / user messages</div>
+              <div id="m1-messages" class="detail-block"></div>
             </div>
-
-            <div id="m1-links-wrapper" style="display: none; margin-bottom: 14px; gap: 8px; flex-wrap: wrap;"></div>
-            <div id="m1-files-wrapper" style="display: none; font-size: 12px; color: var(--text-muted); font-family: var(--font-mono);"></div>
+            <div class="detail-section" id="m1-status-message-wrapper" style="display: none;">
+              <div class="detail-label">Status message</div>
+              <div id="m1-status-message" class="detail-block"></div>
+            </div>
+            <div class="detail-section" id="m1-pause-wrapper" style="display: none;">
+              <div class="detail-label">Pause information</div>
+              <div id="m1-pause" class="detail-block"></div>
+            </div>
+            <div class="detail-section" id="m1-acceptance-wrapper" style="display: none;">
+              <div class="detail-label">Acceptance</div>
+              <div id="m1-acceptance" class="detail-block"></div>
+            </div>
+            <div class="detail-section" id="m1-result-wrapper" style="display: none;">
+              <div class="detail-label">Result</div>
+              <pre id="m1-result" class="detail-block detail-pre"></pre>
+            </div>
           </div>
-          <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); padding: 16px; border-radius: 14px; display: flex; flex-direction: column; gap: 10px; font-size: 12px;">
-            <div><strong>Role:</strong> <span id="m1-role-text" class="badge badge-role"></span></div>
-            <div><strong>Priority:</strong> <span id="m1-priority-text"></span></div>
+          <div class="detail-side">
+            <div><strong>Kind:</strong> <span id="m1-kind-text"></span></div>
+            <div><strong>Task:</strong> <span id="m1-task-text" style="font-family: var(--font-mono); word-break: break-all;"></span></div>
+            <div><strong>Raw state:</strong> <span id="m1-raw-state" style="font-family: var(--font-mono);"></span></div>
+            <div><strong>Wait reason:</strong> <span id="m1-wait-text"></span></div>
+            <div><strong>Roles:</strong> <span id="m1-role-text" class="detail-chips"></span></div>
+            <div><strong>Attempts:</strong> <span id="m1-attempt-count"></span></div>
+            <div><strong>Human review:</strong> <span id="m1-human-review">unknown</span></div>
             <div><strong>Created:</strong> <span id="m1-created-text" style="color: var(--text-muted);"></span></div>
+            <div><strong>Updated:</strong> <span id="m1-updated-text" style="color: var(--text-muted);"></span></div>
           </div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">Unavailable actions</div>
+          <ul id="m1-unavailable-list" class="detail-list"></ul>
         </div>
       </div>
 
       <div id="m1-runlog" class="sub-tab-pane">
-        <div id="m1-runlog-list" style="font-family: var(--font-mono); font-size: 12px; display: flex; flex-direction: column; gap: 8px;"></div>
-      </div>
-
-      <div id="m1-turns" class="sub-tab-pane">
-        <div id="m1-turns-list" style="display: flex; flex-direction: column; gap: 12px; font-size: 13px;"></div>
+        <div id="m1-runlog-list" class="event-timeline"></div>
       </div>
 
       <div id="m1-attempts" class="sub-tab-pane">
         <div class="attempts-table-wrapper">
-        <table class="attempts-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Role</th>
-              <th>Provider</th>
-              <th>Model</th>
-              <th>Tier</th>
-              <th>Outcome</th>
-              <th>Started</th>
-              <th>Finished</th>
-            </tr>
-          </thead>
-          <tbody id="m1-attempts-body"></tbody>
-        </table>
+          <table class="attempts-table">
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Sandbox</th>
+                <th>Journal state</th>
+                <th>Task state</th>
+                <th>Outcome</th>
+                <th>Started</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody id="m1-attempts-body"></tbody>
+          </table>
         </div>
       </div>
 
       <div id="m1-metrics" class="sub-tab-pane">
-        <!-- KPI summary cards -->
+        <div id="m1-usage-coverage" class="detail-note"></div>
         <div class="metrics-stat-grid">
           <div class="metrics-stat-card">
-            <div class="metrics-stat-label">Total Cost</div>
-            <div id="m1-metric-cost" class="metrics-stat-value" style="color: var(--accent-green);">$0.0000</div>
-            <div id="m1-metric-cost-sub" class="metrics-stat-sub">In: $0.00 | Out: $0.00</div>
-          </div>
-          <div class="metrics-stat-card">
             <div class="metrics-stat-label">Total Tokens</div>
-            <div id="m1-metric-tokens" class="metrics-stat-value" style="color: var(--accent-cyan);">0</div>
-            <div id="m1-metric-tokens-sub" class="metrics-stat-sub">Prompt + Completion</div>
+            <div id="m1-metric-tokens" class="metrics-stat-value" style="color: var(--accent-cyan);"></div>
+            <div id="m1-metric-tokens-sub" class="metrics-stat-sub"></div>
           </div>
           <div class="metrics-stat-card">
-            <div class="metrics-stat-label">Prompt Caching</div>
-            <div id="m1-metric-cache" class="metrics-stat-value" style="color: var(--accent-purple);">0</div>
-            <div id="m1-metric-cache-sub" class="metrics-stat-sub">Cached Prompt Reads</div>
+            <div class="metrics-stat-label">Cached Input</div>
+            <div id="m1-metric-cache" class="metrics-stat-value" style="color: var(--accent-purple);"></div>
+            <div id="m1-metric-cache-sub" class="metrics-stat-sub"></div>
           </div>
           <div class="metrics-stat-card">
-            <div class="metrics-stat-label">Role Runs</div>
-            <div id="m1-metric-runs" class="metrics-stat-value" style="color: var(--accent-blue);">0</div>
-            <div id="m1-metric-runs-sub" class="metrics-stat-sub">Active Invocations</div>
+            <div class="metrics-stat-label">Turns</div>
+            <div id="m1-metric-turns" class="metrics-stat-value" style="color: var(--accent-blue);"></div>
+            <div id="m1-metric-turns-sub" class="metrics-stat-sub"></div>
+          </div>
+          <div class="metrics-stat-card">
+            <div class="metrics-stat-label">Elapsed</div>
+            <div id="m1-metric-elapsed" class="metrics-stat-value" style="color: var(--accent-green);"></div>
+            <div id="m1-metric-elapsed-sub" class="metrics-stat-sub"></div>
           </div>
         </div>
+        <div class="detail-note">Cost is not measured: usage is billed through a subscription. Values the runtime did not report are shown as unavailable, never as 0.</div>
 
-        <!-- Role Breakdown Section -->
         <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); padding: 14px; border-radius: 14px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
-            <strong style="font-size: 13px; color: var(--text-primary);">Role Cost &amp; Token Breakdown</strong>
-            <span id="m1-role-breakdown-count" style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">0 roles</span>
-          </div>
-
-          <!-- Visual Distribution Bar -->
-          <div id="m1-role-progress-bar" style="height: 10px; border-radius: 5px; overflow: hidden; display: flex; background: rgba(0,0,0,0.3); border: var(--nm-border-bevel); margin-bottom: 14px;"></div>
-
-          <!-- Breakdown Table -->
+          <strong style="font-size: 13px; color: var(--text-primary); display: block; margin-bottom: 10px;">Per-role usage</strong>
           <div class="attempts-table-wrapper">
             <table class="attempts-table">
               <thead>
                 <tr>
                   <th>Role</th>
-                  <th>Provider / Model</th>
-                  <th style="text-align: right;">Prompt</th>
-                  <th style="text-align: right;">Completion</th>
-                  <th style="text-align: right;">Total Tokens</th>
-                  <th style="text-align: right;">Cost (USD)</th>
-                  <th style="text-align: right;">Share</th>
+                  <th>Models</th>
+                  <th style="text-align: right;">Input</th>
+                  <th style="text-align: right;">Cached</th>
+                  <th style="text-align: right;">Output</th>
+                  <th style="text-align: right;">Total</th>
+                  <th style="text-align: right;">Turns</th>
+                  <th style="text-align: right;">Elapsed</th>
                 </tr>
               </thead>
               <tbody id="m1-metrics-role-body"></tbody>
@@ -125,24 +135,8 @@
     </div>
 
     <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+      <div id="m1-action-buttons" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;"></div>
       <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-        <button type="button" class="btn btn-secondary" id="m1-btn-return-backlog" style="color: var(--accent-cyan);" title="Return task to Backlog for specification and re-assignment">
-          <span>&#x21A9;</span> Return to Backlog
-        </button>
-        <button type="button" class="btn btn-secondary" id="m1-btn-edit-ticket" style="color: var(--accent-blue);" title="Edit task specifications and fields">
-          <span>&#x270E;</span> Edit Ticket
-        </button>
-      </div>
-      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-        <button type="button" class="btn" id="m1-btn-pause" style="display: none;" title="Pause / Resume task execution">
-          <span id="m1-btn-pause-icon">&#x23F8;</span> <span id="m1-btn-pause-text">Pause</span>
-        </button>
-        <button type="button" class="btn btn-danger" id="m1-btn-stop" style="display: none;" title="Stop active task execution">
-          <span>&#x25A0;</span> Stop
-        </button>
-        <button type="button" class="btn btn-danger" id="m1-btn-cancel" style="display: none;" title="Cancel task">
-          <span>&#x2715;</span> Cancel Task
-        </button>
         <button type="button" class="btn btn-secondary" data-close="modal-ticket-detail">Close</button>
       </div>
     </div>

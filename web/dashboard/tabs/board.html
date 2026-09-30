@@ -5,12 +5,14 @@
       <button class="view-btn" id="btn-view-role">Role View</button>
     </div>
     <div class="board-filters">
-      <input type="text" id="board-search" class="input-text" placeholder="Search tickets..." style="width: 220px;">
-      <select id="board-role-filter" class="select-input">
+      <input type="text" id="board-search" class="input-text" placeholder="Search title or task id..." maxlength="200" aria-label="Search executions" style="width: 220px;">
+      <select id="board-role-filter" class="select-input" aria-label="Filter by role">
         <option value="all">All Roles</option>
       </select>
     </div>
   </div>
+
+  <div id="board-status" class="board-status" role="status" aria-live="polite">Loading...</div>
 
   <!-- 5 Column View -->
   <div id="status-view-container" class="board-columns-container">

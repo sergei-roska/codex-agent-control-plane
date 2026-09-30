@@ -17,10 +17,10 @@ function assemble() {
   const connectionsTab = readFile('tabs/connections.html');
 
   const ticketDetailModal = readFile('modals/ticket-detail.html');
-  const ticketCreateModal = readFile('modals/ticket-create.html');
   const approvalModal = readFile('modals/approval.html');
   const providerCreateModal = readFile('modals/provider-create.html');
   const battlepassModal = readFile('modals/battlepass.html');
+  const notPairedPanel = readFile('modals/not-paired.html');
 
   const indexHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -50,13 +50,13 @@ function assemble() {
         <button class="btn-close-sidebar" id="btn-close-sidebar" title="Close Sidebar">&times;</button>
       </div>
       <div class="session-status">
-        <div class="status-dot"></div>
-        <span>Operator: <strong>Serghei Rosca</strong></span>
+        <div class="status-dot conn-connecting" id="session-status-dot"></div>
+        <span id="session-status-text">Session: connecting...</span>
       </div>
     </div>
 
     <div class="sidebar-roles">
-      <div class="sidebar-section-title">9 Standard Roles</div>
+      <div class="sidebar-section-title">Runtime Roles</div>
       <div id="roles-list-container" style="display:flex; flex-direction:column; gap:12px;">
         <!-- Injected via JS -->
       </div>
@@ -66,6 +66,7 @@ function assemble() {
       <button class="btn-new-ticket" id="btn-open-new-ticket" title="Create New Ticket">
         <span>+</span><span class="btn-new-ticket-text"> New Ticket</span>
       </button>
+      <div class="sidebar-note btn-new-ticket-text">Direct tickets arrive in M2</div>
     </div>
   </aside>
 
@@ -76,10 +77,11 @@ function assemble() {
       <div class="header-top-row">
         <div class="header-title-group">
           <button class="btn-menu-toggle" id="btn-menu-toggle" title="Open Roles Menu">&#9776;</button>
-          <span class="header-title">Workspace</span>
+          <span class="header-title" id="header-title">Workspace</span>
         </div>
 
         <div class="header-actions">
+          <span class="conn-status conn-connecting" id="conn-status" role="status" aria-live="polite">Connecting...</span>
           <button class="btn-battlepass" id="btn-open-battlepass">
             <span>&#x26A1; <span class="bp-text-full">BATTLE </span>PASS</span>
             <span class="bp-lvl-badge" style="font-size:10px; background:rgba(0,0,0,0.28); padding:2px 6px; border-radius:6px; border:1px solid rgba(255,255,255,0.25);">LVL 12</span>
@@ -126,16 +128,18 @@ ${connectionsTab.split('\\n').map(l => '      ' + l).join('\\n')}
 <!-- Modals -->
 ${ticketDetailModal}
 
-${ticketCreateModal}
-
 ${approvalModal}
 
 ${providerCreateModal}
 
 ${battlepassModal}
 
+${notPairedPanel}
+
 <!-- Modular Scripts -->
 <script src="js/state.js"></script>
+<script src="js/util.js"></script>
+<script src="js/api.js"></script>
 <script src="js/theme.js"></script>
 <script src="js/layout/sidebar.js"></script>
 <script src="js/layout/header.js"></script>

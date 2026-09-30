@@ -182,7 +182,7 @@ test('reconciliation rewrites stale specialist and lead tasks only', async (t) =
   assert.deepEqual(waiting.metadata, { note: 'kept' });
 
   const second = await reconcileInterruptedTasks(state);
-  assert.deepEqual(second, { specialists: [], lead: [] });
+  assert.deepEqual(second, { specialists: [], lead: [], specialistRefs: [] });
 });
 
 function buildGraph(checkpointer) {

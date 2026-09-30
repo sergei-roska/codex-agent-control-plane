@@ -1,0 +1,13 @@
+<!-- Full-screen panel shown on any 401 from the dashboard API -->
+<div class="not-paired-panel" id="not-paired-panel" role="alertdialog" aria-labelledby="not-paired-title" aria-describedby="not-paired-body">
+  <div class="not-paired-box">
+    <h2 id="not-paired-title">Not paired</h2>
+    <p id="not-paired-body">This browser does not have a dashboard session. To pair it:</p>
+    <ol>
+      <li>Run <code>npm run dashboard:pair</code> in the project directory.</li>
+      <li>Open the printed URL in this browser.</li>
+    </ol>
+    <p class="not-paired-hint">Pairing codes are single-use and expire after 10 minutes. Sessions last 7 days.</p>
+    <p id="not-paired-detail" class="not-paired-detail"></p>
+  </div>
+</div>

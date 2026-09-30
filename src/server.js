@@ -2,6 +2,7 @@
 
 const express = require('express');
 const fs = require('node:fs');
+const path = require('node:path');
 const { AgentEvent, InMemoryTaskStore, DefaultRequestHandler } = require('@a2a-js/sdk/server');
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
 const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/server/express');
@@ -11,13 +12,45 @@ const { registerRoleAgents } = require('./a2a-role-service');
 const { LeadOrchestrator, ResumeInputError } = require('./lead-orchestrator');
 const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
 const { WriterAdmission } = require('./writer-admission');
+const { EventJournal, withDispatchEvents, NOOP_EVENTS } = require('./event-journal');
 const { UsageLedger } = require('./usage-ledger');
 const { validateAcceptanceContract, formatAcceptance } = require('./acceptance');
 const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
+const { createDashboardAuth } = require('./dashboard-auth');
+const { createProjection } = require('./dashboard-projection');
+const { createDashboardApi, computeProjectId, sendError, newRequestId } = require('./dashboard-api');
 
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 3000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+const DASHBOARD_WEB_DIR = path.resolve(__dirname, '..', 'web', 'dashboard');
+const PACKAGE_VERSION = require('../package.json').version;
+
+function assertWebDirOutsideArtifacts(webDir) {
+  const artifacts = path.resolve(__dirname, '..', 'artifacts');
+  const relative = path.relative(artifacts, webDir);
+  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+    throw new Error(`Dashboard web root must not be inside artifacts/: ${webDir}`);
+  }
+}
+
+function mountDashboard(app, { auth, authMiddleware, state, roles, leadRole, workspace, events }) {
+  assertWebDirOutsideArtifacts(DASHBOARD_WEB_DIR);
+  const projectId = computeProjectId(workspace);
+  const projection = createProjection({ db: state.db, roleIds: [...roles.keys()], projectId });
+  const api = createDashboardApi({
+    projection, events, roles, leadRole, workspace, projectId, startedAt: new Date().toISOString(), version: PACKAGE_VERSION,
+  });
+  app.use('/api/dashboard/v1', auth.hostGuard, auth.noStore);
+  // Bearer only and deliberately no originGuard: the CLI sends no Origin header.
+  app.post('/api/dashboard/v1/pairing-codes', auth.hostGuard, authMiddleware, auth.pairingCodeHandler);
+  app.use('/api/dashboard/v1', auth.sessionRouter());
+  app.use('/api/dashboard/v1', auth.requireSession, api);
+  app.use('/api/dashboard', (req, res) => sendError(res, 404, 'not_found', 'Not found', newRequestId()));
+  app.use('/dashboard', auth.hostGuard, auth.securityHeaders,
+    express.static(DASHBOARD_WEB_DIR, { index: 'index.html', dotfiles: 'deny' }));
+  app.get('/', (req, res) => res.redirect('/dashboard/'));
+}
 
 function textPart(text) {
   return { content: { $case: 'text', value: text }, mediaType: 'text/plain', filename: '', metadata: undefined };
@@ -147,7 +180,7 @@ function isResumeInputError(error) {
   return error instanceof ResumeInputError;
 }
 
-function makeLeadExecutor({ orchestrator }) {
+function makeLeadExecutor({ orchestrator, events = NOOP_EVENTS }) {
   const controllers = new Map();
   const reservations = new Set();
   const inflight = new Set();
@@ -167,6 +200,7 @@ function makeLeadExecutor({ orchestrator }) {
       metadata: {},
     };
     const resuming = requestContext.task?.status?.state === TaskState.TASK_STATE_INPUT_REQUIRED;
+    const emit = (type, payload) => events.record(type, { runId: taskId, namespace: 'orchestrator', taskId, role: 'orch-lead', payload });
     let effectivePause = null;
     const republishPause = (pause, explanation, suffix) => {
       const text = explanation ? `${explanation}\n${describePause(taskId, pause)}` : describePause(taskId, pause);
@@ -245,6 +279,8 @@ function makeLeadExecutor({ orchestrator }) {
         metadata: resuming ? { pause: null } : {},
       }));
       let result;
+      if (resuming) emit('run_resumed', { pauseKind });
+      else emit('run_submitted', {});
       if (resuming) {
         try {
           result = await orchestrator.resume({ runId: taskId, input: resumeInput, signal: controller.signal });
@@ -263,6 +299,7 @@ function makeLeadExecutor({ orchestrator }) {
       const paused = (result?.status === 'input_required' || result?.status === 'waiting_for_budget') && !controller.signal.aborted;
       if (paused) {
         const pause = result.pause || await orchestrator.getPause?.(taskId) || { kind: result.status === 'waiting_for_budget' ? 'waiting_for_budget' : 'human_decision' };
+        emit('run_paused', { pauseKind: pause?.kind });
         eventBus.publish(AgentEvent.statusUpdate({
           taskId,
           contextId,
@@ -279,6 +316,9 @@ function makeLeadExecutor({ orchestrator }) {
       const output = cancellationUnconfirmed
         ? 'Cancellation was requested, but downstream A2A cancellation could not be confirmed.'
         : typeof result?.text === 'string' ? result.text : '';
+      if (completed) emit('run_completed', { disposition: result?.acceptance?.disposition, rounds: result?.rounds });
+      else if (canceled) emit('run_canceled', {});
+      else emit('run_failed', { outcome: cancellationUnconfirmed ? 'cancellation_unconfirmed' : result?.status });
       if (completed) {
         const acceptanceText = formatAcceptance(result?.acceptance);
         eventBus.publish(AgentEvent.artifactUpdate({
@@ -316,6 +356,7 @@ function makeLeadExecutor({ orchestrator }) {
         republishPause(effectivePause, `The answer was rejected: ${error?.message || String(error)}. The task is still waiting.`, 'input-error');
         return;
       }
+      emit('run_error', { errorName: error?.name || 'Error', message: String(error?.message || error) });
       let resumable = false;
       if (!cancellationRequested && error?.name !== 'UnconfirmedCancellationError') {
         try { resumable = Boolean(await orchestrator.isResumable?.(taskId)); } catch (_) { resumable = false; }
@@ -323,9 +364,11 @@ function makeLeadExecutor({ orchestrator }) {
       if (resumable) {
         const message = String(error?.message || error).slice(0, MAX_ERROR_PAUSE_CHARS);
         const pause = { kind: 'error', message, errorName: error?.name || 'Error' };
+        emit('run_paused', { pauseKind: 'error' });
         republishPause(pause, '', 'error-pause');
         return;
       }
+      emit(cancellationRequested ? 'run_canceled' : 'run_failed', cancellationRequested ? {} : { outcome: 'error' });
       eventBus.publish(AgentEvent.statusUpdate({
         taskId,
         contextId,
@@ -404,10 +447,10 @@ function rejectOverlappingLeadTask(executor) {
   };
 }
 
-function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore() }) {
+function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), events }) {
   const endpoint = new URL('/orchestrator', `${baseUrl}/`).toString();
   const card = makeLeadCard({ leadRole, endpoint });
-  const executor = makeLeadExecutor({ orchestrator });
+  const executor = makeLeadExecutor({ orchestrator, events });
   const requestHandler = new DefaultRequestHandler(card, taskStore, executor);
   app.use('/orchestrator/agent-card.json', agentCardHandler({ agentCardProvider: async () => AgentCard.toJSON(card) }));
   app.use('/orchestrator', authMiddleware, express.json(), rejectOverlappingLeadTask(executor), jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));
@@ -473,28 +516,49 @@ async function startServer({
       });
     }
     // Reconcile only once this process owns both the state file and the port.
-    await reconcileInterruptedTasks(state, { leadNamespace: 'orchestrator' });
+    const events = new EventJournal({ db: state.db });
+    events.ensureSchema();
+    const reconciledTasks = await reconcileInterruptedTasks(state, { leadNamespace: 'orchestrator' });
     const admission = new WriterAdmission({ db: state.db, workspace });
-    await admission.reconcileStale();
+    const reconciledWriters = await admission.reconcileStale();
     const actualPort = httpServer?.address()?.port ?? port;
+    events.record('server_started', { payload: {
+      port: actualPort,
+      pid: process.pid,
+      reconciledSpecialists: reconciledTasks?.specialists?.length ?? 0,
+      reconciledLead: reconciledTasks?.lead?.length ?? 0,
+    } });
+    for (const id of reconciledTasks?.lead || []) events.record('task_reconciled_interrupted', { runId: id, namespace: 'orchestrator', taskId: id, payload: { restarted: true } });
+    for (const ref of reconciledTasks?.specialistRefs || []) events.record('task_reconciled_interrupted', { namespace: ref.namespace, taskId: ref.taskId, payload: { restarted: false } });
+    if (reconciledWriters && (reconciledWriters.reconciled?.length || reconciledWriters.unresolved?.length)) {
+      events.record('writer_reconciled', { payload: {
+        reconciled: reconciledWriters.reconciled.length,
+        unresolved: reconciledWriters.unresolved.length,
+        count: reconciledWriters.reconciled.length + reconciledWriters.unresolved.length,
+      } });
+    }
     const baseUrl = `http://${HOST}:${actualPort}`;
     const leadRole = createLeadRole(profilesDir ? { profilesDir } : undefined);
     const usageLedger = new UsageLedger({ db: state.db });
     const orchestrator = orchestratorFactory({
-      appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger,
+      appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger,
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
       roles, appServer, workspace, baseUrl, admission, usageLedger, taskStoreFactory: (roleId) => createTaskStore(state, roleId),
     });
     const leadAgent = registerLead(app, {
-      leadRole, orchestrator, baseUrl, authMiddleware, taskStore: createTaskStore(state, 'orchestrator'),
+      leadRole, orchestrator, baseUrl, authMiddleware, taskStore: createTaskStore(state, 'orchestrator'), events,
     });
+    const dashboardAuth = createDashboardAuth({ db: state.db, getPort: () => actualPort });
+    mountDashboard(app, { auth: dashboardAuth, authMiddleware, state, roles, leadRole, workspace, events });
     return {
       app,
+      dashboardAuth,
       httpServer,
       appServer,
       state,
+      events,
       roles,
       specialistAgents,
       leadAgent,
@@ -563,6 +627,8 @@ function closeHttpServer(server) {
 if (require.main === module) {
   startServer().then((server) => {
     process.stdout.write(`Codex Universal A2A listening at http://${server.host}:${server.port}\n`);
+    const { code } = server.dashboardAuth.issuePairingCode();
+    process.stdout.write(`Dashboard pairing URL: ${server.dashboardAuth.pairingUrl(code)}\n`);
     const shutdown = () => server.close().finally(() => process.exit(0));
     process.once('SIGINT', shutdown);
     process.once('SIGTERM', shutdown);

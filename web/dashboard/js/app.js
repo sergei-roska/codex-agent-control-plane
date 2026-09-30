@@ -1,14 +1,17 @@
 // --- MAIN APPLICATION BOOTSTRAP ---
-function initApp() {
-  const roleFilter = document.getElementById('board-role-filter');
-  const monitorRoleFilter = document.getElementById('monitor-role-filter');
-  const ticketRoleSelect = document.getElementById('ticket-role');
+// One poll tick refreshes the board and, when open, the ticket detail modal.
+async function pollTick(signal) {
+  const jobs = [refreshBoard(signal)];
+  if (isTicketModalOpen()) jobs.push(refreshTicketDetail(signal));
+  await Promise.all(jobs);
+}
 
+async function initApp() {
+  // Preview tabs (Monitor) still use the prototype role list.
+  const monitorRoleFilter = document.getElementById('monitor-role-filter');
   ROLES.forEach(role => {
     const roleDisplayName = (typeof ROLE_NAMES !== 'undefined' && ROLE_NAMES[role]) ? ROLE_NAMES[role] : role;
-    if (roleFilter) roleFilter.innerHTML += `<option value="${role}">${roleDisplayName}</option>`;
-    if (monitorRoleFilter) monitorRoleFilter.innerHTML += `<option value="${role}">${roleDisplayName}</option>`;
-    if (ticketRoleSelect) ticketRoleSelect.innerHTML += `<option value="${role}">${roleDisplayName}</option>`;
+    if (monitorRoleFilter) monitorRoleFilter.appendChild(h('option', { text: roleDisplayName, attrs: { value: role } }));
   });
 
   // Global close modal triggers
@@ -27,12 +30,12 @@ function initApp() {
   initMonitorEvents();
   initDocsEvents();
   initTicketDetailEvents();
-  initTicketCreateEvents();
+  initNewTicketButton();
   initApprovalEvents();
   initProviderModalEvents();
   initBattlepassEvents();
 
-  // Initial renders
+  // Preview tabs render fixture data; Board and Sidebar render from the API.
   renderSidebarRoles();
   renderBoard();
   renderPipelines();
@@ -40,6 +43,10 @@ function initApp() {
   renderDecisionsAndEscalations();
   renderDocs();
   renderConnections();
+
+  Conn.subscribe(renderConnectionState);
+  await exchangePairingCode();
+  Poller.start(pollTick);
 }
 
 window.addEventListener('DOMContentLoaded', initApp);

@@ -7,6 +7,8 @@
     "start": "node src/server.js",
     "ask": "node src/cli.js",
     "usage": "node src/usage-report.js",
+    "dashboard:pair": "node src/dashboard-pair.js",
+    "dashboard:dev": "node scripts/dashboard-dev-server.js",
     "test": "node --test test/*.test.js"
   },
   "keywords": [],

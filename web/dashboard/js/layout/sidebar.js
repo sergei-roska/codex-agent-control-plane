@@ -1,58 +1,90 @@
-// --- SIDEBAR ROLES & CONTROLS ---
+// --- SIDEBAR ROLES (read-only, from /roles and cards.roleCounts) ---
+const GENERIC_ROLE_ICON = '\u{1F916}';
+
 function renderSidebarRoles() {
   const container = document.getElementById('roles-list-container');
   if (!container) return;
+  container.textContent = '';
 
-  container.innerHTML = ROLES.map(role => {
-    const counts = getRoleTicketCounts(role);
-    const lastModel = getLastModelAttempt(role);
-    const isChecked = state.roleSessions[role] ? 'checked' : '';
-    const icon = ROLE_ICONS[role] || '&#x1F916;';
-    const roleDisplayName = (typeof ROLE_NAMES !== 'undefined' && ROLE_NAMES[role]) ? ROLE_NAMES[role] : role;
+  if (!boardData.roles.length) {
+    container.appendChild(h('div', { class: 'empty-state', text: boardData.loaded ? 'No roles configured' : 'Loading roles...' }));
+    return;
+  }
 
-    return `
-      <div class="role-card" data-role="${role}" title="Role: ${roleDisplayName} (${role}) - ${counts.backlog} Backlog, ${counts.pending} Pending, ${counts.active} Active">
-        <div class="role-card-header">
-          <div class="role-card-title-group">
-            <span class="role-icon">${icon}</span>
-            <span class="role-name role-name-full">${roleDisplayName}</span>
-          </div>
-          <label class="switch" title="Toggle session routing inclusion">
-            <input type="checkbox" data-role="${role}" class="role-toggle" ${isChecked}>
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="role-counters">
-          <span class="count-chip count-backlog" title="Backlog: ${counts.backlog}">${counts.backlog}B</span>
-          <span class="count-chip count-pending" title="Pending: ${counts.pending}">${counts.pending}P</span>
-          <span class="count-chip count-active active-count" title="Active: ${counts.active}">${counts.active}A</span>
-          <span class="count-chip count-attention attention-count" title="Needs Attention: ${counts.attention}">${counts.attention}!</span>
-          <span class="count-chip count-closed" title="Closed: ${counts.closed}">${counts.closed}C</span>
-        </div>
-        <div class="role-last-model" title="${lastModel}">${lastModel}</div>
-      </div>
-    `;
-  }).join('');
+  const active = document.getElementById('board-role-filter');
+  const activeRole = active ? active.value : 'all';
 
-  container.querySelectorAll('.role-toggle').forEach(el => {
-    el.addEventListener('change', (e) => {
-      const role = e.target.dataset.role;
-      state.roleSessions[role] = e.target.checked;
+  boardData.roles.forEach(role => {
+    const count = isNumber(boardData.roleCounts[role.id]) ? boardData.roleCounts[role.id] : 0;
+    const config = [role.model, role.effort].filter(Boolean).join(' - ');
+    const card = h('div', {
+      class: 'role-card' + (activeRole === role.id ? ' selected' : ''),
+      attrs: { 'data-role': role.id, tabindex: '0', role: 'button' },
+      title: (role.description ? role.description + '. ' : '') + count + ' executions involve this role. Click to filter the board.'
+    }, [
+      h('div', { class: 'role-card-header' }, [
+        h('div', { class: 'role-card-title-group' }, [
+          h('span', { class: 'role-icon', text: GENERIC_ROLE_ICON }),
+          h('span', { class: 'role-name role-name-full', text: role.displayName || role.id })
+        ]),
+        h('span', { class: 'count-chip', text: count, title: 'Executions involving this role' })
+      ]),
+      h('div', { class: 'role-counters' }, [
+        h('span', { class: 'count-chip', text: role.kind || 'role' }),
+        h('span', { class: 'count-chip', text: role.sandbox || 'sandbox unknown' })
+      ])
+    ]);
+    if (config) card.appendChild(h('div', { class: 'role-last-model', text: config, title: config }));
+
+    const toggleFilter = () => {
+      const filter = document.getElementById('board-role-filter');
+      if (!filter) return;
+      filter.value = filter.value === role.id ? 'all' : role.id;
+      applyBoardFilters();
+      renderSidebarRoles();
+    };
+    card.addEventListener('click', toggleFilter);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleFilter(); }
     });
+    container.appendChild(card);
   });
+}
 
-  // Clicking role card in collapsed state filters the board by that role
-  container.querySelectorAll('.role-card').forEach(card => {
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.switch')) return;
-      const role = card.dataset.role;
-      const boardFilter = document.getElementById('board-role-filter');
-      if (boardFilter) {
-        boardFilter.value = role;
-        renderBoard();
-      }
-    });
-  });
+function renderHeaderContext() {
+  const ctx = boardData.context;
+  const project = ctx && ctx.project;
+  if (!project) return;
+  const title = document.getElementById('header-title');
+  if (title && project.displayName) {
+    title.textContent = project.displayName;
+    title.title = project.workspace || '';
+  }
+  if (project.displayName) document.title = project.displayName + ' | Role-Agent Console';
+}
+
+// Connection state drives the sidebar session line and the header status pill.
+function renderConnectionState(conn) {
+  const labels = {
+    connecting: 'Connecting...',
+    connected: 'Connected',
+    reconnecting: 'Reconnecting',
+    unpaired: 'Not paired'
+  };
+  const clock = formatClock(conn.lastSuccessAt);
+  let headerText = labels[conn.status];
+  if (conn.status === 'connected' && clock) headerText += ' - snapshot ' + clock;
+  if (conn.status === 'reconnecting') headerText += clock ? ' - last snapshot ' + clock : ' - no snapshot yet';
+
+  const pill = document.getElementById('conn-status');
+  if (pill) {
+    pill.textContent = headerText;
+    pill.className = 'conn-status conn-' + conn.status;
+  }
+  const sessionText = document.getElementById('session-status-text');
+  if (sessionText) sessionText.textContent = 'Session: ' + labels[conn.status].toLowerCase();
+  const dot = document.getElementById('session-status-dot');
+  if (dot) dot.className = 'status-dot conn-' + conn.status;
 }
 
 function initSidebarEvents() {

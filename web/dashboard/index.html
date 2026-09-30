@@ -26,13 +26,13 @@
         <button class="btn-close-sidebar" id="btn-close-sidebar" title="Close Sidebar">&times;</button>
       </div>
       <div class="session-status">
-        <div class="status-dot"></div>
-        <span>Operator: <strong>Serghei Rosca</strong></span>
+        <div class="status-dot conn-connecting" id="session-status-dot"></div>
+        <span id="session-status-text">Session: connecting...</span>
       </div>
     </div>
 
     <div class="sidebar-roles">
-      <div class="sidebar-section-title">9 Standard Roles</div>
+      <div class="sidebar-section-title">Runtime Roles</div>
       <div id="roles-list-container" style="display:flex; flex-direction:column; gap:12px;">
         <!-- Injected via JS -->
       </div>
@@ -42,6 +42,7 @@
       <button class="btn-new-ticket" id="btn-open-new-ticket" title="Create New Ticket">
         <span>+</span><span class="btn-new-ticket-text"> New Ticket</span>
       </button>
+      <div class="sidebar-note btn-new-ticket-text">Direct tickets arrive in M2</div>
     </div>
   </aside>
 
@@ -52,10 +53,11 @@
       <div class="header-top-row">
         <div class="header-title-group">
           <button class="btn-menu-toggle" id="btn-menu-toggle" title="Open Roles Menu">&#9776;</button>
-          <span class="header-title">Workspace</span>
+          <span class="header-title" id="header-title">Workspace</span>
         </div>
 
         <div class="header-actions">
+          <span class="conn-status conn-connecting" id="conn-status" role="status" aria-live="polite">Connecting...</span>
           <button class="btn-battlepass" id="btn-open-battlepass">
             <span>&#x26A1; <span class="bp-text-full">BATTLE </span>PASS</span>
             <span class="bp-lvl-badge" style="font-size:10px; background:rgba(0,0,0,0.28); padding:2px 6px; border-radius:6px; border:1px solid rgba(255,255,255,0.25);">LVL 12</span>
@@ -86,12 +88,14 @@
       <button class="view-btn" id="btn-view-role">Role View</button>
     </div>
     <div class="board-filters">
-      <input type="text" id="board-search" class="input-text" placeholder="Search tickets..." style="width: 220px;">
-      <select id="board-role-filter" class="select-input">
+      <input type="text" id="board-search" class="input-text" placeholder="Search title or task id..." maxlength="200" aria-label="Search executions" style="width: 220px;">
+      <select id="board-role-filter" class="select-input" aria-label="Filter by role">
         <option value="all">All Roles</option>
       </select>
     </div>
   </div>
+
+  <div id="board-status" class="board-status" role="status" aria-live="polite">Loading...</div>
 
   <!-- 5 Column View -->
   <div id="status-view-container" class="board-columns-container">
@@ -145,6 +149,7 @@
 
       <!-- T2: Pipelines View -->
       <section id="tab-pipelines" class="tab-pane">
+  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
   <div class="pipeline-list" id="pipelines-container">
     <!-- Injected via JS -->
   </div>
@@ -153,6 +158,7 @@
 
       <!-- T3: Monitor Console View -->
       <section id="tab-monitor" class="tab-pane">
+  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
   <div class="monitor-container">
     <div class="monitor-controls">
       <select id="monitor-type-filter" class="select-input">
@@ -180,6 +186,7 @@
 
       <!-- T4: Decisions & Escalations View -->
       <section id="tab-decisions" class="tab-pane">
+  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
   <div class="decisions-grid">
     <div class="split-pane">
       <div class="split-pane-header">
@@ -206,6 +213,7 @@
 
       <!-- T5: Docs Tab -->
       <section id="tab-docs" class="tab-pane">
+  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
   <div class="docs-layout">
     <div class="doc-sidebar" id="docs-list">
       <!-- Injected via JS -->
@@ -228,6 +236,7 @@
 
       <!-- T6: Connections & Model Defaults Tab -->
       <section id="tab-connections" class="tab-pane">
+  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
     <div style="font-weight: 700; font-size: 15px;">Connected AI Agent Providers</div>
     <button class="btn btn-primary" id="btn-add-provider">+ Add Provider</button>
@@ -260,123 +269,133 @@
 </div>
 
 <!-- Modals -->
-<!-- M1: Ticket Detail Modal -->
+<!-- M1: Ticket Detail Modal (read-only) -->
 <div class="modal-backdrop" id="modal-ticket-detail">
   <div class="modal-box large">
     <div class="modal-header">
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <span class="modal-title" id="m1-title">Ticket Detail</span>
+      <div style="display: flex; align-items: center; gap: 12px; min-width: 0;">
+        <span class="modal-title" id="m1-title">Execution detail</span>
         <span class="badge" id="m1-status-badge"></span>
       </div>
-      <button class="modal-close-btn" data-close="modal-ticket-detail">x</button>
+      <button class="modal-close-btn" data-close="modal-ticket-detail" aria-label="Close">x</button>
     </div>
 
     <div class="modal-body">
+      <div id="m1-load-note" class="detail-note" role="status"></div>
+
       <div class="sub-tabs">
         <button class="sub-tab-btn active" data-subtab="m1-overview">Overview</button>
-        <button class="sub-tab-btn" data-subtab="m1-runlog">Run Log</button>
-        <button class="sub-tab-btn" data-subtab="m1-turns">Turns (ReAct)</button>
-        <button class="sub-tab-btn" data-subtab="m1-attempts">Attempts (Audit Trail)</button>
-        <button class="sub-tab-btn" data-subtab="m1-metrics">Tokens &amp; Cost</button>
+        <button class="sub-tab-btn" data-subtab="m1-runlog">Events</button>
+        <button class="sub-tab-btn" data-subtab="m1-attempts">Attempts</button>
+        <button class="sub-tab-btn" data-subtab="m1-metrics">Usage</button>
       </div>
 
       <div id="m1-overview" class="sub-tab-pane active">
         <div class="modal-detail-grid">
-          <div>
+          <div class="detail-main">
             <h4 id="m1-ticket-title" style="margin-bottom: 10px; font-size: 15px;"></h4>
-            <p id="m1-ticket-desc" style="color: var(--text-secondary); font-size: 13px; line-height: 1.6; white-space: pre-wrap; margin-bottom: 14px;"></p>
-            
-            <div id="m1-ac-wrapper" style="display: none; margin-bottom: 14px; background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); padding: 12px; border-radius: 12px;">
-              <strong style="font-size: 12px; color: var(--accent-cyan); display: block; margin-bottom: 6px;">Acceptance Criteria:</strong>
-              <div id="m1-ticket-ac" style="font-size: 12px; color: var(--text-secondary); white-space: pre-wrap; line-height: 1.5;"></div>
+            <div class="detail-section">
+              <div class="detail-label">Goal / user messages</div>
+              <div id="m1-messages" class="detail-block"></div>
             </div>
-
-            <div id="m1-links-wrapper" style="display: none; margin-bottom: 14px; gap: 8px; flex-wrap: wrap;"></div>
-            <div id="m1-files-wrapper" style="display: none; font-size: 12px; color: var(--text-muted); font-family: var(--font-mono);"></div>
+            <div class="detail-section" id="m1-status-message-wrapper" style="display: none;">
+              <div class="detail-label">Status message</div>
+              <div id="m1-status-message" class="detail-block"></div>
+            </div>
+            <div class="detail-section" id="m1-pause-wrapper" style="display: none;">
+              <div class="detail-label">Pause information</div>
+              <div id="m1-pause" class="detail-block"></div>
+            </div>
+            <div class="detail-section" id="m1-acceptance-wrapper" style="display: none;">
+              <div class="detail-label">Acceptance</div>
+              <div id="m1-acceptance" class="detail-block"></div>
+            </div>
+            <div class="detail-section" id="m1-result-wrapper" style="display: none;">
+              <div class="detail-label">Result</div>
+              <pre id="m1-result" class="detail-block detail-pre"></pre>
+            </div>
           </div>
-          <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); padding: 16px; border-radius: 14px; display: flex; flex-direction: column; gap: 10px; font-size: 12px;">
-            <div><strong>Role:</strong> <span id="m1-role-text" class="badge badge-role"></span></div>
-            <div><strong>Priority:</strong> <span id="m1-priority-text"></span></div>
+          <div class="detail-side">
+            <div><strong>Kind:</strong> <span id="m1-kind-text"></span></div>
+            <div><strong>Task:</strong> <span id="m1-task-text" style="font-family: var(--font-mono); word-break: break-all;"></span></div>
+            <div><strong>Raw state:</strong> <span id="m1-raw-state" style="font-family: var(--font-mono);"></span></div>
+            <div><strong>Wait reason:</strong> <span id="m1-wait-text"></span></div>
+            <div><strong>Roles:</strong> <span id="m1-role-text" class="detail-chips"></span></div>
+            <div><strong>Attempts:</strong> <span id="m1-attempt-count"></span></div>
+            <div><strong>Human review:</strong> <span id="m1-human-review">unknown</span></div>
             <div><strong>Created:</strong> <span id="m1-created-text" style="color: var(--text-muted);"></span></div>
+            <div><strong>Updated:</strong> <span id="m1-updated-text" style="color: var(--text-muted);"></span></div>
           </div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">Unavailable actions</div>
+          <ul id="m1-unavailable-list" class="detail-list"></ul>
         </div>
       </div>
 
       <div id="m1-runlog" class="sub-tab-pane">
-        <div id="m1-runlog-list" style="font-family: var(--font-mono); font-size: 12px; display: flex; flex-direction: column; gap: 8px;"></div>
-      </div>
-
-      <div id="m1-turns" class="sub-tab-pane">
-        <div id="m1-turns-list" style="display: flex; flex-direction: column; gap: 12px; font-size: 13px;"></div>
+        <div id="m1-runlog-list" class="event-timeline"></div>
       </div>
 
       <div id="m1-attempts" class="sub-tab-pane">
         <div class="attempts-table-wrapper">
-        <table class="attempts-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Role</th>
-              <th>Provider</th>
-              <th>Model</th>
-              <th>Tier</th>
-              <th>Outcome</th>
-              <th>Started</th>
-              <th>Finished</th>
-            </tr>
-          </thead>
-          <tbody id="m1-attempts-body"></tbody>
-        </table>
+          <table class="attempts-table">
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Sandbox</th>
+                <th>Journal state</th>
+                <th>Task state</th>
+                <th>Outcome</th>
+                <th>Started</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody id="m1-attempts-body"></tbody>
+          </table>
         </div>
       </div>
 
       <div id="m1-metrics" class="sub-tab-pane">
-        <!-- KPI summary cards -->
+        <div id="m1-usage-coverage" class="detail-note"></div>
         <div class="metrics-stat-grid">
           <div class="metrics-stat-card">
-            <div class="metrics-stat-label">Total Cost</div>
-            <div id="m1-metric-cost" class="metrics-stat-value" style="color: var(--accent-green);">$0.0000</div>
-            <div id="m1-metric-cost-sub" class="metrics-stat-sub">In: $0.00 | Out: $0.00</div>
-          </div>
-          <div class="metrics-stat-card">
             <div class="metrics-stat-label">Total Tokens</div>
-            <div id="m1-metric-tokens" class="metrics-stat-value" style="color: var(--accent-cyan);">0</div>
-            <div id="m1-metric-tokens-sub" class="metrics-stat-sub">Prompt + Completion</div>
+            <div id="m1-metric-tokens" class="metrics-stat-value" style="color: var(--accent-cyan);"></div>
+            <div id="m1-metric-tokens-sub" class="metrics-stat-sub"></div>
           </div>
           <div class="metrics-stat-card">
-            <div class="metrics-stat-label">Prompt Caching</div>
-            <div id="m1-metric-cache" class="metrics-stat-value" style="color: var(--accent-purple);">0</div>
-            <div id="m1-metric-cache-sub" class="metrics-stat-sub">Cached Prompt Reads</div>
+            <div class="metrics-stat-label">Cached Input</div>
+            <div id="m1-metric-cache" class="metrics-stat-value" style="color: var(--accent-purple);"></div>
+            <div id="m1-metric-cache-sub" class="metrics-stat-sub"></div>
           </div>
           <div class="metrics-stat-card">
-            <div class="metrics-stat-label">Role Runs</div>
-            <div id="m1-metric-runs" class="metrics-stat-value" style="color: var(--accent-blue);">0</div>
-            <div id="m1-metric-runs-sub" class="metrics-stat-sub">Active Invocations</div>
+            <div class="metrics-stat-label">Turns</div>
+            <div id="m1-metric-turns" class="metrics-stat-value" style="color: var(--accent-blue);"></div>
+            <div id="m1-metric-turns-sub" class="metrics-stat-sub"></div>
+          </div>
+          <div class="metrics-stat-card">
+            <div class="metrics-stat-label">Elapsed</div>
+            <div id="m1-metric-elapsed" class="metrics-stat-value" style="color: var(--accent-green);"></div>
+            <div id="m1-metric-elapsed-sub" class="metrics-stat-sub"></div>
           </div>
         </div>
+        <div class="detail-note">Cost is not measured: usage is billed through a subscription. Values the runtime did not report are shown as unavailable, never as 0.</div>
 
-        <!-- Role Breakdown Section -->
         <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); padding: 14px; border-radius: 14px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
-            <strong style="font-size: 13px; color: var(--text-primary);">Role Cost &amp; Token Breakdown</strong>
-            <span id="m1-role-breakdown-count" style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">0 roles</span>
-          </div>
-
-          <!-- Visual Distribution Bar -->
-          <div id="m1-role-progress-bar" style="height: 10px; border-radius: 5px; overflow: hidden; display: flex; background: rgba(0,0,0,0.3); border: var(--nm-border-bevel); margin-bottom: 14px;"></div>
-
-          <!-- Breakdown Table -->
+          <strong style="font-size: 13px; color: var(--text-primary); display: block; margin-bottom: 10px;">Per-role usage</strong>
           <div class="attempts-table-wrapper">
             <table class="attempts-table">
               <thead>
                 <tr>
                   <th>Role</th>
-                  <th>Provider / Model</th>
-                  <th style="text-align: right;">Prompt</th>
-                  <th style="text-align: right;">Completion</th>
-                  <th style="text-align: right;">Total Tokens</th>
-                  <th style="text-align: right;">Cost (USD)</th>
-                  <th style="text-align: right;">Share</th>
+                  <th>Models</th>
+                  <th style="text-align: right;">Input</th>
+                  <th style="text-align: right;">Cached</th>
+                  <th style="text-align: right;">Output</th>
+                  <th style="text-align: right;">Total</th>
+                  <th style="text-align: right;">Turns</th>
+                  <th style="text-align: right;">Elapsed</th>
                 </tr>
               </thead>
               <tbody id="m1-metrics-role-body"></tbody>
@@ -387,128 +406,11 @@
     </div>
 
     <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+      <div id="m1-action-buttons" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;"></div>
       <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-        <button type="button" class="btn btn-secondary" id="m1-btn-return-backlog" style="color: var(--accent-cyan);" title="Return task to Backlog for specification and re-assignment">
-          <span>&#x21A9;</span> Return to Backlog
-        </button>
-        <button type="button" class="btn btn-secondary" id="m1-btn-edit-ticket" style="color: var(--accent-blue);" title="Edit task specifications and fields">
-          <span>&#x270E;</span> Edit Ticket
-        </button>
-      </div>
-      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-        <button type="button" class="btn" id="m1-btn-pause" style="display: none;" title="Pause / Resume task execution">
-          <span id="m1-btn-pause-icon">&#x23F8;</span> <span id="m1-btn-pause-text">Pause</span>
-        </button>
-        <button type="button" class="btn btn-danger" id="m1-btn-stop" style="display: none;" title="Stop active task execution">
-          <span>&#x25A0;</span> Stop
-        </button>
-        <button type="button" class="btn btn-danger" id="m1-btn-cancel" style="display: none;" title="Cancel task">
-          <span>&#x2715;</span> Cancel Task
-        </button>
         <button type="button" class="btn btn-secondary" data-close="modal-ticket-detail">Close</button>
       </div>
     </div>
-  </div>
-</div>
-
-
-<!-- M2: Create / Edit Ticket Modal -->
-<div class="modal-backdrop" id="modal-add-ticket">
-  <div class="modal-box" style="max-width: 680px; max-height: 90vh; overflow-y: auto;">
-    <div class="modal-header">
-      <span class="modal-title" id="modal-ticket-form-title">Create Ticket</span>
-      <button class="modal-close-btn" data-close="modal-add-ticket">x</button>
-    </div>
-    <form id="form-add-ticket">
-      <input type="hidden" id="ticket-edit-id" value="">
-      <div class="modal-body" style="display: flex; flex-direction: column; gap: 14px;">
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-          <div class="form-group">
-            <label class="form-label" for="ticket-role">Assign Role *</label>
-            <select id="ticket-role" class="select-input" required style="width: 100%;"></select>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label" for="ticket-status-input">Status / Column *</label>
-            <select id="ticket-status-input" class="select-input" required style="width: 100%;">
-              <option value="backlog" selected>Backlog (Ideation &amp; Spec)</option>
-              <option value="pending">Pending (Ready for Agent)</option>
-              <option value="in_progress">In Progress</option>
-              <option value="paused">Paused</option>
-              <option value="waiting_human">Needs Review / Human Auth</option>
-              <option value="blocked">Blocked</option>
-              <option value="done">Done</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="ticket-title-input">Title *</label>
-          <input type="text" id="ticket-title-input" class="input-text" placeholder="e.g. Implement rate limiter MCP tool" required style="width: 100%;">
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="ticket-desc-input">Description</label>
-          <textarea id="ticket-desc-input" class="form-textarea" rows="3" placeholder="Detailed objectives and context..." style="width: 100%; resize: vertical;"></textarea>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="ticket-ac-input">Acceptance Criteria</label>
-          <textarea id="ticket-ac-input" class="form-textarea" rows="3" placeholder="- Given [context] When [action] Then [outcome]&#10;- All automated unit tests pass&#10;- Linters and security checks pass without warnings" style="width: 100%; resize: vertical;"></textarea>
-        </div>
-
-        <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 12px;">
-          <div class="form-group">
-            <label class="form-label" for="ticket-priority">Priority</label>
-            <select id="ticket-priority" class="select-input" style="width: 100%;">
-              <option value="Normal" selected>Normal</option>
-              <option value="High">High</option>
-              <option value="Low">Low</option>
-            </select>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label" for="ticket-jira-issue">Jira Issue Key / URL</label>
-            <input type="text" id="ticket-jira-issue" class="input-text" placeholder="PROJ-101 or https://jira.domain/browse/PROJ-101" style="width: 100%;">
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" style="margin-bottom: 6px; display: block;">Integrations &amp; References (Supports multiple values separated by commas or new lines)</label>
-          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
-            <div>
-              <label class="form-label" for="ticket-jira-parents" style="font-size: 11px; opacity: 0.85;">Parent Jira / Epic / Story</label>
-              <textarea id="ticket-jira-parents" class="form-textarea" rows="2" placeholder="EPIC-10, PROJ-200, https://..." style="width: 100%; resize: vertical; font-size: 12px;"></textarea>
-            </div>
-            <div>
-              <label class="form-label" for="ticket-confluence" style="font-size: 11px; opacity: 0.85;">Confluence Spec URLs</label>
-              <textarea id="ticket-confluence" class="form-textarea" rows="2" placeholder="https://confluence.../spec1, https://confluence.../spec2" style="width: 100%; resize: vertical; font-size: 12px;"></textarea>
-            </div>
-            <div>
-              <label class="form-label" for="ticket-figma" style="font-size: 11px; opacity: 0.85;">Figma Design URLs</label>
-              <textarea id="ticket-figma" class="form-textarea" rows="2" placeholder="https://figma.com/file/..., https://figma.com/file/..." style="width: 100%; resize: vertical; font-size: 12px;"></textarea>
-            </div>
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="ticket-attachments-input">Upload Files &amp; Screenshots</label>
-          <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); border-radius: 12px; padding: 14px; text-align: center;">
-            <input type="file" id="ticket-attachments-input" multiple accept="image/*,.pdf,.doc,.docx,.txt,.md,.json" style="display: none;">
-            <button type="button" class="btn btn-secondary" id="btn-browse-attachments" style="margin-bottom: 6px;">Browse Files / Screenshots</button>
-            <div id="ticket-attachments-preview" style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">No files attached</div>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer" style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
-        <button type="button" class="btn btn-secondary" id="btn-ticket-form-view-details" style="display: none;">View Details &amp; Audit</button>
-        <div style="display: flex; gap: 8px; margin-left: auto;">
-          <button type="button" class="btn btn-secondary" data-close="modal-add-ticket">Cancel</button>
-          <button type="submit" class="btn btn-primary" id="btn-submit-ticket" disabled>Create Ticket</button>
-        </div>
-      </div>
-    </form>
   </div>
 </div>
 
@@ -805,8 +707,25 @@
 </div>
 
 
+<!-- Full-screen panel shown on any 401 from the dashboard API -->
+<div class="not-paired-panel" id="not-paired-panel" role="alertdialog" aria-labelledby="not-paired-title" aria-describedby="not-paired-body">
+  <div class="not-paired-box">
+    <h2 id="not-paired-title">Not paired</h2>
+    <p id="not-paired-body">This browser does not have a dashboard session. To pair it:</p>
+    <ol>
+      <li>Run <code>npm run dashboard:pair</code> in the project directory.</li>
+      <li>Open the printed URL in this browser.</li>
+    </ol>
+    <p class="not-paired-hint">Pairing codes are single-use and expire after 10 minutes. Sessions last 7 days.</p>
+    <p id="not-paired-detail" class="not-paired-detail"></p>
+  </div>
+</div>
+
+
 <!-- Modular Scripts -->
 <script src="js/state.js"></script>
+<script src="js/util.js"></script>
+<script src="js/api.js"></script>
 <script src="js/theme.js"></script>
 <script src="js/layout/sidebar.js"></script>
 <script src="js/layout/header.js"></script>

@@ -12,88 +12,12 @@ const { ClientFactory } = require('@a2a-js/sdk/client');
 const { TaskState } = require('@a2a-js/sdk');
 const { startServer } = require('../src/server');
 const { LeadOrchestrator } = require('../src/lead-orchestrator');
-const { DECISION_SCHEMA } = require('../src/contracts');
+const { decision, assignment, humanDecision, makeFakeAppServer } = require('./fixtures/fake-app-server');
 
 // Test files run in parallel processes; keep workspace locks private to this process.
 process.env.CODEX_A2A_WORKSPACE_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-ws-lock-'));
 
 const BUILDER_FILE = 'src/feature.txt';
-
-function decision(overrides = {}) {
-  return { action: 'finish', assignments: [], final: '', resolutions: [], humanInput: null, ...overrides };
-}
-
-function assignment(role, overrides = {}) {
-  return {
-    role,
-    objective: `Do the ${role} work`,
-    allowedFiles: [],
-    inputs: ['goal text'],
-    evidence: ['none yet'],
-    acceptanceCriteria: ['done'],
-    checks: ['none'],
-    stopConditions: ['blocked'],
-    ...overrides,
-  };
-}
-
-function workerReport(summary = 'All good') {
-  return {
-    outcome: 'completed',
-    summary,
-    filesChanged: [],
-    filesInspected: ['README.md'],
-    checks: [],
-    risks: [],
-    scopeExpansion: [],
-    decisionRequest: null,
-  };
-}
-
-function humanDecision() {
-  return decision({
-    action: 'request_human_input',
-    humanInput: {
-      reason: 'product_choice',
-      question: 'Which flavour?',
-      options: [{ id: 'a', description: 'Option A' }, { id: 'b', description: 'Option B' }],
-      recommendation: 'a',
-      evidenceChecked: ['README.md'],
-      independentWork: '',
-      relatedDecisionIds: [],
-    },
-  });
-}
-
-/**
- * Fake Codex app server. leadScript entries are decision objects or functions
- * (call, input) => decision | throws. workerImpl(call) handles specialists.
- */
-function makeFakeAppServer({ leadScript = [], workerImpl } = {}) {
-  const queue = [...leadScript];
-  const fake = {
-    leadCalls: [],
-    workerCalls: [],
-    async start() {},
-    async getAccount() { return { account: { type: 'chatgpt' } }; },
-    async close() {},
-    async readRateLimits() { return null; },
-    async run({ role, input, threadId, outputSchema, signal }) {
-      const isLead = role?.name === 'orch-lead' || outputSchema === DECISION_SCHEMA;
-      if (isLead) {
-        fake.leadCalls.push({ input, threadId });
-        const next = queue.shift();
-        if (next === undefined) throw new Error('lead script exhausted');
-        const value = typeof next === 'function' ? next(fake.leadCalls.length, input) : next;
-        return { threadId: threadId || 'lead-thread', status: 'completed', text: JSON.stringify(value) };
-      }
-      fake.workerCalls.push({ role: role.name, input });
-      if (workerImpl) return workerImpl({ role: role.name, input, signal });
-      return { threadId: 'worker-thread', status: 'completed', text: JSON.stringify(workerReport()) };
-    },
-  };
-  return fake;
-}
 
 function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `a2a-e2e-${prefix}-`));
@@ -192,6 +116,30 @@ test('e2e real stack', async (suite) => {
       assert.equal(appServer.workerCalls[0].role, 'orch-explorer');
       assert.equal(appServer.leadCalls.length, 2);
       assert.match(appServer.leadCalls[1].input, /All good/);
+    });
+  });
+
+  await suite.test('event journal records submitted, dispatch and completed for one run', async (t) => {
+    const appServer = makeFakeAppServer({
+      leadScript: [
+        decision({ action: 'dispatch', assignments: [assignment('orch-explorer')] }),
+        decision({ final: 'Done.' }),
+      ],
+    });
+    await withStack(t, appServer, async (stack) => {
+      const task = await send(stack, { text: 'Explore the repo' });
+      assert.equal(task.status.state, TaskState.TASK_STATE_COMPLETED);
+      const events = stack.runtime.events.listByRun(task.id);
+      const types = events.map((e) => e.type);
+      assert.equal(types[0], 'run_submitted');
+      assert.ok(types.includes('dispatch_submitting'));
+      assert.ok(types.includes('dispatch_submitted'));
+      assert.ok(types.includes('dispatch_finished'));
+      assert.equal(types.at(-1), 'run_completed');
+      assert.ok(events.every((e) => e.runId === task.id));
+      assert.equal(events.at(-1).payload.disposition, 'not_required');
+      assert.equal(stack.runtime.events.health().status, 'ok');
+      assert.equal(JSON.stringify(events).includes('Explore the repo'), false);
     });
   });
 

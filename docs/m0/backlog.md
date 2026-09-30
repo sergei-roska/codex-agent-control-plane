@@ -13,13 +13,13 @@ independent ownership; integration and dependent decisions stay with the lead.
 
 | ID / state | Deliverable and proposed surface | Dependencies | Acceptance and verification |
 | --- | --- | --- | --- |
-| M1-01 / planned | Local browser pairing/session module; server integration; focused auth tests | M0 decisions D-09 | One-use expiring code, hashed storage, strict cookie, Host/Origin and rate limits; unauthenticated data inaccessible; A2A auth unchanged |
-| M1-02 / planned | Read-only durable projection adapter plus tests; src/durable-store.js only if necessary | M0 contracts | Composite identity, root/standalone vs worker relation, pagination/filter validation; completed never implies human acceptance; no mutation from reads |
-| M1-03 / planned | GET /api/dashboard/v1 endpoints with projection integration | M1-01, M1-02 | Context/cards/detail/roles/attempts/usage follow contracts; bounded queries, errors sanitized, API reads cannot dispatch or alter execution |
-| M1-04 / planned | Runtime diagnostic event correlation and recovery evidence in runtime/store modules | M0 D-12; coordinate ownership with M1-02 | Durable IDs/sequence, startup/submission/dispatch/completion/error/recovery; exporter/observer failure does not fail execution; no duplicate usage |
-| M1-05 / planned | Build/serve independent web/dashboard and integrate polling client | M1-03 | Assets and builds never use writable artifacts path; session expiry/reload/backoff/last-success visible; no secrets embedded |
-| M1-06 / planned | Board/sidebar/detail wiring in web/dashboard | M1-05, M1-04 | Real cards/search/roles/counts/attempts/available usage; remove role toggles; no invented nine-role activation, cache/cost or hidden reasoning; unavailable mutations explained |
-| M1-07 / planned | Browser/CLI/restart acceptance and lead review | M1-01 through M1-06 | Existing CLI run appears/progresses after reload/restart; failed/input-required/unknown/empty cases truthful; reference manifest unchanged; focused regressions pass |
+| M1-01 / complete | Local browser pairing/session module; server integration; focused auth tests | M0 decisions D-09 | One-use expiring code, hashed storage, strict cookie, Host/Origin and rate limits; unauthenticated data inaccessible; A2A auth unchanged |
+| M1-02 / complete | Read-only durable projection adapter plus tests; src/durable-store.js only if necessary | M0 contracts | Composite identity, root/standalone vs worker relation, pagination/filter validation; completed never implies human acceptance; no mutation from reads |
+| M1-03 / complete | GET /api/dashboard/v1 endpoints with projection integration | M1-01, M1-02 | Context/cards/detail/roles/attempts/usage follow contracts; bounded queries, errors sanitized, API reads cannot dispatch or alter execution |
+| M1-04 / complete | Runtime diagnostic event correlation and recovery evidence in runtime/store modules | M0 D-12; coordinate ownership with M1-02 | Durable IDs/sequence, startup/submission/dispatch/completion/error/recovery; exporter/observer failure does not fail execution; no duplicate usage |
+| M1-05 / complete | Build/serve independent web/dashboard and integrate polling client | M1-03 | Assets and builds never use writable artifacts path; session expiry/reload/backoff/last-success visible; no secrets embedded |
+| M1-06 / complete | Board/sidebar/detail wiring in web/dashboard | M1-05, M1-04 | Real cards/search/roles/counts/attempts/available usage; remove role toggles; no invented nine-role activation, cache/cost or hidden reasoning; unavailable mutations explained |
+| M1-07 / complete | Browser/CLI/restart acceptance and lead review | M1-01 through M1-06 | Existing CLI run appears/progresses after reload/restart; failed/input-required/unknown/empty cases truthful; reference manifest unchanged; focused regressions pass |
 
 M1 auth tests are necessary because read access exposes private local task data.
 Projection/lifecycle tests should assert meaningful boundaries, not duplicate UI

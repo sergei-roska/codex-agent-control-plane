@@ -399,7 +399,7 @@ async function reconcileInterruptedTasks(state, { leadNamespace = 'orchestrator'
     'SELECT tenant, owner, id FROM tasks WHERE status_state IN (?, ?) ORDER BY owner, id',
   ).all('TASK_STATE_SUBMITTED', 'TASK_STATE_WORKING');
 
-  const result = { specialists: [], lead: [] };
+  const result = { specialists: [], lead: [], specialistRefs: [] };
   const stores = new Map();
   for (const { tenant, owner, id } of candidates) {
     if (!stores.has(owner)) stores.set(owner, createTaskStore(state, owner));
@@ -426,6 +426,7 @@ async function reconcileInterruptedTasks(state, { leadNamespace = 'orchestrator'
         timestamp: new Date().toISOString(),
       };
       result.specialists.push(id);
+      result.specialistRefs.push({ namespace: owner, taskId: id });
     }
     await store.save(task, context);
   }
