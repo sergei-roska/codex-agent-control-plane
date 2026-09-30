@@ -1,0 +1,68 @@
+<!-- M4: Battle Pass Easter Egg Modal -->
+<div class="modal-backdrop" id="modal-battlepass">
+  <div class="modal-box large">
+    <div class="modal-header">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 16px;">*</span>
+        <span class="modal-title" style="color: var(--accent-amber);">AGENT BATTLE PASS - SEASON 1: SYNTAX SURGE</span>
+      </div>
+      <button class="modal-close-btn" data-close="modal-battlepass">x</button>
+    </div>
+    <div class="modal-body">
+      <div class="bp-banner">
+        <div>
+          <div style="font-size: 16px; font-weight: 700; color: var(--accent-amber);">UPGRADE TO PASS PRO</div>
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Unlock Neumorphic Tactile Skins and 2x Multi-Agent Throughput.</div>
+        </div>
+        <button class="btn-battlepass" id="btn-buy-battlepass" style="padding: 10px 18px; font-size: 13px;">
+          UNLOCK ($9.99 / MO)
+        </button>
+      </div>
+
+      <div>
+        <div style="display: flex; justify-content: space-between; font-size: 12px; font-weight: 600;">
+          <span>Current Level: <strong>LVL 12 (Prompt Architect)</strong></span>
+          <span style="color: var(--accent-amber);">4,500 / 10,000 XP</span>
+        </div>
+        <div class="bp-xp-bar">
+          <div class="bp-xp-fill"></div>
+        </div>
+      </div>
+
+      <div style="font-size: 13px; font-weight: 700;">Season 1 Reward Tiers</div>
+      <div class="bp-tier-track">
+        <div class="bp-tier-card unlocked">
+          <span class="bp-tier-tag" style="color: var(--accent-green);">CLAIMED</span>
+          <div style="font-size: 20px;">*</div>
+          <div style="font-weight: 600; font-size: 12px;">Soft Neumorphic Glow</div>
+          <div style="font-size: 11px; color: var(--text-muted);">Tier 1 (Free)</div>
+        </div>
+
+        <div class="bp-tier-card unlocked">
+          <span class="bp-tier-tag" style="color: var(--accent-green);">CLAIMED</span>
+          <div style="font-size: 20px;">*</div>
+          <div style="font-weight: 600; font-size: 12px;">Cyber-Architect Avatar</div>
+          <div style="font-size: 11px; color: var(--text-muted);">Tier 5 (Free)</div>
+        </div>
+
+        <div class="bp-tier-card">
+          <span class="bp-tier-tag" style="color: var(--accent-amber);">LVL 25</span>
+          <div style="font-size: 20px;">*</div>
+          <div style="font-weight: 600; font-size: 12px;">DeepSeek V3 Ultra Speed</div>
+          <div style="font-size: 11px; color: var(--text-muted);">Tier 25 (Pass)</div>
+        </div>
+
+        <div class="bp-tier-card">
+          <span class="bp-tier-tag" style="color: var(--accent-purple);">LVL 50</span>
+          <div style="font-size: 20px;">*</div>
+          <div style="font-weight: 600; font-size: 12px;">Zero-Latency Local Daemon</div>
+          <div style="font-size: 11px; color: var(--text-muted);">Tier 50 (Mythic)</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="modal-battlepass">Close</button>
+      <button class="btn btn-primary" id="btn-claim-daily-xp">+500 Daily Quest XP</button>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,99 @@
+<!-- M2: Create / Edit Ticket Modal -->
+<div class="modal-backdrop" id="modal-add-ticket">
+  <div class="modal-box" style="max-width: 680px; max-height: 90vh; overflow-y: auto;">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-ticket-form-title">Create Ticket</span>
+      <button class="modal-close-btn" data-close="modal-add-ticket">x</button>
+    </div>
+    <form id="form-add-ticket">
+      <input type="hidden" id="ticket-edit-id" value="">
+      <div class="modal-body" style="display: flex; flex-direction: column; gap: 14px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div class="form-group">
+            <label class="form-label" for="ticket-role">Assign Role *</label>
+            <select id="ticket-role" class="select-input" required style="width: 100%;"></select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="ticket-status-input">Status / Column *</label>
+            <select id="ticket-status-input" class="select-input" required style="width: 100%;">
+              <option value="backlog" selected>Backlog (Ideation &amp; Spec)</option>
+              <option value="pending">Pending (Ready for Agent)</option>
+              <option value="in_progress">In Progress</option>
+              <option value="paused">Paused</option>
+              <option value="waiting_human">Needs Review / Human Auth</option>
+              <option value="blocked">Blocked</option>
+              <option value="done">Done</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-title-input">Title *</label>
+          <input type="text" id="ticket-title-input" class="input-text" placeholder="e.g. Implement rate limiter MCP tool" required style="width: 100%;">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-desc-input">Description</label>
+          <textarea id="ticket-desc-input" class="form-textarea" rows="3" placeholder="Detailed objectives and context..." style="width: 100%; resize: vertical;"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-ac-input">Acceptance Criteria</label>
+          <textarea id="ticket-ac-input" class="form-textarea" rows="3" placeholder="- Given [context] When [action] Then [outcome]&#10;- All automated unit tests pass&#10;- Linters and security checks pass without warnings" style="width: 100%; resize: vertical;"></textarea>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 12px;">
+          <div class="form-group">
+            <label class="form-label" for="ticket-priority">Priority</label>
+            <select id="ticket-priority" class="select-input" style="width: 100%;">
+              <option value="Normal" selected>Normal</option>
+              <option value="High">High</option>
+              <option value="Low">Low</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="ticket-jira-issue">Jira Issue Key / URL</label>
+            <input type="text" id="ticket-jira-issue" class="input-text" placeholder="PROJ-101 or https://jira.domain/browse/PROJ-101" style="width: 100%;">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" style="margin-bottom: 6px; display: block;">Integrations &amp; References (Supports multiple values separated by commas or new lines)</label>
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+            <div>
+              <label class="form-label" for="ticket-jira-parents" style="font-size: 11px; opacity: 0.85;">Parent Jira / Epic / Story</label>
+              <textarea id="ticket-jira-parents" class="form-textarea" rows="2" placeholder="EPIC-10, PROJ-200, https://..." style="width: 100%; resize: vertical; font-size: 12px;"></textarea>
+            </div>
+            <div>
+              <label class="form-label" for="ticket-confluence" style="font-size: 11px; opacity: 0.85;">Confluence Spec URLs</label>
+              <textarea id="ticket-confluence" class="form-textarea" rows="2" placeholder="https://confluence.../spec1, https://confluence.../spec2" style="width: 100%; resize: vertical; font-size: 12px;"></textarea>
+            </div>
+            <div>
+              <label class="form-label" for="ticket-figma" style="font-size: 11px; opacity: 0.85;">Figma Design URLs</label>
+              <textarea id="ticket-figma" class="form-textarea" rows="2" placeholder="https://figma.com/file/..., https://figma.com/file/..." style="width: 100%; resize: vertical; font-size: 12px;"></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-attachments-input">Upload Files &amp; Screenshots</label>
+          <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); border-radius: 12px; padding: 14px; text-align: center;">
+            <input type="file" id="ticket-attachments-input" multiple accept="image/*,.pdf,.doc,.docx,.txt,.md,.json" style="display: none;">
+            <button type="button" class="btn btn-secondary" id="btn-browse-attachments" style="margin-bottom: 6px;">Browse Files / Screenshots</button>
+            <div id="ticket-attachments-preview" style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">No files attached</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+        <button type="button" class="btn btn-secondary" id="btn-ticket-form-view-details" style="display: none;">View Details &amp; Audit</button>
+        <div style="display: flex; gap: 8px; margin-left: auto;">
+          <button type="button" class="btn btn-secondary" data-close="modal-add-ticket">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-ticket" disabled>Create Ticket</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>

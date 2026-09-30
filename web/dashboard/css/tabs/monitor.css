@@ -1,0 +1,62 @@
+/* Monitor Tab Console */
+.monitor-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 16px;
+}
+
+.monitor-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.console-log {
+  flex: 1;
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-in);
+  border: var(--nm-border-inset);
+  border-radius: 18px;
+  padding: 18px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.log-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  line-height: 1.5;
+}
+
+.log-time { color: var(--text-muted); font-size: 11px; }
+
+.log-type-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+.log-type-badge.agent {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent-blue);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+.log-type-badge.system {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent-amber);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.log-role { color: var(--accent-purple); font-weight: 600; }
+.log-role.role-system { color: var(--accent-amber); font-weight: 700; }
+.log-ticket { color: var(--accent-blue); font-weight: 600; }
+.log-msg { color: var(--text-primary); }
+.log-msg.error { color: var(--accent-red); }
+.log-msg.warning { color: var(--accent-amber); }

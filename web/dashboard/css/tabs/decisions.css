@@ -1,0 +1,404 @@
+/* Decisions & Escalations */
+.decisions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  height: 100%;
+}
+
+.split-pane {
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-out);
+  border: var(--nm-border-bevel);
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.split-pane-header {
+  padding: 16px 20px;
+  border-bottom: var(--nm-border-bevel);
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--heading-color);
+}
+
+.split-pane-content {
+  padding: 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.adr-card, .escalation-card {
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-out-sm);
+  border: var(--nm-border-bevel);
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all 0.2s ease;
+}
+
+.adr-card:hover {
+  box-shadow: var(--nm-shadow-out);
+}
+
+.escalation-card {
+  cursor: pointer;
+  position: relative;
+  border-left: 4px solid var(--accent-amber);
+}
+
+.escalation-card:hover {
+  box-shadow: var(--nm-shadow-out);
+  transform: translateY(-2px);
+}
+
+/* Escalation Card Types */
+.escalation-card[data-type="command_approval"] {
+  border-left-color: var(--accent-amber);
+}
+
+.escalation-card[data-type="decision_fork"] {
+  border-left-color: var(--accent-purple);
+}
+
+.escalation-card[data-type="requirements_clarification"] {
+  border-left-color: var(--accent-blue);
+}
+
+.escalation-card[data-type="credentials_request"] {
+  border-left-color: var(--accent-cyan);
+}
+
+.escalation-card[data-type="circuit_breaker"] {
+  border-left-color: var(--accent-red);
+}
+
+.escalation-card[data-type="security_override"] {
+  border-left-color: var(--accent-crimson);
+}
+
+.escalation-card[data-type="scope_baseline_change"] {
+  border-left-color: var(--accent-green);
+}
+
+/* Card Elements */
+.esc-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.esc-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.esc-card-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--heading-color);
+  line-height: 1.4;
+}
+
+.esc-card-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.esc-card-preview {
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-in-sm);
+  border: var(--nm-border-inset);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-cyan);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.esc-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: var(--nm-border-bevel);
+}
+
+.esc-action-btn-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-blue);
+}
+
+/* Type Pill Badges */
+.badge-esc-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.badge-esc-type.type-command {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent-amber);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.badge-esc-type.type-decision {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--accent-purple);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+.badge-esc-type.type-requirements {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent-blue);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.badge-esc-type.type-credentials {
+  background: rgba(6, 182, 212, 0.15);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+}
+
+.badge-esc-type.type-circuit {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.badge-esc-type.type-security {
+  background: rgba(225, 29, 72, 0.15);
+  color: var(--accent-crimson);
+  border: 1px solid rgba(225, 29, 72, 0.3);
+}
+
+.badge-esc-type.type-scope {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-green);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+/* Modal Form Controls for Escalations */
+.esc-info-banner {
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-in-sm);
+  border: var(--nm-border-inset);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.esc-option-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.esc-option-card {
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-out-sm);
+  border: var(--nm-border-bevel);
+  border-radius: 12px;
+  padding: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  transition: all 0.2s ease;
+}
+
+.esc-option-card:hover {
+  box-shadow: var(--nm-shadow-out);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.esc-option-card.selected {
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-in-sm);
+  border: 1.5px solid var(--accent-blue);
+}
+
+.esc-radio-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.esc-option-card.selected .esc-radio-dot {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue);
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+}
+
+.esc-radio-dot-inner {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ffffff;
+  display: none;
+}
+
+.esc-option-card.selected .esc-radio-dot-inner {
+  display: block;
+}
+
+.esc-option-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.esc-option-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--heading-color);
+}
+
+.esc-option-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.esc-tag-list {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.esc-tag {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  border: var(--nm-border-bevel);
+  font-weight: 600;
+}
+
+.esc-tag.recommended {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-green);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+/* Traceback & Terminal Box */
+.esc-terminal-box {
+  background: #0d1117;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #f85149;
+  line-height: 1.5;
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+/* Secret Input with Eye Toggle */
+.esc-secret-wrapper {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: 100%;
+}
+
+.esc-secret-wrapper input {
+  padding-right: 44px;
+  font-family: var(--font-mono);
+}
+
+.esc-toggle-pwd-btn {
+  position: absolute;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  font-size: 14px;
+}
+
+.esc-toggle-pwd-btn:hover {
+  color: var(--text-primary);
+}
+
+/* Comparison Metric Cards */
+.esc-comparison-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.esc-comparison-card {
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-in-sm);
+  border: var(--nm-border-inset);
+  padding: 12px 14px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.esc-comparison-card.highlight {
+  border: 1px solid var(--accent-amber);
+}
+
+.esc-comparison-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.esc-comparison-value {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--heading-color);
+}
+

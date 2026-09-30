@@ -1,0 +1,39 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  transition: background-color 0.25s ease, box-shadow 0.25s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--nm-bg);
+  color: var(--text-primary);
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+}
+
+#app {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  padding: 14px;
+  gap: 16px;
+}
+
+/* Custom Scrollbar for Neumorphic depth */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--nm-bg);
+  box-shadow: var(--nm-shadow-in-sm);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-out-sm);
+  border-radius: 8px;
+}

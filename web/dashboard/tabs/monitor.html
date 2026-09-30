@@ -1,0 +1,24 @@
+<section id="tab-monitor" class="tab-pane">
+  <div class="monitor-container">
+    <div class="monitor-controls">
+      <select id="monitor-type-filter" class="select-input">
+        <option value="all">All Types</option>
+        <option value="agent">Agent Logs</option>
+        <option value="system">System Logs</option>
+      </select>
+      <select id="monitor-role-filter" class="select-input">
+        <option value="all">All Roles</option>
+      </select>
+      <select id="monitor-level-filter" class="select-input">
+        <option value="all">All Levels</option>
+        <option value="info">Info</option>
+        <option value="warning">Warning</option>
+        <option value="error">Error</option>
+      </select>
+      <button class="btn btn-secondary" id="btn-clear-logs" style="margin-left: auto;">Clear Log</button>
+    </div>
+    <div class="console-log" id="monitor-logs">
+      <!-- Injected via JS -->
+    </div>
+  </div>
+</section>

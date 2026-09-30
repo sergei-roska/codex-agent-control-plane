@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Role-Agent Console | Neumorphic Orchestrator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- Mobile Sidebar Overlay Backdrop -->
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+  <!-- S1: Neumorphic Left Sidebar -->
+  <aside class="sidebar" id="main-sidebar">
+    <div class="sidebar-header">
+      <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+        <div class="app-branding">
+          <div class="brand-icon" id="btn-toggle-sidebar-collapse" title="Toggle Sidebar Width">RC</div>
+          <span class="branding-text">Role-Agent Console</span>
+        </div>
+        <button class="btn-close-sidebar" id="btn-close-sidebar" title="Close Sidebar">&times;</button>
+      </div>
+      <div class="session-status">
+        <div class="status-dot"></div>
+        <span>Operator: <strong>Serghei Rosca</strong></span>
+      </div>
+    </div>
+
+    <div class="sidebar-roles">
+      <div class="sidebar-section-title">9 Standard Roles</div>
+      <div id="roles-list-container" style="display:flex; flex-direction:column; gap:12px;">
+        <!-- Injected via JS -->
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="btn-new-ticket" id="btn-open-new-ticket" title="Create New Ticket">
+        <span>+</span><span class="btn-new-ticket-text"> New Ticket</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main Workspace -->
+  <main class="main-area">
+    <!-- Header with 6 Tabs & Controls -->
+    <header class="header-bar">
+      <div class="header-top-row">
+        <div class="header-title-group">
+          <button class="btn-menu-toggle" id="btn-menu-toggle" title="Open Roles Menu">&#9776;</button>
+          <span class="header-title">Workspace</span>
+        </div>
+
+        <div class="header-actions">
+          <button class="btn-battlepass" id="btn-open-battlepass">
+            <span>&#x26A1; <span class="bp-text-full">BATTLE </span>PASS</span>
+            <span class="bp-lvl-badge" style="font-size:10px; background:rgba(0,0,0,0.28); padding:2px 6px; border-radius:6px; border:1px solid rgba(255,255,255,0.25);">LVL 12</span>
+          </button>
+          <button class="btn btn-secondary" id="btn-theme-toggle" title="Toggle Light / Dark Mode">
+            <span id="theme-icon">LIGHT</span>
+          </button>
+        </div>
+      </div>
+
+      <nav class="nav-tabs">
+        <button class="tab-btn active" data-tab="tab-board">Board</button>
+        <button class="tab-btn" data-tab="tab-pipelines">Pipelines</button>
+        <button class="tab-btn" data-tab="tab-monitor">Monitor</button>
+        <button class="tab-btn" data-tab="tab-decisions">Decisions & Escalations</button>
+        <button class="tab-btn" data-tab="tab-docs">Docs</button>
+        <button class="tab-btn" data-tab="tab-connections">Connections & Models</button>
+      </nav>
+    </header>
+
+    <!-- Content Pages -->
+    <div class="tab-content-area">
+      <!-- T1: Board View -->
+      <section id="tab-board" class="tab-pane active">
+  <div class="board-controls">
+    <div class="board-view-toggle">
+      <button class="view-btn active" id="btn-view-status">Status View</button>
+      <button class="view-btn" id="btn-view-role">Role View</button>
+    </div>
+    <div class="board-filters">
+      <input type="text" id="board-search" class="input-text" placeholder="Search tickets..." style="width: 220px;">
+      <select id="board-role-filter" class="select-input">
+        <option value="all">All Roles</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- 5 Column View -->
+  <div id="status-view-container" class="board-columns-container">
+    <div class="board-column" data-col="backlog">
+      <div class="column-header">
+        <span>Backlog</span>
+        <span class="column-count" id="count-backlog">0</span>
+      </div>
+      <div class="column-cards" id="cards-backlog"></div>
+    </div>
+
+    <div class="board-column" data-col="pending">
+      <div class="column-header">
+        <span>Pending</span>
+        <span class="column-count" id="count-pending">0</span>
+      </div>
+      <div class="column-cards" id="cards-pending"></div>
+    </div>
+
+    <div class="board-column" data-col="in_progress">
+      <div class="column-header">
+        <span>In Progress</span>
+        <span class="column-count" id="count-in_progress">0</span>
+      </div>
+      <div class="column-cards" id="cards-in_progress"></div>
+    </div>
+
+    <div class="board-column" data-col="needs_attention">
+      <div class="column-header">
+        <span>Needs Attention</span>
+        <span class="column-count" id="count-needs_attention">0</span>
+      </div>
+      <div class="column-cards" id="cards-needs_attention"></div>
+    </div>
+
+    <div class="board-column" data-col="closed">
+      <div class="column-header">
+        <span>Closed</span>
+        <span class="column-count" id="count-closed">0</span>
+      </div>
+      <div class="column-cards" id="cards-closed"></div>
+    </div>
+  </div>
+
+  <!-- Role Swimlanes View -->
+  <div id="role-view-container" class="role-lanes-container" style="display: none;">
+    <!-- Injected via JS -->
+  </div>
+</section>
+
+
+      <!-- T2: Pipelines View -->
+      <section id="tab-pipelines" class="tab-pane">
+  <div class="pipeline-list" id="pipelines-container">
+    <!-- Injected via JS -->
+  </div>
+</section>
+
+
+      <!-- T3: Monitor Console View -->
+      <section id="tab-monitor" class="tab-pane">
+  <div class="monitor-container">
+    <div class="monitor-controls">
+      <select id="monitor-type-filter" class="select-input">
+        <option value="all">All Types</option>
+        <option value="agent">Agent Logs</option>
+        <option value="system">System Logs</option>
+      </select>
+      <select id="monitor-role-filter" class="select-input">
+        <option value="all">All Roles</option>
+      </select>
+      <select id="monitor-level-filter" class="select-input">
+        <option value="all">All Levels</option>
+        <option value="info">Info</option>
+        <option value="warning">Warning</option>
+        <option value="error">Error</option>
+      </select>
+      <button class="btn btn-secondary" id="btn-clear-logs" style="margin-left: auto;">Clear Log</button>
+    </div>
+    <div class="console-log" id="monitor-logs">
+      <!-- Injected via JS -->
+    </div>
+  </div>
+</section>
+
+
+      <!-- T4: Decisions & Escalations View -->
+      <section id="tab-decisions" class="tab-pane">
+  <div class="decisions-grid">
+    <div class="split-pane">
+      <div class="split-pane-header">
+        <span>Architectural Decision Records (ADR)</span>
+        <span class="badge badge-status" id="adr-count">2 Decisions</span>
+      </div>
+      <div class="split-pane-content" id="adr-list">
+        <!-- Injected via JS -->
+      </div>
+    </div>
+
+    <div class="split-pane">
+      <div class="split-pane-header">
+        <span>Pending Human Escalations</span>
+        <span class="badge badge-status waiting_human" id="escalation-count">1 Action Required</span>
+      </div>
+      <div class="split-pane-content" id="escalation-list">
+        <!-- Injected via JS -->
+      </div>
+    </div>
+  </div>
+</section>
+
+
+      <!-- T5: Docs Tab -->
+      <section id="tab-docs" class="tab-pane">
+  <div class="docs-layout">
+    <div class="doc-sidebar" id="docs-list">
+      <!-- Injected via JS -->
+    </div>
+    <div class="doc-viewer">
+      <div class="doc-viewer-header">
+        <span id="active-doc-title" style="font-weight: 700;">Document Viewer</span>
+        <div style="display: flex; gap: 10px;">
+          <button class="btn btn-secondary" id="btn-toggle-raw">Raw / Rendered</button>
+          <button class="btn btn-secondary" id="btn-copy-doc">Copy</button>
+        </div>
+      </div>
+      <div class="doc-viewer-body" id="doc-viewer-content">
+        <!-- Injected via JS -->
+      </div>
+    </div>
+  </div>
+</section>
+
+
+      <!-- T6: Connections & Model Defaults Tab -->
+      <section id="tab-connections" class="tab-pane">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+    <div style="font-weight: 700; font-size: 15px;">Connected AI Agent Providers</div>
+    <button class="btn btn-primary" id="btn-add-provider">+ Add Provider</button>
+  </div>
+  <div class="connections-grid" id="providers-grid">
+    <!-- Injected via JS -->
+  </div>
+
+  <div style="margin-bottom: 14px; font-weight: 700; font-size: 15px;">Per-Role Model Defaults</div>
+  <div class="role-defaults-table-container">
+    <table class="role-defaults-table">
+      <thead>
+        <tr>
+          <th>Role</th>
+          <th>Assigned Provider</th>
+          <th>Model Name</th>
+          <th>Model Tier</th>
+          <th style="text-align: center;">Routing Status</th>
+        </tr>
+      </thead>
+      <tbody id="role-defaults-body">
+        <!-- Injected via JS -->
+      </tbody>
+    </table>
+  </div>
+</section>
+
+    </div>
+  </main>
+</div>
+
+<!-- Modals -->
+<!-- M1: Ticket Detail Modal -->
+<div class="modal-backdrop" id="modal-ticket-detail">
+  <div class="modal-box large">
+    <div class="modal-header">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <span class="modal-title" id="m1-title">Ticket Detail</span>
+        <span class="badge" id="m1-status-badge"></span>
+      </div>
+      <button class="modal-close-btn" data-close="modal-ticket-detail">x</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="sub-tabs">
+        <button class="sub-tab-btn active" data-subtab="m1-overview">Overview</button>
+        <button class="sub-tab-btn" data-subtab="m1-runlog">Run Log</button>
+        <button class="sub-tab-btn" data-subtab="m1-turns">Turns (ReAct)</button>
+        <button class="sub-tab-btn" data-subtab="m1-attempts">Attempts (Audit Trail)</button>
+        <button class="sub-tab-btn" data-subtab="m1-metrics">Tokens &amp; Cost</button>
+      </div>
+
+      <div id="m1-overview" class="sub-tab-pane active">
+        <div class="modal-detail-grid">
+          <div>
+            <h4 id="m1-ticket-title" style="margin-bottom: 10px; font-size: 15px;"></h4>
+            <p id="m1-ticket-desc" style="color: var(--text-secondary); font-size: 13px; line-height: 1.6; white-space: pre-wrap; margin-bottom: 14px;"></p>
+            
+            <div id="m1-ac-wrapper" style="display: none; margin-bottom: 14px; background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); padding: 12px; border-radius: 12px;">
+              <strong style="font-size: 12px; color: var(--accent-cyan); display: block; margin-bottom: 6px;">Acceptance Criteria:</strong>
+              <div id="m1-ticket-ac" style="font-size: 12px; color: var(--text-secondary); white-space: pre-wrap; line-height: 1.5;"></div>
+            </div>
+
+            <div id="m1-links-wrapper" style="display: none; margin-bottom: 14px; gap: 8px; flex-wrap: wrap;"></div>
+            <div id="m1-files-wrapper" style="display: none; font-size: 12px; color: var(--text-muted); font-family: var(--font-mono);"></div>
+          </div>
+          <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); padding: 16px; border-radius: 14px; display: flex; flex-direction: column; gap: 10px; font-size: 12px;">
+            <div><strong>Role:</strong> <span id="m1-role-text" class="badge badge-role"></span></div>
+            <div><strong>Priority:</strong> <span id="m1-priority-text"></span></div>
+            <div><strong>Created:</strong> <span id="m1-created-text" style="color: var(--text-muted);"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="m1-runlog" class="sub-tab-pane">
+        <div id="m1-runlog-list" style="font-family: var(--font-mono); font-size: 12px; display: flex; flex-direction: column; gap: 8px;"></div>
+      </div>
+
+      <div id="m1-turns" class="sub-tab-pane">
+        <div id="m1-turns-list" style="display: flex; flex-direction: column; gap: 12px; font-size: 13px;"></div>
+      </div>
+
+      <div id="m1-attempts" class="sub-tab-pane">
+        <div class="attempts-table-wrapper">
+        <table class="attempts-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Role</th>
+              <th>Provider</th>
+              <th>Model</th>
+              <th>Tier</th>
+              <th>Outcome</th>
+              <th>Started</th>
+              <th>Finished</th>
+            </tr>
+          </thead>
+          <tbody id="m1-attempts-body"></tbody>
+        </table>
+        </div>
+      </div>
+
+      <div id="m1-metrics" class="sub-tab-pane">
+        <!-- KPI summary cards -->
+        <div class="metrics-stat-grid">
+          <div class="metrics-stat-card">
+            <div class="metrics-stat-label">Total Cost</div>
+            <div id="m1-metric-cost" class="metrics-stat-value" style="color: var(--accent-green);">$0.0000</div>
+            <div id="m1-metric-cost-sub" class="metrics-stat-sub">In: $0.00 | Out: $0.00</div>
+          </div>
+          <div class="metrics-stat-card">
+            <div class="metrics-stat-label">Total Tokens</div>
+            <div id="m1-metric-tokens" class="metrics-stat-value" style="color: var(--accent-cyan);">0</div>
+            <div id="m1-metric-tokens-sub" class="metrics-stat-sub">Prompt + Completion</div>
+          </div>
+          <div class="metrics-stat-card">
+            <div class="metrics-stat-label">Prompt Caching</div>
+            <div id="m1-metric-cache" class="metrics-stat-value" style="color: var(--accent-purple);">0</div>
+            <div id="m1-metric-cache-sub" class="metrics-stat-sub">Cached Prompt Reads</div>
+          </div>
+          <div class="metrics-stat-card">
+            <div class="metrics-stat-label">Role Runs</div>
+            <div id="m1-metric-runs" class="metrics-stat-value" style="color: var(--accent-blue);">0</div>
+            <div id="m1-metric-runs-sub" class="metrics-stat-sub">Active Invocations</div>
+          </div>
+        </div>
+
+        <!-- Role Breakdown Section -->
+        <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); padding: 14px; border-radius: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+            <strong style="font-size: 13px; color: var(--text-primary);">Role Cost &amp; Token Breakdown</strong>
+            <span id="m1-role-breakdown-count" style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">0 roles</span>
+          </div>
+
+          <!-- Visual Distribution Bar -->
+          <div id="m1-role-progress-bar" style="height: 10px; border-radius: 5px; overflow: hidden; display: flex; background: rgba(0,0,0,0.3); border: var(--nm-border-bevel); margin-bottom: 14px;"></div>
+
+          <!-- Breakdown Table -->
+          <div class="attempts-table-wrapper">
+            <table class="attempts-table">
+              <thead>
+                <tr>
+                  <th>Role</th>
+                  <th>Provider / Model</th>
+                  <th style="text-align: right;">Prompt</th>
+                  <th style="text-align: right;">Completion</th>
+                  <th style="text-align: right;">Total Tokens</th>
+                  <th style="text-align: right;">Cost (USD)</th>
+                  <th style="text-align: right;">Share</th>
+                </tr>
+              </thead>
+              <tbody id="m1-metrics-role-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <button type="button" class="btn btn-secondary" id="m1-btn-return-backlog" style="color: var(--accent-cyan);" title="Return task to Backlog for specification and re-assignment">
+          <span>&#x21A9;</span> Return to Backlog
+        </button>
+        <button type="button" class="btn btn-secondary" id="m1-btn-edit-ticket" style="color: var(--accent-blue);" title="Edit task specifications and fields">
+          <span>&#x270E;</span> Edit Ticket
+        </button>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <button type="button" class="btn" id="m1-btn-pause" style="display: none;" title="Pause / Resume task execution">
+          <span id="m1-btn-pause-icon">&#x23F8;</span> <span id="m1-btn-pause-text">Pause</span>
+        </button>
+        <button type="button" class="btn btn-danger" id="m1-btn-stop" style="display: none;" title="Stop active task execution">
+          <span>&#x25A0;</span> Stop
+        </button>
+        <button type="button" class="btn btn-danger" id="m1-btn-cancel" style="display: none;" title="Cancel task">
+          <span>&#x2715;</span> Cancel Task
+        </button>
+        <button type="button" class="btn btn-secondary" data-close="modal-ticket-detail">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- M2: Create / Edit Ticket Modal -->
+<div class="modal-backdrop" id="modal-add-ticket">
+  <div class="modal-box" style="max-width: 680px; max-height: 90vh; overflow-y: auto;">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-ticket-form-title">Create Ticket</span>
+      <button class="modal-close-btn" data-close="modal-add-ticket">x</button>
+    </div>
+    <form id="form-add-ticket">
+      <input type="hidden" id="ticket-edit-id" value="">
+      <div class="modal-body" style="display: flex; flex-direction: column; gap: 14px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div class="form-group">
+            <label class="form-label" for="ticket-role">Assign Role *</label>
+            <select id="ticket-role" class="select-input" required style="width: 100%;"></select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="ticket-status-input">Status / Column *</label>
+            <select id="ticket-status-input" class="select-input" required style="width: 100%;">
+              <option value="backlog" selected>Backlog (Ideation &amp; Spec)</option>
+              <option value="pending">Pending (Ready for Agent)</option>
+              <option value="in_progress">In Progress</option>
+              <option value="paused">Paused</option>
+              <option value="waiting_human">Needs Review / Human Auth</option>
+              <option value="blocked">Blocked</option>
+              <option value="done">Done</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-title-input">Title *</label>
+          <input type="text" id="ticket-title-input" class="input-text" placeholder="e.g. Implement rate limiter MCP tool" required style="width: 100%;">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-desc-input">Description</label>
+          <textarea id="ticket-desc-input" class="form-textarea" rows="3" placeholder="Detailed objectives and context..." style="width: 100%; resize: vertical;"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-ac-input">Acceptance Criteria</label>
+          <textarea id="ticket-ac-input" class="form-textarea" rows="3" placeholder="- Given [context] When [action] Then [outcome]&#10;- All automated unit tests pass&#10;- Linters and security checks pass without warnings" style="width: 100%; resize: vertical;"></textarea>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 12px;">
+          <div class="form-group">
+            <label class="form-label" for="ticket-priority">Priority</label>
+            <select id="ticket-priority" class="select-input" style="width: 100%;">
+              <option value="Normal" selected>Normal</option>
+              <option value="High">High</option>
+              <option value="Low">Low</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="ticket-jira-issue">Jira Issue Key / URL</label>
+            <input type="text" id="ticket-jira-issue" class="input-text" placeholder="PROJ-101 or https://jira.domain/browse/PROJ-101" style="width: 100%;">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" style="margin-bottom: 6px; display: block;">Integrations &amp; References (Supports multiple values separated by commas or new lines)</label>
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+            <div>
+              <label class="form-label" for="ticket-jira-parents" style="font-size: 11px; opacity: 0.85;">Parent Jira / Epic / Story</label>
+              <textarea id="ticket-jira-parents" class="form-textarea" rows="2" placeholder="EPIC-10, PROJ-200, https://..." style="width: 100%; resize: vertical; font-size: 12px;"></textarea>
+            </div>
+            <div>
+              <label class="form-label" for="ticket-confluence" style="font-size: 11px; opacity: 0.85;">Confluence Spec URLs</label>
+              <textarea id="ticket-confluence" class="form-textarea" rows="2" placeholder="https://confluence.../spec1, https://confluence.../spec2" style="width: 100%; resize: vertical; font-size: 12px;"></textarea>
+            </div>
+            <div>
+              <label class="form-label" for="ticket-figma" style="font-size: 11px; opacity: 0.85;">Figma Design URLs</label>
+              <textarea id="ticket-figma" class="form-textarea" rows="2" placeholder="https://figma.com/file/..., https://figma.com/file/..." style="width: 100%; resize: vertical; font-size: 12px;"></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-attachments-input">Upload Files &amp; Screenshots</label>
+          <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); border-radius: 12px; padding: 14px; text-align: center;">
+            <input type="file" id="ticket-attachments-input" multiple accept="image/*,.pdf,.doc,.docx,.txt,.md,.json" style="display: none;">
+            <button type="button" class="btn btn-secondary" id="btn-browse-attachments" style="margin-bottom: 6px;">Browse Files / Screenshots</button>
+            <div id="ticket-attachments-preview" style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">No files attached</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+        <button type="button" class="btn btn-secondary" id="btn-ticket-form-view-details" style="display: none;">View Details &amp; Audit</button>
+        <div style="display: flex; gap: 8px; margin-left: auto;">
+          <button type="button" class="btn btn-secondary" data-close="modal-add-ticket">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-ticket" disabled>Create Ticket</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+
+<!-- M3: Approval Modal -->
+<div class="modal-backdrop" id="modal-approval">
+  <div class="modal-box large">
+    <div class="modal-header">
+      <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <span class="modal-title" id="m3-modal-title" style="color: var(--accent-amber);">Human Authorization Required</span>
+        <span class="badge" id="m3-category-badge"></span>
+      </div>
+      <button class="modal-close-btn" data-close="modal-approval">x</button>
+    </div>
+    <div class="modal-body" id="m3-dynamic-body">
+      <!-- Injected dynamically via JS based on escalation type -->
+    </div>
+    <div class="modal-footer" id="m3-dynamic-footer">
+      <!-- Injected dynamically via JS -->
+    </div>
+  </div>
+</div>
+
+
+<!-- M5: Add / Configure Agent Provider Modal (Opencode / Kilocode Style) -->
+<div class="modal-backdrop" id="modal-add-provider">
+  <div class="modal-box large" style="max-height: 90vh; overflow-y: auto;">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="provider-modal-title">Add New Agent Provider</div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Configure provider endpoint, credentials (API Key or OAuth 2.0), and model routing</div>
+      </div>
+      <button class="modal-close-btn" data-close="modal-add-provider" aria-label="Close modal">x</button>
+    </div>
+
+    <form id="form-add-provider">
+      <input type="hidden" id="provider-edit-id" value="">
+      <div class="modal-body" style="gap: 16px;">
+        <!-- Provider Presets Selector -->
+        <div>
+          <label class="form-label" style="margin-bottom: 8px; display: block;">Select Provider Template</label>
+          <div class="provider-preset-grid" id="provider-preset-grid">
+            <button type="button" class="preset-card active" data-preset="claude">
+              <span class="preset-icon">&#x1F916;</span>
+              <span class="preset-name">Claude</span>
+              <span class="preset-badge">Anthropic</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="codex">
+              <span class="preset-icon">&#x26A1;</span>
+              <span class="preset-name">Codex</span>
+              <span class="preset-badge">OpenAI</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="gemini">
+              <span class="preset-icon">&#x2728;</span>
+              <span class="preset-name">Gemini</span>
+              <span class="preset-badge">Google</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="deepseek">
+              <span class="preset-icon">&#x1F9E0;</span>
+              <span class="preset-name">DeepSeek</span>
+              <span class="preset-badge">Reasoner</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="qwen">
+              <span class="preset-icon">&#x1F30F;</span>
+              <span class="preset-name">Qwen 2.5</span>
+              <span class="preset-badge">Alibaba</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="ollama">
+              <span class="preset-icon">&#x1F4BB;</span>
+              <span class="preset-name">Ollama</span>
+              <span class="preset-badge">Local Node</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="groq">
+              <span class="preset-icon">&#x26A1;</span>
+              <span class="preset-name">Groq</span>
+              <span class="preset-badge">Fast LPU</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="mistral">
+              <span class="preset-icon">&#x1F3A8;</span>
+              <span class="preset-name">Mistral AI</span>
+              <span class="preset-badge">Codestral</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="xai">
+              <span class="preset-icon">&#x2728;</span>
+              <span class="preset-name">xAI (Grok)</span>
+              <span class="preset-badge">Grok-2</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="openrouter">
+              <span class="preset-icon">&#x1F500;</span>
+              <span class="preset-name">OpenRouter</span>
+              <span class="preset-badge">Unified</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="together">
+              <span class="preset-icon">&#x1F91D;</span>
+              <span class="preset-name">Together AI</span>
+              <span class="preset-badge">Cloud OSS</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="lmstudio">
+              <span class="preset-icon">&#x1F4BE;</span>
+              <span class="preset-name">LM Studio</span>
+              <span class="preset-badge">Local vLLM</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="custom">
+              <span class="preset-icon">&#x2699;&#xFE0F;</span>
+              <span class="preset-name">Custom</span>
+              <span class="preset-badge">OpenAI API</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Connection Method Selector -->
+        <div class="form-group">
+          <label class="form-label">Connection Method *</label>
+          <div class="method-segmented-group" id="method-segmented-group">
+            <label class="method-option active" id="method-option-api">
+              <input type="radio" name="provider-method" value="api" checked style="display:none;">
+              <span class="method-icon">&#x1F511;</span>
+              <span class="method-title">API Key</span>
+              <span class="method-desc">Direct Token / Custom Base URL</span>
+            </label>
+            <label class="method-option" id="method-option-oauth">
+              <input type="radio" name="provider-method" value="oauth" style="display:none;">
+              <span class="method-icon">&#x1F310;</span>
+              <span class="method-title">OAuth 2.0</span>
+              <span class="method-desc">Cloud CLI Handshake &amp; Auth</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Provider Name -->
+        <div class="form-group">
+          <label class="form-label" for="provider-name-input">Provider Display Name *</label>
+          <input type="text" id="provider-name-input" class="input-text" placeholder="e.g. Gemini (Work), Claude (Personal), Ollama Local" value="Claude (Anthropic)" required>
+          <div id="provider-name-error" style="display: none; color: var(--accent-red); font-size: 11px; margin-top: 4px; font-weight: 600;"></div>
+        </div>
+
+        <!-- Section: API Method Fields -->
+        <div id="section-api-fields" style="display: flex; flex-direction: column; gap: 14px;">
+          <div class="form-group">
+            <label class="form-label" for="provider-api-key">API Key *</label>
+            <div style="position: relative; display: flex; align-items: center;">
+              <input type="password" id="provider-api-key" class="input-text" placeholder="sk-ant-... or sk-..." style="width: 100%; padding-right: 42px;">
+              <button type="button" id="btn-toggle-key-visibility" class="btn-input-icon" title="Toggle Visibility" style="position: absolute; right: 8px; background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 14px;">&#x1F441;</button>
+            </div>
+            <div style="font-size: 11px; color: var(--text-muted);">Key is stored in session credentials and encrypted CLI daemon state.</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="provider-endpoint-input">API Base URL / Endpoint</label>
+            <input type="text" id="provider-endpoint-input" class="input-text" placeholder="https://api.anthropic.com/v1" value="https://api.anthropic.com/v1">
+          </div>
+        </div>
+
+        <!-- Section: OAuth Method Fields -->
+        <div id="section-oauth-fields" style="display: none; flex-direction: column; gap: 14px;">
+          <div class="form-group">
+            <label class="form-label" for="provider-oauth-profile">OAuth Environment / Profile</label>
+            <select id="provider-oauth-profile" class="select-input">
+              <!-- Populated dynamically via JS -->
+            </select>
+          </div>
+
+          <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); border-radius: 12px; padding: 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+            <div>
+              <div style="font-weight: 600; font-size: 13px; color: var(--text-primary);" id="oauth-status-text">Ready for OAuth Handshake</div>
+              <div style="font-size: 11px; color: var(--text-muted);">Click to initiate browser / CLI authorization session</div>
+            </div>
+            <button type="button" class="btn btn-secondary" id="btn-oauth-authorize">Authorize Now</button>
+          </div>
+        </div>
+
+        <!-- Model Routing -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div class="form-group">
+            <label class="form-label" for="provider-model-select">Default Model *</label>
+            <select id="provider-model-select" class="select-input">
+              <!-- Populated dynamically via JS -->
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="provider-custom-model">Custom Model Identifier</label>
+            <input type="text" id="provider-custom-model" class="input-text" placeholder="Optional custom model ID">
+          </div>
+        </div>
+
+        <!-- Advanced Options Toggle -->
+        <div>
+          <button type="button" id="btn-toggle-provider-advanced" class="btn-link" style="background: none; border: none; color: var(--accent-blue); font-size: 12px; font-weight: 600; cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 4px;">
+            <span id="advanced-chevron">&#x25B6;</span> Advanced Configuration (Headers, Timeout, Context)
+          </button>
+
+          <div id="section-provider-advanced" style="display: none; margin-top: 10px; flex-direction: column; gap: 12px; padding: 14px; background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); border-radius: 12px;">
+            <div class="form-group">
+              <label class="form-label" for="provider-custom-headers">Custom HTTP Headers (JSON format)</label>
+              <input type="text" id="provider-custom-headers" class="input-text" placeholder='{"HTTP-Referer": "https://myapp.internal"}'>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div class="form-group">
+                <label class="form-label" for="provider-timeout-input">Timeout (seconds)</label>
+                <input type="number" id="provider-timeout-input" class="input-text" value="60" min="5" max="600">
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="provider-tag-input">Card Category Tag</label>
+                <input type="text" id="provider-tag-input" class="input-text" placeholder="e.g. Flagship / Reasoning, Asian / Reasoner" value="Flagship">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Test Connection Result Notification -->
+        <div id="provider-test-result" style="display: none; padding: 10px 14px; border-radius: 10px; font-size: 12px; font-family: var(--font-mono);"></div>
+      </div>
+
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <button type="button" class="btn btn-secondary" id="btn-test-provider-connection">Test Handshake</button>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" class="btn btn-secondary" data-close="modal-add-provider">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-add-provider">Add Provider</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+
+<!-- M4: Battle Pass Easter Egg Modal -->
+<div class="modal-backdrop" id="modal-battlepass">
+  <div class="modal-box large">
+    <div class="modal-header">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 16px;">*</span>
+        <span class="modal-title" style="color: var(--accent-amber);">AGENT BATTLE PASS - SEASON 1: SYNTAX SURGE</span>
+      </div>
+      <button class="modal-close-btn" data-close="modal-battlepass">x</button>
+    </div>
+    <div class="modal-body">
+      <div class="bp-banner">
+        <div>
+          <div style="font-size: 16px; font-weight: 700; color: var(--accent-amber);">UPGRADE TO PASS PRO</div>
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Unlock Neumorphic Tactile Skins and 2x Multi-Agent Throughput.</div>
+        </div>
+        <button class="btn-battlepass" id="btn-buy-battlepass" style="padding: 10px 18px; font-size: 13px;">
+          UNLOCK ($9.99 / MO)
+        </button>
+      </div>
+
+      <div>
+        <div style="display: flex; justify-content: space-between; font-size: 12px; font-weight: 600;">
+          <span>Current Level: <strong>LVL 12 (Prompt Architect)</strong></span>
+          <span style="color: var(--accent-amber);">4,500 / 10,000 XP</span>
+        </div>
+        <div class="bp-xp-bar">
+          <div class="bp-xp-fill"></div>
+        </div>
+      </div>
+
+      <div style="font-size: 13px; font-weight: 700;">Season 1 Reward Tiers</div>
+      <div class="bp-tier-track">
+        <div class="bp-tier-card unlocked">
+          <span class="bp-tier-tag" style="color: var(--accent-green);">CLAIMED</span>
+          <div style="font-size: 20px;">*</div>
+          <div style="font-weight: 600; font-size: 12px;">Soft Neumorphic Glow</div>
+          <div style="font-size: 11px; color: var(--text-muted);">Tier 1 (Free)</div>
+        </div>
+
+        <div class="bp-tier-card unlocked">
+          <span class="bp-tier-tag" style="color: var(--accent-green);">CLAIMED</span>
+          <div style="font-size: 20px;">*</div>
+          <div style="font-weight: 600; font-size: 12px;">Cyber-Architect Avatar</div>
+          <div style="font-size: 11px; color: var(--text-muted);">Tier 5 (Free)</div>
+        </div>
+
+        <div class="bp-tier-card">
+          <span class="bp-tier-tag" style="color: var(--accent-amber);">LVL 25</span>
+          <div style="font-size: 20px;">*</div>
+          <div style="font-weight: 600; font-size: 12px;">DeepSeek V3 Ultra Speed</div>
+          <div style="font-size: 11px; color: var(--text-muted);">Tier 25 (Pass)</div>
+        </div>
+
+        <div class="bp-tier-card">
+          <span class="bp-tier-tag" style="color: var(--accent-purple);">LVL 50</span>
+          <div style="font-size: 20px;">*</div>
+          <div style="font-weight: 600; font-size: 12px;">Zero-Latency Local Daemon</div>
+          <div style="font-size: 11px; color: var(--text-muted);">Tier 50 (Mythic)</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" data-close="modal-battlepass">Close</button>
+      <button class="btn btn-primary" id="btn-claim-daily-xp">+500 Daily Quest XP</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Modular Scripts -->
+<script src="js/state.js"></script>
+<script src="js/theme.js"></script>
+<script src="js/layout/sidebar.js"></script>
+<script src="js/layout/header.js"></script>
+<script src="js/tabs/board.js"></script>
+<script src="js/tabs/pipelines.js"></script>
+<script src="js/tabs/monitor.js"></script>
+<script src="js/tabs/decisions.js"></script>
+<script src="js/tabs/docs.js"></script>
+<script src="js/tabs/connections.js"></script>
+<script src="js/modals/ticket-modal.js"></script>
+<script src="js/modals/approval.js"></script>
+<script src="js/modals/provider-modal.js"></script>
+<script src="js/modals/battlepass.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

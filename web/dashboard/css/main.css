@@ -1,0 +1,32 @@
+/* Master Stylesheet Manifest */
+
+/* Variables and Themes */
+@import "variables.css";
+
+/* Base and Reset */
+@import "base.css";
+
+/* Component Styles */
+@import "components/buttons.css";
+@import "components/inputs.css";
+@import "components/badges.css";
+@import "components/switches.css";
+
+/* Layout Styles */
+@import "layout/sidebar.css";
+@import "layout/header.css";
+
+/* Tab Styles */
+@import "tabs/board.css";
+@import "tabs/pipelines.css";
+@import "tabs/monitor.css";
+@import "tabs/decisions.css";
+@import "tabs/docs.css";
+@import "tabs/connections.css";
+
+/* Modal Styles */
+@import "modals/modals.css";
+@import "modals/battlepass.css";
+
+/* Responsive Breakpoints */
+@import "responsive.css";

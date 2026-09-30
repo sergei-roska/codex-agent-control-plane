@@ -1,0 +1,53 @@
+/* Badges & Chips */
+.badge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-in-sm);
+  border: var(--nm-border-inset);
+  display: inline-flex;
+  align-items: center;
+}
+
+.badge-role { color: var(--accent-purple); }
+.badge-status.in_progress { color: var(--accent-blue); }
+.badge-status.blocked { color: var(--accent-amber); }
+.badge-status.paused { color: var(--accent-amber); }
+.badge-status.waiting_human { color: var(--accent-red); }
+.badge-status.done { color: var(--accent-green); }
+.badge-status.cancelled { color: var(--accent-red); }
+.badge-status.stopped { color: var(--text-muted); }
+.badge-status.pending { color: var(--text-secondary); }
+.badge-status.backlog { color: var(--text-muted); }
+
+.model-chip {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-out-sm);
+  border: var(--nm-border-bevel);
+  color: var(--accent-cyan);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.status-badge {
+  font-size: 10px;
+  padding: 4px 8px;
+  border-radius: 10px;
+  font-weight: 700;
+  background: var(--nm-surface);
+  box-shadow: var(--nm-shadow-in-sm);
+  border: var(--nm-border-inset);
+}
+
+.status-badge.connected { color: var(--accent-green); }
+.status-badge.disconnected { color: var(--text-muted); }
+.status-badge.warning { color: var(--accent-amber); }

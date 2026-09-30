@@ -1,0 +1,18 @@
+<!-- M3: Approval Modal -->
+<div class="modal-backdrop" id="modal-approval">
+  <div class="modal-box large">
+    <div class="modal-header">
+      <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <span class="modal-title" id="m3-modal-title" style="color: var(--accent-amber);">Human Authorization Required</span>
+        <span class="badge" id="m3-category-badge"></span>
+      </div>
+      <button class="modal-close-btn" data-close="modal-approval">x</button>
+    </div>
+    <div class="modal-body" id="m3-dynamic-body">
+      <!-- Injected dynamically via JS based on escalation type -->
+    </div>
+    <div class="modal-footer" id="m3-dynamic-footer">
+      <!-- Injected dynamically via JS -->
+    </div>
+  </div>
+</div>

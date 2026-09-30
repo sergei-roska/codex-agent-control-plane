@@ -12,6 +12,14 @@ A2A client -> /orchestrator (lead)
 
 The role profiles, team rules, and skills are bundled in [`profiles/`](profiles/) so this project does not depend on the original pack path. The profiles were adapted to act as A2A workers while keeping their model choices and task boundaries. The lead uses structured decisions, checks role names and file paths, runs read-only assignments in parallel, and runs batches containing a writer serially. Repair roles follow the pack's escalation order.
 
+The agreed scope and open decisions for the dashboard are recorded in
+[dashboard-plan.md](docs/dashboard-plan.md).
+The roadmap through the first beta is in
+[beta-master-plan.md](docs/beta-master-plan.md).
+M0 contracts, screen inventory, verification and the next implementation backlog
+are indexed in [docs/m0/README.md](docs/m0/README.md). Beta Jira/Confluence access
+is read-only; work tracking stays inside the dashboard.
+
 ## Requirements
 
 - Node.js with `npm`.

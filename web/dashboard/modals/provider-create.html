@@ -1,0 +1,200 @@
+<!-- M5: Add / Configure Agent Provider Modal (Opencode / Kilocode Style) -->
+<div class="modal-backdrop" id="modal-add-provider">
+  <div class="modal-box large" style="max-height: 90vh; overflow-y: auto;">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="provider-modal-title">Add New Agent Provider</div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Configure provider endpoint, credentials (API Key or OAuth 2.0), and model routing</div>
+      </div>
+      <button class="modal-close-btn" data-close="modal-add-provider" aria-label="Close modal">x</button>
+    </div>
+
+    <form id="form-add-provider">
+      <input type="hidden" id="provider-edit-id" value="">
+      <div class="modal-body" style="gap: 16px;">
+        <!-- Provider Presets Selector -->
+        <div>
+          <label class="form-label" style="margin-bottom: 8px; display: block;">Select Provider Template</label>
+          <div class="provider-preset-grid" id="provider-preset-grid">
+            <button type="button" class="preset-card active" data-preset="claude">
+              <span class="preset-icon">&#x1F916;</span>
+              <span class="preset-name">Claude</span>
+              <span class="preset-badge">Anthropic</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="codex">
+              <span class="preset-icon">&#x26A1;</span>
+              <span class="preset-name">Codex</span>
+              <span class="preset-badge">OpenAI</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="gemini">
+              <span class="preset-icon">&#x2728;</span>
+              <span class="preset-name">Gemini</span>
+              <span class="preset-badge">Google</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="deepseek">
+              <span class="preset-icon">&#x1F9E0;</span>
+              <span class="preset-name">DeepSeek</span>
+              <span class="preset-badge">Reasoner</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="qwen">
+              <span class="preset-icon">&#x1F30F;</span>
+              <span class="preset-name">Qwen 2.5</span>
+              <span class="preset-badge">Alibaba</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="ollama">
+              <span class="preset-icon">&#x1F4BB;</span>
+              <span class="preset-name">Ollama</span>
+              <span class="preset-badge">Local Node</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="groq">
+              <span class="preset-icon">&#x26A1;</span>
+              <span class="preset-name">Groq</span>
+              <span class="preset-badge">Fast LPU</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="mistral">
+              <span class="preset-icon">&#x1F3A8;</span>
+              <span class="preset-name">Mistral AI</span>
+              <span class="preset-badge">Codestral</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="xai">
+              <span class="preset-icon">&#x2728;</span>
+              <span class="preset-name">xAI (Grok)</span>
+              <span class="preset-badge">Grok-2</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="openrouter">
+              <span class="preset-icon">&#x1F500;</span>
+              <span class="preset-name">OpenRouter</span>
+              <span class="preset-badge">Unified</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="together">
+              <span class="preset-icon">&#x1F91D;</span>
+              <span class="preset-name">Together AI</span>
+              <span class="preset-badge">Cloud OSS</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="lmstudio">
+              <span class="preset-icon">&#x1F4BE;</span>
+              <span class="preset-name">LM Studio</span>
+              <span class="preset-badge">Local vLLM</span>
+            </button>
+            <button type="button" class="preset-card" data-preset="custom">
+              <span class="preset-icon">&#x2699;&#xFE0F;</span>
+              <span class="preset-name">Custom</span>
+              <span class="preset-badge">OpenAI API</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Connection Method Selector -->
+        <div class="form-group">
+          <label class="form-label">Connection Method *</label>
+          <div class="method-segmented-group" id="method-segmented-group">
+            <label class="method-option active" id="method-option-api">
+              <input type="radio" name="provider-method" value="api" checked style="display:none;">
+              <span class="method-icon">&#x1F511;</span>
+              <span class="method-title">API Key</span>
+              <span class="method-desc">Direct Token / Custom Base URL</span>
+            </label>
+            <label class="method-option" id="method-option-oauth">
+              <input type="radio" name="provider-method" value="oauth" style="display:none;">
+              <span class="method-icon">&#x1F310;</span>
+              <span class="method-title">OAuth 2.0</span>
+              <span class="method-desc">Cloud CLI Handshake &amp; Auth</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Provider Name -->
+        <div class="form-group">
+          <label class="form-label" for="provider-name-input">Provider Display Name *</label>
+          <input type="text" id="provider-name-input" class="input-text" placeholder="e.g. Gemini (Work), Claude (Personal), Ollama Local" value="Claude (Anthropic)" required>
+          <div id="provider-name-error" style="display: none; color: var(--accent-red); font-size: 11px; margin-top: 4px; font-weight: 600;"></div>
+        </div>
+
+        <!-- Section: API Method Fields -->
+        <div id="section-api-fields" style="display: flex; flex-direction: column; gap: 14px;">
+          <div class="form-group">
+            <label class="form-label" for="provider-api-key">API Key *</label>
+            <div style="position: relative; display: flex; align-items: center;">
+              <input type="password" id="provider-api-key" class="input-text" placeholder="sk-ant-... or sk-..." style="width: 100%; padding-right: 42px;">
+              <button type="button" id="btn-toggle-key-visibility" class="btn-input-icon" title="Toggle Visibility" style="position: absolute; right: 8px; background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 14px;">&#x1F441;</button>
+            </div>
+            <div style="font-size: 11px; color: var(--text-muted);">Key is stored in session credentials and encrypted CLI daemon state.</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="provider-endpoint-input">API Base URL / Endpoint</label>
+            <input type="text" id="provider-endpoint-input" class="input-text" placeholder="https://api.anthropic.com/v1" value="https://api.anthropic.com/v1">
+          </div>
+        </div>
+
+        <!-- Section: OAuth Method Fields -->
+        <div id="section-oauth-fields" style="display: none; flex-direction: column; gap: 14px;">
+          <div class="form-group">
+            <label class="form-label" for="provider-oauth-profile">OAuth Environment / Profile</label>
+            <select id="provider-oauth-profile" class="select-input">
+              <!-- Populated dynamically via JS -->
+            </select>
+          </div>
+
+          <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); border-radius: 12px; padding: 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+            <div>
+              <div style="font-weight: 600; font-size: 13px; color: var(--text-primary);" id="oauth-status-text">Ready for OAuth Handshake</div>
+              <div style="font-size: 11px; color: var(--text-muted);">Click to initiate browser / CLI authorization session</div>
+            </div>
+            <button type="button" class="btn btn-secondary" id="btn-oauth-authorize">Authorize Now</button>
+          </div>
+        </div>
+
+        <!-- Model Routing -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div class="form-group">
+            <label class="form-label" for="provider-model-select">Default Model *</label>
+            <select id="provider-model-select" class="select-input">
+              <!-- Populated dynamically via JS -->
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="provider-custom-model">Custom Model Identifier</label>
+            <input type="text" id="provider-custom-model" class="input-text" placeholder="Optional custom model ID">
+          </div>
+        </div>
+
+        <!-- Advanced Options Toggle -->
+        <div>
+          <button type="button" id="btn-toggle-provider-advanced" class="btn-link" style="background: none; border: none; color: var(--accent-blue); font-size: 12px; font-weight: 600; cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 4px;">
+            <span id="advanced-chevron">&#x25B6;</span> Advanced Configuration (Headers, Timeout, Context)
+          </button>
+
+          <div id="section-provider-advanced" style="display: none; margin-top: 10px; flex-direction: column; gap: 12px; padding: 14px; background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); border-radius: 12px;">
+            <div class="form-group">
+              <label class="form-label" for="provider-custom-headers">Custom HTTP Headers (JSON format)</label>
+              <input type="text" id="provider-custom-headers" class="input-text" placeholder='{"HTTP-Referer": "https://myapp.internal"}'>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div class="form-group">
+                <label class="form-label" for="provider-timeout-input">Timeout (seconds)</label>
+                <input type="number" id="provider-timeout-input" class="input-text" value="60" min="5" max="600">
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="provider-tag-input">Card Category Tag</label>
+                <input type="text" id="provider-tag-input" class="input-text" placeholder="e.g. Flagship / Reasoning, Asian / Reasoner" value="Flagship">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Test Connection Result Notification -->
+        <div id="provider-test-result" style="display: none; padding: 10px 14px; border-radius: 10px; font-size: 12px; font-family: var(--font-mono);"></div>
+      </div>
+
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <button type="button" class="btn btn-secondary" id="btn-test-provider-connection">Test Handshake</button>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" class="btn btn-secondary" data-close="modal-add-provider">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-add-provider">Add Provider</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>

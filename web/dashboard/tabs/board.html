@@ -1,0 +1,62 @@
+<section id="tab-board" class="tab-pane active">
+  <div class="board-controls">
+    <div class="board-view-toggle">
+      <button class="view-btn active" id="btn-view-status">Status View</button>
+      <button class="view-btn" id="btn-view-role">Role View</button>
+    </div>
+    <div class="board-filters">
+      <input type="text" id="board-search" class="input-text" placeholder="Search tickets..." style="width: 220px;">
+      <select id="board-role-filter" class="select-input">
+        <option value="all">All Roles</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- 5 Column View -->
+  <div id="status-view-container" class="board-columns-container">
+    <div class="board-column" data-col="backlog">
+      <div class="column-header">
+        <span>Backlog</span>
+        <span class="column-count" id="count-backlog">0</span>
+      </div>
+      <div class="column-cards" id="cards-backlog"></div>
+    </div>
+
+    <div class="board-column" data-col="pending">
+      <div class="column-header">
+        <span>Pending</span>
+        <span class="column-count" id="count-pending">0</span>
+      </div>
+      <div class="column-cards" id="cards-pending"></div>
+    </div>
+
+    <div class="board-column" data-col="in_progress">
+      <div class="column-header">
+        <span>In Progress</span>
+        <span class="column-count" id="count-in_progress">0</span>
+      </div>
+      <div class="column-cards" id="cards-in_progress"></div>
+    </div>
+
+    <div class="board-column" data-col="needs_attention">
+      <div class="column-header">
+        <span>Needs Attention</span>
+        <span class="column-count" id="count-needs_attention">0</span>
+      </div>
+      <div class="column-cards" id="cards-needs_attention"></div>
+    </div>
+
+    <div class="board-column" data-col="closed">
+      <div class="column-header">
+        <span>Closed</span>
+        <span class="column-count" id="count-closed">0</span>
+      </div>
+      <div class="column-cards" id="cards-closed"></div>
+    </div>
+  </div>
+
+  <!-- Role Swimlanes View -->
+  <div id="role-view-container" class="role-lanes-container" style="display: none;">
+    <!-- Injected via JS -->
+  </div>
+</section>
