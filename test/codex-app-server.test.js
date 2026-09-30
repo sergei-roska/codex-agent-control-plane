@@ -16,7 +16,13 @@ class FakeProcess extends EventEmitter {
         for (const line of chunk.toString().split('\n').filter(Boolean)) {
           const message = JSON.parse(line);
           this.sent.push(message);
-          handler(message, (response) => this.stdout.write(`${JSON.stringify(response)}\n`));
+          const send = (response) => this.stdout.write(`${JSON.stringify(response)}\n`);
+          // Tool-surface enumeration is answered here so unrelated handlers need not know it.
+          if (message.method === 'config/read' && !handler.ownsConfigRead) {
+            send({ id: message.id, result: { config: { mcp_servers: { alpha: {}, 'gamma': {}, beta: {} } } } });
+            continue;
+          }
+          handler(message, send);
         }
         callback();
       },
@@ -137,6 +143,7 @@ test('resumes an unknown thread once, then reuses it', async (t) => {
   const resumes = sent.filter(({ method }) => method === 'thread/resume');
   assert.equal(resumes.length, 1);
   assert.deepEqual(resumes[0].params, {
+    config: resumes[0].params.config,
     threadId: 'old-thread',
     cwd: '/tmp/project',
     approvalPolicy: 'on-request',
@@ -853,10 +860,14 @@ test('reports permissionConfig for read-only and workspace-write roles', async (
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
   const ro = await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/ro', input: 'go' });
-  assert.deepEqual(ro.permissionConfig, { sandbox: 'read-only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', approvalsReviewer: 'user', cwd: '/ro' });
+  const { toolPolicy: roPolicy, ...roConfig } = ro.permissionConfig;
+  assert.deepEqual(roConfig, { sandbox: 'read-only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', approvalsReviewer: 'user', cwd: '/ro' });
+  assert.equal(roPolicy.enforced, true);
   assert.deepEqual(ro.permissionEvents, []);
   const rw = await client.run({ role, cwd: '/rw', input: 'go', threadId: 'thread-perm' });
-  assert.deepEqual(rw.permissionConfig, { sandbox: 'workspace-write', sandboxPolicy: 'workspaceWrite', approvalPolicy: 'on-request', approvalsReviewer: 'user', cwd: '/rw' });
+  const { toolPolicy: rwPolicy, ...rwConfig } = rw.permissionConfig;
+  assert.equal(rwPolicy, undefined);
+  assert.deepEqual(rwConfig, { sandbox: 'workspace-write', sandboxPolicy: 'workspaceWrite', approvalPolicy: 'on-request', approvalsReviewer: 'user', cwd: '/rw' });
 });
 
 test('attaches permission events to thrown errors', async (t) => {
@@ -1124,4 +1135,97 @@ test('survivors of a termination are attached to the failed run error', async (t
   assert.deepEqual(error.termination.survivors, survivors);
   assert.equal(error.termination.identity.pid, 4300);
   assert.deepEqual(client.lastTermination.survivors, survivors);
+});
+
+function toolHandler(base, configRead) {
+  const handler = (request, send) => {
+    if (request.method === 'config/read') return configRead(request, send);
+    return base(request, send);
+  };
+  handler.ownsConfigRead = true;
+  return handler;
+}
+
+const toolRole = (tools) => ({ ...role, tools });
+
+test('thread/start carries the fixed per-role tool config', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const result = await client.run({ role: toolRole({ mcpServers: ['gamma', 'ghost'], skills: false }), cwd: '/tmp/work', input: 'hi' });
+  const start = fake.getChild().sent.find(({ method }) => method === 'thread/start');
+  assert.deepEqual(start.params.config, {
+    'features.apps': false,
+    'features.plugins': false,
+    'skills.include_instructions': false,
+    'skills.bundled.enabled': false,
+    'mcp_servers.alpha.enabled': false,
+    'mcp_servers.beta.enabled': false,
+  });
+  assert.deepEqual(fake.getChild().sent.find(({ method }) => method === 'config/read').params.cwd, '/tmp/work');
+  assert.deepEqual(result.permissionConfig.toolPolicy, {
+    mcpAllowed: ['gamma'],
+    mcpDisabled: ['alpha', 'beta'],
+    mcpMissing: ['ghost'],
+    skills: false,
+    apps: false,
+    plugins: false,
+    enforced: true,
+    source: 'config/read',
+  });
+});
+
+test('missing tools table means empty allowlist and skills off; skills true keeps the listing', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  await client.run({ role, cwd: '/tmp/work', input: 'one' });
+  await client.run({ role: toolRole({ mcpServers: [], skills: true }), cwd: '/tmp/work', input: 'two' });
+  const starts = fake.getChild().sent.filter(({ method }) => method === 'thread/start');
+  assert.equal(starts[0].params.config['mcp_servers.gamma.enabled'], false);
+  assert.equal(starts[0].params.config['skills.include_instructions'], false);
+  assert.equal('skills.include_instructions' in starts[1].params.config, false);
+  assert.equal('skills.bundled.enabled' in starts[1].params.config, false);
+  // Enumeration is cached per child generation and cwd.
+  assert.equal(fake.getChild().sent.filter(({ method }) => method === 'config/read').length, 1);
+});
+
+test('thread/resume carries the tool config after a child replacement', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const tools = { mcpServers: ['alpha'], skills: false };
+  await client.run({ role: toolRole(tools), cwd: '/tmp/work', input: 'one', threadId: 'old-thread' });
+  const resume = fake.getChild().sent.find(({ method }) => method === 'thread/resume');
+  assert.equal(resume.params.config['mcp_servers.alpha.enabled'], undefined);
+  assert.equal(resume.params.config['mcp_servers.beta.enabled'], false);
+  assert.equal(resume.params.config['features.plugins'], false);
+});
+
+test('enumeration failure still sends apps/plugins/skills overrides and marks enforced false', async (t) => {
+  const fake = fakeSpawn(toolHandler(baseHandler(), (request, send) => send({ id: request.id, error: { code: -32601, message: 'nope' } })));
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const result = await client.run({ role: toolRole({ mcpServers: ['alpha'], skills: false }), cwd: '/tmp/work', input: 'hi' });
+  const start = fake.getChild().sent.find(({ method }) => method === 'thread/start');
+  assert.deepEqual(start.params.config, {
+    'features.apps': false,
+    'features.plugins': false,
+    'skills.include_instructions': false,
+    'skills.bundled.enabled': false,
+  });
+  assert.equal(result.permissionConfig.toolPolicy.enforced, false);
+  assert.match(result.permissionConfig.toolPolicy.reason, /enumeration failed/);
+});
+
+test('mcpServerStatus lists status for a thread', async (t) => {
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'mcpServerStatus/list') return send({ id: request.id, result: { data: [{ name: 'x', runtimeStatus: 'disabled' }] } });
+    return send({ id: request.id, result: {} });
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  assert.deepEqual(await client.mcpServerStatus('t1'), [{ name: 'x', runtimeStatus: 'disabled' }]);
+  assert.equal(fake.getChild().sent.find(({ method }) => method === 'mcpServerStatus/list').params.threadId, 't1');
 });

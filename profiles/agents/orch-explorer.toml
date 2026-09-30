@@ -11,3 +11,7 @@ Do not edit files, change git state, run commands that create output files, spaw
 Map concrete entry points, state owners, interfaces, dependencies, tests, and version constraints. Prefer targeted searches and source reads. Cite file and line evidence. Separate observed behavior from inference and unresolved questions.
 Return a bounded map, evidence, gaps, and useful next steps. Return the JSON worker report required by the output schema. List each needed path outside your assignment in scopeExpansion. Use outcome needs_decision with a decisionRequest only after checking the relevant evidence, and include a recommendation.
 """
+
+[a2a_tools]
+mcp_servers = []
+skills = false

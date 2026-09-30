@@ -11,3 +11,7 @@ Do not change git state, spawn children, deploy, publish, or contact others. Do 
 Preserve established contracts and acceptance criteria. Make the smallest coherent change, run focused checks, and report actual results and remaining risks. Never claim a check passed if it was not run.
 Return the JSON worker report required by the output schema. List each needed path outside your assignment in scopeExpansion. Use outcome needs_decision with a decisionRequest only after checking the relevant evidence, and include a recommendation.
 """
+
+[a2a_tools]
+mcp_servers = []
+skills = false

@@ -54,6 +54,20 @@ The lead Agent Card is at `http://127.0.0.1:3000/orchestrator/agent-card.json`. 
 
 The lead uses GPT-6 Sol at high effort in a read-only Codex thread. Specialist model and effort settings are read from the bundled TOML profiles and can be changed for the signed-in Codex account.
 
+## Role tool surface
+
+Every role gets a fixed tool surface declared in its profile; everything not declared is off. Each thread is started (and resumed) with config overrides that disable Codex apps and plugins, the Codex skills listing, and every user or project MCP server not on the role's allowlist. This cuts roughly 70k input tokens per turn of inherited tool schemas and skill text, and a stable per-role surface keeps prompt caching effective. The lead model does not choose tools.
+
+To allow an MCP server or skills for a role, add a table at the end of its `profiles/agents/<role>.toml`:
+
+```toml
+[a2a_tools]
+mcp_servers = ["some-server"]  # names as in [mcp_servers.*] of your Codex config
+skills = false                 # true keeps the Codex skills listing
+```
+
+A missing table means no MCP servers and no skills. The pack's own `orch-*` skills are read as files by path and do not need the listing. An allowlisted name that is not configured is ignored and reported in `permissionConfig.toolPolicy.mcpMissing`. If the configured servers cannot be enumerated, the turn still runs and the policy is marked `enforced: false` (a cost problem, not a safety boundary). Sandbox and approvals are unaffected.
+
 ## Writer admission
 
 Every writable Codex turn passes through the role executor, which admits at most one writer per workspace (canonical path) using the state database.

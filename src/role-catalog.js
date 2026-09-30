@@ -15,14 +15,46 @@ const REQUIRED_FIELDS = [
 const STRING_FIELDS = new Set(REQUIRED_FIELDS);
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const SANDBOXES = new Set(['read-only', 'workspace-write']);
+const TOOLS_TABLE = 'a2a_tools';
+const MCP_NAME = /^[A-Za-z0-9_-]+$/;
 
 function parseProfile(source, filePath) {
   const values = Object.create(null);
+  const tools = Object.create(null);
+  let inTools = false;
   const lines = source.split(/\r?\n/);
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index].trim();
     if (line === '' || line.startsWith('#')) continue;
+
+    const table = line.match(/^\[([A-Za-z0-9_.-]+)\]\s*(?:#.*)?$/);
+    if (table) {
+      if (table[1] !== TOOLS_TABLE) throw new Error(`${filePath}:${index + 1}: unknown table ${table[1]}`);
+      if (inTools) throw new Error(`${filePath}:${index + 1}: duplicate table ${TOOLS_TABLE}`);
+      inTools = true;
+      continue;
+    }
+    if (inTools) {
+      const toolField = line.match(/^(mcp_servers|skills)\s*=\s*(.*?)\s*(?:#.*)?$/);
+      if (!toolField) throw new Error(`${filePath}:${index + 1}: unsupported ${TOOLS_TABLE} syntax`);
+      const [, key, literal] = toolField;
+      if (Object.hasOwn(tools, key)) throw new Error(`${filePath}:${index + 1}: duplicate field ${key}`);
+      let parsed;
+      try {
+        parsed = JSON.parse(literal);
+      } catch (error) {
+        throw new Error(`${filePath}:${index + 1}: invalid value for ${key}`, { cause: error });
+      }
+      if (key === 'skills' && typeof parsed !== 'boolean') {
+        throw new Error(`${filePath}:${index + 1}: skills must be true or false`);
+      }
+      if (key === 'mcp_servers' && !(Array.isArray(parsed) && parsed.every((name) => typeof name === 'string' && MCP_NAME.test(name)))) {
+        throw new Error(`${filePath}:${index + 1}: mcp_servers must be an array of server names`);
+      }
+      tools[key] = parsed;
+      continue;
+    }
 
     const multiline = line.match(/^([a-z_]+)\s*=\s*"""\s*$/);
     if (multiline) {
@@ -85,6 +117,10 @@ function parseProfile(source, filePath) {
     effort: values.model_reasoning_effort,
     sandbox: values.sandbox_mode,
     instructions: values.developer_instructions,
+    tools: {
+      mcpServers: [...new Set(tools.mcp_servers || [])],
+      skills: tools.skills === true,
+    },
   };
 }
 
@@ -135,6 +171,7 @@ function createLeadRole({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
     model: 'gpt-6-sol',
     effort: 'high',
     sandbox: 'read-only',
+    tools: { mcpServers: [], skills: false },
     instructions: [
       'You are the read-only lead of this A2A development team. You own scope, architecture, priorities, dispatch decisions, integration review, final verification, approvals, and git state.',
       'Use A2A dispatches to assign bounded tasks to the runtime roles. The A2A worker profiles are separate executions; do not spawn Codex subagents.',

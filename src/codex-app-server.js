@@ -5,6 +5,7 @@ const { readProcessIdentity, listGroupMembers } = require('./process-quiescence'
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_TURN_TIMEOUT_MS = 600_000;
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 10_000;
+const MCP_ENUMERATION_TIMEOUT_MS = 15_000;
 const TOKEN_FIELDS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens', 'totalTokens'];
 // Pin the approvals reviewer to the client so every approval request reaches
 // _declineServerRequest instead of a Codex auto-reviewer that could approve escalations.
@@ -78,6 +79,7 @@ class CodexAppServer {
     this.childExitPromise = null;
     this.resolveChildExit = null;
     this.hookInventories = new Map();
+    this.mcpInventories = new Map();
   }
 
   async start() {
@@ -121,6 +123,7 @@ class CodexAppServer {
     this.loadedThreads = new Set();
     this.threadTotals = new Map();
     this.hookInventories = new Map();
+    this.mcpInventories = new Map();
     const identity = typeof child.pid === 'number' ? this.readProcessIdentityImpl(child.pid) : null;
     this.childIdentity = identity;
     this.childExitAt = null;
@@ -231,6 +234,71 @@ class CodexAppServer {
     return this.hookInventories.get(key);
   }
 
+  // Names of MCP servers configured for a cwd, read without a model call or a thread.
+  async listMcpServerNames(cwd) {
+    await this.start();
+    const result = await this._request('config/read', { cwd, includeLayers: false }, { timeoutMs: Math.min(this.requestTimeoutMs, MCP_ENUMERATION_TIMEOUT_MS) });
+    const servers = result?.config?.mcp_servers;
+    if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
+      throw new CodexAppServerError('config/read returned no mcp_servers table');
+    }
+    return Object.keys(servers);
+  }
+
+  // Cached per child generation (the map is reset on every child start) and per cwd.
+  mcpInventory(cwd) {
+    const key = cwd || '';
+    if (!this.mcpInventories.has(key)) {
+      const pending = this.listMcpServerNames(cwd).then(
+        (names) => ({ names }),
+        (error) => ({ names: null, error: error?.message || String(error) }),
+      );
+      this.mcpInventories.set(key, pending);
+      pending.then((entry) => { if (entry.names === null && this.mcpInventories.get(key) === pending) this.mcpInventories.delete(key); });
+    }
+    return this.mcpInventories.get(key);
+  }
+
+  // Fixed per-role tool surface: everything not declared in the role profile is off.
+  async _toolPolicy(role, cwd) {
+    const allowed = [...new Set(role.tools?.mcpServers || [])];
+    const skills = role.tools?.skills === true;
+    const config = { 'features.apps': false, 'features.plugins': false };
+    if (!skills) {
+      config['skills.include_instructions'] = false;
+      config['skills.bundled.enabled'] = false;
+    }
+    const policy = {
+      mcpAllowed: [],
+      mcpDisabled: [],
+      mcpMissing: [],
+      skills,
+      apps: false,
+      plugins: false,
+      enforced: false,
+      source: 'config/read',
+    };
+    const inventory = await this.mcpInventory(cwd);
+    if (inventory.names) {
+      const known = new Set(inventory.names);
+      policy.mcpAllowed = allowed.filter((name) => known.has(name));
+      policy.mcpMissing = allowed.filter((name) => !known.has(name));
+      policy.mcpDisabled = inventory.names.filter((name) => !allowed.includes(name));
+      for (const name of policy.mcpDisabled) config[`mcp_servers.${name}.enabled`] = false;
+      policy.enforced = true;
+    } else {
+      policy.mcpMissing = allowed;
+      policy.reason = `MCP server enumeration failed: ${inventory.error}`;
+    }
+    return { config, policy };
+  }
+
+  async mcpServerStatus(threadId) {
+    await this.start();
+    const result = await this._request('mcpServerStatus/list', { threadId, detail: 'full' });
+    return Array.isArray(result?.data) ? result.data : [];
+  }
+
   async readRateLimits() {
     try {
       await this.start();
@@ -284,6 +352,12 @@ class CodexAppServer {
     await this.start();
 
     const developerInstructions = role.instructions || `You are the ${role.name} agent.`;
+    let toolConfig = null;
+    if (!existingThreadId || !this.loadedThreads.has(existingThreadId)) {
+      const { config, policy } = await this._toolPolicy(role, cwd);
+      toolConfig = config;
+      ctx.permissionConfig.toolPolicy = policy;
+    }
     let threadResult = null;
     let baseline = null;
     if (!existingThreadId) {
@@ -294,6 +368,7 @@ class CodexAppServer {
         sandbox: normalizeSandbox(role.sandbox),
         approvalPolicy: 'on-request',
         approvalsReviewer: APPROVALS_REVIEWER,
+        config: toolConfig,
       }, { signal });
       if (threadResult?.thread?.id) {
         this.loadedThreads.add(threadResult.thread.id);
@@ -313,6 +388,7 @@ class CodexAppServer {
         sandbox: normalizeSandbox(role.sandbox),
         model: role.model || null,
         developerInstructions,
+        config: toolConfig,
       }, { signal });
       this.loadedThreads.add(existingThreadId);
       ctx.model = resumed?.model || ctx.model;

@@ -154,6 +154,10 @@ live.
   same task, models, effort, permissions, and acceptance checks. No efficiency claim
   without measured results.
 
+## 6. Tool surface
+
+Each role profile declares `[a2a_tools]` (`mcp_servers` allowlist, `skills` boolean); a missing table is deny-all. `CodexAppServer` sends a `config` override on every `thread/start` and `thread/resume`: `features.apps=false`, `features.plugins=false`, `skills.include_instructions=false` and `skills.bundled.enabled=false` (unless the role sets skills), and `mcp_servers.<name>.enabled=false` for every server returned by `config/read {cwd}` that is not allowlisted. Enumeration is cached per child generation and cwd. The result is recorded as `permissionConfig.toolPolicy` (`mcpAllowed`, `mcpDisabled`, `mcpMissing`, `skills`, `apps`, `plugins`, `enforced`, `source`, and `reason` on failure) and flows into worker provenance and the usage ledger. If enumeration fails, the other overrides are still sent and `enforced` is false; this is a cost control, not a security boundary, so the turn is not failed. Sandbox and approval settings are unchanged.
+
 ## Known limits
 
 - A tool process that leaves the App Server process group (setsid, setpgid, daemonizing)

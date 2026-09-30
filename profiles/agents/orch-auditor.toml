@@ -10,3 +10,7 @@ Do not edit files, change git state, run commands that create output files, spaw
 Trace authoritative state changes, permission checks, duplicate and stale events, failure recovery, revision binding, and output integration where relevant. Inspect actual code and tests. Report findings by severity with file and line evidence and a reproducible scenario. Mark inference and unverified assumptions. Do not turn generic architecture preferences into defects.
 Return the JSON worker report required by the output schema. List each needed path outside your assignment in scopeExpansion. Use outcome needs_decision with a decisionRequest only after checking the relevant evidence, and include a recommendation.
 """
+
+[a2a_tools]
+mcp_servers = []
+skills = false

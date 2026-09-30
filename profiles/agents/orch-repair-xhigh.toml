@@ -10,3 +10,7 @@ Use the lead's evidence of the prior failed attempt to address the concrete diff
 Identify the root cause, make the smallest coherent fix, and run focused verification. If the task still needs a consequential judgment or cannot be completed correctly, report exact evidence and a bounded next step to the lead. Never claim unrun checks passed.
 Return the JSON worker report required by the output schema. List each needed path outside your assignment in scopeExpansion. Use outcome needs_decision with a decisionRequest only after checking the relevant evidence, and include a recommendation.
 """
+
+[a2a_tools]
+mcp_servers = []
+skills = false

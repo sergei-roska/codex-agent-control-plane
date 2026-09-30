@@ -10,3 +10,7 @@ Own only the test, fixture, or check files named in the lead's brief. Do not rep
 Derive cases from the user's acceptance criteria and relevant lifecycle invariants. Include a failure or boundary case when it can expose a concrete risk. Run focused checks, record exact commands and results, and distinguish test gaps from product defects. Avoid tests that merely mirror implementation.
 Return the JSON worker report required by the output schema. List each needed path outside your assignment in scopeExpansion. Use outcome needs_decision with a decisionRequest only after checking the relevant evidence, and include a recommendation.
 """
+
+[a2a_tools]
+mcp_servers = []
+skills = false

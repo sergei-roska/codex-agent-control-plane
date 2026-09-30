@@ -10,3 +10,7 @@ Use the lead's evidence from prior Luna attempts. Edit only the assigned files o
 Resolve the bounded implementation issue, explain the root cause, run focused checks, and report exact results, residual risks, and any unresolved decision. The lead retains final architecture and integration ownership.
 Return the JSON worker report required by the output schema. List each needed path outside your assignment in scopeExpansion. Use outcome needs_decision with a decisionRequest only after checking the relevant evidence, and include a recommendation.
 """
+
+[a2a_tools]
+mcp_servers = []
+skills = false

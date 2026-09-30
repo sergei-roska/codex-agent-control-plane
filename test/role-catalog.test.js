@@ -81,3 +81,44 @@ test('rejects profiles with missing required settings', (t) => {
 
   assert.throws(() => loadRoles({ profilesDir: copiedProfiles }), /model_reasoning_effort is missing/);
 });
+
+test('every shipped role and the lead have an empty MCP allowlist and skills off', () => {
+  for (const role of [...loadRoles().values(), createLeadRole()]) {
+    assert.deepEqual(role.tools, { mcpServers: [], skills: false }, role.name);
+  }
+});
+
+function withProfile(mutate) {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-role-tools-'));
+  const copied = path.join(tempRoot, 'profiles');
+  fs.cpSync(PROFILES_DIR, copied, { recursive: true });
+  const builder = path.join(copied, 'agents', 'orch-builder.toml');
+  fs.writeFileSync(builder, mutate(fs.readFileSync(builder, 'utf8')));
+  return { copied, cleanup: () => fs.rmSync(tempRoot, { recursive: true, force: true }) };
+}
+
+test('parses an a2a_tools table and treats a missing table as deny-all', (t) => {
+  const allow = withProfile((source) => source.replace(/\[a2a_tools\][\s\S]*$/, '[a2a_tools]\nmcp_servers = ["alpha", "beta", "alpha"] # why\nskills = true\n'));
+  t.after(allow.cleanup);
+  assert.deepEqual(loadRoles({ profilesDir: allow.copied }).get('orch-builder').tools, { mcpServers: ['alpha', 'beta'], skills: true });
+
+  const none = withProfile((source) => source.replace(/\n\[a2a_tools\][\s\S]*$/, '\n'));
+  t.after(none.cleanup);
+  assert.deepEqual(loadRoles({ profilesDir: none.copied }).get('orch-builder').tools, { mcpServers: [], skills: false });
+});
+
+test('rejects malformed a2a_tools tables', (t) => {
+  const bad = [
+    ['unknown key', (s) => `${s}extra = 1\n`],
+    ['non-array allowlist', (s) => s.replace('mcp_servers = []', 'mcp_servers = "alpha"')],
+    ['bad server name', (s) => s.replace('mcp_servers = []', 'mcp_servers = ["a b"]')],
+    ['non-boolean skills', (s) => s.replace('skills = false', 'skills = "yes"')],
+    ['duplicate field', (s) => `${s}skills = true\n`],
+    ['unknown table', (s) => `${s}\n[other]\n`],
+  ];
+  for (const [label, mutate] of bad) {
+    const fixture = withProfile(mutate);
+    t.after(fixture.cleanup);
+    assert.throws(() => loadRoles({ profilesDir: fixture.copied }), /orch-builder\.toml/, label);
+  }
+});
