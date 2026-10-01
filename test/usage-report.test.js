@@ -113,3 +113,31 @@ test('turns, elapsedMs and retries totals carry known/unknown counts and partial
   assert.equal(clean.retriesUnknownRows, 0);
   await state.close();
 });
+
+test('attemptRow includes requested and reported fields from ledger', async () => {
+  const state = await openStateDatabase({ filePath: ':memory:' });
+  const ledger = new UsageLedger({ db: state.db });
+  state.db.prepare(`INSERT INTO dispatch_journal (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id,
+    state, created_at, updated_at) VALUES (?, 'run-3', ?, 'orch-builder', 'workspace-write', 'c', ?, 'finished', 'n', 'n')`)
+    .run('att-a', 'asg-a', 'task-a');
+  state.db.prepare(`INSERT INTO dispatch_journal (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id,
+    state, created_at, updated_at) VALUES (?, 'run-3', ?, 'orch-builder', 'workspace-write', 'c', ?, 'finished', 'n', 'n')`)
+    .run('att-b', 'asg-b', 'task-b');
+  ledger.record({
+    entryId: 'orch-builder:task-a', kind: 'worker_turn', role: 'orch-builder', taskId: 'task-a',
+    requested: { foo: 'bar' }, reported: { baz: 'qux' },
+    outcome: 'completed', permissionEvents: [],
+  });
+  ledger.record({
+    entryId: 'orch-builder:task-b', kind: 'worker_turn', role: 'orch-builder', taskId: 'task-b',
+    outcome: 'completed', permissionEvents: [],
+  });
+  const report = buildReport(state.db, { runId: 'run-3' });
+  const attemptA = report.attempts.find((a) => a.taskId === 'task-a');
+  const attemptB = report.attempts.find((a) => a.taskId === 'task-b');
+  assert.deepEqual(attemptA.requested, { foo: 'bar' });
+  assert.deepEqual(attemptA.reported, { baz: 'qux' });
+  assert.equal(attemptB.requested, null);
+  assert.equal(attemptB.reported, null);
+  await state.close();
+});

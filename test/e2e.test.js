@@ -26,6 +26,9 @@ function tempDir(prefix) {
 async function boot(root, appServer, { stateFile = path.join(root, 'state.sqlite') } = {}) {
   const workspace = path.join(root, 'workspace');
   fs.mkdirSync(workspace, { recursive: true });
+  // These runs use legacy orch-* plans, so select the legacy pack (the default is the delivery pack).
+  const projectConfigFile = path.join(root, 'project.json');
+  fs.writeFileSync(projectConfigFile, JSON.stringify({ rolePack: 'legacy-orch' }));
   const tokenFile = path.join(root, 'token', 'a2a-token');
   const runtime = await startServer({
     port: 0,
@@ -33,6 +36,7 @@ async function boot(root, appServer, { stateFile = path.join(root, 'state.sqlite
     appServer,
     stateFile,
     tokenFile,
+    projectConfigFile,
     orchestratorFactory: (options) => new LeadOrchestrator({ ...options, pollIntervalMs: 5 }),
   });
   const origin = `http://${runtime.host}:${runtime.port}`;

@@ -9,6 +9,7 @@
     "usage": "node src/usage-report.js",
     "dashboard:pair": "node src/dashboard-pair.js",
     "dashboard:dev": "node scripts/dashboard-dev-server.js",
+    "roles:check": "node scripts/role-capability-check.js",
     "test": "node --test test/*.test.js"
   },
   "keywords": [],

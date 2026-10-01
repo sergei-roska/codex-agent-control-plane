@@ -1,0 +1,59 @@
+{
+  "presetId": "bugfix",
+  "version": "1.0.0",
+  "classification": "bugfix",
+  "description": "Defect correction: reproduce the failure first, fix it within a bounded scope, then review and verify the fix.",
+  "stages": [
+    {
+      "key": "reproduce",
+      "roles": [
+        "qa"
+      ],
+      "required": true,
+      "dependsOn": [],
+      "purpose": "Reproduce the reported defect with an executed check and record the failing evidence"
+    },
+    {
+      "key": "implement",
+      "roles": [
+        "developer"
+      ],
+      "required": true,
+      "dependsOn": [
+        "reproduce"
+      ],
+      "purpose": "Minimal fix for the reproduced defect with focused checks inside allowedFiles"
+    },
+    {
+      "key": "review",
+      "roles": [
+        "reviewer"
+      ],
+      "required": true,
+      "dependsOn": [
+        "implement"
+      ],
+      "purpose": "Independent review of the fix diff for correctness and unintended side effects"
+    },
+    {
+      "key": "verify",
+      "roles": [
+        "qa"
+      ],
+      "required": true,
+      "dependsOn": [
+        "implement"
+      ],
+      "purpose": "Re-run the reproduction and regression checks against the fixed candidate"
+    }
+  ],
+  "optionalRoles": [
+    "architect",
+    "security",
+    "performance"
+  ],
+  "optionalDependsOn": [
+    "implement"
+  ],
+  "minChecks": 1
+}

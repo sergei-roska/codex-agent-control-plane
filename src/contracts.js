@@ -3,6 +3,7 @@
 const path = require('node:path');
 
 const MAX_ASSIGNMENTS = 4;
+const LEGACY_REPAIR_CHAINS = Object.freeze({ 'orch-builder': ['orch-repair-xhigh', 'orch-repair-sol'] });
 const MAX_ITEMS = 20;
 const MAX_CHARS = 3_000;
 const WORKER_REPORT_CONTRACT = 'worker-report/v1';
@@ -133,6 +134,22 @@ const DECISION_SCHEMA = {
     },
   },
 };
+
+const SETTINGS_MODEL = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const SETTINGS_TOKEN = /^[a-z0-9_-]{1,32}$/;
+
+/**
+ * Normalizes per-turn effective settings { model, effort, serviceTier } (profile format patterns).
+ * Returns null when the value is absent or malformed; serviceTier null means the standard tier.
+ */
+function normalizeEffectiveSettings(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { model, effort, serviceTier } = value;
+  if (typeof model !== 'string' || !SETTINGS_MODEL.test(model)) return null;
+  if (typeof effort !== 'string' || !SETTINGS_TOKEN.test(effort)) return null;
+  if (serviceTier !== undefined && serviceTier !== null && (typeof serviceTier !== 'string' || !SETTINGS_TOKEN.test(serviceTier))) return null;
+  return { model, effort, serviceTier: serviceTier || null };
+}
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
@@ -285,11 +302,11 @@ function checkAssignment(assignment, decision, ctx) {
   if (assignment.acceptanceCriteria.length === 0 || assignment.checks.length === 0 || assignment.stopConditions.length === 0) {
     throw new Error(`Assignment for ${role.name} requires acceptanceCriteria, checks, and stopConditions`);
   }
-  if (role.name === 'orch-repair-xhigh' && !ctx.attemptedRoles.has('orch-builder')) {
-    throw new Error('orch-repair-xhigh can only be dispatched after an orch-builder attempt');
-  }
-  if (role.name === 'orch-repair-sol' && !ctx.attemptedRoles.has('orch-repair-xhigh')) {
-    throw new Error('orch-repair-sol can only be dispatched after an orch-repair-xhigh attempt');
+  for (const [base, chain] of Object.entries({ ...LEGACY_REPAIR_CHAINS, ...(ctx.repairChains || {}) })) {
+    const at = chain.indexOf(role.name);
+    if (at < 0) continue;
+    const previous = at === 0 ? base : chain[at - 1];
+    if (!ctx.attemptedRoles.has(previous)) throw new Error(`${role.name} can only be dispatched after an ${previous} attempt`);
   }
   if (role.name === 'orch-architect') {
     if (ctx.outcomeCount === 0) throw new Error('orch-architect requires inspected prior evidence');
@@ -317,7 +334,8 @@ function checkHumanInput(humanInput, openIds) {
 
 /**
  * Validate a parsed lead decision. Throws Error on violation.
- * ctx = { roles: Map, attemptedRoles: Set, outcomeCount: number, openDecisionIds: Set, unresolvedWriterCount?: number }
+ * ctx = { roles: Map, attemptedRoles: Set, outcomeCount: number, openDecisionIds: Set, unresolvedWriterCount?: number,
+ *   repairChains?: { [baseRoleId]: [repairRoleId, ...] } } (the legacy orch-builder chain is always included)
  */
 function validateDecision(decision, ctx) {
   if (!isPlainObject(decision)) throw new Error('Lead decision must be a JSON object');
@@ -403,6 +421,8 @@ module.exports = {
   classifyCodexError,
   findCodexErrorInfo,
   safeRelativePath,
+  normalizeEffectiveSettings,
+  LEGACY_REPAIR_CHAINS,
   ASSIGNMENT_FIELDS,
   MAX_ASSIGNMENTS,
 };

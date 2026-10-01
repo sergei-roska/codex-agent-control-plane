@@ -130,8 +130,10 @@ const DELIVERY_TABLES = ['runs', 'intake_results', 'plan_revisions', 'decisions'
 test('migration 2 creates the delivery tables and the one-active-run index', async () => {
   const db = new Database(':memory:');
   const result = await migrateProductSchema({ db, now: fixedNow });
-  assert.equal(result.toVersion, 2);
-  assert.deepEqual(MIGRATIONS.map((m) => [m.version, m.name]), [[1, 'product_tickets'], [2, 'delivery_runs']]);
+  assert.equal(result.toVersion, MIGRATIONS.length);
+  assert.deepEqual(MIGRATIONS.map((m) => [m.version, m.name]), [
+    [1, 'product_tickets'], [2, 'delivery_runs'], [3, 'role_settings'], [4, 'plan_identity'], [5, 'jira_source_tracking'],
+  ]);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
   for (const name of DELIVERY_TABLES) assert.ok(tables.includes(name), name);
   const index = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'runs_one_active_per_ticket'").get();
@@ -145,7 +147,19 @@ test('migration 2 creates the delivery tables and the one-active-run index', asy
   db.close();
 });
 
-test('a version 1 database is backed up and upgraded to version 2 with its tickets intact', async () => {
+test('migration 3 creates the role settings tables', async () => {
+  const db = new Database(':memory:');
+  await migrateProductSchema({ db, now: fixedNow });
+  assert.deepEqual(db.prepare('PRAGMA table_info(role_settings_revisions)').all().map((c) => c.name), [
+    'settings_revision_id', 'pack_id', 'role_runtime_id', 'model', 'effort', 'service_tier',
+    'supersedes_id', 'actor', 'command_id', 'created_at']);
+  assert.deepEqual(db.prepare('PRAGMA table_info(role_settings_current)').all().map((c) => c.name), [
+    'pack_id', 'role_runtime_id', 'settings_revision_id']);
+  assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'role_settings_rev_role_idx'").get());
+  db.close();
+});
+
+test('a version 1 database is backed up and upgraded to the latest version with its tickets intact', async () => {
   const { file } = tempFile();
   const db = new Database(file);
   db.exec(MIGRATIONS[0].sql);
@@ -156,7 +170,7 @@ test('a version 1 database is backed up and upgraded to version 2 with its ticke
     + "VALUES ('t1', 'p', 'direct', 'Keep me', 'normal', 'backlog', 'r1', 1, 'a', 'a', 'operator')",
   ).run();
   const result = await migrateProductSchema({ db, filePath: file, now: fixedNow });
-  assert.deepEqual([result.fromVersion, result.toVersion], [1, 2]);
+  assert.deepEqual([result.fromVersion, result.toVersion], [1, MIGRATIONS.length]);
   assert.equal(result.backupPath, `${file}.bak-v1-20260930T123456Z`);
   assert.equal(fs.statSync(result.backupPath).mode & 0o777, 0o600);
   const backup = new Database(result.backupPath, { readonly: true });
@@ -165,5 +179,74 @@ test('a version 1 database is backed up and upgraded to version 2 with its ticke
   backup.close();
   assert.equal(db.prepare("SELECT title FROM tickets WHERE ticket_id = 't1'").get().title, 'Keep me');
   assert.equal(db.prepare('SELECT COUNT(*) AS c FROM runs').get().c, 0);
+  db.close();
+});
+
+const IDENTITY_COLUMNS = ['preset_id', 'preset_version', 'role_pack', 'role_pack_version'];
+
+test('migration 4 adds nullable plan identity columns on a fresh database', async () => {
+  const db = new Database(':memory:');
+  await migrateProductSchema({ db, now: fixedNow });
+  const cols = db.prepare('PRAGMA table_info(plan_revisions)').all();
+  for (const name of IDENTITY_COLUMNS) {
+    const col = cols.find((c) => c.name === name);
+    assert.ok(col, name);
+    assert.equal(col.notnull, 0);
+  }
+  db.close();
+});
+
+test('migration 5 upgrades version 4 with shared source tables and revision links intact', async () => {
+  const db = new Database(':memory:');
+  for (const migration of MIGRATIONS.slice(0, 4)) db.exec(migration.sql);
+  db.exec('CREATE TABLE product_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+  for (const migration of MIGRATIONS.slice(0, 4)) {
+    db.prepare('INSERT INTO product_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
+      .run(migration.version, migration.name, 'then');
+  }
+  db.exec(`INSERT INTO tickets (ticket_id, project_id, source, title, priority, status, current_revision_id, version, created_at, updated_at, created_by)
+    VALUES ('keep', 'project', 'direct', 'M4/M5 ticket', 'normal', 'backlog', 'keep-rev', 1, 'a', 'a', 'operator')`);
+  db.exec(`INSERT INTO requirement_revisions (revision_id, ticket_id, ordinal, title, description, criteria_json, references_json,
+    artifact_ids_json, priority, tracking_mode, actor, command_id, created_at)
+    VALUES ('keep-rev', 'keep', 1, 'M4/M5 revision', '', '[]', '{}', '[]', 'normal', 'internal', 'operator', 'keep-cmd', 'a')`);
+  await migrateProductSchema({ db, now: fixedNow });
+  assert.equal(db.prepare('SELECT title FROM tickets WHERE ticket_id = ?').get('keep').title, 'M4/M5 ticket');
+  assert.equal(db.prepare('SELECT title FROM requirement_revisions WHERE revision_id = ?').get('keep-rev').title, 'M4/M5 revision');
+  for (const name of ['m6_source_identities', 'm6_source_snapshots', 'ticket_source_revision_links']) {
+    assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name), name);
+  }
+  const shared = require('../src/integrations/source-import-store').SOURCE_SCHEMA_SQL;
+  assert.equal(MIGRATIONS[4].sql.startsWith(shared), true);
+  db.close();
+});
+
+test('a version 3 database with a planMeta row is backfilled, cleaned and backed up', async () => {
+  const { file } = tempFile();
+  const db = new Database(file);
+  for (const migration of MIGRATIONS.slice(0, 3)) db.exec(migration.sql);
+  db.exec('CREATE TABLE product_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+  for (const m of MIGRATIONS.slice(0, 3)) {
+    db.prepare('INSERT INTO product_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(m.version, m.name, 'then');
+  }
+  const insert = db.prepare(
+    'INSERT INTO plan_revisions (plan_revision_id, run_id, parent_plan_revision_id, classification, stages_json, check_ids_json, '
+    + "checks_json, requirements_json, validator_version, reason, created_at) VALUES (?, 'r', NULL, 'feature', '[]', '[]', '[]', ?, 'v', 'intake', 'a')",
+  );
+  const meta = { presetId: 'feature', presetVersion: '1', rolePack: 'delivery', rolePackVersion: '2' };
+  insert.run('p1', JSON.stringify({ goal: 'x', planMeta: meta }));
+  insert.run('p2', JSON.stringify({ goal: 'y' }));
+  const result = await migrateProductSchema({ db, filePath: file, now: fixedNow });
+  assert.deepEqual([result.fromVersion, result.toVersion], [3, MIGRATIONS.length]);
+  assert.equal(result.backupPath, `${file}.bak-v3-20260930T123456Z`);
+  assert.equal(fs.statSync(result.backupPath).mode & 0o777, 0o600);
+  const backup = new Database(result.backupPath, { readonly: true });
+  assert.match(backup.prepare("SELECT requirements_json FROM plan_revisions WHERE plan_revision_id = 'p1'").get().requirements_json, /planMeta/);
+  backup.close();
+  const p1 = db.prepare("SELECT * FROM plan_revisions WHERE plan_revision_id = 'p1'").get();
+  assert.deepEqual([p1.preset_id, p1.preset_version, p1.role_pack, p1.role_pack_version], ['feature', '1', 'delivery', '2']);
+  assert.deepEqual(JSON.parse(p1.requirements_json), { goal: 'x' });
+  const p2 = db.prepare("SELECT * FROM plan_revisions WHERE plan_revision_id = 'p2'").get();
+  assert.deepEqual([p2.preset_id, p2.role_pack], [null, null]);
+  assert.deepEqual(JSON.parse(p2.requirements_json), { goal: 'y' });
   db.close();
 });

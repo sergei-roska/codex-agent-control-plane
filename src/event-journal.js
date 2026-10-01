@@ -13,7 +13,7 @@ const EVENT_TYPES = Object.freeze([
   'ticket_created', 'ticket_revised', 'ticket_cancelled', 'artifact_staged',
   'run_queued', 'lease_acquired', 'intake_completed', 'decision_requested', 'decision_answered',
   'plan_saved', 'branch_prepared', 'preflight_failed', 'engineering_started', 'candidate_captured',
-  'run_settled',
+  'run_settled', 'role_default_saved', 'role_default_reset',
 ]);
 
 const MAX_STRING = 500;

@@ -34,6 +34,11 @@ function createUsageLedgerTable(db) {
     CREATE INDEX IF NOT EXISTS usage_ledger_run_idx ON usage_ledger (run_id);
     CREATE INDEX IF NOT EXISTS usage_ledger_context_idx ON usage_ledger (context_id);
   `);
+  // Requested/reported settings (M5): idempotent add for databases created before the columns existed.
+  const columns = new Set(db.prepare('PRAGMA table_info(usage_ledger)').all().map((column) => column.name));
+  for (const name of ['requested_json', 'reported_json']) {
+    if (!columns.has(name)) db.exec(`ALTER TABLE usage_ledger ADD COLUMN ${name} TEXT`);
+  }
 }
 
 const orNull = (value) => (value === undefined ? null : value);
@@ -51,6 +56,8 @@ function fromRow(row) {
     attemptId: row.attempt_id,
     model: row.model,
     effort: row.effort,
+    requested: parseOrNull(row.requested_json ?? null),
+    reported: parseOrNull(row.reported_json ?? null),
     startedAt: row.started_at,
     elapsedMs: row.elapsed_ms,
     turns: row.turns,
@@ -71,15 +78,16 @@ class UsageLedger {
     if (!db || typeof db.prepare !== 'function') throw new TypeError('UsageLedger requires a better-sqlite3 db');
     this.db = db;
     if (!readonly) createUsageLedgerTable(db);
-    this.insert = db.prepare(`
+    // A readonly handle on a pre-M5 database has no requested/reported columns and never inserts.
+    this.insert = readonly ? null : db.prepare(`
       INSERT OR IGNORE INTO usage_ledger
         (entry_id, kind, run_id, role, task_id, context_id, attempt_id, model, effort, started_at, elapsed_ms,
          turns, model_requests, retries, tokens_json, token_source, cumulative_total_json, app_server_version,
-         outcome, permission_events_json, recorded_at)
+         outcome, permission_events_json, recorded_at, requested_json, reported_json)
       VALUES
         (@entry_id, @kind, @run_id, @role, @task_id, @context_id, @attempt_id, @model, @effort, @started_at, @elapsed_ms,
          @turns, @model_requests, @retries, @tokens_json, @token_source, @cumulative_total_json, @app_server_version,
-         @outcome, @permission_events_json, @recorded_at)
+         @outcome, @permission_events_json, @recorded_at, @requested_json, @reported_json)
     `);
     this.countByContext = db.prepare(
       "SELECT COUNT(*) AS n FROM usage_ledger WHERE kind = 'worker_turn' AND context_id = ?");
@@ -139,6 +147,8 @@ class UsageLedger {
       outcome: orNull(entry.outcome),
       permission_events_json: JSON.stringify(entry.permissionEvents || []),
       recorded_at: entry.recordedAt || new Date().toISOString(),
+      requested_json: jsonOrNull(entry.requested),
+      reported_json: jsonOrNull(entry.reported),
     });
     return info.changes > 0;
   }

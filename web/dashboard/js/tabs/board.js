@@ -12,15 +12,28 @@ const boardData = {
   total: 0,
   truncated: false,
   roles: [],
+  activePack: null,
   context: null
 };
 
 let boardSearchTimer = null;
 let boardLastSignature = null;
 
+// Roles come from GET /roles: delivery roles carry a publicId (requested specialties use it), all carry a runtimeId.
 function roleDisplayNameFor(roleId) {
-  const r = boardData.roles.find(x => x.id === roleId);
+  const r = boardData.roles.find(x => x.runtimeId === roleId) || boardData.roles.find(x => x.publicId === roleId);
   return r && r.displayName ? r.displayName : roleId;
+}
+
+// Roles offered as board filters and lanes: the active pack's public roles, plus legacy roles that
+// appear on loaded cards. Repair executors are attempts of another role, not roles of their own.
+function boardFilterRoles() {
+  const used = new Set();
+  boardData.cards.forEach(c => {
+    if (c.primaryRole) used.add(c.primaryRole);
+    (c.participatingRoles || []).forEach(id => used.add(id));
+  });
+  return boardData.roles.filter(r => r.kind !== 'repair' && (r.kind !== 'legacy' || used.has(r.runtimeId)));
 }
 
 function boardFilters() {
@@ -37,10 +50,10 @@ async function refreshBoard(signal) {
   if (!boardData.context) {
     boardData.context = await apiGet('/context', { signal });
   }
-  if (!boardData.roles.length) {
-    const res = await apiGet('/roles', { signal });
-    boardData.roles = Array.isArray(res.roles) ? res.roles : [];
-  }
+  // Refreshed every tick: activeAttempts drives the sidebar activity dots.
+  const rolesRes = await apiGet('/roles', { signal });
+  boardData.roles = Array.isArray(rolesRes.roles) ? rolesRes.roles : [];
+  boardData.activePack = rolesRes.activePack || null;
   let cards = [];
   let cursor = null;
   let last = null;
@@ -67,21 +80,23 @@ async function refreshBoard(signal) {
   renderRoleFilterOptions();
   renderSidebarRoles();
   renderBoard();
+  await refreshPipelinesIfVisible(signal);
 }
 
 function renderRoleFilterOptions() {
   const select = document.getElementById('board-role-filter');
   if (!select) return;
-  const signature = boardData.roles.map(r => r.id + '|' + r.displayName).join(',');
+  const filterRoles = boardFilterRoles();
+  const signature = filterRoles.map(r => r.runtimeId + '|' + r.displayName).join(',');
   if (select.dataset.signature === signature) return;
   const current = select.value;
   select.textContent = '';
   select.appendChild(h('option', { text: 'All Roles', attrs: { value: 'all' } }));
-  boardData.roles.forEach(r => {
-    select.appendChild(h('option', { text: r.displayName || r.id, attrs: { value: r.id } }));
+  filterRoles.forEach(r => {
+    select.appendChild(h('option', { text: r.displayName || r.runtimeId, attrs: { value: r.runtimeId } }));
   });
   select.dataset.signature = signature;
-  select.value = boardData.roles.some(r => r.id === current) ? current : 'all';
+  select.value = filterRoles.some(r => r.runtimeId === current) ? current : 'all';
 }
 
 function createDirectTicketCard(card) {
@@ -253,7 +268,7 @@ function renderBoard() {
     roleContainer.style.display = 'flex';
     const scroll = roleContainer.scrollTop;
     roleContainer.textContent = '';
-    const lanes = boardData.roles.map(r => ({ id: r.id, name: r.displayName || r.id, cards: [] }));
+    const lanes = boardFilterRoles().map(r => ({ id: r.runtimeId, name: r.displayName || r.runtimeId, cards: [] }));
     const unassigned = { id: null, name: 'No primary role', cards: [] };
     boardData.cards.forEach(c => {
       const lane = lanes.find(l => l.id === c.primaryRole);

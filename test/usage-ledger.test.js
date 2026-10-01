@@ -96,3 +96,34 @@ test('listByRun also joins worker rows by context when the journal task id is nu
   assert.deepEqual(ids, ['r:ta', 'r:task-c', 'r:tb']);
   await state.close();
 });
+
+test('requested and reported settings round trip and default to null', async () => {
+  const state = await openStateDatabase({ filePath: ':memory:' });
+  const ledger = new UsageLedger({ db: state.db });
+  const requested = { model: 'm', effort: 'high', serviceTier: 'fast' };
+  const reported = { model: 'm2', reasoningEffort: 'high', serviceTier: null };
+  ledger.record(worker({ entryId: 'e1', taskId: 't-set', requested, reported }));
+  ledger.record(worker({ entryId: 'e2', taskId: 't-none' }));
+  const [set] = ledger.listByTask('t-set');
+  assert.deepEqual(set.requested, requested);
+  assert.deepEqual(set.reported, reported);
+  const [none] = ledger.listByTask('t-none');
+  assert.equal(none.requested, null);
+  assert.equal(none.reported, null);
+  await state.close();
+});
+
+test('the settings columns are added idempotently to an older ledger table', async () => {
+  const Database = require('better-sqlite3');
+  const { createUsageLedgerTable } = require('../src/usage-ledger');
+  const db = new Database(':memory:');
+  createUsageLedgerTable(db);
+  db.exec('ALTER TABLE usage_ledger DROP COLUMN requested_json');
+  db.exec('ALTER TABLE usage_ledger DROP COLUMN reported_json');
+  createUsageLedgerTable(db);
+  createUsageLedgerTable(db);
+  const names = db.prepare('PRAGMA table_info(usage_ledger)').all().map((c) => c.name);
+  assert.equal(names.filter((n) => n === 'requested_json').length, 1);
+  assert.ok(names.includes('reported_json'));
+  db.close();
+});

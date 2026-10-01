@@ -57,7 +57,7 @@ function makeWorkspace(dir) {
 
 function makeRoot(prefix) {
   const root = tempDir(prefix);
-  fs.writeFileSync(path.join(root, 'project.json'), JSON.stringify({ baseRef: 'main', checks: [CHECK] }));
+  fs.writeFileSync(path.join(root, 'project.json'), JSON.stringify({ baseRef: 'main', checks: [CHECK], rolePack: 'legacy-orch' }));
   return root;
 }
 

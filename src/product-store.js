@@ -1,6 +1,8 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { SourceImportStore, SourceImportError } = require('./integrations/source-import-store');
+const { bundleToIntakeInput } = require('./integrations/source-bundle');
 
 const SPECIALTIES = Object.freeze([
   'project-manager', 'architect', 'developer', 'qa', 'reviewer',
@@ -36,6 +38,9 @@ const STATUS_BY_CODE = Object.freeze({
   conflict: 409,
   invalid_state: 409,
   stale_decision: 409,
+  settings_invalid: 409,
+  catalog_unavailable: 503,
+  command_conflict: 409,
 });
 
 class ProductError extends Error {
@@ -368,6 +373,9 @@ function planFromRow(row) {
     checkIds: parseJson(row.check_ids_json, []),
     checks: parseJson(row.checks_json, []),
     requirements: parseJson(row.requirements_json, null),
+    ...(row.preset_id ? {
+      presetId: row.preset_id, presetVersion: row.preset_version, rolePack: row.role_pack, rolePackVersion: row.role_pack_version,
+    } : {}),
     validatorVersion: row.validator_version,
     reason: row.reason,
     createdAt: row.created_at,
@@ -381,6 +389,9 @@ function planView(plan) {
     stages: plan.stages,
     checks: plan.checks,
     requirements: plan.requirements,
+    ...(plan.presetId ? {
+      presetId: plan.presetId, presetVersion: plan.presetVersion, rolePack: plan.rolePack, rolePackVersion: plan.rolePackVersion,
+    } : {}),
     validatorVersion: plan.validatorVersion,
     createdAt: plan.createdAt,
   };
@@ -535,6 +546,7 @@ class ProductStore {
     this.randomId = randomId || defaultRandomId;
     this.events = events || null;
     this.stmts = {};
+    this.sourceImports = new SourceImportStore({ db, now: () => this.now(), randomId: this.randomId });
   }
 
   // Diagnostic only; the journal never throws and never drives state.
@@ -592,6 +604,152 @@ class ProductStore {
       .all(String(ticketId)).map(artifactFromRow);
   }
 
+  // ------------------------------------------------------ source reads (M6)
+
+  getTicketSource(ticketId) {
+    const ticket = this.getTicket(String(ticketId));
+    if (!ticket || ticket.projectId !== this.projectId) return null;
+    const identity = this.stmt('SELECT * FROM m6_source_identities WHERE ticket_id = ? AND project_id = ?')
+      .get(ticket.ticketId, this.projectId);
+    if (!identity) return null;
+    const applied = this.stmt(`SELECT l.snapshot_id FROM ticket_source_revision_links l
+      JOIN requirement_revisions r ON r.revision_id = l.revision_id
+      WHERE l.ticket_id = ? ORDER BY r.ordinal DESC LIMIT 1`).get(ticket.ticketId);
+    const latest = identity.latest_snapshot_id ? this.sourceSnapshotMeta(identity.latest_snapshot_id) : null;
+    const latestAvailable = identity.latest_available_snapshot_id
+      ? this.sourceSnapshotMeta(identity.latest_available_snapshot_id) : null;
+    const appliedSnapshotId = applied?.snapshot_id || null;
+    const pendingSnapshotId = identity.latest_snapshot_id && identity.latest_snapshot_id !== appliedSnapshotId
+      ? identity.latest_snapshot_id : null;
+    return {
+      identityId: identity.identity_id,
+      sourceKind: identity.source_kind,
+      originId: identity.origin_id,
+      externalId: identity.external_id,
+      ticketId: identity.ticket_id,
+      latestSnapshotId: identity.latest_snapshot_id,
+      latestAvailableSnapshotId: identity.latest_available_snapshot_id,
+      appliedSnapshotId,
+      pendingSnapshotId,
+      pending: Boolean(pendingSnapshotId),
+      rootAvailable: latest ? latest.rootAvailable : false,
+      latestAvailableRootAvailable: latestAvailable ? latestAvailable.rootAvailable : false,
+      displayKey: latest?.displayKey || latestAvailable?.displayKey || null,
+      sourceRevision: latest?.rootSourceRevision || latestAvailable?.rootSourceRevision || null,
+      fetchedAt: latest?.fetchedAt || null,
+    };
+  }
+
+  getRevisionSource(ticketId, revisionId) {
+    const revision = this.getRevision(String(ticketId), String(revisionId));
+    if (!revision) return null;
+    const row = this.stmt(`SELECT l.*, s.content_hash, s.fetched_at, s.recorded_at, s.root_available,
+      json_extract(s.bundle_json, '$.root.sourceKind') AS root_source_kind,
+      json_extract(s.bundle_json, '$.root.originId') AS root_origin_id,
+      json_extract(s.bundle_json, '$.root.externalId') AS root_external_id,
+      json_extract(s.bundle_json, '$.root.displayKey') AS root_display_key
+      FROM ticket_source_revision_links l JOIN m6_source_snapshots s ON s.snapshot_id = l.snapshot_id
+      JOIN m6_source_identities i ON i.identity_id = l.identity_id
+      WHERE l.ticket_id = ? AND l.revision_id = ? AND i.project_id = ? AND i.ticket_id = ?`)
+      .get(String(ticketId), String(revisionId), this.projectId, String(ticketId));
+    if (!row) return null;
+    const documents = this.stmt(`SELECT json_extract(j.value, '$.sourceKind') AS source_kind,
+      json_extract(j.value, '$.originId') AS origin_id,
+      json_extract(j.value, '$.externalId') AS external_id,
+      json_extract(j.value, '$.displayKey') AS display_key,
+      json_extract(j.value, '$.availability') AS availability,
+      json_extract(j.value, '$.title') AS title,
+      json_extract(j.value, '$.url') AS url,
+      json_extract(j.value, '$.sourceRevision') AS source_revision
+      FROM m6_source_snapshots s, json_each(s.bundle_json, '$.documents') j
+      WHERE s.snapshot_id = ? ORDER BY CAST(j.key AS INTEGER) LIMIT 20`).all(row.snapshot_id);
+    return {
+      revisionId: row.revision_id,
+      ticketId: row.ticket_id,
+      identityId: row.identity_id,
+      snapshotId: row.snapshot_id,
+      artifactId: row.artifact_id,
+      rootAvailable: Boolean(row.root_available),
+      fetchedAt: row.fetched_at,
+      recordedAt: row.recorded_at,
+      contentHash: row.content_hash,
+      root: { sourceKind: row.root_source_kind, originId: row.root_origin_id,
+        externalId: row.root_external_id, displayKey: row.root_display_key || null },
+      documents: documents.map((doc) => ({ sourceKind: doc.source_kind, originId: doc.origin_id,
+        externalId: doc.external_id, displayKey: doc.display_key || null, availability: doc.availability,
+        title: doc.title, url: doc.url, sourceRevision: doc.source_revision || null })),
+    };
+  }
+
+  getTicketSourceHistory(ticketId, { beforeOrdinal, limit = 50 } = {}) {
+    const source = this.getTicketSource(ticketId);
+    if (!source) return null;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw invalid('source history limit must be 1..100');
+    if (beforeOrdinal !== undefined && (!Number.isInteger(beforeOrdinal) || beforeOrdinal < 1)) {
+      throw invalid('source history beforeOrdinal must be a positive integer');
+    }
+    const rows = this.stmt(`SELECT snapshot_id, identity_id, ordinal, parent_snapshot_id, content_hash,
+      fetched_at, recorded_at, root_available,
+      json_extract(bundle_json, '$.root.displayKey') AS display_key,
+      json_array_length(bundle_json, '$.documents') AS document_count
+      FROM m6_source_snapshots
+      WHERE identity_id = ? AND (? IS NULL OR ordinal < ?)
+      ORDER BY ordinal DESC LIMIT ?`).all(source.identityId,
+      beforeOrdinal === undefined ? null : beforeOrdinal, beforeOrdinal === undefined ? null : beforeOrdinal, limit + 1);
+    const hasMore = rows.length > limit;
+    const snapshots = rows.slice(0, limit).map((row) => this.sourceSnapshotSummary(row));
+    return {
+      snapshots,
+      nextBeforeOrdinal: hasMore && snapshots.length ? snapshots[snapshots.length - 1].ordinal : null,
+    };
+  }
+
+  getTicketSourceSnapshot(ticketId, snapshotId) {
+    const source = this.getTicketSource(ticketId);
+    if (!source) return null;
+    const belongs = this.stmt(`SELECT 1 FROM m6_source_snapshots s JOIN m6_source_identities i ON i.identity_id = s.identity_id
+      WHERE s.snapshot_id = ? AND i.identity_id = ? AND i.project_id = ? AND i.ticket_id = ?`)
+      .get(String(snapshotId), source.identityId, this.projectId, String(ticketId));
+    if (!belongs) return null;
+    const snapshot = this.sourceImports.getSnapshot(String(snapshotId));
+    if (!snapshot) return null;
+    return snapshot;
+  }
+
+  sourceSnapshotMeta(snapshotId) {
+    const row = this.stmt(`SELECT snapshot_id, identity_id, ordinal, parent_snapshot_id, content_hash,
+      fetched_at, recorded_at, root_available,
+      json_extract(bundle_json, '$.root.displayKey') AS display_key,
+      json_array_length(bundle_json, '$.documents') AS document_count,
+      (SELECT json_extract(j.value, '$.sourceRevision') FROM json_each(m6_source_snapshots.bundle_json, '$.documents') j
+        WHERE json_extract(j.value, '$.sourceKind') = json_extract(m6_source_snapshots.bundle_json, '$.root.sourceKind')
+          AND json_extract(j.value, '$.originId') = json_extract(m6_source_snapshots.bundle_json, '$.root.originId')
+          AND json_extract(j.value, '$.externalId') = json_extract(m6_source_snapshots.bundle_json, '$.root.externalId') LIMIT 1) AS root_source_revision
+      FROM m6_source_snapshots WHERE snapshot_id = ?`).get(String(snapshotId));
+    return row ? {
+      snapshotId: row.snapshot_id, identityId: row.identity_id, ordinal: row.ordinal,
+      parentSnapshotId: row.parent_snapshot_id, contentHash: row.content_hash, fetchedAt: row.fetched_at,
+      recordedAt: row.recorded_at, rootAvailable: Boolean(row.root_available), displayKey: row.display_key || null,
+      documentCount: row.document_count, rootSourceRevision: row.root_source_revision || null,
+    } : null;
+  }
+
+  sourceSnapshotSummary(snapshot) {
+    const row = snapshot;
+    return {
+      snapshotId: row.snapshot_id,
+      identityId: row.identity_id,
+      ordinal: row.ordinal,
+      parentSnapshotId: row.parent_snapshot_id,
+      contentHash: row.content_hash,
+      fetchedAt: row.fetched_at,
+      recordedAt: row.recorded_at,
+      rootAvailable: Boolean(row.root_available),
+      documentCount: row.document_count,
+      displayKey: row.display_key || null,
+    };
+  }
+
   // -------------------------------------------------------- artifacts
 
   recordStagedArtifact(meta) {
@@ -644,6 +802,201 @@ class ProductStore {
       this.attachArtifacts(ticketId, content.artifactIds, false);
       return { ticketId, revisionId };
     });
+  }
+
+  getSourceCommandResult({ commandId, kind, request } = {}) {
+    const normalized = this.validateSourceCommand(commandId, kind, request);
+    const fingerprint = sha256(canonicalJson({ projectId: this.projectId, request: normalized }));
+    const row = this.stmt('SELECT kind, payload_sha256, result_json FROM product_commands WHERE command_id = ?')
+      .get(commandId);
+    if (!row) return null;
+    if (row.kind !== kind || row.payload_sha256 !== fingerprint) {
+      throw new ProductError('command_conflict', 'commandId was already used with a different source command');
+    }
+    return { ...JSON.parse(row.result_json), replayed: true };
+  }
+
+  importSourceBundle({ commandId, request, bundle, artifact } = {}) {
+    this.validateSourceCommand(commandId, 'source_import', request);
+    const replay = this.getSourceCommandResult({ commandId, kind: 'source_import', request });
+    if (replay) return replay;
+    this.validateJiraRoot(bundle, request);
+    const root = bundle.root;
+    const fingerprint = sha256(canonicalJson({ projectId: this.projectId, request }));
+    return this.db.transaction(() => {
+      const prior = this.stmt('SELECT kind, payload_sha256, result_json FROM product_commands WHERE command_id = ?')
+        .get(commandId);
+      if (prior) return this.resolveSourceCommandRow(prior, 'source_import', fingerprint);
+
+      // Identity lookup is repeated under the same immediate transaction to
+      // serialize concurrent imports from separate SQLite connections.
+      const identity = this.sourceImports.getIdentity({ projectId: this.projectId, sourceKind: 'jira',
+        originId: request.originId, externalId: root.externalId });
+      if (identity?.ticketId) {
+        const result = {
+          ticket: this.getTicket(identity.ticketId),
+          revision: this.getTicket(identity.ticketId) && this.getRevision(identity.ticketId, this.getTicket(identity.ticketId).currentRevisionId),
+          source: this.getTicketSource(identity.ticketId),
+          duplicate: true, applied: false, changed: false, artifactAttached: false,
+        };
+        this.recordSourceCommand(commandId, 'source_import', fingerprint, result);
+        return { ...result, replayed: false };
+      }
+
+      const recorded = this.sourceImports.recordSnapshot({ projectId: this.projectId, bundle });
+      const snapshot = this.sourceImports.getSnapshot(recorded.snapshotId);
+      if (!snapshot.rootAvailable) throw new ProductError('invalid_request', 'Jira source root must be available to create a ticket');
+      const input = bundleToIntakeInput(snapshot.bundle);
+      const ticketId = this.randomId('tkt_');
+      const revisionId = this.randomId('rev_');
+      const at = this.now();
+      if (!isPlainObject(artifact) || typeof artifact.artifactId !== 'string') throw invalid('persisted source evidence artifact is required');
+      input.revision.artifactIds = [artifact.artifactId];
+      const content = validateContent(input.revision);
+      this.stmt(
+        'INSERT INTO tickets (ticket_id, project_id, source, title, priority, status, current_revision_id, '
+        + 'version, created_at, updated_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)',
+      ).run(ticketId, this.projectId, 'jira', content.title, content.priority, 'backlog', revisionId, at, at, 'operator');
+      const artifactId = this.insertSourceArtifact(artifact, ticketId, at);
+      this.insertRevision(revisionId, ticketId, null, 1, content, commandId, at);
+      this.sourceImports.bindTicket({ identityId: recorded.identityId, ticketId });
+      this.linkSourceRevision(revisionId, ticketId, recorded.identityId, recorded.snapshotId, artifactId, at);
+      const result = {
+        ticket: this.getTicket(ticketId), revision: this.getRevision(ticketId, revisionId),
+        source: this.getTicketSource(ticketId), duplicate: false, applied: true,
+        changed: true, artifactAttached: true,
+      };
+      this.recordSourceCommand(commandId, 'source_import', fingerprint, result);
+      return { ...result, replayed: false };
+    }).immediate();
+  }
+
+  refreshSourceBundle(ticketId, { commandId, request, bundle, artifact, expectedVersion } = {}) {
+    const canonicalRequest = request || { ticketId: String(ticketId), expectedVersion };
+    this.validateSourceCommand(commandId, 'source_refresh', canonicalRequest);
+    const replay = this.getSourceCommandResult({ commandId, kind: 'source_refresh', request: canonicalRequest });
+    if (replay) return replay;
+    if (canonicalRequest.ticketId !== String(ticketId)) throw invalid('source refresh ticket does not match request');
+    const fingerprint = sha256(canonicalJson({ projectId: this.projectId, request: canonicalRequest }));
+    return this.db.transaction(() => {
+      const prior = this.stmt('SELECT kind, payload_sha256, result_json FROM product_commands WHERE command_id = ?')
+        .get(commandId);
+      if (prior) return this.resolveSourceCommandRow(prior, 'source_refresh', fingerprint);
+      const ticket = this.requireTicket(ticketId);
+      if (ticket.projectId !== this.projectId) throw new ProductError('not_found', 'ticket not found');
+      this.requireVersion(ticket, canonicalRequest.expectedVersion);
+      const identityRow = this.stmt(`SELECT * FROM m6_source_identities
+        WHERE ticket_id = ? AND project_id = ? AND source_kind = 'jira'`).get(ticket.ticketId, this.projectId);
+      if (!identityRow) throw new ProductError('not_found', 'ticket has no linked Jira source');
+      this.validateJiraRoot(bundle, { originId: identityRow.origin_id }, identityRow.external_id);
+      const recorded = this.sourceImports.recordSnapshot({ projectId: this.projectId, bundle });
+      const snapshot = this.sourceImports.getSnapshot(recorded.snapshotId);
+      const appliedRow = this.stmt(`SELECT l.snapshot_id FROM ticket_source_revision_links l
+        JOIN requirement_revisions r ON r.revision_id = l.revision_id
+        WHERE l.ticket_id = ? ORDER BY r.ordinal DESC LIMIT 1`).get(ticket.ticketId);
+      const alreadyApplied = appliedRow?.snapshot_id === snapshot.snapshotId;
+      let applied = false;
+      let artifactAttached = false;
+      let revision = this.getRevision(ticket.ticketId, ticket.currentRevisionId);
+      const at = this.now();
+      if (snapshot.rootAvailable && !alreadyApplied && ticket.status === 'backlog') {
+        const input = bundleToIntakeInput(snapshot.bundle);
+        const revisionId = this.randomId('rev_');
+        const artifactId = this.insertSourceArtifact(artifact, ticket.ticketId, at);
+        input.revision.artifactIds = [artifactId];
+        const content = validateContent(input.revision);
+        const parent = this.stmt('SELECT revision_id, ordinal FROM requirement_revisions WHERE revision_id = ?')
+          .get(ticket.currentRevisionId);
+        this.insertRevision(revisionId, ticket.ticketId, parent.revision_id, parent.ordinal + 1, content, commandId, at);
+        this.linkSourceRevision(revisionId, ticket.ticketId, identityRow.identity_id, snapshot.snapshotId, artifactId, at);
+        this.stmt('UPDATE tickets SET title = ?, priority = ?, current_revision_id = ?, version = version + 1, updated_at = ? WHERE ticket_id = ?')
+          .run(content.title, content.priority, revisionId, at, ticket.ticketId);
+        revision = this.getRevision(ticket.ticketId, revisionId);
+        applied = true;
+        artifactAttached = true;
+      }
+      const result = {
+        ticket: this.getTicket(ticket.ticketId), revision,
+        source: this.getTicketSource(ticket.ticketId), duplicate: false, applied,
+        changed: recorded.changed, artifactAttached,
+      };
+      this.recordSourceCommand(commandId, 'source_refresh', fingerprint, result);
+      return { ...result, replayed: false };
+    }).immediate();
+  }
+
+  validateSourceCommand(commandId, kind, request) {
+    if (typeof commandId !== 'string' || !COMMAND_ID_RE.test(commandId)) throw invalid('commandId is invalid');
+    if (!['source_import', 'source_refresh'].includes(kind)) throw invalid('source command kind is invalid');
+    if (!isPlainObject(request)) throw invalid('source request must be an object');
+    const fields = kind === 'source_import' ? ['originId', 'issueIdOrKey'] : ['ticketId', 'expectedVersion'];
+    if (Object.keys(request).some((key) => !fields.includes(key)) || fields.some((key) => !(key in request))) {
+      throw invalid('source request fields are invalid');
+    }
+    if (kind === 'source_import') {
+      for (const field of fields) {
+        if (typeof request[field] !== 'string' || request[field].length < 1 || request[field].length > 256 || CONTROL_RE.test(request[field])) {
+          throw invalid(`source request ${field} is invalid`);
+        }
+      }
+    } else if (typeof request.ticketId !== 'string' || request.ticketId.length < 1 || request.ticketId.length > 256
+      || CONTROL_RE.test(request.ticketId) || !Number.isInteger(request.expectedVersion) || request.expectedVersion < 1) {
+      throw invalid('source refresh request is invalid');
+    }
+    return kind === 'source_import'
+      ? { originId: request.originId, issueIdOrKey: request.issueIdOrKey }
+      : { ticketId: request.ticketId, expectedVersion: request.expectedVersion };
+  }
+
+  validateJiraRoot(bundle, request, expectedExternalId) {
+    if (!bundle || !bundle.root || bundle.root.sourceKind !== 'jira'
+      || bundle.root.originId !== request.originId || !/^\d+$/.test(String(bundle.root.externalId || ''))
+      || (expectedExternalId && bundle.root.externalId !== expectedExternalId)) {
+      throw new ProductError('invalid_request', 'source bundle must contain the requested immutable Jira issue identity');
+    }
+    const alias = bundle.root.displayKey || bundle.root.externalId;
+    if (!expectedExternalId && request.issueIdOrKey !== alias && request.issueIdOrKey !== bundle.root.externalId) {
+      throw new ProductError('invalid_request', 'source bundle Jira key does not match the requested issue');
+    }
+  }
+
+  resolveSourceCommandRow(row, kind, fingerprint) {
+    if (row.kind !== kind || row.payload_sha256 !== fingerprint) {
+      throw new ProductError('command_conflict', 'commandId was already used with a different source command');
+    }
+    return { ...JSON.parse(row.result_json), replayed: true };
+  }
+
+  recordSourceCommand(commandId, kind, fingerprint, result) {
+    this.stmt('INSERT INTO product_commands (command_id, kind, payload_sha256, result_json, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(commandId, kind, fingerprint, JSON.stringify(result), this.now());
+  }
+
+  insertSourceArtifact(meta, ticketId, at) {
+    if (!isPlainObject(meta)) throw invalid('persisted source evidence artifact is required');
+    const required = ['artifactId', 'displayName', 'mediaType', 'sha256', 'storageRef', 'extraction'];
+    for (const field of required) {
+      if (typeof meta[field] !== 'string' || meta[field].length < 1 || meta[field].length > 2048 || CONTROL_RE.test(meta[field])) {
+        throw invalid(`source artifact ${field} is invalid`);
+      }
+    }
+    if (!Number.isInteger(meta.size) || meta.size < 0 || meta.size > LIMITS.artifactBytes) throw invalid('source artifact size is invalid');
+    if (!/^[a-f0-9]{64}$/i.test(meta.sha256)) throw invalid('source artifact digest is invalid');
+    const existing = this.stmt('SELECT artifact_id FROM artifacts WHERE artifact_id = ?').get(meta.artifactId);
+    if (existing) throw invalid('source artifact is already registered');
+    this.stmt(`INSERT INTO artifacts (artifact_id, ticket_id, state, kind, media_type, display_name, size, sha256,
+      storage_ref, extraction, extracted_chars, extraction_truncated, origin, created_at)
+      VALUES (?, ?, 'attached', 'attachment', ?, ?, ?, ?, ?, ?, ?, ?, 'jira_import', ?)`)
+      .run(meta.artifactId, ticketId, meta.mediaType, meta.displayName, meta.size, meta.sha256, meta.storageRef,
+        meta.extraction, Number.isInteger(meta.extractedChars) ? meta.extractedChars : null,
+        meta.extractionTruncated ? 1 : 0, at);
+    return meta.artifactId;
+  }
+
+  linkSourceRevision(revisionId, ticketId, identityId, snapshotId, artifactId, at) {
+    this.stmt(`INSERT INTO ticket_source_revision_links
+      (revision_id, ticket_id, identity_id, snapshot_id, artifact_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(revisionId, ticketId, identityId, snapshotId, artifactId, at);
   }
 
   reviseTicket(ticketId, command) {
@@ -945,7 +1298,7 @@ class ProductStore {
   }
 
   // Intake turn is ready: save the immutable plan revision and move to the branch phase.
-  saveIntakePlan(runId, { turn, output, classification, plan, checks, requirements, validatorVersion, reason = 'intake' }) {
+  saveIntakePlan(runId, { turn, output, classification, plan, checks, requirements, validatorVersion, planMeta = null, reason = 'intake' }) {
     return this.tx(() => {
       const run = this.getRun(runId);
       if (!run || run.phase !== 'intake' || run.status !== 'running') return null;
@@ -954,9 +1307,13 @@ class ProductStore {
       const planRevisionId = this.randomId('plan_');
       this.stmt(
         'INSERT INTO plan_revisions (plan_revision_id, run_id, parent_plan_revision_id, classification, stages_json, '
-        + 'check_ids_json, checks_json, requirements_json, validator_version, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        + 'check_ids_json, checks_json, requirements_json, validator_version, reason, created_at, '
+        + 'preset_id, preset_version, role_pack, role_pack_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).run(planRevisionId, run.runId, run.planRevisionId, classification, JSON.stringify(plan.stages),
-        JSON.stringify(plan.checkIds), JSON.stringify(checks), JSON.stringify(requirements), validatorVersion, reason, at);
+        JSON.stringify(plan.checkIds), JSON.stringify(checks),
+        JSON.stringify(requirements), validatorVersion, reason, at,
+        planMeta ? planMeta.presetId : null, planMeta ? planMeta.presetVersion : null,
+        planMeta ? planMeta.rolePack : null, planMeta ? planMeta.rolePackVersion : null);
       this.patchRun(run.runId, { plan_revision_id: planRevisionId, intake_turns: turn, phase: 'branch' }, at);
       return this.getPlanRevision(planRevisionId);
     });
@@ -1129,6 +1486,18 @@ class ProductStore {
   }
 
   // Runs one command in a single immediate transaction with the idempotency ledger.
+  // Stored outcome of an already-applied submit command (null when new), so callers can skip revalidation on replay.
+  replayedSubmit(ticketId, command) {
+    const allowed = ['commandId', 'expectedVersion'];
+    validateEnvelope(command, allowed);
+    const { commandId, ...rest } = command;
+    const payloadHash = sha256(canonicalJson({ kind: 'submit', ticketId: String(ticketId), body: rest }));
+    const prior = this.stmt('SELECT payload_sha256, result_json FROM product_commands WHERE command_id = ?').get(commandId);
+    if (!prior) return null;
+    if (prior.payload_sha256 !== payloadHash) throw new ProductError('conflict', 'commandId was already used with a different payload');
+    return { ...JSON.parse(prior.result_json), replayed: true };
+  }
+
   runCommand(kind, targetTicketId, body, allowedFields, apply) {
     validateEnvelope(body, allowedFields);
     const { commandId, ...rest } = body;
@@ -1211,4 +1580,5 @@ class ProductStore {
 
 module.exports = {
   ProductStore, ProductError, LIMITS, SPECIALTIES, PRIORITIES, REFERENCE_KINDS, ACTIVE_RUN_STATUSES, canonicalJson, runSummary,
+  validateEnvelope, sha256, defaultRandomId,
 };

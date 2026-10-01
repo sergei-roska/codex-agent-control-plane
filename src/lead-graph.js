@@ -8,8 +8,9 @@ const {
 } = require('@langchain/langgraph');
 const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
 const {
-  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, parseWorkerReport, classifyCodexError,
+  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, LEGACY_REPAIR_CHAINS, validateDecision, parseWorkerReport, classifyCodexError,
 } = require('./contracts');
+const { stageRoleMatches } = require('./plan-validator');
 const { runAcceptance, assessWithoutChecks } = require('./acceptance');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
 
@@ -220,10 +221,6 @@ function outsideAllowed(files, allowedFiles, workspace) {
 
 // ---- plan helpers (pure)
 
-function isRepairRole(roleName) {
-  return roleName === 'orch-repair-xhigh' || roleName === 'orch-repair-sol';
-}
-
 function planRoundLimit(plan, fallback) {
   if (!plan) return fallback;
   return Math.min(PLAN_MAX_ROUNDS_CAP, Math.max(PLAN_MIN_ROUNDS, 2 * plan.stages.length));
@@ -321,6 +318,7 @@ const LeadState = Annotation.Root({
   unresolvedWriters: last(() => []),
   contract: last(() => ({ requiredChecks: [] })),
   plan: last(() => null),
+  settings: last(() => null),
   stageStatuses: last(() => ({})),
   planViolations: last(() => 0),
   planRetry: last(() => false),
@@ -348,6 +346,13 @@ function buildLeadGraph(deps) {
     appServer, roles, leadRole, workspace, maxRounds, journal, pollIntervalMs,
   } = deps;
   const { admission } = deps;
+  const repairChains = deps.repairChains || LEGACY_REPAIR_CHAINS;
+  const hasRepairChain = (roleId) => Array.isArray(repairChains[roleId]) && repairChains[roleId].length > 0;
+  // Pinned per-run settings for a runtime role, or null (legacy runs pin none).
+  const settingsFor = (state, roleId) => (state.settings && state.settings[roleId]) || null;
+  const withSettings = (role, entry) => (entry
+    ? { ...role, model: entry.model, effort: entry.effort, ...(entry.serviceTier ? { serviceTier: entry.serviceTier } : {}) }
+    : role);
   const reconcileWaitMs = Number.isFinite(deps.reconcileWaitMs) ? deps.reconcileWaitMs : DEFAULT_RECONCILE_WAIT_MS;
 
   const runtimeOf = (config) => deps.runtimeFor(config?.configurable?.thread_id) || {};
@@ -387,7 +392,10 @@ function buildLeadGraph(deps) {
       'The lead must not edit files. Delegate all changes through the A2A role agents.',
       `User goal:\n${state.goal}`,
       `Dispatch rounds already used: ${state.round}/${maxRounds}. A dispatch decision consumes one round.`,
-      'Available roles:\n' + JSON.stringify([...roles.values()].map(({ name, description, sandbox, model, effort }) => ({ name, description, sandbox, model, effort }))),
+      'Available roles:\n' + JSON.stringify([...roles.values()].map((role) => {
+        const { name, description, sandbox, model, effort } = withSettings(role, settingsFor(state, role.name));
+        return { name, description, sandbox, model, effort };
+      })),
     ];
     if (state.plan) {
       const eligible = eligibleStages(state).map((stage) => stage.stageId);
@@ -401,7 +409,7 @@ function buildLeadGraph(deps) {
         })),
       }));
       sections.push(`Next eligible stages: ${eligible.length > 0 ? eligible.join(', ') : 'none'}.`);
-      sections.push('Plan rules: every assignment must set stageId to an eligible stage (dependencies succeeded, stage not yet succeeded), use that stage role (a repair role may retry an attempted orch-builder stage), and keep allowedFiles within the stage allowedFiles. You may finish only when every required stage has succeeded. A decision that breaks these rules is discarded and counts as a round; two in a row end the run as plan_violation.');
+      sections.push('Plan rules: every assignment must set stageId to an eligible stage (dependencies succeeded, stage not yet succeeded), use that stage role (a repair executor from the stage role repair chain may retry an attempted stage, in chain order), and keep allowedFiles within the stage allowedFiles. You may finish only when every required stage has succeeded. A decision that breaks these rules is discarded and counts as a round; two in a row end the run as plan_violation.');
     }
     if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
     sections.push('Open worker decisions (each must be resolved in resolutions, or listed in humanInput.relatedDecisionIds):\n' + JSON.stringify(openDecisions));
@@ -442,6 +450,8 @@ function buildLeadGraph(deps) {
         attemptId: null,
         model: usage?.model ?? null,
         effort: usage?.effort ?? null,
+        requested: usage?.requested ?? null,
+        reported: usage?.reported ?? null,
         startedAt: usage?.startedAt ?? null,
         elapsedMs: usage?.elapsedMs ?? null,
         turns: usage?.turns ?? null,
@@ -488,7 +498,7 @@ function buildLeadGraph(deps) {
     let leadResult;
     try {
       leadResult = await appServer.run({
-        role: leadRole,
+        role: withSettings(leadRole, settingsFor(state, leadRole?.name)),
         cwd: workspace,
         input: decisionPrompt(state, { notes }),
         ...(state.threadId ? { threadId: state.threadId } : {}),
@@ -513,6 +523,7 @@ function buildLeadGraph(deps) {
       outcomeCount: state.outcomes.length,
       unresolvedWriterCount: state.unresolvedWriters.length,
       openDecisionIds: new Set(state.openDecisions.map((entry) => entry.id)),
+      repairChains,
     });
     deps.emit(runtime.onEvent, { type: 'decision', round: state.round + 1, action: decision.action });
 
@@ -541,7 +552,7 @@ function buildLeadGraph(deps) {
         const reopen = new Set();
         for (const assignment of decision.assignments) {
           const stage = state.plan.stages.find((entry) => entry.stageId === assignment.stageId);
-          if (stage && stage.roleId === 'orch-builder' && stageStatusOf(state, stage.stageId) === 'succeeded') reopen.add(stage.stageId);
+          if (stage && hasRepairChain(stage.roleId) && stageStatusOf(state, stage.stageId) === 'succeeded') reopen.add(stage.stageId);
         }
         if (reopen.size > 0) {
           let grew = true;
@@ -598,13 +609,13 @@ function buildLeadGraph(deps) {
       }
       if (seen.has(id)) problems.push(`stage ${id} is assigned more than once in one decision`);
       seen.add(id);
-      const repairReopen = state.acceptance?.disposition === 'rejected' && stage.roleId === 'orch-builder';
+      const repairReopen = state.acceptance?.disposition === 'rejected' && hasRepairChain(stage.roleId);
       if (stageStatusOf(state, id) === 'succeeded' && !repairReopen) problems.push(`stage ${id} has already succeeded`);
       const unmet = stage.dependencies.filter((dep) => stageStatusOf(state, dep) !== 'succeeded');
       if (unmet.length > 0) problems.push(`stage ${id} is not eligible: dependencies not succeeded (${unmet.join(', ')})`);
-      const attempted = (state.stageStatuses?.[id]?.attemptIds || []).length > 0;
-      const repairOk = stage.roleId === 'orch-builder' && isRepairRole(assignment.role) && attempted;
-      if (assignment.role !== stage.roleId && !repairOk) problems.push(`stage ${id} requires role ${stage.roleId}, not ${assignment.role}`);
+      const attemptIds = new Set(state.stageStatuses?.[id]?.attemptIds || []);
+      const attemptedRoles = new Set(state.outcomes.filter((outcome) => attemptIds.has(outcome.attemptId)).map((outcome) => outcome.role));
+      if (!stageRoleMatches(stage, assignment.role, attemptedRoles, { repairChains })) problems.push(`stage ${id} requires role ${stage.roleId}, not ${assignment.role}`);
       const extra = outsideAllowed(assignment.allowedFiles, stage.allowedFiles, workspace);
       if (extra.length > 0) problems.push(`assignment for stage ${id} widens allowedFiles beyond the stage (${extra.join(', ')})`);
     }
@@ -640,7 +651,7 @@ function buildLeadGraph(deps) {
     return { ...item, state: 'finished', taskId: result.taskId || item.taskId, result };
   }
 
-  async function submitItem(item, signal) {
+  async function submitItem(item, signal, settings = null) {
     const role = roles.get(item.role);
     const client = await deps.clientFor(item.role);
     const row = journal.get(item.attemptId);
@@ -671,6 +682,7 @@ function buildLeadGraph(deps) {
       }
     }
 
+    const pinned = settings && settings[item.role] ? settings[item.role] : null;
     const { stageId: _stageId, ...workerAssignment } = item.assignment;
     const text = JSON.stringify({
       ...workerAssignment,
@@ -686,7 +698,7 @@ function buildLeadGraph(deps) {
           contextId: item.contextId,
           role: A2ARole.ROLE_USER,
           parts: [{ content: { $case: 'text', value: text }, mediaType: 'text/plain' }],
-          metadata: {},
+          metadata: pinned ? { effectiveSettings: { roleRuntimeId: item.role, model: pinned.model, effort: pinned.effort, serviceTier: pinned.serviceTier ?? null } } : {},
           extensions: [],
           referenceTaskIds: [],
         },
@@ -793,7 +805,7 @@ function buildLeadGraph(deps) {
       throw new Error(`Writable dispatch refused: ${state.unresolvedWriters.length} writer outcome(s) are unresolved`);
     }
     // An abort during submit leaves the item submitted with an unknown task so collect can cancel it.
-    const settled = await Promise.allSettled(targets.map((item) => submitItem(item, signal).catch((error) => {
+    const settled = await Promise.allSettled(targets.map((item) => submitItem(item, signal, state.settings).catch((error) => {
       if (error?.name === 'AbortError') return { ...item, state: 'submitted', taskId: null };
       throw error;
     })));

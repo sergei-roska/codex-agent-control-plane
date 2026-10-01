@@ -122,3 +122,46 @@ test('rejects malformed a2a_tools tables', (t) => {
     assert.throws(() => loadRoles({ profilesDir: fixture.copied }), /orch-builder\.toml/, label);
   }
 });
+
+test('name, model, and effort patterns accept delivery-pack values and reject bad ones', (t) => {
+  const tweak = (mutate) => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-role-patterns-'));
+    t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+    const copied = path.join(tempRoot, 'profiles');
+    fs.cpSync(PROFILES_DIR, copied, { recursive: true });
+    mutate(path.join(copied, 'agents'));
+    return copied;
+  };
+
+  const dots = tweak((dir) => {
+    const file = path.join(dir, 'orch-builder.toml');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('model = "gpt-6-luna"', 'model = "gpt-6.1_mini-2"').replace('model_reasoning_effort = "high"', 'model_reasoning_effort = "ultra_high"'));
+  });
+  const builder = loadRoles({ profilesDir: dots }).get('orch-builder');
+  assert.equal(builder.model, 'gpt-6.1_mini-2');
+  assert.equal(builder.effort, 'ultra_high');
+
+  const dlv = tweak((dir) => {
+    const src = fs.readFileSync(path.join(dir, 'orch-builder.toml'), 'utf8').replace('name = "orch-builder"', 'name = "dlv-builder"');
+    fs.writeFileSync(path.join(dir, 'dlv-builder.toml'), src);
+  });
+  const roles = loadRoles({ profilesDir: dlv });
+  assert.ok(roles.has('dlv-builder'));
+  assert.ok(roles.has('orch-builder'));
+
+  const cases = [
+    ['bad name prefix', 'name = "orch-builder"', 'name = "xyz-builder"', 'orch-builder.toml'],
+    ['uppercase name', 'name = "orch-builder"', 'name = "orch-Builder"', 'orch-builder.toml'],
+    ['leading-dot model', 'model = "gpt-6-luna"', 'model = ".gpt"', 'orch-builder.toml'],
+    ['uppercase model', 'model = "gpt-6-luna"', 'model = "GPT"', 'orch-builder.toml'],
+    ['long model', 'model = "gpt-6-luna"', `model = "${'a'.repeat(65)}"`, 'orch-builder.toml'],
+    ['bad effort', 'model_reasoning_effort = "high"', 'model_reasoning_effort = "Very High"', 'orch-builder.toml'],
+  ];
+  for (const [label, from, to, file] of cases) {
+    const dir = tweak((agents) => {
+      const target = path.join(agents, file);
+      fs.writeFileSync(target, fs.readFileSync(target, 'utf8').replace(from, to));
+    });
+    assert.throws(() => loadRoles({ profilesDir: dir }), /orch-builder\.toml/, label);
+  }
+});

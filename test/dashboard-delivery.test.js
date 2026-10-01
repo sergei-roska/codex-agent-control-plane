@@ -94,7 +94,7 @@ function builderWorker(workspace, source = GOOD_SOURCE) {
 // Boots the stack, pairs a dashboard session and runs fn({ runtime, api, client, requestOptions, workspace, appServer }).
 async function withStack(appServerFactory, fn) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-dash-delivery-'));
-  fs.writeFileSync(path.join(root, 'project.json'), JSON.stringify({ baseRef: 'main', checks: [CHECK] }));
+  fs.writeFileSync(path.join(root, 'project.json'), JSON.stringify({ baseRef: 'main', checks: [CHECK], rolePack: 'legacy-orch' }));
   const workspace = path.join(root, 'workspace');
   makeWorkspace(workspace);
   const appServer = appServerFactory(workspace);

@@ -1,0 +1,38 @@
+{
+  "presetId": "audit",
+  "version": "1.0.0",
+  "classification": "audit",
+  "description": "Read-only investigation: evidence gathering by a read-only specialist, then a synthesized findings report. No repository writes.",
+  "stages": [
+    {
+      "key": "investigate",
+      "roles": [
+        "architect",
+        "security",
+        "reviewer"
+      ],
+      "required": true,
+      "dependsOn": [],
+      "purpose": "Read-only investigation of the assigned question with cited evidence"
+    },
+    {
+      "key": "synthesis",
+      "roles": [
+        "reviewer"
+      ],
+      "required": true,
+      "dependsOn": [
+        "investigate"
+      ],
+      "purpose": "Consolidated findings with severity, location, and recommendations"
+    }
+  ],
+  "optionalRoles": [
+    "security",
+    "architect"
+  ],
+  "optionalDependsOn": [
+    "investigate"
+  ],
+  "minChecks": 0
+}

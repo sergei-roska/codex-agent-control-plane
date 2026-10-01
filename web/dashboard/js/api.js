@@ -133,12 +133,14 @@ function hideNotPaired() {
 async function exchangePairingCode() {
   const params = new URLSearchParams((location.hash || '').replace(/^#/, ''));
   const code = params.get('pair');
-  if (!code) return;
+  if (!code) return false;
   try {
     await apiRequest('POST', '/session', { body: { code }, noUnpairedPanel: true });
     hideNotPaired();
+    return true;
   } catch (err) {
     Conn.unpaired('Pairing failed: ' + err.message + '. Request a new code.');
+    return false;
   } finally {
     history.replaceState(null, '', location.pathname + location.search);
   }
@@ -147,7 +149,15 @@ async function exchangePairingCode() {
 // Pasting a pairing URL into an already-open dashboard tab only changes the fragment.
 window.addEventListener('hashchange', () => {
   if (!/(^#|&)pair=/.test(location.hash || '')) return;
-  exchangePairingCode().then(() => location.reload());
+  const hasPendingOAuth = typeof window.pendingAtlassianOAuthHandle === 'string' && Boolean(window.pendingAtlassianOAuthHandle);
+  exchangePairingCode().then(async (paired) => {
+    if (hasPendingOAuth && !paired) return;
+    if (hasPendingOAuth && typeof window.completePendingAtlassianOAuth === 'function') {
+      const complete = await window.completePendingAtlassianOAuth();
+      if (!complete) return;
+    }
+    location.reload();
+  });
 });
 
 // --- Poller: one task at a time, stale requests aborted ---

@@ -2,7 +2,7 @@
 
 const crypto = require('node:crypto');
 
-const { validatePlan, STAGE_ROLES } = require('./plan-validator');
+const { validatePlan, validatePresetPlan, STAGE_ROLES } = require('./plan-validator');
 
 const MAX_INTAKE_TURNS = 3;
 const MAX_QUESTIONS = 5;
@@ -69,6 +69,83 @@ const INTAKE_SCHEMA = {
   },
 };
 
+// Pack-aware schema: plan adds presetId, stages add presetStageKey, roleId is a public role id.
+const INTAKE_SCHEMA_V2 = {
+  ...INTAKE_SCHEMA,
+  properties: {
+    ...INTAKE_SCHEMA.properties,
+    plan: {
+      ...INTAKE_SCHEMA.properties.plan,
+      required: ['presetId', 'stages', 'checkIds'],
+      properties: {
+        presetId: { type: 'string' },
+        stages: {
+          type: 'array',
+          items: {
+            ...INTAKE_SCHEMA.properties.plan.properties.stages.items,
+            required: ['stageId', 'presetStageKey', 'roleId', 'objective', 'dependencies', 'allowedFiles', 'required'],
+            properties: {
+              stageId: { type: 'string' },
+              presetStageKey: { type: ['string', 'null'] },
+              roleId: { type: 'string' },
+              objective: { type: 'string' },
+              dependencies: stringArray,
+              allowedFiles: stringArray,
+              required: { type: 'boolean' },
+            },
+          },
+        },
+        checkIds: stringArray,
+      },
+    },
+  },
+};
+
+const DEFAULT_UNAVAILABLE_REASON = 'needs its own contract and pilot';
+
+// presets may be a Map, an array, or { available, unavailable }; unavailable falls back to the pack list.
+function normalizePresets(pack, presets) {
+  let available = [];
+  let unavailable = [];
+  if (presets instanceof Map) available = [...presets.values()];
+  else if (Array.isArray(presets)) available = presets;
+  else if (presets && typeof presets === 'object') {
+    available = presets.available instanceof Map ? [...presets.available.values()] : (presets.available || []);
+    unavailable = presets.unavailable || [];
+  }
+  if (unavailable.length === 0 && pack && Array.isArray(pack.unavailablePresets)) unavailable = pack.unavailablePresets;
+  unavailable = unavailable.map((item) => (typeof item === 'string'
+    ? { presetId: item, reason: DEFAULT_UNAVAILABLE_REASON }
+    : { presetId: item.presetId, reason: item.reason || DEFAULT_UNAVAILABLE_REASON }));
+  return { available, unavailable };
+}
+
+function roleSummary(entry) {
+  const role = entry.role || {};
+  const text = String(role.description || role.summary || '').replace(/\s+/g, ' ').trim();
+  return text || '(no summary)';
+}
+
+function presetLines(pack, presets) {
+  const { available, unavailable } = normalizePresets(pack, presets);
+  const lines = ['Public roles (use these ids as roleId):'];
+  for (const entry of pack.roles || []) lines.push(`- ${entry.publicId} (${entry.displayName || entry.publicId}): ${roleSummary(entry)}`);
+  lines.push('Available presets (pick the one whose classification matches yours; plan.presetId must be its id):');
+  for (const preset of available) {
+    lines.push(`- ${preset.presetId} v${preset.version} (classification ${preset.classification}), minChecks ${preset.minChecks}`);
+    for (const st of preset.stages || []) {
+      const deps = (st.dependsOn || []).length ? ` <- ${st.dependsOn.join(', ')}` : '';
+      lines.push(`  - required stage key "${st.key}": ${st.roles.join(' or ')}${deps}`);
+    }
+    lines.push(`  - optional roles: ${(preset.optionalRoles || []).join(', ') || '(none)'}; optional stages depend on: ${(preset.optionalDependsOn || []).join(', ') || '(none)'}`);
+  }
+  if (unavailable.length > 0) {
+    lines.push('Unavailable presets (never use; say unsupported if the ticket needs one):');
+    for (const item of unavailable) lines.push(`- ${item.presetId}: unavailable, ${item.reason}`);
+  }
+  return lines;
+}
+
 const PM_PREAMBLE = [
   'You are acting as the product manager (PM) and coordinating entry point for this team.',
   'You own requirements, readiness, scope, coordination, and the delivery report. You must not implement anything yourself and must not edit files.',
@@ -108,7 +185,7 @@ function referenceLines(references) {
   return lines;
 }
 
-function buildIntakePrompt({ revision, artifacts = [], extractedTexts = new Map(), priorTurns = [], projectConfig, roleMapping } = {}) {
+function buildIntakePrompt({ revision, artifacts = [], extractedTexts = new Map(), priorTurns = [], projectConfig, roleMapping, pack, presets } = {}) {
   const parts = [];
   const delimiter = newDelimiter();
   const block = (label, text) => blockWith(label, text, delimiter);
@@ -154,19 +231,22 @@ function buildIntakePrompt({ revision, artifacts = [], extractedTexts = new Map(
   }
   const checks = (projectConfig && projectConfig.checks) || [];
   const mapping = roleMapping || {};
+  const packAware = Boolean(pack);
   const roleLines = STAGE_ROLES.map((role) => `- ${role}${mapping[role] ? `: ${mapping[role]}` : ''}`);
   parts.push([
     'Project policy (trusted):',
     `Base ref: ${projectConfig ? projectConfig.baseRef : 'main'}`,
     `Approved check ids (plan.checkIds must be a subset; you cannot invent commands):\n${checks.length ? checks.map((c) => `- ${c.id}${c.description ? `: ${c.description}` : ''}`).join('\n') : '(none configured)'}`,
-    `Stage roles:\n${roleLines.join('\n')}`,
-    'Plan rules: 1..12 stages; stageId [a-z0-9-] up to 40 chars, unique; dependencies name earlier stages only; orch-builder and orch-verifier stages need 1..20 relative allowedFiles, other stages []; feature/bugfix need required builder, verifier and auditor stages (verifier and auditor depending on the builder) and at least one checkId; docs need required builder and auditor; audit is read-only with a required auditor. Repair roles are never stage roles.',
+    ...(packAware ? [presetLines(pack, presets).join('\n')] : [`Stage roles:\n${roleLines.join('\n')}`]),
+    packAware
+      ? 'Plan rules: set plan.presetId to the classification\'s preset id; 1..12 stages; stageId [a-z0-9-] up to 40 chars, unique; dependencies name earlier stages only; every required preset stage appears exactly once with presetStageKey set to its key, required true, a role from its list, and dependencies including the preset dependsOn stages; optional stages have presetStageKey null and use only the preset optional roles, depending on the optionalDependsOn stages; writable roles (Developer, QA, Performance, DevOps, Technical Writer) need 1..20 relative allowedFiles, read-only roles []; audit is read-only; checkIds must be a subset of the approved ids with at least minChecks entries. Repair executors are never stage roles.'
+      : 'Plan rules: 1..12 stages; stageId [a-z0-9-] up to 40 chars, unique; dependencies name earlier stages only; orch-builder and orch-verifier stages need 1..20 relative allowedFiles, other stages []; feature/bugfix need required builder, verifier and auditor stages (verifier and auditor depending on the builder) and at least one checkId; docs need required builder and auditor; audit is read-only with a required auditor. Repair roles are never stage roles.',
     `readiness: needs_input needs 1..${MAX_QUESTIONS} questions and plan null; ready needs a plan and no questions; unsupported needs unsupportedReason.`,
   ].join('\n'));
   return parts.join('\n\n');
 }
 
-function validateIntakeOutput(output, { projectConfig } = {}) {
+function validateIntakeOutput(output, { projectConfig, pack, presets } = {}) {
   const errors = [];
   const fail = (path, message) => errors.push({ path, message });
   if (!output || typeof output !== 'object' || Array.isArray(output)) {
@@ -213,7 +293,16 @@ function validateIntakeOutput(output, { projectConfig } = {}) {
     if (plan === null || plan === undefined) fail('plan', 'ready requires a plan');
     else {
       const checks = (projectConfig && projectConfig.checks) || [];
-      const result = validatePlan(plan, { classification, projectCheckIds: checks.map((c) => c.id) });
+      const projectCheckIds = checks.map((c) => c.id);
+      let result;
+      if (pack) {
+        const preset = normalizePresets(pack, presets).available.find((item) => item.classification === classification);
+        result = preset
+          ? validatePresetPlan(plan, { pack, preset, projectCheckIds })
+          : { ok: false, errors: [{ path: 'classification', message: `no available preset for classification "${classification}"` }] };
+      } else {
+        result = validatePlan(plan, { classification, projectCheckIds });
+      }
       if (!result.ok) result.errors.forEach((e) => fail(e.path, e.message));
       else normalizedPlan = result.plan;
     }
@@ -257,6 +346,7 @@ function renderRequirementsGoal({ revision, intake }) {
 
 module.exports = {
   INTAKE_SCHEMA,
+  INTAKE_SCHEMA_V2,
   MAX_INTAKE_TURNS,
   MAX_QUESTIONS,
   MAX_EXTRACTED_CHARS,

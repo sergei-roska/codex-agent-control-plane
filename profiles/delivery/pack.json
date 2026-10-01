@@ -1,0 +1,69 @@
+{
+  "packId": "delivery",
+  "version": "1.0.0",
+  "coordinator": {
+    "publicId": "project-manager",
+    "runtimeId": "dlv-project-manager",
+    "displayName": "Project Manager"
+  },
+  "roles": [
+    {
+      "publicId": "architect",
+      "runtimeId": "dlv-architect",
+      "displayName": "Architect"
+    },
+    {
+      "publicId": "developer",
+      "runtimeId": "dlv-developer",
+      "displayName": "Developer"
+    },
+    {
+      "publicId": "qa",
+      "runtimeId": "dlv-qa",
+      "displayName": "QA"
+    },
+    {
+      "publicId": "reviewer",
+      "runtimeId": "dlv-reviewer",
+      "displayName": "Reviewer"
+    },
+    {
+      "publicId": "security",
+      "runtimeId": "dlv-security",
+      "displayName": "Security"
+    },
+    {
+      "publicId": "performance",
+      "runtimeId": "dlv-performance",
+      "displayName": "Performance"
+    },
+    {
+      "publicId": "devops",
+      "runtimeId": "dlv-devops",
+      "displayName": "DevOps"
+    },
+    {
+      "publicId": "tech-writer",
+      "runtimeId": "dlv-tech-writer",
+      "displayName": "Technical Writer"
+    }
+  ],
+  "repairChains": {
+    "dlv-developer": [
+      "dlv-developer-xhigh",
+      "dlv-developer-sol"
+    ]
+  },
+  "presets": [
+    "feature",
+    "bugfix",
+    "docs",
+    "audit"
+  ],
+  "unavailablePresets": [
+    "security",
+    "performance",
+    "environment",
+    "debt"
+  ]
+}

@@ -6,14 +6,14 @@ const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/s
 const express = require('express');
 const Database = require('better-sqlite3');
 const {
-  WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, classifyCodexError, findCodexErrorInfo,
+  WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, classifyCodexError, findCodexErrorInfo, normalizeEffectiveSettings,
 } = require('./contracts');
 const { WriterAdmission } = require('./writer-admission');
 
 const DEFAULT_RECONCILE_RETRY = { intervalMs: 250, totalMs: 5000 };
 
 function roleSlug(roleId) {
-  if (!/^orch-[a-z0-9-]+$/.test(roleId)) {
+  if (!/^(orch|dlv)-[a-z0-9-]+$/.test(roleId)) {
     throw new TypeError(`Invalid role id "${roleId}"; expected an orch-* slug`);
   }
   return roleId;
@@ -125,15 +125,33 @@ function workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries 
     tokenSource: usage?.tokenSource ?? 'unavailable',
     cumulativeTotal: usage?.cumulativeTotal ?? null,
     appServerVersion: usage?.appServerVersion ?? null,
+    requested: usage?.requested ?? null,
+    reported: usage?.reported ?? null,
     outcome,
     permissionEvents: Array.isArray(source?.permissionEvents) ? source.permissionEvents : [],
   };
 }
 
+// Pinned per-run settings sent by the lead; honored only when they name this endpoint's role.
+// An entry naming this role that fails the format check, or (catalog ok) the catalog check, fails the turn.
+async function effectiveSettingsFor(roleId, message, catalog) {
+  const raw = message?.metadata?.effectiveSettings;
+  if (!raw || typeof raw !== 'object' || raw.roleRuntimeId !== roleId) return null;
+  const normalized = normalizeEffectiveSettings(raw);
+  if (!normalized) throw new Error(`effectiveSettings for ${roleId} is malformed (invalid model, effort or serviceTier)`);
+  if (catalog && catalog.status().state === 'ok') {
+    const verdict = await catalog.validateSelection(normalized);
+    if (!verdict.ok && verdict.code !== 'catalog_unavailable') {
+      throw new Error(`effectiveSettings for ${roleId} refused: ${verdict.errors.map((entry) => entry.message).join('; ')}`);
+    }
+  }
+  return normalized;
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function makeExecutor({
-  roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null,
+  roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, catalog = null,
 }) {
   const writable = role.sandbox !== 'read-only';
   const reservations = new Map();
@@ -320,8 +338,13 @@ function makeExecutor({
         let result;
         let runError = null;
         try {
+          const effective = await effectiveSettingsFor(roleId, requestContext.userMessage, catalog);
           result = await appServer.run({
-            role: { id: roleId, ...role },
+            role: {
+              id: roleId,
+              ...role,
+              ...(effective ? { model: effective.model, effort: effective.effort, ...(effective.serviceTier ? { serviceTier: effective.serviceTier } : {}) } : {}),
+            },
             cwd: workspace,
             input,
             outputSchema: WORKER_REPORT_SCHEMA,
@@ -457,7 +480,7 @@ function rejectOverlappingTask(executor) {
 
 /** Mount one independently stored A2A JSON-RPC agent per role. */
 function registerRoleAgents(app, {
-  roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger,
+  roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger, catalog = null,
 }) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
     throw new TypeError('app must be an Express application');
@@ -480,7 +503,7 @@ function registerRoleAgents(app, {
     const route = `/agents/${roleId}`;
     const endpoint = new URL(route, `${origin.origin}/`).toString();
     const card = makeRoleCard({ roleId, role, endpoint });
-    const executor = makeExecutor({ roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger });
+    const executor = makeExecutor({ roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, catalog });
     const handler = new DefaultRequestHandler(
       card,
       taskStoreFactory(roleId),

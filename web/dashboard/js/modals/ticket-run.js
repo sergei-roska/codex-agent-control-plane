@@ -23,7 +23,7 @@ const TRR_TERMINAL = ['completed', 'failed', 'stopped', 'cancelled'];
 // sigs: per-section render signatures so polling never rebuilds (and so never resets) an untouched section.
 const trr = {
   pick: null, runId: null, data: null, dataRunId: null, error: null, tab: 'requirements',
-  sigs: {}, drafts: {}, answering: null, answerError: {}, diff: null
+  sigs: {}, drafts: {}, answering: null, answerError: {}, diff: null, usage: null
 };
 
 function trrReset() {
@@ -33,6 +33,7 @@ function trrReset() {
   trr.dataRunId = null;
   trr.error = null;
   trr.tab = 'requirements';
+  trr.usage = null;
   trr.sigs = {};
   trr.drafts = {};
   trr.answering = null;
@@ -532,8 +533,9 @@ function renderRunTabs(d, run, data) {
   });
   const candidate = data ? data.candidate : null;
   if (trr.tab === 'candidate' && candidate) trrEnsureDiff(candidate);
+  if (trr.tab === 'settings' && data && data.leadTaskCardId) trrEnsureUsage(data);
   const sig = JSON.stringify([trr.tab, run.runId, data ? { i: data.intake, p: data.plan, s: data.stages, c: data.candidate, st: data.settings, l: data.leadTaskCardId } : null,
-    trr.diff ? [trr.diff.key, trr.diff.state, trr.diff.error] : null, trr.error]);
+    trr.diff ? [trr.diff.key, trr.diff.state, trr.diff.error] : null, trr.usage ? [trr.usage.key, trr.usage.state, trr.usage.attempts.length] : null, trr.error]);
   trrGuard('panel', sig, panel, (el) => {
     if (!data) { el.appendChild(h('div', { class: 'detail-empty', text: trr.error ? 'Run details unavailable.' : 'Loading run details...' })); return; }
     if (trr.tab === 'requirements') trrTabRequirements(el, data);
@@ -776,13 +778,93 @@ function trrFlatten(value, prefix, out) {
   return out;
 }
 
+// A null tier means nothing was sent to the App Server; the model's own default (if advertised) applies.
+function trrTierLabel(v, model) {
+  if (v) return String(v);
+  const entry = model && typeof cmFindModel === 'function' ? cmFindModel(model) : null;
+  const dflt = entry && entry.defaultServiceTier ? entry.defaultServiceTier : null;
+  return dflt ? 'Default (not sent; model default ' + dflt + ')' : 'Default (not sent)';
+}
+
+function trrEnsureUsage(data) {
+  const cardId = data.leadTaskCardId;
+  const key = cardId + '|' + JSON.stringify((data.stages || []).map(s => [s.stageId, s.status, (s.attempts || []).length]));
+  if (trr.usage && trr.usage.key === key) return;
+  const prev = trr.usage && trr.usage.cardId === cardId ? trr.usage.attempts : [];
+  trr.usage = { key, cardId, state: prev.length ? 'ok' : 'loading', attempts: prev };
+  apiGet('/cards/' + encodeURIComponent(cardId) + '/usage').then(res => {
+    if (!trr.usage || trr.usage.key !== key) return;
+    trr.usage = { key, cardId, state: 'ok', attempts: Array.isArray(res && res.attempts) ? res.attempts : [] };
+    renderRunPanel();
+  }, () => {
+    if (!trr.usage || trr.usage.key !== key) return;
+    trr.usage = { key, cardId, state: 'error', attempts: [] };
+    renderRunPanel();
+  });
+}
+
+function trrSettingsLine(model, effort, tier) {
+  return [model || 'unknown', effort || 'unknown', trrTierLabel(tier, model)].join(' / ');
+}
+
+function trrRolesTable(roles) {
+  const ids = Object.keys(roles);
+  const table = h('table', { class: 'attempts-table' });
+  table.appendChild(h('thead', {}, [h('tr', {}, ['Role', 'Model', 'Effort', 'Speed', 'Source'].map(t => h('th', { text: t })))]));
+  const body = h('tbody');
+  ids.forEach(id => {
+    const r = roles[id] && typeof roles[id] === 'object' ? roles[id] : {};
+    body.appendChild(h('tr', {}, [
+      h('td', {}, [h('span', { class: 'tr-token', text: id })]),
+      h('td', { text: r.model || 'n/a' }),
+      h('td', { text: r.effort || 'n/a' }),
+      h('td', { text: trrTierLabel(r.serviceTier, r.model) }),
+      h('td', { text: r.source || 'n/a', title: r.settingsRevisionId ? 'Revision ' + r.settingsRevisionId : '' })
+    ]));
+  });
+  table.appendChild(body);
+  return h('div', { class: 'attempts-table-wrapper' }, [table]);
+}
+
+function trrAttemptsSettings(usage) {
+  if (!usage || usage.state === 'loading') return h('span', { class: 'detail-empty', text: 'Loading attempt settings...' });
+  if (usage.state === 'error') return h('span', { class: 'detail-empty', text: 'Attempt settings unavailable.' });
+  const withData = usage.attempts.filter(a => a && (a.requested || a.reported));
+  if (!withData.length) {
+    return h('span', { class: 'detail-empty', text: usage.attempts.length
+      ? 'Requested and reported settings are not exposed for these attempts.' : 'No attempts recorded yet.' });
+  }
+  const table = h('table', { class: 'attempts-table' });
+  table.appendChild(h('thead', {}, [h('tr', {}, ['Role', 'Requested', 'Reported', ''].map(t => h('th', { text: t })))]));
+  const body = h('tbody');
+  withData.forEach(a => {
+    const rq = a.requested || null;
+    const rp = a.reported || null;
+    const differs = rq && rp && ((rq.model || null) !== (rp.model || null)
+      || (rq.effort || null) !== (rp.reasoningEffort || null) || (rq.serviceTier || null) !== (rp.serviceTier || null));
+    body.appendChild(h('tr', {}, [
+      h('td', { text: a.role || 'n/a' }),
+      h('td', { text: rq ? trrSettingsLine(rq.model, rq.effort, rq.serviceTier) : 'not recorded' }),
+      h('td', { text: rp ? trrSettingsLine(rp.model, rp.reasoningEffort, rp.serviceTier) : 'not reported' }),
+      h('td', {}, [differs ? h('span', { class: 'badge tone-warn', text: 'differs' }) : null])
+    ]));
+  });
+  table.appendChild(body);
+  return h('div', { class: 'attempts-table-wrapper' }, [table]);
+}
+
 function trrTabSettings(el, data) {
   if (!data.settings || typeof data.settings !== 'object') {
     el.appendChild(h('div', { class: 'detail-empty', text: 'No settings snapshot recorded for this run.' }));
     return;
   }
   el.appendChild(h('div', { class: 'form-hint', text: 'Settings pinned when the run was submitted. Later changes do not affect this run.' }));
-  el.appendChild(h('div', { class: 'detail-block' }, [trrKv(trrFlatten(data.settings, '', []))]));
+  const rest = Object.assign({}, data.settings);
+  const roles = rest.roles && typeof rest.roles === 'object' && !Array.isArray(rest.roles) ? rest.roles : null;
+  if (roles) delete rest.roles;
+  el.appendChild(h('div', { class: 'detail-block' }, [trrKv(trrFlatten(rest, '', []))]));
+  if (roles) el.appendChild(trrSection('Pinned role settings', trrRolesTable(roles)));
+  if (data.leadTaskCardId) el.appendChild(trrSection('Requested vs reported, per attempt', trrAttemptsSettings(trr.usage)));
 }
 
 function trrTabExecution(el, data) {

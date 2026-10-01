@@ -80,3 +80,15 @@ test('defaultProjectConfigPath', () => {
   assert.equal(defaultProjectConfigPath('/var/state/s.json', {}), '/var/state/project.json');
   assert.equal(defaultProjectConfigPath('/var/state/s.json', { CODEX_PROJECT_CONFIG: '/x/p.json' }), '/x/p.json');
 });
+
+test('rolePack defaults to delivery, accepts legacy-orch, is strict and changes the revision', () => {
+  const defaults = loadProjectConfig({ filePath: path.join(os.tmpdir(), 'nope-none', 'project.json') });
+  assert.equal(defaults.rolePack, 'delivery');
+  assert.equal(load({}).rolePack, 'delivery');
+  assert.equal(load({ rolePack: 'delivery' }).rolePack, 'delivery');
+  assert.equal(load({ rolePack: 'legacy-orch' }).rolePack, 'legacy-orch');
+  assert.notEqual(load({ rolePack: 'legacy-orch' }).revision, load({ rolePack: 'delivery' }).revision);
+  for (const bad of ['orch', 'Delivery', '', null, 1, ['delivery']]) {
+    assert.throws(() => load({ rolePack: bad }), /rolePack must be one of/, JSON.stringify(bad));
+  }
+});

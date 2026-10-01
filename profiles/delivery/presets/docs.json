@@ -1,0 +1,36 @@
+{
+  "presetId": "docs",
+  "version": "1.0.0",
+  "classification": "docs",
+  "description": "Documentation change: write from delivered behavior, then independent review of accuracy and links.",
+  "stages": [
+    {
+      "key": "write",
+      "roles": [
+        "tech-writer"
+      ],
+      "required": true,
+      "dependsOn": [],
+      "purpose": "Maintainer or API documentation limited to assigned documentation files, with verified examples"
+    },
+    {
+      "key": "review",
+      "roles": [
+        "reviewer"
+      ],
+      "required": true,
+      "dependsOn": [
+        "write"
+      ],
+      "purpose": "Independent review of accuracy, examples, and links against the delivered behavior"
+    }
+  ],
+  "optionalRoles": [
+    "qa",
+    "architect"
+  ],
+  "optionalDependsOn": [
+    "write"
+  ],
+  "minChecks": 1
+}

@@ -133,11 +133,14 @@ test('dashboard api', async (suite) => {
     assert.equal(typeof context.lastEventSequence, 'number');
     assert.ok(context.server.startedAt && context.server.now);
 
-    const { roles } = await (await get('/roles', headers)).json();
-    assert.equal(roles[0].id, 'orch-lead');
-    assert.equal(roles[0].kind, 'lead');
-    assert.ok(roles.some((role) => role.id === 'orch-explorer' && role.kind === 'specialist'));
-    assert.deepEqual(Object.keys(roles[0]).sort(), ['description', 'displayName', 'effort', 'id', 'kind', 'model', 'sandbox']);
+    const rolesBody = await (await get('/roles', headers)).json();
+    const { roles } = rolesBody;
+    assert.equal(typeof rolesBody.activePack.packId, 'string');
+    assert.ok(roles.some((role) => role.runtimeId === 'orch-lead' && role.kind === 'legacy'));
+    assert.ok(roles.some((role) => role.runtimeId === 'orch-explorer' && role.kind === 'legacy'));
+    assert.deepEqual(Object.keys(roles[0]).sort(), [
+      'activeAttempts', 'displayName', 'effort', 'kind', 'model', 'pack', 'publicId', 'runtimeId', 'sandbox', 'serviceTier', 'settingsSource',
+    ]);
 
     const empty = await (await get('/cards', headers)).json();
     assert.deepEqual(empty.cards, []);

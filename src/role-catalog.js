@@ -13,7 +13,7 @@ const REQUIRED_FIELDS = [
   'developer_instructions',
 ];
 const STRING_FIELDS = new Set(REQUIRED_FIELDS);
-const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
+const EFFORT = /^[a-z0-9_-]{1,32}$/;
 const SANDBOXES = new Set(['read-only', 'workspace-write']);
 const TOOLS_TABLE = 'a2a_tools';
 const MCP_NAME = /^[A-Za-z0-9_-]+$/;
@@ -98,16 +98,16 @@ function parseProfile(source, filePath) {
       throw new Error(`${filePath}: required non-empty string field ${key} is missing`);
     }
   }
-  if (!/^orch-[a-z0-9-]+$/.test(values.name)) {
+  if (!/^(orch|dlv)-[a-z0-9-]+$/.test(values.name)) {
     throw new Error(`${filePath}: invalid role name ${JSON.stringify(values.name)}`);
   }
-  if (!EFFORTS.has(values.model_reasoning_effort)) {
+  if (!EFFORT.test(values.model_reasoning_effort)) {
     throw new Error(`${filePath}: unsupported model_reasoning_effort ${JSON.stringify(values.model_reasoning_effort)}`);
   }
   if (!SANDBOXES.has(values.sandbox_mode)) {
     throw new Error(`${filePath}: unsupported sandbox_mode ${JSON.stringify(values.sandbox_mode)}`);
   }
-  if (!/^gpt-[a-z0-9-]+$/.test(values.model)) {
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(values.model)) {
     throw new Error(`${filePath}: invalid model ${JSON.stringify(values.model)}`);
   }
   return {

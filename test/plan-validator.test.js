@@ -249,3 +249,242 @@ test('protected allowedFiles are rejected', () => {
     assert.ok(pv.validatePlan(plan, opts()).ok, file);
   }
 });
+
+// ---- M4 preset fixtures (shape of loadRolePack output) ----
+const FX_ROLES = [
+  ['architect', 'dlv-architect', 'Architect', 'read-only', 'Scoped technical plan.'],
+  ['developer', 'dlv-developer', 'Developer', 'workspace-write', 'Bounded implementation within allowedFiles.'],
+  ['qa', 'dlv-qa', 'QA', 'workspace-write', 'Executes checks and reports failures.'],
+  ['reviewer', 'dlv-reviewer', 'Reviewer', 'read-only', 'Reviews the delta against the contract.'],
+  ['security', 'dlv-security', 'Security', 'read-only', 'Flags unsafe access boundaries.'],
+  ['performance', 'dlv-performance', 'Performance', 'workspace-write', 'Measures and labels hypotheses.'],
+  ['devops', 'dlv-devops', 'DevOps', 'workspace-write', 'Environment and pipeline setup.'],
+  ['tech-writer', 'dlv-tech-writer', 'Technical Writer', 'workspace-write', 'Verifies documentation examples.'],
+];
+const fxPack = () => ({
+  packId: 'delivery',
+  version: '1.0.0',
+  coordinator: { publicId: 'project-manager', runtimeId: 'dlv-project-manager', displayName: 'Project Manager' },
+  roles: FX_ROLES.map(([publicId, runtimeId, displayName, sandbox, description]) => ({ publicId, runtimeId, displayName, role: { name: runtimeId, sandbox, description } })),
+  repairChains: { 'dlv-developer': ['dlv-developer-xhigh', 'dlv-developer-sol'] },
+  presets: new Map(),
+  unavailablePresets: ['security', 'performance', 'environment', 'debt'],
+  publicToRuntime: new Map(FX_ROLES.map((r) => [r[0], r[1]])),
+  runtimeToPublic: new Map(FX_ROLES.map((r) => [r[1], r[0]])),
+});
+const fxStage = (key, roles, dependsOn = []) => ({ key, roles, required: true, dependsOn, purpose: key });
+const fxPresets = () => new Map([
+  ['feature', { presetId: 'feature', version: '1.0.0', classification: 'feature', description: 'f', stages: [fxStage('design', ['architect']), fxStage('implement', ['developer'], ['design']), fxStage('review', ['reviewer'], ['implement']), fxStage('qa', ['qa'], ['implement'])], optionalRoles: ['security', 'performance', 'devops', 'tech-writer'], optionalDependsOn: ['implement'], minChecks: 1 }],
+  ['bugfix', { presetId: 'bugfix', version: '1.0.0', classification: 'bugfix', description: 'b', stages: [fxStage('reproduce', ['qa']), fxStage('implement', ['developer'], ['reproduce']), fxStage('review', ['reviewer'], ['implement']), fxStage('verify', ['qa'], ['implement'])], optionalRoles: ['architect', 'security', 'performance'], optionalDependsOn: ['implement'], minChecks: 1 }],
+  ['docs', { presetId: 'docs', version: '1.0.0', classification: 'docs', description: 'd', stages: [fxStage('write', ['tech-writer']), fxStage('review', ['reviewer'], ['write'])], optionalRoles: ['qa', 'architect'], optionalDependsOn: ['write'], minChecks: 1 }],
+  ['audit', { presetId: 'audit', version: '1.0.0', classification: 'audit', description: 'a', stages: [fxStage('investigate', ['architect', 'security', 'performance', 'reviewer']), fxStage('synthesis', ['reviewer'], ['investigate'])], optionalRoles: ['security', 'performance', 'architect'], optionalDependsOn: ['investigate'], minChecks: 0 }],
+]);
+const WRITABLE_PUBLIC = ['developer', 'qa', 'performance', 'devops', 'tech-writer'];
+const pst = (stageId, key, roleId, dependencies = [], extra = {}) => ({
+  stageId, presetStageKey: key, roleId, objective: 'do it', dependencies,
+  allowedFiles: WRITABLE_PUBLIC.includes(roleId) ? ['src/a.js'] : [], required: key !== null, ...extra,
+});
+const presetPlans = () => ({
+  feature: { presetId: 'feature', checkIds: ['unit'], stages: [pst('design', 'design', 'architect'), pst('impl', 'implement', 'developer', ['design']), pst('rev', 'review', 'reviewer', ['impl']), pst('qa', 'qa', 'qa', ['impl'])] },
+  bugfix: { presetId: 'bugfix', checkIds: ['unit'], stages: [pst('repro', 'reproduce', 'qa'), pst('impl', 'implement', 'developer', ['repro']), pst('rev', 'review', 'reviewer', ['impl']), pst('ver', 'verify', 'qa', ['impl'])] },
+  docs: { presetId: 'docs', checkIds: ['unit'], stages: [pst('write', 'write', 'tech-writer'), pst('rev', 'review', 'reviewer', ['write'])] },
+  audit: { presetId: 'audit', checkIds: [], stages: [pst('inv', 'investigate', 'architect'), pst('syn', 'synthesis', 'reviewer', ['inv'])] },
+});
+
+const preset = (id) => fxPresets().get(id);
+const runPreset = (plan, id = plan.presetId, extra = {}) => pv.validatePresetPlan(plan, { pack: fxPack(), preset: preset(id), projectCheckIds: ['unit'], ...extra });
+const messages = (result) => result.errors.map((e) => `${e.path}: ${e.message}`).join('\n');
+
+for (const id of ['feature', 'bugfix', 'docs', 'audit']) {
+  test(`preset ${id} happy path`, () => {
+    const result = runPreset(presetPlans()[id]);
+    assert.equal(result.ok, true, messages(result));
+    assert.equal(result.plan.presetId, id);
+    assert.equal(result.plan.presetVersion, '1.0.0');
+    assert.equal(result.plan.rolePack, 'delivery');
+    assert.equal(result.plan.rolePackVersion, '1.0.0');
+    assert.equal(result.plan.validatorVersion, 'm4-plan-v1');
+  });
+}
+
+test('preset plan maps public role ids to runtime ids and keeps both', () => {
+  const result = runPreset(presetPlans().feature);
+  const impl = result.plan.stages.find((s) => s.stageId === 'impl');
+  assert.equal(impl.publicRoleId, 'developer');
+  assert.equal(impl.roleId, 'dlv-developer');
+  assert.equal(impl.presetStageKey, 'implement');
+  assert.equal(result.plan.stages.find((s) => s.stageId === 'rev').roleId, 'dlv-reviewer');
+});
+
+test('preset plan rejects a missing required stage', () => {
+  const plan = presetPlans().feature;
+  plan.stages = plan.stages.filter((s) => s.presetStageKey !== 'qa');
+  const result = runPreset(plan);
+  assert.equal(result.ok, false);
+  assert.match(messages(result), /missing required preset stage "qa"/);
+});
+
+test('preset plan rejects a duplicated required stage', () => {
+  const plan = presetPlans().feature;
+  plan.stages.push(pst('qa2', 'qa', 'qa', ['impl']));
+  const result = runPreset(plan);
+  assert.equal(result.ok, false);
+  assert.match(messages(result), /"qa" appears 2 times/);
+});
+
+test('preset plan rejects the wrong role for a preset stage', () => {
+  const plan = presetPlans().feature;
+  plan.stages[1] = pst('impl', 'implement', 'qa', ['design']);
+  const result = runPreset(plan);
+  assert.equal(result.ok, false);
+  assert.match(messages(result), /needs one of developer/);
+});
+
+test('preset plan rejects unknown role ids, including runtime ids and the coordinator', () => {
+  for (const bad of ['dlv-developer', 'project-manager', 'orch-builder']) {
+    const plan = presetPlans().feature;
+    plan.stages[1] = pst('impl', 'implement', bad, ['design'], { allowedFiles: ['src/a.js'] });
+    assert.equal(runPreset(plan).ok, false, bad);
+  }
+});
+
+test('audit investigate accepts each of its four role options', () => {
+  for (const role of ['architect', 'security', 'performance', 'reviewer']) {
+    const plan = presetPlans().audit;
+    plan.stages[0] = pst('inv', 'investigate', role);
+    const result = runPreset(plan);
+    if (role === 'performance') {
+      // performance is writable in the fixture pack, so the audit read-only rule applies
+      assert.equal(result.ok, false);
+      assert.match(messages(result), /audit plan must be read-only/);
+    } else {
+      assert.equal(result.ok, true, `${role}: ${messages(result)}`);
+    }
+  }
+});
+
+test('audit investigate with a read-only performance role is accepted', () => {
+  const pack = fxPack();
+  pack.roles.find((r) => r.publicId === 'performance').role.sandbox = 'read-only';
+  const plan = presetPlans().audit;
+  plan.stages[0] = pst('inv', 'investigate', 'performance', [], { allowedFiles: [] });
+  const result = pv.validatePresetPlan(plan, { pack, preset: preset('audit'), projectCheckIds: [] });
+  assert.equal(result.ok, true, messages(result));
+});
+
+test('optional stage happy path and its rules', () => {
+  const plan = presetPlans().feature;
+  plan.stages.push(pst('sec', null, 'security', ['impl']));
+  assert.equal(runPreset(plan).ok, true);
+  const notListed = presetPlans().docs;
+  notListed.stages.push(pst('sec', null, 'security', ['write']));
+  const r1 = runPreset(notListed);
+  assert.equal(r1.ok, false);
+  assert.match(messages(r1), /not an optional role/);
+  const noDep = presetPlans().feature;
+  noDep.stages.push(pst('perf', null, 'performance', ['design']));
+  const r2 = runPreset(noDep);
+  assert.equal(r2.ok, false);
+  assert.match(messages(r2), /must depend on preset stage "implement"/);
+});
+
+test('optional stage may carry extra dependencies', () => {
+  const plan = presetPlans().feature;
+  plan.stages.push(pst('sec', null, 'security', ['impl', 'design']));
+  assert.equal(runPreset(plan).ok, true);
+});
+
+test('required stage must include its preset dependencies', () => {
+  const plan = presetPlans().feature;
+  plan.stages[3] = pst('qa', 'qa', 'qa', ['design']);
+  const result = runPreset(plan);
+  assert.equal(result.ok, false);
+  assert.match(messages(result), /must depend on preset stage "implement"/);
+});
+
+test('audit rejects a writable role', () => {
+  const plan = presetPlans().audit;
+  plan.stages.push(pst('perf', null, 'performance', ['inv']));
+  const result = runPreset(plan);
+  assert.equal(result.ok, false);
+  assert.match(messages(result), /audit plan must be read-only/);
+});
+
+test('read-only roles never get allowedFiles; writable roles need 1..20', () => {
+  const ro = presetPlans().feature;
+  ro.stages[0].allowedFiles = ['src/a.js'];
+  const r1 = runPreset(ro);
+  assert.equal(r1.ok, false);
+  assert.match(messages(r1), /read-only and must have no allowedFiles/);
+  const empty = presetPlans().feature;
+  empty.stages[1].allowedFiles = [];
+  assert.match(messages(runPreset(empty)), /needs 1\.\.20 allowedFiles/);
+  const protectedPath = presetPlans().feature;
+  protectedPath.stages[1].allowedFiles = ['.codex/config.toml'];
+  assert.match(messages(runPreset(protectedPath)), /protected path/);
+});
+
+test('minChecks: docs needs 1, audit needs 0', () => {
+  const docs = presetPlans().docs;
+  docs.checkIds = [];
+  const r1 = runPreset(docs);
+  assert.equal(r1.ok, false);
+  assert.match(messages(r1), /at least 1 checkId/);
+  const noneConfigured = runPreset(presetPlans().docs, 'docs', { projectCheckIds: [] });
+  assert.match(messages(noneConfigured), /no approved acceptance checks configured/);
+  const audit = runPreset(presetPlans().audit, 'audit', { projectCheckIds: [] });
+  assert.equal(audit.ok, true, messages(audit));
+  const unknown = presetPlans().docs;
+  unknown.checkIds = ['nope'];
+  assert.match(messages(runPreset(unknown)), /unknown checkId/);
+});
+
+test('presetId must equal the preset id (classification mismatch)', () => {
+  const plan = presetPlans().feature;
+  plan.presetId = 'bugfix';
+  const result = runPreset(plan, 'feature');
+  assert.equal(result.ok, false);
+  assert.match(messages(result), /presetId must be "feature"/);
+});
+
+test('preset plan keeps stage-count, cycle and shape rules', () => {
+  const plan = presetPlans().feature;
+  plan.stages[0].dependencies = ['rev'];
+  assert.match(messages(runPreset(plan)), /forward reference or cycle/);
+  const many = presetPlans().feature;
+  for (let i = 0; i < 9; i += 1) many.stages.push(pst(`o${i}`, null, 'security', ['impl']));
+  assert.match(messages(runPreset(many)), /1\.\.12 stages/);
+  assert.equal(runPreset('x', 'feature').ok, false);
+});
+
+test('stageRoleMatches follows pack repair chain order', () => {
+  const pack = fxPack();
+  const devStage = { roleId: 'dlv-developer' };
+  assert.equal(pv.stageRoleMatches(devStage, 'dlv-developer', new Set(), pack), true);
+  assert.equal(pv.stageRoleMatches(devStage, 'dlv-developer-xhigh', new Set(), pack), false);
+  assert.equal(pv.stageRoleMatches(devStage, 'dlv-developer-xhigh', new Set(['dlv-developer']), pack), true);
+  assert.equal(pv.stageRoleMatches(devStage, 'dlv-developer-sol', new Set(['dlv-developer']), pack), false);
+  assert.equal(pv.stageRoleMatches(devStage, 'dlv-developer-sol', ['dlv-developer', 'dlv-developer-xhigh'], pack), true);
+  assert.equal(pv.stageRoleMatches({ roleId: 'dlv-qa' }, 'dlv-developer-xhigh', new Set(['dlv-qa']), pack), false);
+  assert.equal(pv.stageRoleMatches({ roleId: 'dlv-reviewer' }, 'dlv-developer', new Set(['x']), pack), false);
+});
+
+test('legacy validatePlan and isStageRole are unchanged', () => {
+  assert.equal(pv.VALIDATOR_VERSION, 'm3-plan-v1');
+  const result = pv.validatePlan(featurePlan(), { classification: 'feature', projectCheckIds: ['unit'] });
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.validatorVersion, undefined);
+  assert.equal(result.plan.stages[0].publicRoleId, undefined);
+  assert.equal(pv.isStageRole({ roleId: 'orch-builder' }, 'orch-repair-sol', new Set(['orch-builder'])), true);
+  assert.equal(pv.isStageRole({ roleId: 'orch-builder' }, 'orch-repair-sol', new Set()), false);
+});
+
+test('validatePresetPlan accepts a V2 plan against the real loaded role pack', () => {
+  const { loadRolePack } = require('../src/role-pack');
+  const pack = loadRolePack({ packDir: 'profiles/delivery' });
+  const result = pv.validatePresetPlan(presetPlans().feature, { pack, preset: pack.presets.get('feature'), projectCheckIds: ['unit'] });
+  assert.equal(result.ok, true, messages(result));
+  const impl = result.plan.stages.find((s) => s.stageId === 'impl');
+  assert.equal(impl.publicRoleId, 'developer');
+  assert.equal(impl.roleId, 'dlv-developer');
+});

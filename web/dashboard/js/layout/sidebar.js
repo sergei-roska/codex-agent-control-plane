@@ -1,4 +1,4 @@
-// --- SIDEBAR ROLES (read-only, from /roles and cards.roleCounts) ---
+// --- SIDEBAR ROLES (read-only, from /roles and cards.roleCounts; no switches) ---
 const GENERIC_ROLE_ICON = '\u{1F916}';
 
 function renderSidebarRoles() {
@@ -6,7 +6,10 @@ function renderSidebarRoles() {
   if (!container) return;
   container.textContent = '';
 
-  if (!boardData.roles.length) {
+  // The active pack's public roles, coordinator first (API order); repair executors are not roles.
+  const packId = boardData.activePack && boardData.activePack.packId;
+  const roles = boardData.roles.filter(r => r.kind !== 'repair' && (!packId || r.pack === packId));
+  if (!roles.length) {
     container.appendChild(h('div', { class: 'empty-state', text: boardData.loaded ? 'No roles configured' : 'Loading roles...' }));
     return;
   }
@@ -14,18 +17,23 @@ function renderSidebarRoles() {
   const active = document.getElementById('board-role-filter');
   const activeRole = active ? active.value : 'all';
 
-  boardData.roles.forEach(role => {
-    const count = isNumber(boardData.roleCounts[role.id]) ? boardData.roleCounts[role.id] : 0;
-    const config = [role.model, role.effort].filter(Boolean).join(' - ');
+  roles.forEach(role => {
+    const count = isNumber(boardData.roleCounts[role.runtimeId]) ? boardData.roleCounts[role.runtimeId] : 0;
+    const busy = isNumber(role.activeAttempts) && role.activeAttempts > 0;
+    const config = [role.model, role.effort, role.serviceTier].filter(Boolean).join(' - ');
     const card = h('div', {
-      class: 'role-card' + (activeRole === role.id ? ' selected' : ''),
-      attrs: { 'data-role': role.id, tabindex: '0', role: 'button' },
-      title: (role.description ? role.description + '. ' : '') + count + ' executions involve this role. Click to filter the board.'
+      class: 'role-card' + (activeRole === role.runtimeId ? ' selected' : ''),
+      attrs: { 'data-role': role.runtimeId, tabindex: '0', role: 'button' },
+      title: count + ' executions involve this role. Click to filter the board.'
     }, [
       h('div', { class: 'role-card-header' }, [
         h('div', { class: 'role-card-title-group' }, [
           h('span', { class: 'role-icon', text: GENERIC_ROLE_ICON }),
-          h('span', { class: 'role-name role-name-full', text: role.displayName || role.id })
+          h('span', { class: 'role-name role-name-full', text: role.displayName || role.runtimeId }),
+          busy ? h('span', {
+            class: 'activity-dot', attrs: { role: 'img', 'aria-label': 'Active' },
+            title: role.activeAttempts + (role.activeAttempts === 1 ? ' attempt running' : ' attempts running')
+          }) : null
         ]),
         h('span', { class: 'count-chip', text: count, title: 'Executions involving this role' })
       ]),
@@ -39,7 +47,7 @@ function renderSidebarRoles() {
     const toggleFilter = () => {
       const filter = document.getElementById('board-role-filter');
       if (!filter) return;
-      filter.value = filter.value === role.id ? 'all' : role.id;
+      filter.value = filter.value === role.runtimeId ? 'all' : role.runtimeId;
       applyBoardFilters();
       renderSidebarRoles();
     };

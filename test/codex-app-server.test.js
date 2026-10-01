@@ -1229,3 +1229,99 @@ test('mcpServerStatus lists status for a thread', async (t) => {
   assert.deepEqual(await client.mcpServerStatus('t1'), [{ name: 'x', runtimeStatus: 'disabled' }]);
   assert.equal(fake.getChild().sent.find(({ method }) => method === 'mcpServerStatus/list').params.threadId, 't1');
 });
+
+function versionedHandler({ thread = {}, ready = {} } = {}) {
+  const base = baseHandler();
+  return (request, send) => {
+    if (request.method === 'thread/start' || request.method === 'thread/resume') {
+      return send({ id: request.id, result: { thread: { id: request.params.threadId || 'thread-1' }, ...thread } });
+    }
+    if (request.method === 'model/list') return ready.modelList(request, send);
+    return base(request, send);
+  };
+}
+
+test('serviceTier is sent on thread/start and turn/start only when the role sets it', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  await client.run({ role, cwd: '/tmp/project', input: 'plain' });
+  let sent = fake.getChild().sent;
+  assert.equal(Object.hasOwn(sent.find(({ method }) => method === 'thread/start').params, 'serviceTier'), false);
+  assert.equal(Object.hasOwn(sent.find(({ method }) => method === 'turn/start').params, 'serviceTier'), false);
+
+  await client.run({ role: { ...role, serviceTier: 'fast' }, cwd: '/tmp/project', input: 'quick' });
+  sent = fake.getChild().sent;
+  const starts = sent.filter(({ method }) => method === 'thread/start');
+  const turns = sent.filter(({ method }) => method === 'turn/start');
+  assert.equal(starts[1].params.serviceTier, 'fast');
+  assert.equal(turns[1].params.serviceTier, 'fast');
+  assert.equal(turns[1].params.model, 'gpt-6-sol');
+  assert.equal(turns[1].params.effort, 'high');
+});
+
+test('serviceTier is sent on thread/resume when set', async (t) => {
+  const fake = fakeSpawn(versionedHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  await client.run({ role: { ...role, serviceTier: 'fast' }, cwd: '/tmp/project', input: 'again', threadId: 'old-thread' });
+  const resume = fake.getChild().sent.find(({ method }) => method === 'thread/resume');
+  assert.equal(resume.params.serviceTier, 'fast');
+  await client.run({ role, cwd: '/tmp/project', input: 'again', threadId: 'other-thread' });
+  const resumes = fake.getChild().sent.filter(({ method }) => method === 'thread/resume');
+  assert.equal(Object.hasOwn(resumes[1].params, 'serviceTier'), false);
+});
+
+test('usage carries requested and reported settings from the thread response', async (t) => {
+  const fake = fakeSpawn(versionedHandler({ thread: { model: 'gpt-6-luna', reasoningEffort: 'xhigh', serviceTier: 'fast' } }));
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const result = await client.run({ role: { ...role, serviceTier: 'fast' }, cwd: '/tmp/project', input: 'hi' });
+  assert.deepEqual(result.usage.requested, { model: 'gpt-6-sol', effort: 'high', serviceTier: 'fast' });
+  assert.deepEqual(result.usage.reported, { model: 'gpt-6-luna', reasoningEffort: 'xhigh', serviceTier: 'fast' });
+  assert.equal(result.usage.model, 'gpt-6-luna');
+  assert.equal(result.usage.effort, 'high');
+});
+
+test('usage requested and reported are null-filled when nothing is set or reported', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const result = await client.run({ role: { name: 'bare', sandbox: 'read-only' }, cwd: '/tmp/project', input: 'hi' });
+  assert.deepEqual(result.usage.requested, { model: null, effort: null, serviceTier: null });
+  assert.deepEqual(result.usage.reported, { model: null, reasoningEffort: null, serviceTier: null });
+});
+
+test('usage reported is null on a turn of an already loaded thread', async (t) => {
+  const fake = fakeSpawn(versionedHandler({ thread: { model: 'gpt-6-luna', reasoningEffort: 'xhigh', serviceTier: 'fast' } }));
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const first = await client.run({ role, cwd: '/tmp/project', input: 'one' });
+  assert.equal(first.usage.reported.model, 'gpt-6-luna');
+  const second = await client.run({ role, cwd: '/tmp/project', input: 'two', threadId: first.threadId });
+  assert.equal(second.usage.reported, null);
+  assert.deepEqual(second.usage.requested, { model: 'gpt-6-sol', effort: 'high', serviceTier: null });
+});
+
+test('listModels pages model/list until nextCursor is null', async (t) => {
+  const pages = { undefined: { data: [{ id: 'a' }], nextCursor: 'c1' }, c1: { data: [{ id: 'b' }, { id: 'c' }], nextCursor: null } };
+  const fake = fakeSpawn(versionedHandler({ ready: { modelList: (request, send) => send({ id: request.id, result: pages[request.params.cursor] }) } }));
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  assert.deepEqual((await client.listModels()).map((m) => m.id), ['a', 'b', 'c']);
+  const requests = fake.getChild().sent.filter(({ method }) => method === 'model/list');
+  assert.deepEqual(requests.map((r) => r.params), [{ includeHidden: false }, { includeHidden: false, cursor: 'c1' }]);
+});
+
+test('listModels gives up after 20 pages and propagates RPC errors', async (t) => {
+  const endless = fakeSpawn(versionedHandler({ ready: { modelList: (request, send) => send({ id: request.id, result: { data: [], nextCursor: 'more' } }) } }));
+  const endlessClient = new CodexAppServer({ spawnImpl: endless.spawnImpl });
+  t.after(() => endlessClient.close());
+  await assert.rejects(endlessClient.listModels(), /20 pages/);
+  assert.equal(endless.getChild().sent.filter(({ method }) => method === 'model/list').length, 20);
+
+  const bad = fakeSpawn(versionedHandler({ ready: { modelList: (request, send) => send({ id: request.id, error: { code: -32601, message: 'nope' } }) } }));
+  const badClient = new CodexAppServer({ spawnImpl: bad.spawnImpl });
+  t.after(() => badClient.close());
+  await assert.rejects(badClient.listModels(), /nope/);
+});

@@ -9,7 +9,8 @@ const MAX_CHECKS = 20;
 const MAX_BASE_REF = 200;
 const MAX_DESCRIPTION = 200;
 const PREFIX_PATTERN = /^[a-z0-9][a-z0-9/_-]{0,30}$/;
-const TOP_KEYS = ['baseRef', 'branchPrefixes', 'checks'];
+const TOP_KEYS = ['baseRef', 'branchPrefixes', 'checks', 'rolePack'];
+const ROLE_PACKS = ['delivery', 'legacy-orch'];
 const PREFIX_KEYS = ['feature', 'bugfix', 'docs'];
 const CHECK_KEYS = ['id', 'argv', 'timeoutMs', 'description'];
 
@@ -17,6 +18,7 @@ const DEFAULT_CONFIG = Object.freeze({
   baseRef: 'main',
   branchPrefixes: Object.freeze({ feature: 'feature/', bugfix: 'fix/', docs: 'docs/' }),
   checks: Object.freeze([]),
+  rolePack: 'delivery',
 });
 
 function sha256(data) {
@@ -40,6 +42,8 @@ function normalizeConfig(raw) {
   if (typeof baseRef !== 'string' || !baseRef.trim() || baseRef.length > MAX_BASE_REF) {
     throw new TypeError(`baseRef must be a non-empty string of at most ${MAX_BASE_REF} chars`);
   }
+  const rolePack = raw.rolePack === undefined ? DEFAULT_CONFIG.rolePack : raw.rolePack;
+  if (!ROLE_PACKS.includes(rolePack)) throw new TypeError(`rolePack must be one of ${ROLE_PACKS.join(', ')}`);
   const prefixesRaw = raw.branchPrefixes === undefined ? {} : raw.branchPrefixes;
   if (!isPlainObject(prefixesRaw)) throw new TypeError('branchPrefixes must be an object');
   rejectUnknown(prefixesRaw, PREFIX_KEYS, 'branchPrefixes');
@@ -79,7 +83,7 @@ function normalizeConfig(raw) {
     seen.add(check.id);
     return { id: check.id, argv: check.argv, timeoutMs: check.timeoutMs, description: descriptions[index] };
   });
-  return { baseRef: baseRef.trim(), branchPrefixes, checks };
+  return { baseRef: baseRef.trim(), branchPrefixes, checks, rolePack };
 }
 
 function loadProjectConfig({ filePath } = {}) {

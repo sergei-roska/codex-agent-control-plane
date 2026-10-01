@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { SOURCE_SCHEMA_SQL } = require('./integrations/source-import-store');
 
 const MIGRATION_1_SQL = `
 CREATE TABLE tickets (
@@ -71,9 +72,63 @@ CREATE TABLE ticket_branches (
 );
 `;
 
+const MIGRATION_3_SQL = `
+CREATE TABLE role_settings_revisions (
+  settings_revision_id TEXT PRIMARY KEY, pack_id TEXT NOT NULL, role_runtime_id TEXT NOT NULL,
+  model TEXT NOT NULL, effort TEXT NOT NULL, service_tier TEXT,
+  supersedes_id TEXT, actor TEXT NOT NULL, command_id TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX role_settings_rev_role_idx ON role_settings_revisions (pack_id, role_runtime_id, created_at);
+CREATE TABLE role_settings_current (
+  pack_id TEXT NOT NULL, role_runtime_id TEXT NOT NULL, settings_revision_id TEXT NOT NULL,
+  PRIMARY KEY (pack_id, role_runtime_id)
+);
+`;
+
+const MIGRATION_4_SQL = `
+ALTER TABLE plan_revisions ADD COLUMN preset_id TEXT;
+ALTER TABLE plan_revisions ADD COLUMN preset_version TEXT;
+ALTER TABLE plan_revisions ADD COLUMN role_pack TEXT;
+ALTER TABLE plan_revisions ADD COLUMN role_pack_version TEXT;
+`;
+
+const MIGRATION_5_SQL = `${SOURCE_SCHEMA_SQL}
+CREATE TABLE ticket_source_revision_links (
+  revision_id TEXT PRIMARY KEY REFERENCES requirement_revisions(revision_id),
+  ticket_id TEXT NOT NULL REFERENCES tickets(ticket_id),
+  identity_id TEXT NOT NULL REFERENCES m6_source_identities(identity_id),
+  snapshot_id TEXT NOT NULL REFERENCES m6_source_snapshots(snapshot_id),
+  artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ticket_source_revision_ticket_idx
+  ON ticket_source_revision_links(ticket_id, created_at, revision_id);
+`;
+
+// Moves preset/pack identity out of requirements_json.planMeta into the new columns (runs in the migration transaction).
+function backfillPlanIdentity(db) {
+  const rows = db.prepare("SELECT plan_revision_id, requirements_json FROM plan_revisions WHERE requirements_json LIKE '%planMeta%'").all();
+  const update = db.prepare(
+    'UPDATE plan_revisions SET preset_id = ?, preset_version = ?, role_pack = ?, role_pack_version = ?, requirements_json = ? '
+    + 'WHERE plan_revision_id = ?',
+  );
+  const str = (value) => (typeof value === 'string' ? value : null);
+  for (const row of rows) {
+    let stored;
+    try { stored = JSON.parse(row.requirements_json); } catch { continue; }
+    if (!stored || typeof stored !== 'object' || !stored.planMeta || typeof stored.planMeta !== 'object') continue;
+    const { planMeta, ...requirements } = stored;
+    update.run(str(planMeta.presetId), str(planMeta.presetVersion), str(planMeta.rolePack), str(planMeta.rolePackVersion),
+      JSON.stringify(requirements), row.plan_revision_id);
+  }
+}
+
 const MIGRATIONS = [
   { version: 1, name: 'product_tickets', sql: MIGRATION_1_SQL },
   { version: 2, name: 'delivery_runs', sql: MIGRATION_2_SQL },
+  { version: 3, name: 'role_settings', sql: MIGRATION_3_SQL },
+  { version: 4, name: 'plan_identity', sql: MIGRATION_4_SQL, after: backfillPlanIdentity },
+  { version: 5, name: 'jira_source_tracking', sql: MIGRATION_5_SQL },
 ];
 
 const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -158,6 +213,7 @@ async function migrateProductSchema({ db, filePath, now } = {}) {
   for (const migration of pending) {
     db.transaction(() => {
       db.exec(migration.sql);
+      if (migration.after) migration.after(db);
       record.run(migration.version, migration.name, resolveNow(now).toISOString());
     }).immediate();
     toVersion = migration.version;

@@ -13,6 +13,7 @@ const APPROVALS_REVIEWER = 'user';
 const ZERO_TOTAL = Object.freeze(Object.fromEntries(TOKEN_FIELDS.map((key) => [key, 0])));
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_PERMISSION_EVENTS = 50;
+const MODEL_LIST_MAX_PAGES = 20;
 const MAX_TEXT_CHARS = 500;
 const MAX_COMMAND_CHARS = 300;
 const MAX_HOOK_COMMAND_CHARS = 200;
@@ -208,6 +209,20 @@ class CodexAppServer {
     };
   }
 
+  /** Pages model/list (visible models only). Throws on RPC failure; the catalog layer fails closed. */
+  async listModels() {
+    await this.start();
+    const models = [];
+    let cursor = null;
+    for (let page = 0; page < MODEL_LIST_MAX_PAGES; page += 1) {
+      const result = await this._request('model/list', { includeHidden: false, ...(cursor ? { cursor } : {}) });
+      if (Array.isArray(result?.data)) models.push(...result.data);
+      cursor = typeof result?.nextCursor === 'string' && result.nextCursor ? result.nextCursor : null;
+      if (!cursor) return models;
+    }
+    throw new CodexAppServerError(`model/list did not finish within ${MODEL_LIST_MAX_PAGES} pages`);
+  }
+
   async listHooks(cwd) {
     try {
       await this.start();
@@ -323,6 +338,8 @@ class CodexAppServer {
       run: null,
       model: role.model || null,
       effort: role.effort || null,
+      requested: requestedSettings(role),
+      reported: null,
       startedAt: new Date().toISOString(),
       startedMs: performance.now(),
       permissionEvents: [],
@@ -363,6 +380,7 @@ class CodexAppServer {
     if (!existingThreadId) {
       threadResult = await this._request('thread/start', {
         model: role.model || null,
+        ...serviceTierParam(role),
         cwd,
         developerInstructions,
         sandbox: normalizeSandbox(role.sandbox),
@@ -375,6 +393,7 @@ class CodexAppServer {
         // A brand-new thread has consumed nothing yet.
         if (!this.threadTotals.has(threadResult.thread.id)) this.threadTotals.set(threadResult.thread.id, ZERO_TOTAL);
       }
+      ctx.reported = reportedSettings(threadResult);
       ctx.model = threadResult?.model || ctx.model;
       ctx.effort = ctx.effort || threadResult?.reasoningEffort || null;
     } else if (!this.loadedThreads.has(existingThreadId)) {
@@ -387,10 +406,12 @@ class CodexAppServer {
         approvalsReviewer: APPROVALS_REVIEWER,
         sandbox: normalizeSandbox(role.sandbox),
         model: role.model || null,
+        ...serviceTierParam(role),
         developerInstructions,
         config: toolConfig,
       }, { signal });
       this.loadedThreads.add(existingThreadId);
+      ctx.reported = reportedSettings(resumed);
       ctx.model = resumed?.model || ctx.model;
       ctx.effort = ctx.effort || resumed?.reasoningEffort || null;
     }
@@ -423,6 +444,7 @@ class CodexAppServer {
         input: [{ type: 'text', text: input }],
         ...(role.model ? { model: role.model } : {}),
         ...(role.effort ? { effort: role.effort } : {}),
+        ...serviceTierParam(role),
         cwd,
         sandboxPolicy: sandboxPolicy(role.sandbox),
         approvalPolicy: 'on-request',
@@ -492,6 +514,8 @@ class CodexAppServer {
     return {
       model: ctx.model,
       effort: ctx.effort,
+      requested: ctx.requested,
+      reported: ctx.reported,
       startedAt: ctx.startedAt,
       elapsedMs: Math.round(performance.now() - ctx.startedMs),
       // A run that failed before turn/start was sent has a known count of zero turns.
@@ -943,6 +967,24 @@ function sandboxPolicy(sandbox) {
   if (normalized === 'read-only') return { type: 'readOnly' };
   if (normalized === 'danger-full-access') return { type: 'dangerFullAccess' };
   return { type: 'workspaceWrite' };
+}
+
+// serviceTier is sent only when the role sets it, so unset roles keep the exact prior params.
+function serviceTierParam(role) {
+  return role.serviceTier ? { serviceTier: role.serviceTier } : {};
+}
+
+function requestedSettings(role) {
+  return { model: role.model || null, effort: role.effort || null, serviceTier: role.serviceTier || null };
+}
+
+function reportedSettings(threadResponse) {
+  if (!threadResponse || typeof threadResponse !== 'object') return null;
+  return {
+    model: threadResponse?.model ?? null,
+    reasoningEffort: threadResponse?.reasoningEffort ?? null,
+    serviceTier: threadResponse?.serviceTier ?? null,
+  };
 }
 
 function sanitizeAccount(account) {

@@ -106,6 +106,8 @@ function attemptRow(row) {
     tokens: row.tokens,
     tokenSource: row.tokenSource,
     outcome: row.outcome,
+    requested: row.requested ?? null,
+    reported: row.reported ?? null,
     permissionDenials: denialCounts([row]).total,
   };
 }

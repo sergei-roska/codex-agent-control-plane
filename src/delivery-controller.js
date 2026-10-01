@@ -10,10 +10,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { TaskState } = require('@a2a-js/sdk');
 const {
-  INTAKE_SCHEMA, MAX_INTAKE_TURNS, MAX_EXTRACTED_CHARS, PROMPT_VERSION, createPmLeadRole, buildIntakePrompt,
+  INTAKE_SCHEMA, INTAKE_SCHEMA_V2, MAX_INTAKE_TURNS, MAX_EXTRACTED_CHARS, PROMPT_VERSION, createPmLeadRole, buildIntakePrompt,
   validateIntakeOutput, renderRequirementsGoal,
 } = require('./intake');
 const { VALIDATOR_VERSION, WRITABLE_STAGE_ROLES } = require('./plan-validator');
+const { normalizeEffectiveSettings } = require('./contracts');
 const { ProductError, canonicalJson } = require('./product-store');
 const { WriterAdmission } = require('./writer-admission');
 const { takeSnapshot } = require('./workspace-snapshot');
@@ -112,9 +113,17 @@ function checkView(check) {
   };
 }
 
+class PinnedSettingsError extends Error {
+  constructor(roleId) {
+    super(`pinned settings for ${roleId} are invalid`);
+    this.name = 'PinnedSettingsError';
+  }
+}
+
 function createDeliveryController({
   store, artifactStore, gitAdapterFactory, projectConfig, appServer, leadRole, roles, leadClient, taskReader,
   usageLedger, events, now, workspace, writerAdmission, tickMs = DEFAULT_TICK_MS, rolePackHash = null, appServerVersion = null, logger,
+  deliveryPack = null, legacyPack = null, settingsStore = null, modelCatalog = null,
 } = {}) {
   for (const [name, value] of Object.entries({ store, artifactStore, gitAdapterFactory, projectConfig, appServer, leadRole, leadClient, taskReader })) {
     if (!value) throw new TypeError(`createDeliveryController requires ${name}`);
@@ -124,7 +133,19 @@ function createDeliveryController({
     const value = typeof now === 'function' ? now() : now;
     return value instanceof Date ? value : new Date(value === undefined ? Date.now() : value);
   };
-  const pmRole = createPmLeadRole(leadRole);
+  // Delivery pack mode (M4/M5): the coordinator is the Intake and lead role; the legacy pack keeps M3 behavior.
+  // New runs pin the pack that the current project config selects at submit; every later step follows the pinned pack.
+  const submitPack = deliveryPack && projectConfig.rolePack !== 'legacy-orch' ? deliveryPack : null;
+  // Legacy-orch runs resolve, validate and pin settings through the store as well; without a legacy pack object the profile snapshot stays.
+  const snapshotPack = submitPack || (legacyPack && (settingsStore || modelCatalog) ? legacyPack : null);
+  const legacyPmRole = createPmLeadRole(leadRole);
+  // The pack a run is pinned to: a delivery pack object, null for legacy-orch, or undefined when it is not available.
+  function packOfRun(run) {
+    const id = (run.settings && run.settings.rolePack) || 'legacy-orch';
+    if (id === 'legacy-orch') return null;
+    return deliveryPack && deliveryPack.packId === id ? deliveryPack : undefined;
+  }
+  const pmRoleOf = (pack) => (pack ? pack.coordinator.role : legacyPmRole);
   let admission = writerAdmission || null;
   // Read-only view of the workspace writer holder (active or unresolved), or null when the workspace is free.
   function writerHolder() {
@@ -169,8 +190,24 @@ function createDeliveryController({
     return plan;
   }
 
-  function isWritable(plan) {
-    return plan.stages.some((stage) => WRITABLE_STAGE_ROLES.includes(stage.roleId));
+  function stageWritable(pack, roleId) {
+    const role = pack ? pack.runtimeRoles.get(roleId) : null;
+    return role ? role.sandbox !== 'read-only' : WRITABLE_STAGE_ROLES.includes(roleId);
+  }
+
+  function isWritable(run, plan) {
+    const pack = packOfRun(run) || null;
+    return plan.stages.some((stage) => stageWritable(pack, stage.roleId));
+  }
+
+  // The role object for one run: the pinned settings entry overrides the profile (runs that pinned role settings).
+  // A pinned entry that does not normalize fails the run instead of silently using profile values.
+  function pinnedRole(run, base) {
+    const entry = run.settings && run.settings.roles ? run.settings.roles[base.name] : null;
+    if (!entry) return base;
+    const pinned = normalizeEffectiveSettings(entry);
+    if (!pinned) throw new PinnedSettingsError(base.name);
+    return { ...base, model: pinned.model, effort: pinned.effort, ...(pinned.serviceTier ? { serviceTier: pinned.serviceTier } : {}) };
   }
 
   // ---------------------------------------------------------------- intake
@@ -196,7 +233,7 @@ function createDeliveryController({
     return turns;
   }
 
-  function recordIntakeUsage(run, turn, attempt, source, outcome) {
+  function recordIntakeUsage(run, turn, attempt, source, outcome, role) {
     if (!usageLedger) return;
     try {
       const usage = source && source.usage ? source.usage : null;
@@ -205,9 +242,11 @@ function createDeliveryController({
         entryId: `intake:${run.runId}:t${turn}:a${attempt}:${startedAt}`,
         kind: 'intake_turn',
         runId: run.runId,
-        role: pmRole.name,
-        model: usage?.model ?? pmRole.model ?? null,
-        effort: usage?.effort ?? pmRole.effort ?? null,
+        role: role.name,
+        model: usage?.model ?? role.model ?? null,
+        effort: usage?.effort ?? role.effort ?? null,
+        requested: usage?.requested ?? null,
+        reported: usage?.reported ?? null,
         startedAt,
         elapsedMs: usage?.elapsedMs ?? null,
         turns: usage?.turns ?? null,
@@ -231,6 +270,8 @@ function createDeliveryController({
   }
 
   async function stepIntake(run) {
+    const pack = packOfRun(run) || null;
+    const pmRole = pmRoleOf(pack);
     const turn = run.intakeTurns + 1;
     if (turn > MAX_INTAKE_TURNS) {
       settle(run, {
@@ -247,8 +288,10 @@ function createDeliveryController({
       const text = extractedTextOf(artifact);
       if (text !== null) extractedTexts.set(artifact.artifactId, text);
     }
+    const intakeRole = pinnedRole(run, pmRole);
     const basePrompt = buildIntakePrompt({
-      revision, artifacts, extractedTexts, priorTurns: priorTurnsOf(run), projectConfig, roleMapping: ROLE_MAPPING,
+      revision, artifacts, extractedTexts, priorTurns: priorTurnsOf(run), projectConfig,
+      ...(pack ? { pack, presets: pack.presets } : { roleMapping: ROLE_MAPPING }),
     });
 
     let value = null;
@@ -260,11 +303,11 @@ function createDeliveryController({
         : `${basePrompt}\n\nYour previous answer was rejected. Fix these problems and answer again with JSON only:\n${errors.map((e) => `- ${e.path || 'output'}: ${e.message}`).join('\n')}`;
       let result;
       try {
-        result = await appServer.run({ role: pmRole, cwd: workspace, input, outputSchema: INTAKE_SCHEMA, signal: abort.signal });
+        result = await appServer.run({ role: intakeRole, cwd: workspace, input, outputSchema: pack ? INTAKE_SCHEMA_V2 : INTAKE_SCHEMA, signal: abort.signal });
       } catch (error) {
         // Shutdown mid-turn: nothing is persisted, the turn is repeated on the next start (read-only).
         if (stopped || abort.signal.aborted || error?.name === 'AbortError') return false;
-        recordIntakeUsage(run, turn, attempt, error, 'error');
+        recordIntakeUsage(run, turn, attempt, error, 'error', intakeRole);
         settle(run, {
           status: 'failed', releaseLease: true, ticketStatus: 'blocked', waitReason: 'execution_error',
           waitDetail: { code: 'intake_error', message: shorten(error?.message || String(error)) },
@@ -272,7 +315,7 @@ function createDeliveryController({
         return true;
       }
       if (stopped) return false;
-      recordIntakeUsage(run, turn, attempt, result, result?.status || 'completed');
+      recordIntakeUsage(run, turn, attempt, result, result?.status || 'completed', intakeRole);
       if (result && result.status && result.status !== 'completed') {
         settle(run, {
           status: 'failed', releaseLease: true, ticketStatus: 'blocked', waitReason: 'execution_error',
@@ -286,7 +329,7 @@ function createDeliveryController({
         errors = [parsed.error];
         continue;
       }
-      const validation = validateIntakeOutput(parsed.value, { projectConfig });
+      const validation = validateIntakeOutput(parsed.value, pack ? { projectConfig, pack, presets: pack.presets } : { projectConfig });
       if (validation.ok) value = validation.value;
       else errors = validation.errors;
     }
@@ -313,7 +356,11 @@ function createDeliveryController({
       });
       const saved = store.saveIntakePlan(run.runId, {
         turn, output: value, classification: value.classification, plan: value.plan, checks,
-        requirements: value.requirements, validatorVersion: VALIDATOR_VERSION,
+        requirements: value.requirements,
+        validatorVersion: pack ? value.plan.validatorVersion : VALIDATOR_VERSION,
+        ...(pack ? { planMeta: {
+          presetId: value.plan.presetId, presetVersion: value.plan.presetVersion, rolePack: value.plan.rolePack, rolePackVersion: value.plan.rolePackVersion,
+        } } : {}),
       });
       if (!saved) return false;
       emit('plan_saved', run, { stageCount: value.plan.stages.length, classification: value.classification });
@@ -361,7 +408,7 @@ function createDeliveryController({
       });
     };
     if (!pre.ok) { fail(pre.problems); return true; }
-    if (!isWritable(plan)) {
+    if (!isWritable(run, plan)) {
       if (store.recordBranch(run.runId, { branchName: null, baseCommit: pre.baseCommit })) emit('branch_prepared', run, { created: false, kind: 'read_only' });
       return true;
     }
@@ -384,6 +431,104 @@ function createDeliveryController({
       emit('branch_prepared', run, { created: Boolean(prepared.created), kind: prepared.reused ? 'reused' : 'new' });
     }
     return true;
+  }
+
+  // ------------------------------------------------------------- settings
+
+  // Effective settings of the coordinator, specialists and repair profiles. Callers validate them against the
+  // model catalog (fail closed): sync from the cache (buildDeliverySnapshot) or async with a TTL refresh.
+  function resolveDeliveryRoles(pack) {
+    const coordinatorId = pack.coordinator.runtimeId;
+    const ids = [coordinatorId, ...pack.roles.map((entry) => entry.runtimeId), ...pack.repairProfiles.keys()];
+    const roleSettings = {};
+    for (const id of ids) {
+      const profile = id === coordinatorId ? pack.coordinator.role : pack.runtimeRoles.get(id);
+      const effective = settingsStore
+        ? settingsStore.effectiveDefault(pack.packId, id, profile)
+        : { model: profile.model, effort: profile.effort, serviceTier: profile.serviceTier ?? null, source: 'profile', settingsRevisionId: null };
+      roleSettings[id] = {
+        model: effective.model,
+        effort: effective.effort,
+        serviceTier: effective.serviceTier && effective.serviceTier !== 'default' ? effective.serviceTier : null,
+        sandbox: profile.sandbox,
+        source: effective.source,
+        settingsRevisionId: effective.settingsRevisionId ?? null,
+      };
+    }
+    return { ids, roleSettings, coordinatorId };
+  }
+
+  // Throws ProductError settings_invalid (409) or catalog_unavailable (503) from catalog validation results.
+  function catalogProblem(code, details) {
+    if (code === 'catalog_unavailable') return new ProductError('catalog_unavailable', 'model catalog is unavailable', details);
+    return new ProductError('settings_invalid', 'saved role settings are invalid', details);
+  }
+
+  function deliverySnapshotOf(pack, { roleSettings, coordinatorId }, catalogFetchedAt) {
+    return {
+      provider: 'openai',
+      runtimeAdapter: 'codex-app-server',
+      rolePack: pack.packId,
+      rolePackVersion: pack.version,
+      rolePackHash: pack.packId === 'legacy-orch' ? rolePackHash : pack.hash,
+      leadModel: roleSettings[coordinatorId].model,
+      leadEffort: roleSettings[coordinatorId].effort,
+      roles: roleSettings,
+      promptVersions: { intake: PROMPT_VERSION, lead: LEAD_PROMPT_VERSION },
+      projectPolicyRevision: projectConfig ? projectConfig.revision : null,
+      appServerVersion,
+      catalogFetchedAt,
+    };
+  }
+
+
+  // Validates against the cached catalog only; used where an async round trip is not possible.
+  function buildDeliverySnapshot(pack) {
+    const resolved = resolveDeliveryRoles(pack);
+    let catalogFetchedAt = null;
+    if (modelCatalog) {
+      const catalogStatus = modelCatalog.status();
+      if (catalogStatus.state !== 'ok') {
+        throw catalogProblem('catalog_unavailable',
+          [{ field: 'catalog', message: (catalogStatus.error && catalogStatus.error.message) || 'model catalog is unavailable' }]);
+      }
+      catalogFetchedAt = catalogStatus.fetchedAt;
+      const details = [];
+      for (const id of resolved.ids) {
+        const result = validateAgainstEntry(modelCatalog.find(resolved.roleSettings[id].model), resolved.roleSettings[id]);
+        for (const item of result) details.push({ roleRuntimeId: id, ...item });
+      }
+      if (details.length > 0) throw catalogProblem('settings_invalid', details);
+    }
+    return deliverySnapshotOf(pack, resolved, catalogFetchedAt);
+  }
+
+  function validateAgainstEntry(entry, settings) {
+    const out = [];
+    if (!entry) return [{ field: 'model', message: `model "${settings.model}" is not in the catalog` }];
+    if (!entry.efforts.includes(settings.effort)) out.push({ field: 'effort', message: `effort "${settings.effort}" is not supported by ${entry.model}` });
+    if (settings.serviceTier && !entry.serviceTiers.some((candidate) => candidate.id === settings.serviceTier)) {
+      out.push({ field: 'serviceTier', message: `service tier "${settings.serviceTier}" is not supported by ${entry.model}` });
+    }
+    if (out.length === 0 && !normalizeEffectiveSettings(settings)) {
+      out.push({ field: 'model', message: 'selection cannot be pinned (model, effort or serviceTier format is not accepted by the runtime)' });
+    }
+    return out;
+  }
+
+  // Async variant: each selection goes through modelCatalog.validateSelection, which refreshes a stale cache.
+  async function validatedDeliverySnapshot(pack) {
+    const resolved = resolveDeliveryRoles(pack);
+    if (!modelCatalog) return deliverySnapshotOf(pack, resolved, null);
+    const details = [];
+    for (const id of resolved.ids) {
+      const result = await modelCatalog.validateSelection(resolved.roleSettings[id]);
+      if (result.ok) continue;
+      if (result.code === 'catalog_unavailable') throw catalogProblem('catalog_unavailable', result.errors);
+      for (const item of result.errors) details.push({ roleRuntimeId: id, ...item });
+    }
+    if (details.length > 0) throw catalogProblem('settings_invalid', details);
+    return deliverySnapshotOf(pack, resolved, modelCatalog.status().fetchedAt);
   }
 
   // ----------------------------------------------------------- engineering
@@ -423,7 +568,18 @@ function createDeliveryController({
       runId: run.runId,
       planRevisionId: plan.planRevisionId,
       planHash,
-      plan: { planRevisionId: plan.planRevisionId, classification: plan.classification, stages: plan.stages, checkIds: plan.checkIds },
+      rolePack: (run.settings && run.settings.rolePack) || 'legacy-orch',
+      plan: {
+        planRevisionId: plan.planRevisionId,
+        classification: plan.classification,
+        ...(plan.presetId ? {
+          presetId: plan.presetId, presetVersion: plan.presetVersion, rolePack: plan.rolePack, rolePackVersion: plan.rolePackVersion,
+        } : {}),
+        stages: plan.stages,
+        checkIds: plan.checkIds,
+      },
+      // The pinned per-role settings map; the lead pins it in graph state and never re-reads settings.
+      ...(run.settings && run.settings.roles ? { settings: run.settings.roles } : {}),
     };
     const sent = await leadClient.send({ goal, acceptance, delivery });
     if (!sent || !sent.taskId) throw new Error('the lead endpoint returned no task id');
@@ -533,13 +689,13 @@ function createDeliveryController({
     }
     if (capture.headMoved) return block('head_moved', 'HEAD moved from the base commit; agents must not commit');
     const expected = raw && raw.candidate ? raw.candidate.fingerprint : null;
-    if (isWritable(plan) || expected) {
+    if (isWritable(run, plan) || expected) {
       const fresh = takeSnapshot(workspace);
       if (!expected || fresh.kind !== 'git' || fresh.fingerprint !== expected) {
         return block('candidate_changed', 'The checkout changed after acceptance verified it');
       }
     }
-    if (isWritable(plan) && capture.manifest.length === 0) return block('empty_candidate', 'The plan is writable but no files changed');
+    if (isWritable(run, plan) && capture.manifest.length === 0) return block('empty_candidate', 'The plan is writable but no files changed');
     return null;
   }
 
@@ -583,7 +739,7 @@ function createDeliveryController({
         artifactId: stored.artifactId, displayName: 'candidate.diff', size: stored.size, sha256: stored.sha256, storageRef: stored.storageRef,
       };
     }
-    const accepted = !gate && (acceptance.disposition === 'accepted' || (acceptance.disposition === 'not_required' && !isWritable(plan)));
+    const accepted = !gate && (acceptance.disposition === 'accepted' || (acceptance.disposition === 'not_required' && !isWritable(run, plan)));
     const candidate = store.completeRun(run.runId, {
       candidate: {
         baseCommit: capture.baseCommit,
@@ -615,6 +771,27 @@ function createDeliveryController({
   // ------------------------------------------------------------------ loop
 
   async function stepOnce(run) {
+    if (packOfRun(run) === undefined) {
+      const id = run.settings && run.settings.rolePack;
+      settle(run, {
+        status: 'failed', releaseLease: true, ticketStatus: 'blocked', waitReason: 'execution_error',
+        waitDetail: { code: 'role_pack_unavailable', message: `The role pack "${shorten(id, 80)}" pinned to this run is not available on this server` },
+      });
+      return true;
+    }
+    try {
+      return await stepPhase(run);
+    } catch (error) {
+      if (!(error instanceof PinnedSettingsError)) throw error;
+      settle(run, {
+        status: 'failed', releaseLease: true, ticketStatus: 'blocked', waitReason: 'execution_error',
+        waitDetail: { code: 'pinned_settings_invalid', message: error.message },
+      });
+      return true;
+    }
+  }
+
+  async function stepPhase(run) {
     switch (run.phase) {
       case 'queued': {
         const result = store.acquireLease(run.runId);
@@ -732,9 +909,17 @@ function createDeliveryController({
     poke() { return tick(); },
     cancelTicket,
     settingsSnapshot() {
+      if (snapshotPack) return buildDeliverySnapshot(snapshotPack);
+      return buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash, appServerVersion });
+    },
+    // Submit path: validates against the live catalog, refreshing it when the TTL has lapsed.
+    async validatedSettingsSnapshot() {
+      if (snapshotPack) return validatedDeliverySnapshot(snapshotPack);
       return buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash, appServerVersion });
     },
   };
 }
 
-module.exports = { createDeliveryController, buildSettingsSnapshot, computeRolePackHash, planHashOf, LEAD_PROMPT_VERSION };
+module.exports = {
+  createDeliveryController, buildSettingsSnapshot, computeRolePackHash, planHashOf, LEAD_PROMPT_VERSION,
+};

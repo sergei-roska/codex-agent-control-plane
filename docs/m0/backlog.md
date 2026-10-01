@@ -32,9 +32,9 @@ report a real model run separately if deliberately performed.
 | --- | --- | --- |
 | M2 / complete | Durable direct drafts/revisions/files with migrations, create/edit UI | Save does not execute; duplicate/stale commands; extraction truth and limits |
 | M3 / complete | PM Intake, minimum persisted plan, serialized branch ownership, direct execution | One direct feature and bugfix reach evidence-based review; no protected commit/push |
-| M4 / planned | Separate nine-role delivery pack, preset registry and real Pipelines | Role capability cases, dependency/scope validation and bounded repair routing |
-| M5 / planned | Catalog-backed OpenAI defaults, account health and effective snapshots | New defaults cannot reconfigure active/resumed work; unsupported Fast unavailable |
-| M6 / planned | Read-only Jira/Confluence Intake into internal tracking | Real source provenance, missing context/expired auth/repeated request cases; zero external writes |
+| M4 / complete | Separate nine-role delivery pack, preset registry and real Pipelines | Role capability cases, dependency/scope validation and bounded repair routing |
+| M5 / complete | Catalog-backed OpenAI defaults, account health and effective snapshots | New defaults cannot reconfigure active/resumed work; unsupported Fast unavailable |
+| M6 / in_progress | Read-only Jira/Confluence Intake into internal tracking | 729 tests pass, zero skips; Gemini fixture QA reports 12/12 PASS; lead directly verifies 390px browser layout; approved live pilots pending; see [M6 acceptance](../m6/acceptance.md) |
 | M7 / planned | Guarded operator commands, version-bound review and Git adapter | Safe settlement, stale approval rejection, exact candidate/remote authorization |
 | M8 / planned | Remaining views, cache/quality evidence and bounded MLflow experiment | No fake data; correlated sanitized traces; explicit adopt/defer and prompt comparison |
 | M9 / planned | Live pilots, recovery/security checks, packaging and beta review | Exact candidate evidence and owner release authority; no implicit merge/publication |

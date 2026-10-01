@@ -8,7 +8,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
 const { MAX_ARTIFACT_BYTES, MAX_EXTRACTED_CHARS, ArtifactError, sanitizeDisplayName } = require('./artifact-store');
+const { parseWorkerReport } = require('./contracts');
 const { LIMITS, SPECIALTIES, ACTIVE_RUN_STATUSES } = require('./product-store');
+const { createPipelinesRouter } = require('./dashboard-pipelines-api');
+const { createSettingsRouter, makeSettingsResolver } = require('./dashboard-settings-api');
+const { loadLegacyPack, loadRolePack } = require('./role-pack');
+const { createAtlassianDashboardApi } = require('./dashboard-atlassian-api');
 
 const MAX_EVENTS_LIMIT = 500;
 const DEFAULT_EVENTS_LIMIT = 100;
@@ -23,9 +28,19 @@ const STATUS_BY_CODE = Object.freeze({
   conflict: 409,
   staging_limit: 409,
   invalid_state: 409,
+  command_conflict: 409,
+  connection_changed: 409,
+  reconnect_required: 409,
+  site_not_authorized: 409,
+  scope_not_authorized: 409,
+  not_configured: 503,
+  source_unavailable: 503,
+  request_timeout: 503,
   stale_decision: 409,
+  settings_invalid: 409,
   payload_too_large: 413,
   unsupported_media_type: 415,
+  catalog_unavailable: 503,
 });
 const SPECIALTY_NAMES = Object.freeze({
   'project-manager': 'Project Manager',
@@ -170,7 +185,11 @@ function liveStages(db, run, plan) {
     const last = mine[mine.length - 1];
     if (last.state !== 'finished') return 'running';
     const result = parse(last.result_json) || {};
-    return result.status === 'TASK_STATE_COMPLETED' && result.report && result.report.outcome === 'completed' ? 'succeeded' : 'failed';
+    // The worker report is JSON text in the task artifact; parse it exactly as the lead graph does.
+    const { report } = result.status === 'TASK_STATE_COMPLETED'
+      ? parseWorkerReport(result.artifacts?.[0]?.text || result.text)
+      : { report: null };
+    return report && report.outcome === 'completed' ? 'succeeded' : 'failed';
   };
   const statuses = stageRows.map((entry) => statusOf(entry));
   stageRows.forEach((entry, index) => { if (statuses[index] === 'succeeded') succeeded.add(entry.stage.stageId); });
@@ -195,23 +214,11 @@ function liveStages(db, run, plan) {
 }
 
 function createDashboardApi({
-  projection, events, roles, leadRole, workspace, projectId, startedAt, version, auth, productStore, artifactStore, deliveryController,
+  projection, events, workspace, projectId, startedAt, version, auth, productStore, artifactStore, deliveryController, activePack, legacyPack, settingsResolver, modelCatalog, accountHealth, settingsStore, atlassianIntegration,
 } = {}) {
   if (!projection || !events) throw new TypeError('createDashboardApi requires projection and events');
   const resolvedProjectId = projectId || computeProjectId(workspace);
   const started = startedAt || new Date().toISOString();
-  const roleList = [
-    ...(leadRole ? [{ role: leadRole, kind: 'lead' }] : []),
-    ...[...(roles instanceof Map ? roles.values() : roles || [])].map((role) => ({ role, kind: 'specialist' })),
-  ].map(({ role, kind }) => ({
-    id: role.name,
-    displayName: role.name,
-    description: role.description,
-    sandbox: role.sandbox,
-    model: role.model,
-    effort: role.effort,
-    kind,
-  }));
   const router = express.Router();
 
   const handle = (fn) => (req, res, next) => {
@@ -223,6 +230,8 @@ function createDashboardApi({
   };
 
   const tickets = Boolean(productStore && artifactStore && auth);
+
+  if (atlassianIntegration && auth) router.use(createAtlassianDashboardApi({ integration: atlassianIntegration, auth }));
 
   router.get('/context', handle(() => ({
     apiVersion: 1,
@@ -249,7 +258,16 @@ function createDashboardApi({
     lastEventSequence: events.lastSequence(),
   })));
 
-  router.get('/roles', handle(() => ({ roles: roleList.map((entry) => ({ ...entry })) })));
+  // Packs come from the server; the default profile paths are a fallback for embedded use.
+  const legacy = legacyPack || loadLegacyPack();
+  const pack = activePack || loadRolePack();
+  if (modelCatalog && accountHealth && settingsStore && auth) {
+    router.use(createSettingsRouter({ activePack: pack, legacyPack: legacy, modelCatalog, accountHealth, settingsStore, auth }));
+  }
+  router.use(createPipelinesRouter({
+    activePack: pack, legacyPack: legacy, productStore, db: productStore ? productStore.db : null,
+    settingsResolver: settingsResolver || (settingsStore ? makeSettingsResolver({ settingsStore }) : undefined),
+  }));
 
   router.get('/cards', handle((req) => projection.listCards({
     column: single(req.query, 'column'),
@@ -328,9 +346,11 @@ function createDashboardApi({
     });
 
     if (deliveryController) {
-      router.post('/tickets/:ticketId/submit', auth.originGuard, jsonBody, (req, res, next) => {
+      router.post('/tickets/:ticketId/submit', auth.originGuard, jsonBody, async (req, res, next) => {
         try {
-          const result = productStore.submitTicket(req.params.ticketId, req.body, deliveryController.settingsSnapshot());
+          // A replayed command returns its stored outcome without revalidating the catalog.
+          const result = productStore.replayedSubmit(req.params.ticketId, req.body)
+            || productStore.submitTicket(req.params.ticketId, req.body, await deliveryController.validatedSettingsSnapshot());
           commandResult(res, result, 'ticket_submitted', (r) => ({ version: r.ticket.version }));
           poke();
         } catch (error) { next(error); }

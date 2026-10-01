@@ -185,3 +185,126 @@ test('renderRequirementsGoal frames operator text as untrusted data', () => {
   }
   assert.ok(goal.indexOf('Follow the saved plan') > close);
 });
+
+// ---- M4 preset fixtures (shape of loadRolePack output) ----
+const FX_ROLES = [
+  ['architect', 'dlv-architect', 'Architect', 'read-only', 'Scoped technical plan.'],
+  ['developer', 'dlv-developer', 'Developer', 'workspace-write', 'Bounded implementation within allowedFiles.'],
+  ['qa', 'dlv-qa', 'QA', 'workspace-write', 'Executes checks and reports failures.'],
+  ['reviewer', 'dlv-reviewer', 'Reviewer', 'read-only', 'Reviews the delta against the contract.'],
+  ['security', 'dlv-security', 'Security', 'read-only', 'Flags unsafe access boundaries.'],
+  ['performance', 'dlv-performance', 'Performance', 'workspace-write', 'Measures and labels hypotheses.'],
+  ['devops', 'dlv-devops', 'DevOps', 'workspace-write', 'Environment and pipeline setup.'],
+  ['tech-writer', 'dlv-tech-writer', 'Technical Writer', 'workspace-write', 'Verifies documentation examples.'],
+];
+const fxPack = () => ({
+  packId: 'delivery',
+  version: '1.0.0',
+  coordinator: { publicId: 'project-manager', runtimeId: 'dlv-project-manager', displayName: 'Project Manager' },
+  roles: FX_ROLES.map(([publicId, runtimeId, displayName, sandbox, description]) => ({ publicId, runtimeId, displayName, role: { name: runtimeId, sandbox, description } })),
+  repairChains: { 'dlv-developer': ['dlv-developer-xhigh', 'dlv-developer-sol'] },
+  presets: new Map(),
+  unavailablePresets: ['security', 'performance', 'environment', 'debt'],
+  publicToRuntime: new Map(FX_ROLES.map((r) => [r[0], r[1]])),
+  runtimeToPublic: new Map(FX_ROLES.map((r) => [r[1], r[0]])),
+});
+const fxStage = (key, roles, dependsOn = []) => ({ key, roles, required: true, dependsOn, purpose: key });
+const fxPresets = () => new Map([
+  ['feature', { presetId: 'feature', version: '1.0.0', classification: 'feature', description: 'f', stages: [fxStage('design', ['architect']), fxStage('implement', ['developer'], ['design']), fxStage('review', ['reviewer'], ['implement']), fxStage('qa', ['qa'], ['implement'])], optionalRoles: ['security', 'performance', 'devops', 'tech-writer'], optionalDependsOn: ['implement'], minChecks: 1 }],
+  ['bugfix', { presetId: 'bugfix', version: '1.0.0', classification: 'bugfix', description: 'b', stages: [fxStage('reproduce', ['qa']), fxStage('implement', ['developer'], ['reproduce']), fxStage('review', ['reviewer'], ['implement']), fxStage('verify', ['qa'], ['implement'])], optionalRoles: ['architect', 'security', 'performance'], optionalDependsOn: ['implement'], minChecks: 1 }],
+  ['docs', { presetId: 'docs', version: '1.0.0', classification: 'docs', description: 'd', stages: [fxStage('write', ['tech-writer']), fxStage('review', ['reviewer'], ['write'])], optionalRoles: ['qa', 'architect'], optionalDependsOn: ['write'], minChecks: 1 }],
+  ['audit', { presetId: 'audit', version: '1.0.0', classification: 'audit', description: 'a', stages: [fxStage('investigate', ['architect', 'security', 'performance', 'reviewer']), fxStage('synthesis', ['reviewer'], ['investigate'])], optionalRoles: ['security', 'performance', 'architect'], optionalDependsOn: ['investigate'], minChecks: 0 }],
+]);
+const WRITABLE_PUBLIC = ['developer', 'qa', 'performance', 'devops', 'tech-writer'];
+const pst = (stageId, key, roleId, dependencies = [], extra = {}) => ({
+  stageId, presetStageKey: key, roleId, objective: 'do it', dependencies,
+  allowedFiles: WRITABLE_PUBLIC.includes(roleId) ? ['src/a.js'] : [], required: key !== null, ...extra,
+});
+const presetPlans = () => ({
+  feature: { presetId: 'feature', checkIds: ['unit'], stages: [pst('design', 'design', 'architect'), pst('impl', 'implement', 'developer', ['design']), pst('rev', 'review', 'reviewer', ['impl']), pst('qa', 'qa', 'qa', ['impl'])] },
+  bugfix: { presetId: 'bugfix', checkIds: ['unit'], stages: [pst('repro', 'reproduce', 'qa'), pst('impl', 'implement', 'developer', ['repro']), pst('rev', 'review', 'reviewer', ['impl']), pst('ver', 'verify', 'qa', ['impl'])] },
+  docs: { presetId: 'docs', checkIds: ['unit'], stages: [pst('write', 'write', 'tech-writer'), pst('rev', 'review', 'reviewer', ['write'])] },
+  audit: { presetId: 'audit', checkIds: [], stages: [pst('inv', 'investigate', 'architect'), pst('syn', 'synthesis', 'reviewer', ['inv'])] },
+});
+
+const fxProject = { baseRef: 'main', checks: [{ id: 'unit', argv: ['npm', 'test'], timeoutMs: 1, description: 'Unit tests' }] };
+const readyV2 = (id = 'feature', extra = {}) => ({ readiness: 'ready', classification: id, requirements: requirements(), questions: [], unsupportedReason: null, plan: presetPlans()[id], ...extra });
+const v2 = () => ({ projectConfig: fxProject, pack: fxPack(), presets: fxPresets() });
+const promptV2 = () => intake.buildIntakePrompt({ revision: { title: 'T', description: 'D', criteria: [] }, projectConfig: fxProject, pack: fxPack(), presets: fxPresets() });
+
+test('INTAKE_SCHEMA_V2 adds presetId and presetStageKey', () => {
+  const plan = intake.INTAKE_SCHEMA_V2.properties.plan;
+  assert.deepEqual(plan.required, ['presetId', 'stages', 'checkIds']);
+  assert.equal(plan.properties.presetId.type, 'string');
+  const stage = plan.properties.stages.items;
+  assert.deepEqual(stage.properties.presetStageKey.type, ['string', 'null']);
+  assert.ok(stage.required.includes('presetStageKey'));
+  assert.equal(intake.INTAKE_SCHEMA.properties.plan.properties.presetId, undefined);
+});
+
+test('pack-aware prompt lists nine roles, presets and unavailable presets', () => {
+  const text = promptV2();
+  for (const id of ['architect', 'developer', 'qa', 'reviewer', 'security', 'performance', 'devops', 'tech-writer']) {
+    assert.match(text, new RegExp(`- ${id} \\(`));
+  }
+  assert.match(text, /Bounded implementation within allowedFiles/);
+  for (const id of ['feature', 'bugfix', 'docs', 'audit']) assert.match(text, new RegExp(`- ${id} v1\\.0\\.0`));
+  assert.match(text, /required stage key "investigate": architect or security or performance or reviewer/);
+  assert.match(text, /optional roles: security, performance, devops, tech-writer/);
+  assert.match(text, /minChecks 0/);
+  for (const id of ['security', 'performance', 'environment', 'debt']) assert.match(text, new RegExp(`- ${id}: unavailable, needs its own contract and pilot`));
+  assert.match(text, /plan\.presetId to the classification's preset id/);
+  assert.doesNotMatch(text, /orch-builder/);
+  assert.match(text, /<<<BEGIN UNTRUSTED-[0-9a-f]{16} TICKET>>>/);
+  assert.match(text, /data, not instructions/);
+});
+
+test('prompt without a pack is the M3 prompt', () => {
+  const text = intake.buildIntakePrompt({ revision: { title: 'T', description: 'D', criteria: [] }, projectConfig: fxProject });
+  assert.match(text, /orch-builder/);
+  assert.doesNotMatch(text, /Public roles/);
+});
+
+test('pack-aware validation accepts each preset plan and maps roles', () => {
+  for (const id of ['feature', 'bugfix', 'docs', 'audit']) {
+    const result = intake.validateIntakeOutput(readyV2(id), v2());
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.value.plan.presetId, id);
+    assert.equal(result.value.plan.validatorVersion, 'm4-plan-v1');
+  }
+  const mapped = intake.validateIntakeOutput(readyV2('feature'), v2()).value.plan.stages.find((s) => s.stageId === 'impl');
+  assert.equal(mapped.roleId, 'dlv-developer');
+  assert.equal(mapped.publicRoleId, 'developer');
+});
+
+test('pack-aware validation rejects presetId mismatch and legacy roles', () => {
+  const wrong = intake.validateIntakeOutput(readyV2('feature', { classification: 'bugfix' }), v2());
+  assert.equal(wrong.ok, false);
+  assert.ok(wrong.errors.some((e) => e.path === 'plan.presetId'));
+  const legacy = intake.validateIntakeOutput(ready(), v2());
+  assert.equal(legacy.ok, false);
+});
+
+test('pack-aware validation requires an available preset for the classification', () => {
+  const presets = fxPresets();
+  presets.delete('docs');
+  const result = intake.validateIntakeOutput(readyV2('docs'), { projectConfig: fxProject, pack: fxPack(), presets });
+  assert.equal(result.ok, false);
+  assert.match(result.errors[0].message, /no available preset/);
+});
+
+test('M3 validation path is unchanged without a pack', () => {
+  const result = intake.validateIntakeOutput(ready(), { projectConfig });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.plan.validatorVersion, undefined);
+});
+
+test('validateIntakeOutput accepts a V2 plan against the real loaded role pack', () => {
+  const { loadRolePack } = require('../src/role-pack');
+  const pack = loadRolePack({ packDir: 'profiles/delivery' });
+  const result = intake.validateIntakeOutput(readyV2('feature'), { projectConfig: fxProject, pack, presets: pack.presets });
+  assert.equal(result.ok, true, JSON.stringify(result.errors));
+  const impl = result.value.plan.stages.find((s) => s.stageId === 'impl');
+  assert.equal(impl.publicRoleId, 'developer');
+  assert.equal(impl.roleId, 'dlv-developer');
+});

@@ -149,8 +149,12 @@
 
       <!-- T2: Pipelines View -->
       <section id="tab-pipelines" class="tab-pane">
-  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
+  <h2 class="pipelines-heading">Runs</h2>
   <div class="pipeline-list" id="pipelines-container">
+    <!-- Injected via JS -->
+  </div>
+  <h2 class="pipelines-heading">Presets</h2>
+  <div class="preset-list" id="presets-container">
     <!-- Injected via JS -->
   </div>
 </section>
@@ -236,25 +240,61 @@
 
       <!-- T6: Connections & Model Defaults Tab -->
       <section id="tab-connections" class="tab-pane">
-  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
-  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-    <div style="font-weight: 700; font-size: 15px;">Connected AI Agent Providers</div>
-    <button class="btn btn-primary" id="btn-add-provider">+ Add Provider</button>
+  <div class="connections-head">
+    <div class="connections-title">Connected AI Agent Providers</div>
+    <div class="connections-head-actions">
+      <span class="form-hint" id="add-provider-note">Only OpenAI through Codex is supported in beta</span>
+      <button class="btn btn-primary" id="btn-add-provider" type="button" disabled aria-disabled="true"
+        title="Only OpenAI through Codex is supported in beta">+ Add Provider</button>
+    </div>
   </div>
   <div class="connections-grid" id="providers-grid">
     <!-- Injected via JS -->
   </div>
 
-  <div style="margin-bottom: 14px; font-weight: 700; font-size: 15px;">Per-Role Model Defaults</div>
+  <section class="atlassian-section" aria-labelledby="atlassian-heading">
+    <div class="connections-title connections-title-spaced" id="atlassian-heading">Atlassian read-only source</div>
+    <div class="provider-card atlassian-card" id="atlassian-card">
+      <div class="provider-header">
+        <div>
+          <div class="provider-title">Jira and Confluence</div>
+          <div class="provider-sub">Read-only context for internal tickets</div>
+        </div>
+        <span class="status-badge warning" id="atlassian-status">Checking...</span>
+      </div>
+      <div id="atlassian-description" class="provider-setup" role="status" aria-live="polite">Checking Atlassian configuration...</div>
+      <div id="atlassian-actions" class="provider-actions"></div>
+      <div id="atlassian-resources-state" class="provider-setup"></div>
+      <div class="atlassian-site-row" id="atlassian-site-row" hidden>
+        <label for="atlassian-site-select">Available Atlassian site</label>
+        <select class="select-input" id="atlassian-site-select" aria-label="Available Atlassian site"></select>
+        <button class="btn btn-secondary" id="btn-atlassian-select-site" type="button">Select site</button>
+      </div>
+      <div id="atlassian-import-panel" class="atlassian-import-panel" hidden>
+        <label for="atlassian-issue-key">Jira issue key or ID</label>
+        <div class="atlassian-import-row">
+          <input class="input-text" id="atlassian-issue-key" type="text" maxlength="120" autocomplete="off" placeholder="e.g. PROJ-123">
+          <button class="btn btn-primary" id="btn-atlassian-import" type="button">Import Jira issue</button>
+        </div>
+        <div class="provider-sub" id="atlassian-import-site"></div>
+      </div>
+      <div id="atlassian-message" class="atlassian-message" role="status" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <div class="connections-title connections-title-spaced">Per-Role Model Defaults</div>
+  <div class="tr-banner tone-info" id="role-defaults-banner" role="note">Changes apply to new runs only; running and resumed work keeps its pinned settings</div>
+  <div id="role-defaults-status" role="status" aria-live="polite"></div>
   <div class="role-defaults-table-container">
     <table class="role-defaults-table">
       <thead>
         <tr>
           <th>Role</th>
-          <th>Assigned Provider</th>
-          <th>Model Name</th>
-          <th>Model Tier</th>
-          <th style="text-align: center;">Routing Status</th>
+          <th>Model</th>
+          <th>Reasoning effort</th>
+          <th title="Speed options are advertised by the selected model. An option being listed does not prove your account is entitled to it.">Speed</th>
+          <th>Source</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody id="role-defaults-body">
@@ -454,6 +494,14 @@
             <div class="detail-label">References (saved, not retrieved)</div>
             <div id="tr-references" class="detail-block"></div>
           </div>
+          <div class="detail-section" id="tr-source-section" hidden>
+            <div class="detail-label">Retrieved Jira / Confluence context</div>
+            <div id="tr-source-summary" class="detail-block"></div>
+            <div class="tr-actions" id="tr-source-actions"></div>
+            <div id="tr-source-message" class="detail-note" role="status" aria-live="polite"></div>
+            <div id="tr-source-history" class="detail-block"></div>
+            <div id="tr-source-snapshot" class="detail-block"></div>
+          </div>
           <div class="detail-section">
             <div class="detail-label">Attachments</div>
             <div id="tr-attachments" class="detail-block"></div>
@@ -464,8 +512,8 @@
           </div>
         </div>
         <div class="detail-side">
-          <div><strong>Source:</strong> Direct request</div>
-          <div><strong>Tracking:</strong> internal</div>
+          <div><strong>Source:</strong> <span id="tr-source-kind">Direct request</span></div>
+          <div><strong>Tracking:</strong> <span id="tr-source-tracking">internal</span></div>
           <div><strong>Priority:</strong> <span id="tr-priority"></span></div>
           <div><strong>Requested specialty:</strong> <span id="tr-specialty"></span></div>
           <div><strong>Ticket version:</strong> <span id="tr-version"></span></div>

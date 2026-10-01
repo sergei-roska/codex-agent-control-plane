@@ -654,7 +654,12 @@ test('live stages map journal attempts by stageId, so two stages with one role s
   const base = { runId: 'lead-1', sandbox: 'workspace-write', contextId: 'c' };
   journal.recordSubmitting({ ...base, attemptId: 'a1', assignmentId: 'a1', role: 'orch-builder', stageId: 'build-a' });
   journal.recordSubmitted('a1', 't1');
-  journal.recordFinished('a1', { status: 'TASK_STATE_COMPLETED', report: { outcome: 'completed' } });
+  journal.recordFinished('a1', {
+    status: 'TASK_STATE_COMPLETED',
+    text: JSON.stringify({
+      outcome: 'completed', summary: 'ok', filesChanged: [], filesInspected: [], checks: [], risks: [], scopeExpansion: [], decisionRequest: null,
+    }),
+  });
   journal.recordSubmitting({ ...base, attemptId: 'a2', assignmentId: 'a2', role: 'orch-builder', stageId: 'build-b' });
   journal.recordSubmitting({ ...base, attemptId: 'a3', assignmentId: 'a3', role: 'orch-builder' });
   assert.equal(journal.get('a1').stageId, 'build-a');

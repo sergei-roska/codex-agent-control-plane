@@ -37,6 +37,14 @@
             <div class="detail-label">References (saved, not retrieved)</div>
             <div id="tr-references" class="detail-block"></div>
           </div>
+          <div class="detail-section" id="tr-source-section" hidden>
+            <div class="detail-label">Retrieved Jira / Confluence context</div>
+            <div id="tr-source-summary" class="detail-block"></div>
+            <div class="tr-actions" id="tr-source-actions"></div>
+            <div id="tr-source-message" class="detail-note" role="status" aria-live="polite"></div>
+            <div id="tr-source-history" class="detail-block"></div>
+            <div id="tr-source-snapshot" class="detail-block"></div>
+          </div>
           <div class="detail-section">
             <div class="detail-label">Attachments</div>
             <div id="tr-attachments" class="detail-block"></div>
@@ -47,8 +55,8 @@
           </div>
         </div>
         <div class="detail-side">
-          <div><strong>Source:</strong> Direct request</div>
-          <div><strong>Tracking:</strong> internal</div>
+          <div><strong>Source:</strong> <span id="tr-source-kind">Direct request</span></div>
+          <div><strong>Tracking:</strong> <span id="tr-source-tracking">internal</span></div>
           <div><strong>Priority:</strong> <span id="tr-priority"></span></div>
           <div><strong>Requested specialty:</strong> <span id="tr-specialty"></span></div>
           <div><strong>Ticket version:</strong> <span id="tr-version"></span></div>

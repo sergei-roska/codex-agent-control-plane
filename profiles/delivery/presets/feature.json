@@ -1,0 +1,60 @@
+{
+  "presetId": "feature",
+  "version": "1.0.0",
+  "classification": "feature",
+  "description": "New behavior or capability: technical plan, bounded implementation, then independent review and QA of the exact candidate.",
+  "stages": [
+    {
+      "key": "design",
+      "roles": [
+        "architect"
+      ],
+      "required": true,
+      "dependsOn": [],
+      "purpose": "Scoped technical plan, proportional to impact"
+    },
+    {
+      "key": "implement",
+      "roles": [
+        "developer"
+      ],
+      "required": true,
+      "dependsOn": [
+        "design"
+      ],
+      "purpose": "Bounded implementation of the planned change with focused checks inside allowedFiles"
+    },
+    {
+      "key": "review",
+      "roles": [
+        "reviewer"
+      ],
+      "required": true,
+      "dependsOn": [
+        "implement"
+      ],
+      "purpose": "Independent review of the exact diff against the requirements and project conventions"
+    },
+    {
+      "key": "qa",
+      "roles": [
+        "qa"
+      ],
+      "required": true,
+      "dependsOn": [
+        "implement"
+      ],
+      "purpose": "Independent behavior and regression evidence from executed checks"
+    }
+  ],
+  "optionalRoles": [
+    "security",
+    "performance",
+    "devops",
+    "tech-writer"
+  ],
+  "optionalDependsOn": [
+    "implement"
+  ],
+  "minChecks": 1
+}

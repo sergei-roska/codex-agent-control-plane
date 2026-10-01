@@ -6,7 +6,7 @@ const { ClientFactory } = require('@a2a-js/sdk/client');
 const { TaskState } = require('@a2a-js/sdk');
 const { Command, MemorySaver } = require('@langchain/langgraph');
 const { createLeadRole } = require('./role-catalog');
-const { DECISION_SCHEMA, safeRelativePath } = require('./contracts');
+const { DECISION_SCHEMA, safeRelativePath, normalizeEffectiveSettings } = require('./contracts');
 const { InMemoryDispatchJournal } = require('./durable-store');
 const { validateAcceptanceContract } = require('./acceptance');
 const { buildLeadGraph, isTerminalTask, pauseMessage } = require('./lead-graph');
@@ -79,6 +79,7 @@ class LeadOrchestrator {
     usageLedger = null,
     runCheckImpl,
     snapshot,
+    repairChains,
   } = {}) {
     if (!appServer || typeof appServer.run !== 'function') throw new TypeError('appServer.run is required');
     if (!(roles instanceof Map)) throw new TypeError('roles must be a Map');
@@ -121,6 +122,7 @@ class LeadOrchestrator {
       usageLedger,
       runCheckImpl,
       snapshot,
+      ...(repairChains ? { repairChains } : {}),
       runtimeFor: (runId) => this.runtimes.get(runId),
       clientFor: (roleName) => this._clientFor(roleName),
       authOptions: () => this._authRequestOptions(),
@@ -161,9 +163,12 @@ class LeadOrchestrator {
     const pinned = JSON.parse(JSON.stringify({
       planRevisionId: plan.planRevisionId ?? null,
       classification: plan.classification ?? null,
+      ...(typeof plan.presetId === 'string' ? { presetId: plan.presetId } : {}),
       stages: stages.map((stage) => ({
         stageId: stage.stageId,
         roleId: stage.roleId,
+        ...(typeof stage.publicRoleId === 'string' ? { publicRoleId: stage.publicRoleId } : {}),
+        ...(typeof stage.presetStageKey === 'string' ? { presetStageKey: stage.presetStageKey } : {}),
         objective: stage.objective ?? '',
         dependencies: stage.dependencies,
         allowedFiles: stage.allowedFiles,
@@ -175,6 +180,18 @@ class LeadOrchestrator {
       plan: pinned,
       stageStatuses: Object.fromEntries(pinned.stages.map((stage) => [stage.stageId, { status: 'pending', attemptIds: [] }])),
     };
+  }
+
+  // Pinned per-run role settings: { [roleRuntimeId]: { model, effort, serviceTier } }. Malformed entries are refused.
+  static _settingsState(settings) {
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new TypeError('settings must be an object keyed by role runtime id');
+    const pinned = {};
+    for (const [roleId, entry] of Object.entries(settings)) {
+      const normalized = normalizeEffectiveSettings(entry);
+      if (!normalized) throw new TypeError(`settings for ${roleId} must have a valid model, effort, and serviceTier`);
+      pinned[roleId] = normalized;
+    }
+    return pinned;
   }
 
   static _exists(snapshot) {
@@ -197,14 +214,16 @@ class LeadOrchestrator {
   /**
    * `contract` is the acceptance contract; it is pinned in graph state here and never changed afterwards.
    * `plan` (optional, already validated by the caller) is pinned the same way and constrains dispatch; null = legacy.
+   * `settings` (optional, the snapshot roles map) is pinned the same way; a resume never changes it.
    */
-  async run({ goal, runId = randomUUID(), contract, plan = null, signal, onEvent, interruptAfter } = {}) {
+  async run({ goal, runId = randomUUID(), contract, plan = null, settings = null, signal, onEvent, interruptAfter } = {}) {
     if (!isNonEmptyString(goal)) throw new TypeError('goal must be a non-empty string');
     if (!isNonEmptyString(runId)) throw new TypeError('runId must be a non-empty string');
     const pinnedContract = validateAcceptanceContract(contract);
     if (LeadOrchestrator._exists(await this._snapshot(runId))) throw new Error(`A checkpoint already exists for run ${runId}; use resume()`);
     const planState = plan == null ? {} : LeadOrchestrator._planState(plan);
-    return this._drive(runId, { goal, runId, contract: pinnedContract, ...planState }, { signal, onEvent, interruptAfter, resumed: false });
+    const settingsState = settings == null ? {} : { settings: LeadOrchestrator._settingsState(settings) };
+    return this._drive(runId, { goal, runId, contract: pinnedContract, ...planState, ...settingsState }, { signal, onEvent, interruptAfter, resumed: false });
   }
 
   async resume({ runId, input, signal, onEvent, interruptAfter } = {}) {

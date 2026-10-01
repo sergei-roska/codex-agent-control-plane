@@ -23,11 +23,20 @@ const { migrateProductSchema } = require('./product-migrations');
 const { ProductStore } = require('./product-store');
 const { ArtifactStore, defaultArtifactRoot } = require('./artifact-store');
 const { createPmLeadRole } = require('./intake');
-const { validatePlan } = require('./plan-validator');
+const { validatePlan, validatePresetPlan } = require('./plan-validator');
+const { loadRolePack, loadLegacyPack } = require('./role-pack');
+const { createModelCatalog } = require('./model-catalog');
+const { createAccountHealth } = require('./account-health');
+const { createSettingsStore } = require('./settings-store');
 const { loadProjectConfig, defaultProjectConfigPath } = require('./project-config');
 const { createGitAdapter } = require('./git-adapter');
-const { createDeliveryController, computeRolePackHash, LEAD_PROMPT_VERSION } = require('./delivery-controller');
+const {
+  createDeliveryController, computeRolePackHash, LEAD_PROMPT_VERSION,
+} = require('./delivery-controller');
 const { collectStaleStagedArtifacts, createDashboardApi, computeProjectId, sendError, newRequestId } = require('./dashboard-api');
+const { loadAtlassianConfig } = require('./integrations/atlassian-config');
+const { createAtlassianIntegration } = require('./integrations/atlassian-integration');
+const { atlassianCallbackRoute } = require('./dashboard-atlassian-api');
 
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 3000;
@@ -43,14 +52,18 @@ function assertWebDirOutsideArtifacts(webDir) {
   }
 }
 
-function mountDashboard(app, { auth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController }) {
+function mountDashboard(app, {
+  auth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController,
+  activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration,
+}) {
   assertWebDirOutsideArtifacts(DASHBOARD_WEB_DIR);
   const projection = createProjection({ db: state.db, roleIds: [...roles.keys()], projectId, productStore });
   const api = createDashboardApi({
     projection, events, roles, leadRole, workspace, projectId, startedAt: new Date().toISOString(), version: PACKAGE_VERSION,
-    auth, productStore, artifactStore, deliveryController,
+    auth, productStore, artifactStore, deliveryController, activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration,
   });
   app.use('/api/dashboard/v1', auth.hostGuard, auth.noStore);
+  if (atlassianIntegration) app.use('/api/dashboard/v1', atlassianCallbackRoute({ integration: atlassianIntegration, auth }));
   // Bearer only and deliberately no originGuard: the CLI sends no Origin header.
   app.post('/api/dashboard/v1/pairing-codes', auth.hostGuard, authMiddleware, auth.pairingCodeHandler);
   // The session router parses 1 KiB JSON bodies; confine it to /session so ticket commands are not affected.
@@ -203,10 +216,29 @@ function readDelivery(raw) {
     plan: raw.plan,
     ...(typeof raw.planRevisionId === 'string' && raw.planRevisionId ? { planRevisionId: raw.planRevisionId } : {}),
     ...(typeof raw.planHash === 'string' && raw.planHash ? { planHash: raw.planHash } : {}),
+    ...(typeof raw.rolePack === 'string' && raw.rolePack ? { rolePack: raw.rolePack } : {}),
+    ...(raw.settings && typeof raw.settings === 'object' && !Array.isArray(raw.settings) ? { settings: raw.settings } : {}),
   };
 }
 
-function makeLeadExecutor({ orchestrator: defaultOrchestrator, deliveryOrchestrator = null, events = NOOP_EVENTS, projectConfig = null }) {
+/**
+ * Re-validates a delivery-pack plan against its preset. The saved plan carries runtime role ids beside
+ * publicRoleId; the preset validator takes public ids and returns both again.
+ */
+function validateDeliveryPlan(plan, pack, projectCheckIds) {
+  const preset = pack.presets.get(plan.presetId);
+  if (!preset) return { ok: false, errors: [{ path: 'plan.presetId', message: `unknown preset "${String(plan.presetId)}"` }], plan: null };
+  const stages = Array.isArray(plan.stages)
+    ? plan.stages.map((stage) => (stage && typeof stage === 'object'
+      ? { ...stage, roleId: typeof stage.publicRoleId === 'string' ? stage.publicRoleId : pack.runtimeToPublic(stage.roleId) || stage.roleId }
+      : stage))
+    : plan.stages;
+  return validatePresetPlan({ ...plan, stages }, { pack, preset, projectCheckIds });
+}
+
+function makeLeadExecutor({
+  orchestrator: defaultOrchestrator, deliveryOrchestrators = new Map(), events = NOOP_EVENTS, projectConfig = null,
+}) {
   const controllers = new Map();
   const reservations = new Set();
   const inflight = new Set();
@@ -239,7 +271,11 @@ function makeLeadExecutor({ orchestrator: defaultOrchestrator, deliveryOrchestra
         deliveryError = error;
       }
     }
-    const orchestrator = delivery && deliveryOrchestrator ? deliveryOrchestrator : defaultOrchestrator;
+    // The role pack is pinned per run (message metadata for new runs, task metadata for resumes); missing means legacy-orch.
+    const rolePackId = delivery ? (delivery.rolePack || 'legacy-orch') : null;
+    const route = delivery ? deliveryOrchestrators.get(rolePackId) || null : null;
+    const orchestrator = route ? route.orchestrator : defaultOrchestrator;
+    const deliveryPack = route ? route.pack : null;
     const emit = (type, payload) => events.record(type, { runId: taskId, namespace: 'orchestrator', taskId, role: 'orch-lead', payload });
     let effectivePause = null;
     const republishPause = (pause, explanation, suffix) => {
@@ -277,11 +313,11 @@ function makeLeadExecutor({ orchestrator: defaultOrchestrator, deliveryOrchestra
         return;
       }
 
-      if (!resuming && (deliveryError || (delivery && !deliveryOrchestrator))) {
+      if (deliveryError || (delivery && !route)) {
         eventBus.publish(AgentEvent.statusUpdate({
           taskId,
           contextId,
-          status: status(TaskState.TASK_STATE_FAILED, agentMessage(taskId, contextId, 'delivery-error', deliveryError ? `Invalid delivery metadata: ${deliveryError.message}` : 'Delivery runs are not available on this server.')),
+          status: status(TaskState.TASK_STATE_FAILED, agentMessage(taskId, contextId, 'delivery-error', deliveryError ? `Invalid delivery metadata: ${deliveryError.message}` : `role_pack_unavailable: the role pack "${rolePackId}" is not available on this server.`)),
           metadata: {},
         }));
         return;
@@ -289,10 +325,10 @@ function makeLeadExecutor({ orchestrator: defaultOrchestrator, deliveryOrchestra
 
       // The server never trusts the caller's plan: re-validate it against the project policy before any run starts.
       if (!resuming && delivery) {
-        const checked = validatePlan(delivery.plan, {
-          classification: delivery.plan.classification,
-          projectCheckIds: ((projectConfig && projectConfig.checks) || []).map((check) => check.id),
-        });
+        const projectCheckIds = ((projectConfig && projectConfig.checks) || []).map((check) => check.id);
+        const checked = deliveryPack
+          ? validateDeliveryPlan(delivery.plan, deliveryPack, projectCheckIds)
+          : validatePlan(delivery.plan, { classification: delivery.plan.classification, projectCheckIds });
         if (!checked.ok) {
           const listed = checked.errors.map((entry) => `- ${entry.path}: ${entry.message}`).join('\n');
           eventBus.publish(AgentEvent.statusUpdate({
@@ -304,7 +340,12 @@ function makeLeadExecutor({ orchestrator: defaultOrchestrator, deliveryOrchestra
           return;
         }
         // Run the normalized plan, never the raw metadata plan.
-        delivery = { ...delivery, plan: checked.plan };
+        delivery = {
+          ...delivery,
+          plan: deliveryPack
+            ? { ...checked.plan, planRevisionId: delivery.plan.planRevisionId ?? null, classification: delivery.plan.classification ?? null }
+            : checked.plan,
+        };
       }
 
       // The acceptance contract is read from a new run only; a resume can never change it.
@@ -346,7 +387,7 @@ function makeLeadExecutor({ orchestrator: defaultOrchestrator, deliveryOrchestra
             ? agentMessage(taskId, contextId, `resume-note-${Date.now()}`, 'Resumed. Acceptance metadata on a resume message is ignored; the contract was pinned when the run started.')
             : undefined),
         // Task metadata merges shallowly, so a cleared pause is null rather than absent.
-        metadata: resuming ? { pause: null } : delivery ? { delivery: { runId: delivery.runId, ...(delivery.planRevisionId ? { planRevisionId: delivery.planRevisionId } : {}), ...(delivery.planHash ? { planHash: delivery.planHash } : {}) } } : {},
+        metadata: resuming ? { pause: null } : delivery ? { delivery: { runId: delivery.runId, rolePack: rolePackId, ...(delivery.planRevisionId ? { planRevisionId: delivery.planRevisionId } : {}), ...(delivery.planHash ? { planHash: delivery.planHash } : {}) } } : {},
       }));
       let result;
       if (resuming) emit('run_resumed', { pauseKind });
@@ -362,10 +403,14 @@ function makeLeadExecutor({ orchestrator: defaultOrchestrator, deliveryOrchestra
           let originalContract;
           try { originalContract = validateAcceptanceContract(firstUserMetadata(task).acceptance); } catch (_) { originalContract = undefined; }
           const originalDelivery = delivery?.plan ? delivery : (() => { try { return readDelivery(firstUserMetadata(task).delivery); } catch (_) { return null; } })();
-          result = await orchestrator.run({ goal: original, runId: taskId, contract: originalContract, ...(originalDelivery?.plan ? { plan: originalDelivery.plan } : {}), signal: controller.signal });
+          result = await orchestrator.run({
+            goal: original, runId: taskId, contract: originalContract, ...(originalDelivery?.plan ? { plan: originalDelivery.plan } : {}), ...(originalDelivery?.settings ? { settings: originalDelivery.settings } : {}), signal: controller.signal,
+          });
         }
       } else {
-        result = await orchestrator.run({ goal, runId: taskId, contract, ...(delivery?.plan ? { plan: delivery.plan } : {}), signal: controller.signal });
+        result = await orchestrator.run({
+          goal, runId: taskId, contract, ...(delivery?.plan ? { plan: delivery.plan } : {}), ...(delivery?.settings ? { settings: delivery.settings } : {}), signal: controller.signal,
+        });
       }
       const paused = (result?.status === 'input_required' || result?.status === 'waiting_for_budget') && !controller.signal.aborted;
       if (paused) {
@@ -594,10 +639,12 @@ function rejectOverlappingLeadTask(executor) {
   };
 }
 
-function registerLead(app, { leadRole, orchestrator, deliveryOrchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), events, projectConfig }) {
+function registerLead(app, {
+  leadRole, orchestrator, deliveryOrchestrators, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), events, projectConfig,
+}) {
   const endpoint = new URL('/orchestrator', `${baseUrl}/`).toString();
   const card = makeLeadCard({ leadRole, endpoint });
-  const executor = makeLeadExecutor({ orchestrator, deliveryOrchestrator, events, projectConfig });
+  const executor = makeLeadExecutor({ orchestrator, deliveryOrchestrators, events, projectConfig });
   const requestHandler = new DefaultRequestHandler(card, taskStore, executor);
   app.use('/orchestrator/agent-card.json', agentCardHandler({ agentCardProvider: async () => AgentCard.toJSON(card) }));
   app.use('/orchestrator', authMiddleware, express.json(), rejectOverlappingLeadTask(executor), jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));
@@ -607,7 +654,7 @@ function registerLead(app, { leadRole, orchestrator, deliveryOrchestrator, baseU
 function protectRoleRpcMounts(app, authMiddleware) {
   const protectedApp = {
     use(route, ...handlers) {
-      if (typeof route === 'string' && /^\/agents\/orch-[a-z0-9-]+$/.test(route)) {
+      if (typeof route === 'string' && /^\/agents\/(orch|dlv)-[a-z0-9-]+$/.test(route)) {
         app.use(route, authMiddleware, ...handlers);
       } else {
         app.use(route, ...handlers);
@@ -633,6 +680,13 @@ async function startServer({
   workspaceLockDir,
   projectConfigFile,
   deliveryTickMs,
+  catalogNow,
+  atlassianConfigPath = process.env.CODEX_ATLASSIAN_CONFIG,
+  atlassianConfig: suppliedAtlassianConfig,
+  atlassianIntegration: suppliedAtlassianIntegration,
+  atlassianOAuth,
+  atlassianProvider,
+  atlassianFetchImpl,
 } = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new RangeError('port must be an integer from 0 to 65535');
   if (typeof workspace !== 'string' || !workspace || !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
@@ -673,6 +727,14 @@ async function startServer({
     const authToken = loadOrCreateAuthToken(tokenFile ? { filePath: tokenFile } : undefined);
     const authMiddleware = createAuthMiddleware(authToken);
     const roles = loadRoles(profilesDir ? { profilesDir } : undefined);
+    // Role packs: the legacy orch-* pack as today plus the nine-role delivery pack (a profiles/delivery dir next to a custom profilesDir wins).
+    const customPackDir = profilesDir ? path.join(profilesDir, 'delivery') : null;
+    const deliveryPack = loadRolePack(customPackDir && fs.existsSync(path.join(customPackDir, 'pack.json')) ? { packDir: customPackDir } : undefined);
+    const legacyPack = loadLegacyPack(profilesDir ? { profilesDir } : undefined);
+    const useDelivery = projectConfig.rolePack !== 'legacy-orch';
+    const activePack = useDelivery ? deliveryPack : legacyPack;
+    // Legacy and delivery runtime roles are all A2A endpoints and projection namespaces; coordinators are never endpoints.
+    const allRoles = new Map([...roles, ...deliveryPack.runtimeRoles]);
     const app = express();
     if (listen) {
       httpServer = await new Promise((resolve, reject) => {
@@ -689,6 +751,14 @@ async function startServer({
     const admission = new WriterAdmission({ db: state.db, workspace });
     const reconciledWriters = await admission.reconcileStale();
     const actualPort = httpServer?.address()?.port ?? port;
+    let atlassianIntegration = suppliedAtlassianIntegration || null;
+    if (!atlassianIntegration) {
+      const atlassianConfig = suppliedAtlassianConfig === undefined
+        ? loadAtlassianConfig({ workspace: path.resolve(workspace), configPath: atlassianConfigPath, port: actualPort })
+        : suppliedAtlassianConfig;
+      atlassianIntegration = createAtlassianIntegration({ db: state.db, productStore, artifactStore, workspace: path.resolve(workspace),
+        config: atlassianConfig, oauth: atlassianOAuth, provider: atlassianProvider, fetchImpl: atlassianFetchImpl });
+    }
     events.record('server_started', { payload: {
       port: actualPort,
       pid: process.pid,
@@ -710,16 +780,50 @@ async function startServer({
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger,
     });
-    const deliveryOrchestrator = orchestratorFactory({
-      appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger, leadRole: { ...createPmLeadRole(leadRole), promptVersion: LEAD_PROMPT_VERSION },
+    // Both delivery orchestrators exist so a run keeps the role pack pinned at submit whatever the project config says now.
+    const deliveryOrchestrators = new Map([
+      [deliveryPack.packId, {
+        pack: deliveryPack,
+        orchestrator: orchestratorFactory({
+          appServer, roles: deliveryPack.runtimeRoles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger,
+          leadRole: { ...deliveryPack.coordinator.role, promptVersion: LEAD_PROMPT_VERSION }, repairChains: deliveryPack.repairChains,
+        }),
+      }],
+      ['legacy-orch', {
+        pack: null,
+        orchestrator: orchestratorFactory({
+          appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger, leadRole: { ...createPmLeadRole(leadRole), promptVersion: LEAD_PROMPT_VERSION },
+        }),
+      }],
+    ]);
+    // Model catalog, account health and saved role defaults (M5). The catalog is warmed once; failures leave it unavailable (fail closed).
+    const modelCatalog = createModelCatalog({
+      appServer: typeof appServer.listModels === 'function' ? appServer : { async listModels() { throw new Error('model/list is not supported by this App Server client'); } },
+      now: catalogNow,
     });
+    await modelCatalog.refresh();
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
-      roles, appServer, workspace, baseUrl, admission, usageLedger, taskStoreFactory: (roleId) => createTaskStore(state, roleId),
+      roles, appServer, workspace, baseUrl, admission, usageLedger, catalog: modelCatalog, taskStoreFactory: (roleId) => createTaskStore(state, roleId),
+    });
+    const deliveryAgents = registerRoleAgents(protectedRoleApp, {
+      roles: deliveryPack.runtimeRoles, appServer, workspace, baseUrl, admission, usageLedger, catalog: modelCatalog, taskStoreFactory: (roleId) => createTaskStore(state, roleId),
+    });
+    for (const [id, agent] of deliveryAgents) specialistAgents.set(id, agent);
+    const accountHealth = createAccountHealth({ appServer });
+    const packsById = new Map([[deliveryPack.packId, deliveryPack], [legacyPack.packId, legacyPack]]);
+    const settingsStore = createSettingsStore({
+      db: state.db,
+      catalog: modelCatalog,
+      events,
+      roleExists: (packId, roleRuntimeId) => {
+        const found = packsById.get(packId);
+        return Boolean(found) && (found.coordinator.runtimeId === roleRuntimeId || found.runtimeRoles.has(roleRuntimeId));
+      },
     });
     const leadTaskStore = createTaskStore(state, 'orchestrator');
     const leadAgent = registerLead(app, {
-      leadRole, orchestrator, deliveryOrchestrator, baseUrl, authMiddleware, taskStore: leadTaskStore, events, projectConfig,
+      leadRole, orchestrator, deliveryOrchestrators, baseUrl, authMiddleware, taskStore: leadTaskStore, events, projectConfig,
     });
     if (httpServer) {
       deliveryController = createDeliveryController({
@@ -738,10 +842,17 @@ async function startServer({
         tickMs: deliveryTickMs,
         rolePackHash: computeRolePackHash(path.resolve(profilesDir || path.join(__dirname, '..', 'profiles'))),
         appServerVersion: typeof appServer.version === 'string' ? appServer.version : null,
+        deliveryPack,
+        legacyPack,
+        settingsStore,
+        modelCatalog,
       });
     }
     const dashboardAuth = createDashboardAuth({ db: state.db, getPort: () => actualPort });
-    mountDashboard(app, { auth: dashboardAuth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController });
+    mountDashboard(app, {
+      auth: dashboardAuth, authMiddleware, state, roles: allRoles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController,
+      activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration,
+    });
     deliveryController?.start();
     return {
       app,
@@ -756,10 +867,17 @@ async function startServer({
       productStore,
       projectConfig,
       deliveryController,
+      activePack,
+      legacyPack,
+      modelCatalog,
+      accountHealth,
+      settingsStore,
+      atlassianIntegration,
       host: HOST,
       port: actualPort,
       async close() {
         // Stop the controller first so it never reacts to the cancellations that follow.
+        atlassianIntegration?.clear?.();
         await deliveryController?.stop();
         leadAgent.executor.cancelAll();
         // Let canceled runs confirm downstream and persist their terminal state first.
