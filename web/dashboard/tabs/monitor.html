@@ -1,23 +1,18 @@
 <section id="tab-monitor" class="tab-pane">
-  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
   <div class="monitor-container">
     <div class="monitor-controls">
-      <select id="monitor-type-filter" class="select-input">
-        <option value="all">All Types</option>
-        <option value="agent">Agent Logs</option>
-        <option value="system">System Logs</option>
+      <select id="monitor-type-filter" class="select-input" disabled>
+        <option value="all">All categories</option>
       </select>
-      <select id="monitor-role-filter" class="select-input">
-        <option value="all">All Roles</option>
+      <select id="monitor-role-filter" class="select-input" disabled>
+        <option value="all">Role filter unavailable</option>
       </select>
-      <select id="monitor-level-filter" class="select-input">
-        <option value="all">All Levels</option>
-        <option value="info">Info</option>
-        <option value="warning">Warning</option>
-        <option value="error">Error</option>
+      <select id="monitor-level-filter" class="select-input" disabled>
+        <option value="all">Severity unavailable</option>
       </select>
       <button class="btn btn-secondary" id="btn-clear-logs" style="margin-left: auto;">Clear Log</button>
     </div>
+    <div id="monitor-status" class="detail-empty" role="status"></div>
     <div class="console-log" id="monitor-logs">
       <!-- Injected via JS -->
     </div>

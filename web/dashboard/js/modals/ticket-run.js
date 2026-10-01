@@ -14,7 +14,11 @@ const TRR_TABS = [
   { key: 'plan', label: 'Plan' },
   { key: 'candidate', label: 'Candidate' },
   { key: 'settings', label: 'Settings' },
-  { key: 'execution', label: 'Execution' }
+  { key: 'execution', label: 'Execution' },
+  { key: 'run-log', label: 'Run Log' },
+  { key: 'turns', label: 'Turns/events' },
+  { key: 'attempts-activity', label: 'Attempts' },
+  { key: 'tokens', label: 'Tokens' }
 ];
 const TRR_DIFF_CHUNK = 2000;
 const TRR_ANSWER_MAX = 4000;
@@ -23,7 +27,8 @@ const TRR_TERMINAL = ['completed', 'failed', 'stopped', 'cancelled'];
 // sigs: per-section render signatures so polling never rebuilds (and so never resets) an untouched section.
 const trr = {
   pick: null, runId: null, data: null, dataRunId: null, error: null, tab: 'requirements',
-  sigs: {}, drafts: {}, answering: null, answerError: {}, diff: null, usage: null
+  sigs: {}, drafts: {}, answering: null, answerError: {}, diff: null, usage: null,
+  activity: null
 };
 const TRR_FINDINGS_MAX = 8000;
 const TRD_MESSAGE_MAX = 2000;
@@ -55,6 +60,7 @@ function trrReset() {
   trr.answering = null;
   trr.answerError = {};
   trr.diff = null;
+  trr.activity = null;
   trdReset();
 }
 
@@ -134,7 +140,17 @@ function renderRunPanel() {
   const section = document.getElementById('tr-run-section');
   if (!d || !section) return;
   const { runs, run: summary } = trrSelectedRun(d);
-  if (!summary) { section.hidden = true; return; }
+  if (!summary) {
+    section.hidden = false;
+    trrGuard('head', 'no-run', document.getElementById('tr-run-head'), (el) => {
+      el.appendChild(h('div', { class: 'detail-empty', text: 'No run recorded.' }));
+    });
+    trrGuard('decisions', 'no-run', document.getElementById('tr-run-decisions'), () => {});
+    if (tr.ticketId) trrEnsureActivity(tr.ticketId);
+    renderRunTabs(d, null, null);
+    renderDeliveryPanel(d);
+    return;
+  }
   section.hidden = false;
   if (trr.runId !== summary.runId) {
     trr.runId = summary.runId;
@@ -660,11 +676,259 @@ function trrHistoryItem(dec) {
 
 // ---------- tabs ----------
 
+
+// ----- activity fetch (GET /tickets/:id/activity) -----
+
+function trrEnsureActivity(ticketId) {
+  if (trr.activity && trr.activity.ticketId === ticketId) return;
+  trr.activity = { ticketId, state: 'loading', data: null, error: null, loadingMore: false, loadMoreError: null };
+  const key = ticketId;
+  apiGet('/tickets/' + encodeURIComponent(ticketId) + '/activity').then(function(res) {
+    if (!trr.activity || trr.activity.ticketId !== key) return;
+    trr.activity = { ticketId, state: 'ok', data: res, error: null };
+    trr.sigs.panel = null;
+    renderRunPanel();
+  }, function(err) {
+    if (!trr.activity || trr.activity.ticketId !== key) return;
+    trr.activity = { ticketId, state: 'error', data: null, error: err && err.message ? err.message : 'Activity unavailable' };
+    trr.sigs.panel = null;
+    renderRunPanel();
+  });
+}
+
+function trrLoadMoreActivity(ticketId) {
+  const activity = trr.activity;
+  const runLog = activity && activity.data && activity.data.runLog;
+  if (!activity || activity.ticketId !== ticketId || activity.loadingMore || !runLog || !runLog.hasMore) return;
+  activity.loadingMore = true;
+  activity.loadMoreError = null;
+  trr.sigs.panel = null;
+  renderRunPanel();
+  const query = '?after=' + encodeURIComponent(runLog.nextAfter || 0) + '&limit=' + encodeURIComponent(runLog.limit || 100);
+  apiGet('/tickets/' + encodeURIComponent(ticketId) + '/activity' + query).then(function(res) {
+    if (trr.activity !== activity || trr.activity.ticketId !== ticketId) return;
+    const pageLog = res && res.runLog;
+    if (!res || res.available === false || (pageLog && pageLog.status === 'unavailable')) {
+      activity.loadingMore = false;
+      activity.loadMoreError = (pageLog && pageLog.reason) || (res && res.reason) || 'Activity unavailable';
+      trr.sigs.panel = null;
+      renderRunPanel();
+      return;
+    }
+    const current = activity.data.runLog || {};
+    const seen = new Set((Array.isArray(current.entries) ? current.entries : []).map(function(ev) { return ev.sequence; }));
+    const incoming = pageLog && Array.isArray(pageLog.entries) ? pageLog.entries : [];
+    const merged = (Array.isArray(current.entries) ? current.entries : []).concat(incoming.filter(function(ev) {
+      if (seen.has(ev.sequence)) return false;
+      seen.add(ev.sequence);
+      return true;
+    }));
+    merged.sort(function(a, b) { return a.sequence - b.sequence; });
+    activity.data.runLog = Object.assign({}, current, pageLog || {}, {
+      entries: merged,
+      status: pageLog && pageLog.hasMore ? 'partial' : (merged.length ? 'available' : 'empty')
+    });
+    activity.loadingMore = false;
+    activity.loadMoreError = null;
+    trr.sigs.panel = null;
+    renderRunPanel();
+  }, function(err) {
+    if (trr.activity !== activity || trr.activity.ticketId !== ticketId) return;
+    activity.loadingMore = false;
+    activity.loadMoreError = err && err.message ? err.message : 'Activity unavailable';
+    trr.sigs.panel = null;
+    renderRunPanel();
+  });
+}
+
+function trrActivityRunLog(el, activity, run) {
+  if (!activity || activity.state === 'loading') { el.appendChild(h('div', { class: 'detail-empty', text: 'Loading run log...' })); return; }
+  if (activity.state === 'error') { el.appendChild(h('div', { class: 'tf-field-error', text: 'Run log unavailable: ' + activity.error, attrs: { role: 'alert' } })); return; }
+  const d = activity.data;
+  if (!d || !d.available) { el.appendChild(h('div', { class: 'detail-empty', text: 'Run log unavailable: ' + (d && d.reason ? d.reason : 'unknown error') })); return; }
+  const rl = d.runLog || {};
+  if (rl.status === 'unavailable') { el.appendChild(h('div', { class: 'detail-empty', text: 'Run log: ' + (rl.reason || 'unavailable') })); return; }
+  const entries = Array.isArray(rl.entries) ? rl.entries : [];
+  if (!entries.length && !rl.hasMore) { el.appendChild(h('div', { class: 'detail-empty', text: 'No run log events recorded.' })); return; }
+  const runId = run && run.runId;
+  const filtered = runId ? entries.filter(function(ev) { return !ev.runId || ev.runId === runId; }) : entries;
+  if (!filtered.length) el.appendChild(h('div', { class: 'detail-empty', text: 'No run log events for this run in the loaded page.' }));
+  filtered.forEach(function(ev) {
+    const who = [ev.role, ev.attemptId ? 'attempt ' + String(ev.attemptId).slice(0, 8) : null].filter(Boolean).join(' / ');
+    el.appendChild(h('div', { class: 'event-row' }, [
+      h('span', { class: 'event-time', text: formatAbsTime(ev.occurredAt) }),
+      h('span', { class: 'event-type', text: ev.type || 'event' }),
+      h('span', { class: 'event-who', text: who }),
+    ]));
+  });
+  if (rl.hasMore) {
+    el.appendChild(h('div', { class: 'detail-empty', text: 'More run log events are available. The events shown are a partial view.' }));
+    if (activity.loadingMore) {
+      el.appendChild(h('div', { class: 'detail-empty', text: 'Loading more run log events...' }));
+    } else {
+      const more = h('button', { class: 'btn btn-sm', text: activity.loadMoreError ? 'Retry loading events' : 'Load more events' });
+      more.addEventListener('click', function() { trrLoadMoreActivity(activity.ticketId); });
+      el.appendChild(more);
+    }
+    if (activity.loadMoreError) el.appendChild(h('div', { class: 'tf-field-error', text: 'More run log events unavailable: ' + activity.loadMoreError, attrs: { role: 'alert' } }));
+  }
+}
+
+function trrFormatShare(cs) {
+  if (!cs || cs.status === 'unavailable' || cs.share === null || cs.share === undefined) return 'unavailable';
+  var pct = (cs.share * 100).toFixed(1) + '%';
+  return cs.status === 'partial' ? pct + ' (partial)' : pct;
+}
+
+function trrActivityTurns(el, activity, run) {
+  if (!activity || activity.state === 'loading') { el.appendChild(h('div', { class: 'detail-empty', text: 'Loading turns...' })); return; }
+  if (activity.state === 'error') { el.appendChild(h('div', { class: 'tf-field-error', text: 'Turns unavailable: ' + activity.error, attrs: { role: 'alert' } })); return; }
+  const d = activity.data;
+  if (!d || !d.available) { el.appendChild(h('div', { class: 'detail-empty', text: 'Turns unavailable: ' + (d && d.reason ? d.reason : 'unknown error') })); return; }
+  const turns = d.turns || {};
+  if (turns.status === 'unavailable') { el.appendChild(h('div', { class: 'detail-empty', text: 'Turns: ' + (turns.reason || 'unavailable') })); return; }
+  const runId = run && run.runId;
+  const entries = (Array.isArray(turns.entries) ? turns.entries : []).filter(function(e) { return !runId || e.productRunId === runId; });
+  if (!entries.length) { el.appendChild(h('div', { class: 'detail-empty', text: 'No usage rows for this run.' })); return; }
+  el.appendChild(h('div', { class: 'form-hint', text: 'Operational metadata only. Model reasoning and prompt content are not exposed.' }));
+  const table = h('table', { class: 'attempts-table tr-table' });
+  table.appendChild(h('thead', {}, [h('tr', {}, ['Kind', 'Role', 'Model', 'Turns', 'Elapsed', 'Outcome', 'Tokens'].map(function(t) { return h('th', { text: t }); }))]));
+  const body = h('tbody');
+  const cell = function(v) { return h('td', { text: (v === null || v === undefined || v === '') ? 'n/a' : String(v) }); };
+  entries.forEach(function(a) {
+    body.appendChild(h('tr', {}, [
+      cell(a.kind), cell(a.role), cell(a.model),
+      cell(isNumber(a.turns) ? String(a.turns) : null),
+      cell(isNumber(a.elapsedMs) ? formatMaybeDuration(a.elapsedMs) : null),
+      cell(a.outcome),
+      cell(a.hasTokens ? 'yes' : 'no'),
+    ]));
+  });
+  table.appendChild(body);
+  el.appendChild(h('div', { class: 'attempts-table-wrapper' }, [table]));
+}
+
+function trrActivityAttempts(el, activity, run) {
+  if (!activity || activity.state === 'loading') { el.appendChild(h('div', { class: 'detail-empty', text: 'Loading attempts...' })); return; }
+  if (activity.state === 'error') { el.appendChild(h('div', { class: 'tf-field-error', text: 'Attempts unavailable: ' + activity.error, attrs: { role: 'alert' } })); return; }
+  const d = activity.data;
+  if (!d || !d.available) { el.appendChild(h('div', { class: 'detail-empty', text: 'Attempts unavailable: ' + (d && d.reason ? d.reason : 'unknown error') })); return; }
+  const att = d.attempts || {};
+  if (att.status === 'unavailable') { el.appendChild(h('div', { class: 'detail-empty', text: 'Attempts: ' + (att.reason || 'unavailable') })); return; }
+  const runId = run && run.runId;
+  const entries = (Array.isArray(att.entries) ? att.entries : []).filter(function(e) { return !runId || e.productRunId === runId; });
+  if (!entries.length) { el.appendChild(h('div', { class: 'detail-empty', text: 'No dispatch attempts for this run.' })); return; }
+  const table = h('table', { class: 'attempts-table tr-table' });
+  table.appendChild(h('thead', {}, [h('tr', {}, ['Role', 'State', 'Outcome', 'Started', 'Updated'].map(function(t) { return h('th', { text: t }); }))]));
+  const body = h('tbody');
+  const cell = function(v) { return h('td', { text: (v === null || v === undefined || v === '') ? 'n/a' : String(v) }); };
+  entries.forEach(function(a) {
+    body.appendChild(h('tr', {}, [cell(a.role), cell(a.journalState), cell(a.outcome), cell(formatAbsTime(a.createdAt)), cell(formatAbsTime(a.updatedAt))]));
+  });
+  table.appendChild(body);
+  el.appendChild(h('div', { class: 'attempts-table-wrapper' }, [table]));
+}
+
+function trrActivityTokens(el, activity, run) {
+  if (!activity || activity.state === 'loading') { el.appendChild(h('div', { class: 'detail-empty', text: 'Loading tokens...' })); return; }
+  if (activity.state === 'error') { el.appendChild(h('div', { class: 'tf-field-error', text: 'Tokens unavailable: ' + activity.error, attrs: { role: 'alert' } })); return; }
+  const d = activity.data;
+  if (!d || !d.available) { el.appendChild(h('div', { class: 'detail-empty', text: 'Tokens unavailable: ' + (d && d.reason ? d.reason : 'unknown error') })); return; }
+  const tokens = d.tokens || {};
+  const runId = run && run.runId;
+
+  if (tokens.status === 'unavailable') {
+    // Show reason if present; if there is simply no usage, no sentence is added.
+    if (tokens.reason) {
+      el.appendChild(h('div', { class: 'detail-empty', text: 'Token data unavailable: ' + tokens.reason }));
+    }
+    // Fall through to render monetary cost and execution binding even when no token rows.
+  } else {
+    const measured = tokens.measured || {};
+    const tk = measured.tokens;
+    el.appendChild(trrKv([
+      ['Total tokens', formatMaybeNumber(tk && tk.totalTokens)],
+      ['Input tokens', formatMaybeNumber(tk && tk.inputTokens)],
+      ['Cached input tokens', formatMaybeNumber(tk && tk.cachedInputTokens)],
+      ['Output tokens', formatMaybeNumber(tk && tk.outputTokens)],
+      ['Turns', formatMaybeNumber(measured.turns)],
+      ['Elapsed', formatMaybeDuration(measured.elapsedMs)],
+    ]));
+  }
+
+  // Cache shares: ticket, selected run, and each role.
+  const cacheShare = tokens.cacheShare || null;
+  if (cacheShare) {
+    const ticketCs = cacheShare.ticket || null;
+    const runCs = runId && cacheShare.byRun ? cacheShare.byRun[runId] || null : null;
+    const shareRows = [];
+    if (ticketCs) {
+      shareRows.push(['Cache share (ticket)', trrFormatShare(ticketCs)]);
+    }
+    if (runCs) {
+      const runLabel = 'Cache share (this run' + (runCs.status === 'partial' ? ', partial' : '') + ')';
+      shareRows.push([runLabel, trrFormatShare(runCs)]);
+    }
+    if (shareRows.length) el.appendChild(trrKv(shareRows));
+    if (cacheShare.byRole && typeof cacheShare.byRole === 'object') {
+      const roleIds = Object.keys(cacheShare.byRole);
+      if (roleIds.length) {
+        const roleShareRows = roleIds.map(function(roleId) {
+          const rcs = cacheShare.byRole[roleId];
+          const label = 'Cache share (' + roleId + (rcs && rcs.status === 'partial' ? ', partial' : '') + ')';
+          return [label, trrFormatShare(rcs)];
+        });
+        el.appendChild(trrKv(roleShareRows));
+      }
+    }
+    // Meaning string from ticket-level cache share.
+    const meaning = (ticketCs && ticketCs.meaning) || (runCs && runCs.meaning) || null;
+    if (meaning) el.appendChild(h('div', { class: 'form-hint', text: meaning }));
+    // Coverage note for partial run share.
+    const covCs = runCs || ticketCs;
+    if (covCs && covCs.status === 'partial' && covCs.coverageNote) {
+      el.appendChild(h('div', { class: 'form-hint', text: covCs.coverageNote }));
+    }
+  }
+
+  // Monetary cost: unavailable unless amount is finite; never invent 0.
+  const mcost = tokens.monetaryCost || null;
+  const mcostText = (mcost && isNumber(mcost.amount))
+    ? mcost.currency + ' ' + mcost.amount.toFixed(4)
+    : 'unavailable (subscription; not metered per call)';
+  el.appendChild(h('div', { class: 'detail-block' }, [h('span', { class: 'kv-key', text: 'Monetary cost: ' }), h('span', { text: mcostText })]));
+
+  const hyp = tokens.hypotheticalApiCost;
+  if (hyp) {
+    const hypText = isNumber(hyp.estimatedCost) ? 'USD ' + hyp.estimatedCost.toFixed(4) : 'not computed';
+    el.appendChild(h('div', { class: 'detail-block' }, [
+      h('span', { class: 'kv-key', text: 'Hypothetical API cost: ' }),
+      h('span', { text: hypText }),
+      h('div', { class: 'form-hint', text: hyp.label || 'hypothetical API pricing estimate; not measured spend' }),
+    ]));
+  }
+
+  // Execution binding block: always rendered even when there are no token rows.
+  const exec = d.executions && runId ? d.executions.find(function(e) { return e.runId === runId; }) : null;
+  if (exec) {
+    const parts = [];
+    if (exec.review) parts.push('Review: ' + (exec.review.verdict || 'unknown'));
+    if (exec.acceptance) parts.push('Acceptance: ' + (exec.acceptance.disposition || 'unknown'));
+    if (exec.rework && exec.rework.parentRunId) parts.push('Rework parent: ' + String(exec.rework.parentRunId).slice(0, 12));
+    if (exec.rework && exec.rework.childRunIds && exec.rework.childRunIds.length) parts.push('Rework children: ' + exec.rework.childRunIds.length);
+    if (parts.length) el.appendChild(trrSection('Execution bindings', trrList(parts, 'None.')));
+  }
+}
+
 function renderRunTabs(d, run, data) {
   const tabs = document.getElementById('tr-run-tabs');
   const panel = document.getElementById('tr-run-panel');
-  trrGuard('tabs', JSON.stringify([trr.tab]), tabs, (el) => {
-    TRR_TABS.forEach(t => {
+  const activityTabs = ['run-log', 'turns', 'attempts-activity', 'tokens'];
+  const noRun = !run;
+  if (noRun && activityTabs.indexOf(trr.tab) === -1) trr.tab = 'run-log';
+  const tabList = noRun ? TRR_TABS.filter(t => activityTabs.indexOf(t.key) !== -1) : TRR_TABS;
+  trrGuard('tabs', JSON.stringify([trr.tab, noRun]), tabs, (el) => {
+    tabList.forEach(t => {
       const btn = h('button', {
         class: 'sub-tab-btn tr-tab-btn' + (t.key === trr.tab ? ' active' : ''), text: t.label,
         attrs: { type: 'button', role: 'tab', 'aria-selected': t.key === trr.tab ? 'true' : 'false' }
@@ -681,10 +945,19 @@ function renderRunTabs(d, run, data) {
   const candidate = data ? data.candidate : null;
   if (trr.tab === 'candidate' && candidate) trrEnsureDiff(candidate);
   if (trr.tab === 'settings' && data && data.leadTaskCardId) trrEnsureUsage(data);
-  const sig = JSON.stringify([trr.tab, run.runId, data ? { i: data.intake, p: data.plan, s: data.stages, c: data.candidate, st: data.settings, l: data.leadTaskCardId } : null,
-    trr.diff ? [trr.diff.key, trr.diff.state, trr.diff.error] : null, trr.usage ? [trr.usage.key, trr.usage.state, trr.usage.attempts.length] : null, trr.error]);
+  if (activityTabs.indexOf(trr.tab) !== -1 && tr.ticketId) trrEnsureActivity(tr.ticketId);
+  const activitySig = trr.activity ? [trr.activity.ticketId, trr.activity.state, trr.activity.data && trr.activity.data.available,
+    trr.activity.data && trr.activity.data.runLog && trr.activity.data.runLog.entries && trr.activity.data.runLog.entries.length,
+    trr.activity.data && trr.activity.data.runLog && trr.activity.data.runLog.hasMore, trr.activity.loadingMore, trr.activity.loadMoreError] : null;
+  const sig = JSON.stringify([trr.tab, run && run.runId, data ? { i: data.intake, p: data.plan, s: data.stages, c: data.candidate, st: data.settings, l: data.leadTaskCardId } : null,
+    trr.diff ? [trr.diff.key, trr.diff.state, trr.diff.error] : null, trr.usage ? [trr.usage.key, trr.usage.state, trr.usage.attempts.length] : null, trr.error, activitySig]);
   trrGuard('panel', sig, panel, (el) => {
-    if (!data) { el.appendChild(h('div', { class: 'detail-empty', text: trr.error ? 'Run details unavailable.' : 'Loading run details...' })); return; }
+    const activity = trr.activity;
+    if (trr.tab === 'run-log') { trrActivityRunLog(el, activity, run); return; }
+    if (trr.tab === 'turns') { trrActivityTurns(el, activity, run); return; }
+    if (trr.tab === 'attempts-activity') { trrActivityAttempts(el, activity, run); return; }
+    if (trr.tab === 'tokens') { trrActivityTokens(el, activity, run); return; }
+    if (!run || !data) { el.appendChild(h('div', { class: 'detail-empty', text: trr.error ? 'Run details unavailable.' : 'Loading run details...' })); return; }
     if (trr.tab === 'requirements') trrTabRequirements(el, data);
     else if (trr.tab === 'plan') trrTabPlan(el, data);
     else if (trr.tab === 'candidate') trrTabCandidate(el, data);

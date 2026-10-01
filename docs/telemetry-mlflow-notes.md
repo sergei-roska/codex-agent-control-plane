@@ -1,9 +1,10 @@
 # Automatic telemetry and MLflow discussion
 
-Recorded on 2026-09-30. This document distinguishes product intent, observed
-capabilities, approved direction, and open proposals. The owner approved the
-incremental direction below. Production adoption of MLflow remains subject to
-the integration evaluation; no implementation has been requested yet.
+Recorded on 2026-09-30. This document distinguishes product intent, the
+baseline observed then, approved direction, and open proposals. The owner
+approved the incremental direction below. M8 subsequently implemented local
+telemetry and a bounded MLflow experiment; see [M8 acceptance](m8/acceptance.md).
+Production MLflow adoption remains deferred.
 
 ## Product intent
 
@@ -17,7 +18,7 @@ Telemetry records what happened. It does not itself improve prompts, update
 model weights, or make past experience available to the next execution.
 Evaluation, prompt changes, and knowledge retrieval are separate capabilities.
 
-## Observed baseline
+## Baseline observed on 2026-09-30
 
 - [UsageLedger](../src/usage-ledger.js) persists lead and worker usage in SQLite:
   role, task/run/attempt references, model, effort, elapsed time, available tokens,
@@ -27,7 +28,7 @@ Evaluation, prompt changes, and knowledge retrieval are separate capabilities.
   reconciliation, and acceptance callbacks. These are not a durable tracing export.
 - [Usage reporting](../src/usage-report.js) distinguishes subscription usage
   from hypothetical API cost. Missing token counts remain unknown.
-- The inspected implementation has no MLflow integration or prompt optimizer.
+- The implementation inspected that day had no MLflow integration or prompt optimizer.
 
 ## Proposed observation contract
 
@@ -62,8 +63,8 @@ run, retaining attempt-level usage for diagnosis.
 - This ratio measures token reuse, not the percentage of requests hitting cache.
   It does not establish monetary savings or subscription quota savings.
 
-This is an approved requirement for future telemetry integration; the current
-dashboard remains a prototype and these metrics have not been wired into it.
+M8 wired these metrics into the working dashboard with explicit partial and
+unavailable states. The protected reference prototype remains unchanged.
 
 ## MLflow capabilities and fit
 
@@ -110,6 +111,19 @@ The owner approved this sequence on 2026-09-30: automatic telemetry from the
 early integration stages, a bounded MLflow integration evaluation, and later
 prompt optimization based on collected data and quality criteria. Detailed
 implementation and deployment choices remain open.
+
+## M8 outcome on 2026-10-01
+
+M8 added the dashboard telemetry views and cached-input coverage. A bounded
+exporter sent sanitized trace, correlation, outcome, and feedback fields as
+MLflow Tracking run parameters to a temporary local server, then read them
+back. It does not ingest MLflow GenAI traces or create dedicated feedback
+records. Production export is deferred pending a persistent service and an
+integration decision. The local telemetry path remains available when export
+is skipped or fails. A model-backed baseline/candidate comparison passed
+2/2 cases for each version, with no measured improvement and no promotion.
+The [acceptance record](m8/acceptance.md) and [release note](m8/release-notes.md)
+contain the evidence and limits.
 
 ## Background system maintenance proposal
 

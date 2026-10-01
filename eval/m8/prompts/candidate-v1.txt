@@ -1,0 +1,5 @@
+Summarize the ticket outcome for the operator.
+preserve correlation ids
+redact credentials before export
+do not promote automatically
+isolated workspace checklist

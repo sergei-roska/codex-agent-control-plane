@@ -1,0 +1,91 @@
+{
+  "command": "node scripts/m8-experiment.js",
+  "fixtureVersions": {
+    "trace": "trace-v1",
+    "dataset": "cases-v2",
+    "baselinePrompt": "baseline-v1",
+    "candidatePrompt": "candidate-v1"
+  },
+  "sanitizedTraceIds": [
+    "trace:trace-v1:tkt_m8_001:run_m8_001:att_m8_001"
+  ],
+  "scores": {
+    "evaluation": {
+      "protocol": "m8-runtime-contract-v1",
+      "modelRun": false,
+      "promptRun": false,
+      "promptComparison": {
+        "status": "not-evaluated",
+        "baselineVersion": "baseline-v1",
+        "candidateVersion": "candidate-v1"
+      },
+      "limitation": "Scores are observed from M8 application code execution. Prompt quality is unmeasured because no model-backed prompt execution is configured."
+    },
+    "runtimeContracts": {
+      "suiteVersion": "m8-runtime-contract-v1",
+      "passed": 4,
+      "total": 4,
+      "cases": [
+        {
+          "id": "case-trace-sanitization",
+          "passed": true,
+          "observed": {
+            "correlationMatchesFixture": true,
+            "containsSecret": false,
+            "redactionMarkers": 3
+          }
+        },
+        {
+          "id": "case-export-correlation-feedback",
+          "passed": true,
+          "observed": {
+            "status": "accepted",
+            "feedbackAccepted": true,
+            "correlationPreserved": true,
+            "feedbackAttached": true
+          }
+        },
+        {
+          "id": "case-manual-adoption-review",
+          "passed": true,
+          "observed": {
+            "adoptDefer": "defer",
+            "productionAdoption": "defer"
+          }
+        },
+        {
+          "id": "case-isolated-artifact",
+          "passed": true,
+          "observed": {
+            "artifactCreated": true,
+            "insideTemporaryWorkspace": true,
+            "contentsMatch": true,
+            "removedAfterRun": true
+          }
+        }
+      ]
+    }
+  },
+  "exporter": {
+    "inProcess": {
+      "status": "accepted",
+      "runId": "in-process:trace:trace-v1:tkt_m8_001:run_m8_001:att_m8_001"
+    },
+    "live": {
+      "status": "deferred",
+      "reason": "tracking uri unset",
+      "attemptedConfiguration": [
+        {
+          "step": "skip-export",
+          "result": "skipped",
+          "reason": "M8_MLFLOW_TRACKING_URI is unset"
+        }
+      ]
+    }
+  },
+  "adoptDefer": "defer",
+  "localExperiment": "success",
+  "productionAdoption": "defer",
+  "distinction": "An unset MLflow tracking URI or experiment ID is a deferral of production adoption, not a failure of the local experiment.",
+  "rolePromptRewrite": false
+}

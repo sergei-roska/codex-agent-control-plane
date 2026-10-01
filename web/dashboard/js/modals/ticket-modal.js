@@ -58,7 +58,7 @@ function openTicketDetailModal(cardId) {
   setText('m1-status-badge', '');
   setText('m1-load-note', 'Loading execution detail...');
   showSection('m1-load-note', true);
-  ['m1-overview', 'm1-runlog', 'm1-attempts', 'm1-metrics'].forEach(id => {
+  ['m1-overview', 'm1-runlog', 'm1-turns', 'm1-attempts', 'm1-metrics'].forEach(id => {
     const pane = document.getElementById(id);
     if (pane) pane.classList.add('detail-stale');
   });
@@ -126,7 +126,7 @@ async function refreshTicketDetail(signal) {
 function renderTicketDetail(data) {
   const detail = data.detail;
   const card = detail.card || {};
-  ['m1-overview', 'm1-runlog', 'm1-attempts', 'm1-metrics'].forEach(id => {
+  ['m1-overview', 'm1-runlog', 'm1-turns', 'm1-attempts', 'm1-metrics'].forEach(id => {
     const pane = document.getElementById(id);
     if (pane) pane.classList.remove('detail-stale');
   });
@@ -167,6 +167,7 @@ function renderTicketDetail(data) {
   renderDetailUnavailable(detail.unavailableActions);
   renderDetailActions(detail.unavailableActions);
   renderDetailEvents(data);
+  renderDetailTurns(data);
   renderDetailAttempts(data, isStandalone);
   renderDetailUsage(data);
 }
@@ -293,6 +294,38 @@ function renderDetailEvents(data) {
   });
 }
 
+function renderDetailTurns(data) {
+  const box = clearEl('m1-turns-list');
+  if (!box) return;
+  if (data.usage === null) {
+    box.appendChild(h('div', { class: 'detail-empty', text: 'Turns unavailable: ' + data.usageError }));
+    return;
+  }
+  const usage = data.usage;
+  const attempts = Array.isArray(usage && usage.attempts) ? usage.attempts : [];
+  if (!attempts.length) {
+    box.appendChild(h('div', { class: 'detail-empty', text: 'No usage rows recorded.' }));
+    return;
+  }
+  const table = h('table', { class: 'attempts-table' });
+  table.appendChild(h('thead', {}, [h('tr', {}, ['Kind', 'Role', 'Model', 'Turns', 'Elapsed', 'Outcome', 'Token source'].map(t => h('th', { text: t })))]));
+  const body = h('tbody');
+  const cell = (v) => h('td', { text: (v === null || v === undefined || v === '') ? 'n/a' : String(v) });
+  attempts.forEach(a => {
+    body.appendChild(h('tr', {}, [
+      cell(a.kind),
+      cell(a.role),
+      cell(a.model),
+      cell(isNumber(a.turns) ? String(a.turns) : null),
+      cell(isNumber(a.elapsedMs) ? formatMaybeDuration(a.elapsedMs) : null),
+      cell(a.outcome),
+      cell(a.tokenSource),
+    ]));
+  });
+  table.appendChild(body);
+  box.appendChild(h('div', { class: 'attempts-table-wrapper' }, [table]));
+}
+
 function renderDetailAttempts(data, isStandalone) {
   const body = clearEl('m1-attempts-body');
   if (!body) return;
@@ -317,20 +350,28 @@ function tokenField(tokens, key) {
   return tokens && typeof tokens === 'object' ? tokens[key] : null;
 }
 
+function formatShare(cs) {
+  if (!cs || cs.status === 'unavailable' || cs.share === null || cs.share === undefined) return 'unavailable';
+  const pct = (cs.share * 100).toFixed(1) + '%';
+  return cs.status === 'partial' ? pct + ' (partial)' : pct;
+}
+
 function renderDetailUsage(data) {
   const note = clearEl('m1-usage-coverage');
+  const costNote = clearEl('m1-cost-note');
   const body = clearEl('m1-metrics-role-body');
   const fields = ['m1-metric-tokens', 'm1-metric-cache', 'm1-metric-turns', 'm1-metric-elapsed'];
   const subs = ['m1-metric-tokens-sub', 'm1-metric-cache-sub', 'm1-metric-turns-sub', 'm1-metric-elapsed-sub'];
   if (data.usage === null) {
     fields.forEach(id => setText(id, 'unavailable'));
     subs.forEach(id => setText(id, ''));
-    if (note) note.textContent = 'Usage unavailable: ' + data.usageError;
+    if (note) note.textContent = 'Tokens unavailable: ' + data.usageError;
     return;
   }
   const usage = data.usage;
   const totals = usage.totals || {};
   const cov = usage.coverage || {};
+  const measured = usage.measured || {};
   if (note) {
     note.textContent = 'Coverage: ' + (cov.status || 'unknown')
       + (isNumber(cov.rows) ? ' (' + cov.rows + ' usage rows; tokens known for ' + (isNumber(cov.tokensKnownRows) ? cov.tokensKnownRows : '?') + ')' : '');
@@ -342,22 +383,40 @@ function renderDetailUsage(data) {
   setText('m1-metric-tokens-sub', 'in ' + formatMaybeNumber(tokenField(tk, 'inputTokens')) + ' / out ' + formatMaybeNumber(tokenField(tk, 'outputTokens'))
     + (tokensPartial ? ' (partial' + (missing ? ': ' + missing + (missing === 1 ? ' attempt' : ' attempts') + ' without usage' : '') + ')' : ''));
   setText('m1-metric-cache', formatMaybeNumber(tokenField(tk, 'cachedInputTokens')));
-  setText('m1-metric-cache-sub', totals.tokensPartial ? 'partial: some rows unknown' : 'cached input tokens');
+  // Cache share from totals.cacheShare (ratio of sums, same rule as ticket activity).
+  const cs = totals.cacheShare && typeof totals.cacheShare === 'object' ? totals.cacheShare : null;
+  const shareText = cs ? formatShare(cs) : 'unavailable';
+  setText('m1-metric-cache-sub', 'cached input tokens; share ' + shareText + (totals.tokensPartial ? ' (partial: some rows unknown)' : ''));
   setText('m1-metric-turns', formatMaybeNumber(totals.turns));
   setText('m1-metric-turns-sub', totals.turnsPartial ? 'partial: some rows unknown' : 'model turns');
   setText('m1-metric-elapsed', formatMaybeDuration(totals.elapsedMs));
   setText('m1-metric-elapsed-sub', totals.elapsedMsPartial ? 'partial: some rows unknown' : 'summed runtime');
 
+  // Monetary cost: only shown when a finite amount is available; null is unavailable, never --.
+  const monetaryCost = usage.monetaryCost || null;
+  const monetaryText = (monetaryCost && isNumber(monetaryCost.amount))
+    ? 'Monetary cost: ' + monetaryCost.currency + ' ' + monetaryCost.amount.toFixed(4)
+    : 'Monetary cost: unavailable (subscription; not metered per call)';
+  // Hypothetical cost: only when the field is present.
+  const hypCost = usage.hypotheticalApiCost || null;
+  const hypText = hypCost
+    ? ('Hypothetical API estimate: ' + (isNumber(hypCost.estimatedCost) ? 'USD ' + hypCost.estimatedCost.toFixed(4) : 'not computed') + ' - ' + (hypCost.label || 'hypothetical'))
+    : null;
+  if (costNote) {
+    costNote.textContent = monetaryText + (hypText ? ' | ' + hypText : '');
+  }
+
   const byRole = usage.byRole && typeof usage.byRole === 'object' ? usage.byRole : {};
   const roleIds = Object.keys(byRole);
   if (!roleIds.length) {
-    body.appendChild(h('tr', {}, [h('td', { text: 'No usage rows recorded.', attrs: { colspan: '8' }, class: 'detail-empty' })]));
+    body.appendChild(h('tr', {}, [h('td', { text: 'No usage rows recorded.', attrs: { colspan: '9' }, class: 'detail-empty' })]));
     return;
   }
   const num = (v) => h('td', { text: formatMaybeNumber(v), attrs: { style: 'text-align: right;' } });
   roleIds.forEach(roleId => {
     const s = byRole[roleId] || {};
     const models = Array.isArray(s.models) && s.models.length ? s.models.join(', ') : 'unavailable';
+    const roleCs = s.cacheShare && typeof s.cacheShare === 'object' ? s.cacheShare : null;
     body.appendChild(h('tr', {}, [
       h('td', { text: roleDisplayNameFor(roleId), title: roleId }),
       h('td', { text: models }),
@@ -366,7 +425,8 @@ function renderDetailUsage(data) {
       num(tokenField(s.tokens, 'outputTokens')),
       num(tokenField(s.tokens, 'totalTokens')),
       num(s.turns),
-      h('td', { text: formatMaybeDuration(s.elapsedMs), attrs: { style: 'text-align: right;' } })
+      h('td', { text: formatMaybeDuration(s.elapsedMs), attrs: { style: 'text-align: right;' } }),
+      h('td', { text: roleCs ? formatShare(roleCs) : 'unavailable', attrs: { style: 'text-align: right;' } })
     ]));
   });
 }

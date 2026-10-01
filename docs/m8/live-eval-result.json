@@ -1,0 +1,73 @@
+{
+  "protocol": "m8-model-comparison-v1",
+  "model": "gpt-6-luna",
+  "effort": "low",
+  "freshThreadPerCase": true,
+  "promoted": false,
+  "promptComparison": {
+    "status": "evaluated",
+    "baseline": {
+      "passed": 2,
+      "evaluated": 2,
+      "total": 2
+    },
+    "candidate": {
+      "passed": 2,
+      "evaluated": 2,
+      "total": 2
+    },
+    "improvementObserved": false
+  },
+  "cases": [
+    {
+      "prompt": "baseline-v1",
+      "caseId": "operator-summary",
+      "status": "evaluated",
+      "passed": true,
+      "checks": {
+        "tkt_m8_001": true,
+        "run_m8_001": true,
+        "att_m8_001": true,
+        "out_m8_001": true,
+        "accepted": true
+      },
+      "response": "Ticket `tkt_m8_001` ran as `run_m8_001`, with attempt `att_m8_001`. Outcome `out_m8_001` finished with status **accepted**."
+    },
+    {
+      "prompt": "baseline-v1",
+      "caseId": "review-checklist",
+      "status": "evaluated",
+      "passed": true,
+      "checks": {
+        "defer|do not promote|not authorized": true,
+        "artifact": true
+      },
+      "response": "Ticket **tkt_m8_001** has an accepted outcome (**out_m8_001**) for run **run_m8_001**, attempt **att_m8_001**. The sanitized trace includes redacted sensitive material and a redacted URL.\n\n**Production adoption decision:** Do not promote based on the local trace alone; it does not authorize production adoption.\n\nCreated [review-checklist.txtreview-checklist.txt with the exact requested content."
+    },
+    {
+      "prompt": "candidate-v1",
+      "caseId": "operator-summary",
+      "status": "evaluated",
+      "passed": true,
+      "checks": {
+        "tkt_m8_001": true,
+        "run_m8_001": true,
+        "att_m8_001": true,
+        "out_m8_001": true,
+        "accepted": true
+      },
+      "response": "Ticket `tkt_m8_001` (“Summarize the fixture outcome”) completed in run `run_m8_001`, attempt `att_m8_001`. Outcome `out_m8_001` has final status **accepted**."
+    },
+    {
+      "prompt": "candidate-v1",
+      "caseId": "review-checklist",
+      "status": "evaluated",
+      "passed": true,
+      "checks": {
+        "defer|do not promote|not authorized": true,
+        "artifact": true
+      },
+      "response": "Created [review-checklist.txtreview-checklist.txt with exactly `review artifact isolation`.\n\n**Ticket outcome:** `accepted` — `tkt_m8_001`, run `run_m8_001`, attempt `att_m8_001`, outcome `out_m8_001`. Credentials are redacted in the supplied fixture.\n\n**Production adoption:** Do not promote automatically. The local trace alone does not authorize promotion."
+    }
+  ]
+}

@@ -1404,6 +1404,16 @@ class ProductStore {
     return row ? reviewFromRow(row) : null;
   }
 
+  listReviews() {
+    return this.stmt('SELECT * FROM reviews ORDER BY created_at DESC, rowid DESC').all().map(reviewFromRow);
+  }
+
+  listControlRequests() {
+    return this.stmt(
+      "SELECT * FROM runs WHERE control_request IS NOT NULL AND control_request != '' ORDER BY control_requested_at ASC, rowid ASC",
+    ).all().map(runFromRow);
+  }
+
   getLatestReview(ticketId) {
     const row = this.stmt('SELECT * FROM reviews WHERE ticket_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(String(ticketId));
     return row ? reviewFromRow(row) : null;

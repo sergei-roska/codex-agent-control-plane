@@ -11,11 +11,13 @@ const { MAX_ARTIFACT_BYTES, MAX_EXTRACTED_CHARS, ArtifactError, sanitizeDisplayN
 const { parseWorkerReport } = require('./contracts');
 const { LIMITS, SPECIALTIES, ACTIVE_RUN_STATUSES, MAX_REWORKS } = require('./product-store');
 const { stripUserinfo } = require('./git-delivery');
-const { canReturnToBacklog } = require('./dashboard-projection');
+const { canReturnToBacklog, projectMonitor, projectDecisions, collectDecisions, projectDocs, readDocsCatalog } = require('./dashboard-projection');
 const { createPipelinesRouter } = require('./dashboard-pipelines-api');
 const { createSettingsRouter, makeSettingsResolver } = require('./dashboard-settings-api');
 const { loadLegacyPack, loadRolePack } = require('./role-pack');
 const { createAtlassianDashboardApi } = require('./dashboard-atlassian-api');
+const { redactDiagnosticMessage } = require('./event-journal');
+const { buildTicketActivity, unavailableActivity } = require('./ticket-telemetry');
 
 const MAX_EVENTS_LIMIT = 500;
 const DEFAULT_EVENTS_LIMIT = 100;
@@ -318,9 +320,10 @@ function liveStages(db, run, plan) {
 }
 
 function createDashboardApi({
-  projection, events, workspace, projectId, startedAt, version, auth, productStore, artifactStore, deliveryController, activePack, legacyPack, settingsResolver, modelCatalog, accountHealth, settingsStore, atlassianIntegration, gitDeliveryFactory,
+  projection, events, workspace, projectId, startedAt, version, auth, productStore, artifactStore, deliveryController, activePack, legacyPack, settingsResolver, modelCatalog, accountHealth, settingsStore, atlassianIntegration, gitDeliveryFactory, projectConfig, projectConfigPath, docsPackDir,
 } = {}) {
   if (!projection || !events) throw new TypeError('createDashboardApi requires projection and events');
+  const docsPackDirResolved = docsPackDir || path.resolve(__dirname, '..', 'profiles', 'delivery');
   const resolvedProjectId = projectId || computeProjectId(workspace);
   const started = startedAt || new Date().toISOString();
   const router = express.Router();
@@ -372,6 +375,31 @@ function createDashboardApi({
     activePack: pack, legacyPack: legacy, productStore, db: productStore ? productStore.db : null,
     settingsResolver: settingsResolver || (settingsStore ? makeSettingsResolver({ settingsStore }) : undefined),
   }));
+
+  // Monitor reads the journal; it does not write runtime_events and is not on the delivery path.
+  router.get('/monitor', handle((req) => {
+    const limit = integerParam(req.query, 'limit', { min: 1, max: MAX_EVENTS_LIMIT, fallback: DEFAULT_EVENTS_LIMIT });
+    const read = typeof events.listRecent === 'function' ? events.listRecent({ limit }) : { ok: false, events: [] };
+    return projectMonitor(read);
+  }));
+
+  router.get('/decisions', (req, res) => {
+    try {
+      const read = productStore ? collectDecisions(productStore) : { ok: false, reason: 'Product store is unavailable' };
+      res.json(projectDecisions(read));
+    } catch (error) {
+      res.json(projectDecisions({ ok: false, reason: redactDiagnosticMessage(error && error.message ? error.message : 'Decisions are unavailable') }));
+    }
+  });
+
+  router.get('/docs', (req, res) => {
+    try {
+      const catalog = readDocsCatalog({ packDir: docsPackDirResolved, projectConfig, projectConfigPath });
+      res.json(projectDocs(catalog));
+    } catch (error) {
+      res.json({ available: false, reason: redactDiagnosticMessage(error && error.message ? error.message : 'Docs are unavailable'), documents: [] });
+    }
+  });
 
   router.get('/cards', handle((req) => projection.listCards({
     column: single(req.query, 'column'),
@@ -629,6 +657,25 @@ function createDashboardApi({
       const list = events.listByTicket(ticket.ticketId, { after, limit });
       return { events: list, nextAfter: list.length ? list[list.length - 1].sequence : after };
     }));
+
+    router.get('/tickets/:ticketId/activity', (req, res, next) => {
+      // Unknown ticket: propagate not_found to the error handler.
+      try { requireTicket(req.params.ticketId); } catch (error) { return next(error); }
+      let after;
+      let limit;
+      try {
+        after = integerParam(req.query, 'after', { min: 0, max: Number.MAX_SAFE_INTEGER, fallback: 0 });
+        // Reserve one journal row internally to detect continuation.
+        limit = integerParam(req.query, 'limit', { min: 1, max: 499, fallback: 100 });
+      } catch (error) { return next(error); }
+      // Metric/read failure: 200 with available:false. Never 500 from this handler.
+      try {
+        res.json(buildTicketActivity({ productStore, events, ticketId: req.params.ticketId, after, limit }));
+      } catch (error) {
+        res.json(unavailableActivity(error));
+      }
+      return undefined;
+    });
 
     router.post('/artifacts', auth.originGuard, rawBody, (req, res, next) => {
       let stored = null;

@@ -2,6 +2,8 @@
 name: worker
 description: Delegate for mechanical work against a self-contained brief - edits, tests, uniform checks, and call-site searches. Use when the change is already specified and must not be redesigned.
 model: composer-2.5[fast=false]
+# readonly false: file edits and check shell require default mode, not Ask mode.
+readonly: false
 ---
 
 You are a mechanical implementation worker. Follow the brief. Do not redesign.

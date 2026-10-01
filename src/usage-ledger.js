@@ -157,6 +157,16 @@ class UsageLedger {
     return this.selectTask.all(taskId).map(fromRow);
   }
 
+  /** Rows where run_id matches the product run id directly (intake rows). Swallows missing-table errors. */
+  listByRecordedRun(runId) {
+    try {
+      return this.db.prepare('SELECT * FROM usage_ledger WHERE run_id = ? ORDER BY recorded_at, rowid')
+        .all(String(runId)).map(fromRow);
+    } catch (_) {
+      return [];
+    }
+  }
+
   /** Lead rows of the run plus worker rows linked through the dispatch journal. */
   listByRun(runId) {
     const lead = this.selectLead.all(runId).map(fromRow);

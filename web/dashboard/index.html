@@ -162,25 +162,20 @@
 
       <!-- T3: Monitor Console View -->
       <section id="tab-monitor" class="tab-pane">
-  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
   <div class="monitor-container">
     <div class="monitor-controls">
-      <select id="monitor-type-filter" class="select-input">
-        <option value="all">All Types</option>
-        <option value="agent">Agent Logs</option>
-        <option value="system">System Logs</option>
+      <select id="monitor-type-filter" class="select-input" disabled>
+        <option value="all">All categories</option>
       </select>
-      <select id="monitor-role-filter" class="select-input">
-        <option value="all">All Roles</option>
+      <select id="monitor-role-filter" class="select-input" disabled>
+        <option value="all">Role filter unavailable</option>
       </select>
-      <select id="monitor-level-filter" class="select-input">
-        <option value="all">All Levels</option>
-        <option value="info">Info</option>
-        <option value="warning">Warning</option>
-        <option value="error">Error</option>
+      <select id="monitor-level-filter" class="select-input" disabled>
+        <option value="all">Severity unavailable</option>
       </select>
       <button class="btn btn-secondary" id="btn-clear-logs" style="margin-left: auto;">Clear Log</button>
     </div>
+    <div id="monitor-status" class="detail-empty" role="status"></div>
     <div class="console-log" id="monitor-logs">
       <!-- Injected via JS -->
     </div>
@@ -190,12 +185,11 @@
 
       <!-- T4: Decisions & Escalations View -->
       <section id="tab-decisions" class="tab-pane">
-  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
   <div class="decisions-grid">
     <div class="split-pane">
       <div class="split-pane-header">
-        <span>Architectural Decision Records (ADR)</span>
-        <span class="badge badge-status" id="adr-count">2 Decisions</span>
+        <span>Answered decisions and reviews</span>
+        <span class="badge badge-status" id="adr-count">0 records</span>
       </div>
       <div class="split-pane-content" id="adr-list">
         <!-- Injected via JS -->
@@ -204,8 +198,8 @@
 
     <div class="split-pane">
       <div class="split-pane-header">
-        <span>Pending Human Escalations</span>
-        <span class="badge badge-status waiting_human" id="escalation-count">1 Action Required</span>
+        <span>Pending actions</span>
+        <span class="badge badge-status" id="escalation-count">0 pending</span>
       </div>
       <div class="split-pane-content" id="escalation-list">
         <!-- Injected via JS -->
@@ -217,7 +211,6 @@
 
       <!-- T5: Docs Tab -->
       <section id="tab-docs" class="tab-pane">
-  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
   <div class="docs-layout">
     <div class="doc-sidebar" id="docs-list">
       <!-- Injected via JS -->
@@ -225,7 +218,8 @@
     <div class="doc-viewer">
       <div class="doc-viewer-header">
         <span id="active-doc-title" style="font-weight: 700;">Document Viewer</span>
-        <div style="display: flex; gap: 10px;">
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <span id="doc-copy-status" role="status" class="doc-copy-status"></span>
           <button class="btn btn-secondary" id="btn-toggle-raw">Raw / Rendered</button>
           <button class="btn btn-secondary" id="btn-copy-doc">Copy</button>
         </div>
@@ -325,9 +319,10 @@
 
       <div class="sub-tabs">
         <button class="sub-tab-btn active" data-subtab="m1-overview">Overview</button>
-        <button class="sub-tab-btn" data-subtab="m1-runlog">Events</button>
+        <button class="sub-tab-btn" data-subtab="m1-runlog">Run Log</button>
+        <button class="sub-tab-btn" data-subtab="m1-turns">Turns/events</button>
         <button class="sub-tab-btn" data-subtab="m1-attempts">Attempts</button>
-        <button class="sub-tab-btn" data-subtab="m1-metrics">Usage</button>
+        <button class="sub-tab-btn" data-subtab="m1-metrics">Tokens</button>
       </div>
 
       <div id="m1-overview" class="sub-tab-pane active">
@@ -377,6 +372,10 @@
         <div id="m1-runlog-list" class="event-timeline"></div>
       </div>
 
+      <div id="m1-turns" class="sub-tab-pane">
+        <div id="m1-turns-list" class="event-timeline"></div>
+      </div>
+
       <div id="m1-attempts" class="sub-tab-pane">
         <div class="attempts-table-wrapper">
           <table class="attempts-table">
@@ -420,7 +419,7 @@
             <div id="m1-metric-elapsed-sub" class="metrics-stat-sub"></div>
           </div>
         </div>
-        <div class="detail-note">Cost is not measured: usage is billed through a subscription. Values the runtime did not report are shown as unavailable, never as 0.</div>
+        <div id="m1-cost-note" class="detail-note"></div>
 
         <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); padding: 14px; border-radius: 14px;">
           <strong style="font-size: 13px; color: var(--text-primary); display: block; margin-bottom: 10px;">Per-role usage</strong>
@@ -436,6 +435,7 @@
                   <th style="text-align: right;">Total</th>
                   <th style="text-align: right;">Turns</th>
                   <th style="text-align: right;">Elapsed</th>
+                  <th style="text-align: right;">Cache share</th>
                 </tr>
               </thead>
               <tbody id="m1-metrics-role-body"></tbody>

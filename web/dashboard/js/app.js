@@ -41,16 +41,14 @@ async function pollTick(signal) {
   const jobs = [refreshBoard(signal)];
   if (isTicketModalOpen()) jobs.push(refreshTicketDetail(signal));
   if (isTicketRecordOpen()) jobs.push(refreshTicketRecordPoll(signal));
+  if (typeof refreshMonitorIfVisible === 'function') jobs.push(refreshMonitorIfVisible(signal));
+  if (typeof refreshDecisionsIfVisible === 'function') jobs.push(refreshDecisionsIfVisible(signal));
+  if (typeof refreshDocsIfVisible === 'function') jobs.push(refreshDocsIfVisible(signal));
   await Promise.all(jobs);
 }
 
 async function initApp() {
-  // Preview tabs (Monitor) still use the prototype role list.
-  const monitorRoleFilter = document.getElementById('monitor-role-filter');
-  ROLES.forEach(role => {
-    const roleDisplayName = (typeof ROLE_NAMES !== 'undefined' && ROLE_NAMES[role]) ? ROLE_NAMES[role] : role;
-    if (monitorRoleFilter) monitorRoleFilter.appendChild(h('option', { text: roleDisplayName, attrs: { value: role } }));
-  });
+  // Monitor role filter stays unavailable until the system-vs-role model is settled.
 
   // Global close modal triggers
   document.querySelectorAll('[data-close]').forEach(el => {
@@ -66,6 +64,7 @@ async function initApp() {
   initTabRouting();
   initBoardEvents();
   initMonitorEvents();
+  initDecisionsEvents();
   initDocsEvents();
   initTicketDetailEvents();
   initNewTicketButton();
@@ -74,7 +73,7 @@ async function initApp() {
   initProviderModalEvents();
   initBattlepassEvents();
 
-  // Preview tabs render fixture data; Board and Sidebar render from the API.
+  // Board, sidebar, monitor, decisions, and docs render from the API; other preview tabs may still use fixtures.
   renderSidebarRoles();
   renderBoard();
   renderPipelines();

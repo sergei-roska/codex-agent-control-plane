@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Database = require('better-sqlite3');
-const { EventJournal, withDispatchEvents, EVENT_TYPES } = require('../src/event-journal');
+const { EventJournal, withDispatchEvents, EVENT_TYPES, redactDiagnosticMessage } = require('../src/event-journal');
 const { InMemoryDispatchJournal } = require('../src/durable-store');
 
 function makeJournal() {
@@ -104,4 +104,49 @@ test('withDispatchEvents is unaffected by a failing event journal', () => {
   const row = { attemptId: 'a1', runId: 'r1', assignmentId: 'as1', role: 'orch-explorer', sandbox: 'read-only', contextId: 'c1' };
   assert.equal(wrapped.recordSubmitting(row).attemptId, 'a1');
   assert.equal(wrapped.recordFinished('a1', { status: 'completed' }).state, 'finished');
+});
+
+test('redactDiagnosticMessage redacts assignment secrets outside a URL', () => {
+  const text = [
+    'password=secret',
+    'token=abc',
+    'Token: abc',
+    'API_KEY=k',
+    'client_secret: s',
+    'https://user:secret@host/repo?token=abc',
+    'Authorization: Bearer leak.token',
+    'prefix Bearer leak.token',
+    'model key sk-LEAKME99abcd',
+    'mytoken=abc',
+    'notpassword=visible',
+  ].join('\n');
+  const redacted = redactDiagnosticMessage(text);
+  const lines = redacted.split('\n');
+  assert.equal(lines[0], 'password=[REDACTED]');
+  assert.equal(lines[1], 'token=[REDACTED]');
+  assert.equal(redacted.includes('password=secret'), false);
+  assert.equal(redacted.includes('password=[REDACTED]'), true);
+  assert.equal(redacted.includes('token=[REDACTED]'), true);
+  assert.equal(redacted.includes('Token: [REDACTED]'), true);
+  assert.equal(redacted.includes('API_KEY=[REDACTED]'), true);
+  assert.equal(redacted.includes('client_secret: [REDACTED]'), true);
+  assert.equal(redacted.includes('https://host/repo?<redacted>'), true);
+  assert.equal(redacted.includes('Authorization: [REDACTED]'), true);
+  assert.equal(redacted.includes('Bearer [REDACTED]'), true);
+  assert.equal(redacted.includes('sk-LEAKME99abcd'), false);
+  assert.equal(redacted.includes('mytoken=abc'), true);
+  assert.equal(redacted.includes('notpassword=visible'), true);
+});
+
+test('listRecent returns the newest window oldest-first and fails closed without throwing', () => {
+  const { db, journal } = makeJournal();
+  for (let i = 0; i < 5; i += 1) journal.record('run_submitted', { runId: `r${i}` });
+  const page = journal.listRecent({ limit: 3 });
+  assert.equal(page.ok, true);
+  assert.equal(page.events.length, 3);
+  assert.deepEqual(page.events.map((event) => event.sequence), [3, 4, 5]);
+  db.close();
+  let closed;
+  assert.doesNotThrow(() => { closed = journal.listRecent({ limit: 3 }); });
+  assert.deepEqual(closed, { ok: false, events: [] });
 });

@@ -55,13 +55,14 @@ function assertWebDirOutsideArtifacts(webDir) {
 
 function mountDashboard(app, {
   auth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController,
-  activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration, gitDeliveryFactory,
+  activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration, gitDeliveryFactory, projectConfig, projectConfigPath, docsPackDir,
 }) {
   assertWebDirOutsideArtifacts(DASHBOARD_WEB_DIR);
   const projection = createProjection({ db: state.db, roleIds: [...roles.keys()], projectId, productStore });
   const api = createDashboardApi({
     projection, events, roles, leadRole, workspace, projectId, startedAt: new Date().toISOString(), version: PACKAGE_VERSION,
     auth, productStore, artifactStore, deliveryController, activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration, gitDeliveryFactory,
+    projectConfig, projectConfigPath, docsPackDir,
   });
   app.use('/api/dashboard/v1', auth.hostGuard, auth.noStore);
   if (atlassianIntegration) app.use('/api/dashboard/v1', atlassianCallbackRoute({ integration: atlassianIntegration, auth }));
@@ -734,6 +735,9 @@ async function startServer({
     // Role packs: the legacy orch-* pack as today plus the nine-role delivery pack (a profiles/delivery dir next to a custom profilesDir wins).
     const customPackDir = profilesDir ? path.join(profilesDir, 'delivery') : null;
     const deliveryPack = loadRolePack(customPackDir && fs.existsSync(path.join(customPackDir, 'pack.json')) ? { packDir: customPackDir } : undefined);
+    const docsPackDir = customPackDir && fs.existsSync(path.join(customPackDir, 'pack.json'))
+      ? customPackDir
+      : path.join(__dirname, '..', 'profiles', 'delivery');
     const legacyPack = loadLegacyPack(profilesDir ? { profilesDir } : undefined);
     const useDelivery = projectConfig.rolePack !== 'legacy-orch';
     const activePack = useDelivery ? deliveryPack : legacyPack;
@@ -862,6 +866,9 @@ async function startServer({
       auth: dashboardAuth, authMiddleware, state, roles: allRoles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController,
       activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration,
       gitDeliveryFactory: () => createGitDelivery({ workspace, remotes: projectConfig.delivery.remotes }),
+      projectConfig,
+      projectConfigPath: projectConfig.source === 'file' ? projectConfigPath : null,
+      docsPackDir,
     });
     deliveryController?.start();
     return {

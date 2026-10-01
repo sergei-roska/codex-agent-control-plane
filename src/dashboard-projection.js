@@ -3,7 +3,11 @@
 // Read-only projection of stored A2A tasks into dashboard board cards (M1-02).
 // SELECT-only prepared statements on the shared handle; no DDL, writes, migrations or model calls.
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { buildReport } = require('./usage-report');
+const { cachedInputShare } = require('./ticket-telemetry');
+const { redactDiagnosticMessage } = require('./event-journal');
 
 const LEAD_NAMESPACE = 'orchestrator';
 const LEAD_ROLE = 'orch-lead';
@@ -179,6 +183,620 @@ function isoFromMs(ms) {
   const date = new Date(Number.isFinite(value) ? value : 0);
   return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
 }
+
+function monitorNonEmptyString(value) {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function monitorUnavailable() {
+  return {
+    available: false,
+    reason: 'Event journal is unavailable',
+    events: [],
+    filters: {
+      category: { available: false, values: [] },
+      severity: { available: false, values: [] },
+      role: { available: false, values: [] },
+    },
+  };
+}
+
+function projectMonitor(read) {
+  if (!read || read.ok !== true || !Array.isArray(read.events)) return monitorUnavailable();
+  const events = [];
+  for (const event of read.events) {
+    if (!event || typeof event !== 'object' || Array.isArray(event)) continue;
+    const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+      ? event.payload
+      : {};
+    const level = typeof event.level === 'string' ? event.level.trim() : '';
+    events.push({
+      sequence: Number.isInteger(event.sequence) ? event.sequence : null,
+      timestamp: monitorNonEmptyString(event.occurredAt),
+      category: monitorNonEmptyString(event.type),
+      role: monitorNonEmptyString(event.role),
+      ticketId: monitorNonEmptyString(event.ticketId),
+      level: level.length > 0 ? level : null,
+      message: monitorNonEmptyString(typeof payload.message === 'string' ? redactDiagnosticMessage(payload.message) : null),
+    });
+  }
+  const categories = [...new Set(events.map((event) => event.category).filter(Boolean))].sort();
+  const severities = [...new Set(events.map((event) => event.level).filter(Boolean))].sort();
+  const roles = [...new Set(events.map((event) => event.role).filter(Boolean))].sort();
+  return {
+    available: true,
+    events,
+    filters: {
+      category: { available: categories.length > 0, values: categories },
+      severity: { available: severities.length > 0, values: severities },
+      role: { available: roles.length > 0, values: roles },
+    },
+  };
+}
+
+const DOC_MAX_CHARS = 24000;
+const DOC_SOURCES = new Set(['role', 'preset', 'project']);
+
+function decisionsUnavailable(reason) {
+  const text = typeof reason === 'string' && reason.trim()
+    ? redactDiagnosticMessage(reason.trim())
+    : 'Decisions are unavailable';
+  return { available: false, reason: text, pending: [], responses: [] };
+}
+
+function computeDecisionBinding({
+  revisionId, currentRevisionId, candidatePresent, candidateId, integrityHash, liveIntegrityHash,
+}) {
+  const rev = typeof revisionId === 'string' ? revisionId : '';
+  const current = typeof currentRevisionId === 'string' ? currentRevisionId : '';
+  if (rev && current && rev !== current) return 'stale';
+  if (rev === current && candidatePresent === true
+    && typeof candidateId === 'string' && candidateId
+    && typeof integrityHash === 'string' && integrityHash
+    && typeof liveIntegrityHash === 'string' && liveIntegrityHash
+    && integrityHash === liveIntegrityHash) {
+    return 'current';
+  }
+  return 'unavailable';
+}
+
+function publicReviewVerdict(verdict) {
+  if (verdict === 'accepted') return 'accepted';
+  if (verdict === 'corrections') return 'corrections';
+  return null;
+}
+
+function redactTitle(title) {
+  return typeof title === 'string' && title.trim()
+    ? redactDiagnosticMessage(title.trim())
+    : 'unavailable';
+}
+
+function mapPendingReview(store, ticket, run, candidate) {
+  const candidatePresent = Boolean(candidate && candidate.candidateId === run.candidateId);
+  const liveIntegrityHash = candidatePresent ? candidate.integrityHash : '';
+  const integrityHash = candidatePresent ? liveIntegrityHash : '';
+  const binding = computeDecisionBinding({
+    revisionId: run.revisionId,
+    currentRevisionId: ticket.currentRevisionId,
+    candidatePresent,
+    candidateId: run.candidateId,
+    integrityHash,
+    liveIntegrityHash,
+  });
+  const expectedVersion = Number.isInteger(ticket.version) ? ticket.version : null;
+  const fieldsReady = Boolean(ticket.ticketId && run.runId && run.candidateId && integrityHash);
+  const actionable = binding === 'current' && expectedVersion !== null && fieldsReady;
+  return {
+    id: `review:${run.runId}`,
+    kind: 'review',
+    command: null,
+    ticketId: ticket.ticketId,
+    ticketTitle: redactTitle(ticket.title),
+    runId: run.runId,
+    revisionId: run.revisionId || null,
+    planRevisionId: run.planRevisionId || null,
+    candidateId: run.candidateId || null,
+    integrityHash: integrityHash || null,
+    binding,
+    authorized: false,
+    actionable,
+    expectedVersion,
+    requestedAt: run.finishedAt || run.updatedAt || null,
+  };
+}
+
+function mapOperatorCommand(store, run) {
+  const ticket = store.getTicket(run.ticketId);
+  const candidate = run.candidateId ? store.getCandidate(run.candidateId) : null;
+  const candidatePresent = Boolean(candidate && candidate.candidateId === run.candidateId);
+  const liveIntegrityHash = candidatePresent ? candidate.integrityHash : '';
+  const integrityHash = candidatePresent ? liveIntegrityHash : '';
+  const currentRevisionId = ticket ? ticket.currentRevisionId : '';
+  const binding = computeDecisionBinding({
+    revisionId: run.revisionId,
+    currentRevisionId,
+    candidatePresent,
+    candidateId: run.candidateId,
+    integrityHash,
+    liveIntegrityHash,
+  });
+  return {
+    id: `command:${run.runId}:${run.controlRequest}`,
+    kind: 'operator_command',
+    command: run.controlRequest,
+    ticketId: run.ticketId,
+    ticketTitle: redactTitle(ticket ? ticket.title : null),
+    runId: run.runId,
+    revisionId: run.revisionId || null,
+    planRevisionId: run.planRevisionId || null,
+    candidateId: run.candidateId || null,
+    integrityHash: integrityHash || null,
+    binding,
+    authorized: false,
+    actionable: false,
+    expectedVersion: ticket && Number.isInteger(ticket.version) ? ticket.version : null,
+    requestedAt: run.controlRequestedAt || run.updatedAt || null,
+  };
+}
+
+function mapReviewResponse(store, review) {
+  const ticket = store.getTicket(review.ticketId);
+  const currentRevisionId = ticket ? ticket.currentRevisionId : '';
+  const candidate = review.candidateId ? store.getCandidate(review.candidateId) : null;
+  const candidatePresent = Boolean(candidate && candidate.candidateId === review.candidateId);
+  const liveIntegrityHash = candidatePresent ? candidate.integrityHash : '';
+  const integrityHash = typeof review.integrityHash === 'string' ? review.integrityHash : '';
+  const binding = computeDecisionBinding({
+    revisionId: review.revisionId,
+    currentRevisionId,
+    candidatePresent,
+    candidateId: review.candidateId,
+    integrityHash,
+    liveIntegrityHash,
+  });
+  const verdict = publicReviewVerdict(review.verdict);
+  const authorized = binding === 'current' && verdict === 'accepted';
+  const findings = typeof review.findings === 'string' && review.findings.trim()
+    ? redactDiagnosticMessage(review.findings)
+    : null;
+  return {
+    id: review.reviewId,
+    ticketId: review.ticketId,
+    ticketTitle: redactTitle(ticket ? ticket.title : null),
+    runId: review.runId,
+    revisionId: review.revisionId || null,
+    planRevisionId: review.planRevisionId || null,
+    candidateId: review.candidateId || null,
+    integrityHash: integrityHash || null,
+    verdict,
+    findings,
+    createdAt: review.createdAt || null,
+    binding,
+    authorized,
+  };
+}
+
+const DECISION_REQUEST_MAX = 4000;
+const ANSWERABLE_DECISION_KINDS = new Set(['intake_clarification', 'lead_decision']);
+const ACTIVE_DECISION_RUN_STATUSES = new Set(['queued', 'running', 'paused', 'interrupted']);
+
+function decisionText(value) {
+  return typeof value === 'string' ? truncate(redactDiagnosticMessage(value), DECISION_REQUEST_MAX) : null;
+}
+
+function sanitizeDecisionRequest(kind, request) {
+  const source = request && typeof request === 'object' && !Array.isArray(request) ? request : {};
+  if (kind === 'intake_clarification') {
+    return { questions: (Array.isArray(source.questions) ? source.questions : []).slice(0, 50).map((question) => ({
+      id: question && typeof question.id === 'string' ? truncate(question.id, 200) : null,
+      question: decisionText(question && question.question),
+      why: decisionText(question && question.why),
+    })) };
+  }
+  if (kind === 'lead_decision') {
+    return {
+      question: decisionText(source.question),
+      reason: decisionText(source.reason),
+      recommendation: decisionText(source.recommendation),
+      options: (Array.isArray(source.options) ? source.options : []).slice(0, 50).map((option) => ({
+        id: option && typeof option.id === 'string' ? truncate(option.id, 200) : null,
+        description: decisionText(option && option.description),
+      })),
+    };
+  }
+  return {};
+}
+
+function sanitizeDecisionAnswer(kind, answer) {
+  if (!answer || typeof answer !== 'object' || Array.isArray(answer)) return null;
+  if (kind === 'intake_clarification') {
+    return { answers: (Array.isArray(answer.answers) ? answer.answers : []).slice(0, 50).map((entry) => ({
+      questionId: entry && typeof entry.questionId === 'string' ? truncate(entry.questionId, 200) : null,
+      answer: decisionText(entry && entry.answer),
+    })) };
+  }
+  if (kind === 'lead_decision') {
+    return {
+      answer: decisionText(answer.answer),
+      choice: typeof answer.choice === 'string' ? truncate(answer.choice, 200) : null,
+    };
+  }
+  return null;
+}
+
+function mapRunDecision(store, ticket, run, decision) {
+  const runBound = decision.runId === run.runId
+    && decision.revisionId === run.revisionId
+    && decision.planRevisionId === (run.planRevisionId || null);
+  const revisionCurrent = typeof decision.revisionId === 'string' && decision.revisionId.length > 0
+    && decision.revisionId === ticket.currentRevisionId;
+  const binding = revisionCurrent && runBound ? 'current'
+    : (decision.revisionId && ticket.currentRevisionId && decision.revisionId !== ticket.currentRevisionId ? 'stale' : 'unavailable');
+  const current = binding === 'current';
+  const state = decision.state === 'pending' && !current ? 'stale' : decision.state;
+  const expectedVersion = Number.isInteger(ticket.version) ? ticket.version : null;
+  const actionable = state === 'pending' && current && ticket.status === 'waiting_human'
+    && ACTIVE_DECISION_RUN_STATUSES.has(run.status) && expectedVersion !== null
+    && ANSWERABLE_DECISION_KINDS.has(decision.kind);
+  const answer = sanitizeDecisionAnswer(decision.kind, decision.answer);
+  return {
+    id: `decision:${decision.decisionId}`,
+    decisionId: decision.decisionId,
+    kind: decision.kind,
+    state,
+    ticketId: ticket.ticketId,
+    ticketTitle: redactTitle(ticket.title),
+    runId: run.runId,
+    revisionId: decision.revisionId || null,
+    planRevisionId: decision.planRevisionId || null,
+    binding,
+    authorized: false,
+    actionable,
+    expectedVersion,
+    request: sanitizeDecisionRequest(decision.kind, decision.request),
+    answer,
+    createdAt: decision.createdAt || null,
+    answeredAt: decision.answeredAt || null,
+  };
+}
+
+function projectDecisions(read) {
+  if (!read || read.ok !== true) return decisionsUnavailable(read && read.reason);
+  return {
+    available: true,
+    pending: Array.isArray(read.pending) ? read.pending : [],
+    responses: Array.isArray(read.responses) ? read.responses : [],
+  };
+}
+
+function collectDecisions(productStore) {
+  const required = ['listTickets', 'listReviews', 'listControlRequests', 'latestRunOf', 'getReviewForRun', 'getCandidate', 'listRuns', 'listDecisions', 'getRun'];
+  if (!productStore || required.some((method) => typeof productStore[method] !== 'function')) {
+    return { ok: false, reason: 'Product store is unavailable' };
+  }
+  try {
+    const pending = [];
+    const decisionResponses = [];
+    for (const ticket of productStore.listTickets()) {
+      for (const runSummary of productStore.listRuns(ticket.ticketId)) {
+        const run = productStore.getRun(runSummary.runId);
+        if (!run) continue;
+        for (const decision of productStore.listDecisions(run.runId)) {
+          if (!ANSWERABLE_DECISION_KINDS.has(decision.kind)) continue;
+          const projected = mapRunDecision(productStore, ticket, run, decision);
+          if (projected.state === 'pending' || projected.state === 'stale') pending.push(projected);
+          else if (projected.state === 'answered') decisionResponses.push(projected);
+        }
+      }
+      if (ticket.status !== 'waiting_human') continue;
+      const latest = productStore.latestRunOf(ticket.ticketId);
+      if (!latest || latest.status !== 'completed' || latest.waitReason !== 'human_review' || !latest.candidateId) continue;
+      if (productStore.getReviewForRun(latest.runId)) continue;
+      const candidate = productStore.getCandidate(latest.candidateId);
+      pending.push(mapPendingReview(productStore, ticket, latest, candidate));
+    }
+    for (const run of productStore.listControlRequests()) {
+      pending.push(mapOperatorCommand(productStore, run));
+    }
+    const responses = productStore.listReviews().map((review) => mapReviewResponse(productStore, review)).concat(decisionResponses);
+    return { ok: true, pending, responses };
+  } catch (error) {
+    return { ok: false, reason: redactDiagnosticMessage(error && error.message ? error.message : 'Decisions are unavailable') };
+  }
+}
+
+function relativeSourcePath(sourcePath) {
+  if (typeof sourcePath !== 'string' || !sourcePath.trim()) return '';
+  const normalized = sourcePath.replace(/\\/g, '/');
+  if (path.isAbsolute(normalized)) return path.basename(normalized);
+  return normalized.replace(/^\.\/+/, '');
+}
+
+function readDocFileContent(io, filePath, format) {
+  let raw;
+  try {
+    raw = io.readFileSync(filePath);
+  } catch (error) {
+    return { status: 'unavailable', content: null, truncated: false, reason: redactDiagnosticMessage(error.message) };
+  }
+  if (Buffer.isBuffer(raw) && raw.includes(0)) {
+    return { status: 'unavailable', content: null, truncated: false, reason: 'Unsupported binary content (NUL bytes)' };
+  }
+  const text = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw);
+  if (text.includes('\u0000')) {
+    return { status: 'unavailable', content: null, truncated: false, reason: 'Unsupported binary content (NUL bytes)' };
+  }
+  let content = redactDiagnosticMessage(text);
+  let truncated = false;
+  if (content.length > DOC_MAX_CHARS) {
+    content = content.slice(0, DOC_MAX_CHARS);
+    truncated = true;
+  }
+  const status = truncated ? 'truncated' : 'available';
+  const reason = truncated ? 'Content truncated' : null;
+  return { status, content, truncated, reason, format };
+}
+
+function pushDocEntry(documents, entry) {
+  if (!entry || !entry.id || !DOC_SOURCES.has(entry.source)) return;
+  documents.push({
+    id: entry.id,
+    title: entry.title,
+    source: entry.source,
+    sourcePath: relativeSourcePath(entry.sourcePath),
+    status: entry.status,
+    format: entry.format,
+    content: entry.content,
+    truncated: Boolean(entry.truncated),
+    reason: entry.reason || null,
+  });
+}
+
+function readDocsCatalog({ packDir, projectConfig, projectConfigPath, io = fs } = {}) {
+  const documents = [];
+  try {
+    const root = path.resolve(packDir || '');
+    let manifest = null;
+    try {
+      manifest = JSON.parse(io.readFileSync(path.join(root, 'pack.json'), 'utf8'));
+    } catch (_) {
+      manifest = null;
+    }
+    const presetIds = manifest && Array.isArray(manifest.presets) ? manifest.presets : [];
+    const unavailablePresetIds = manifest && Array.isArray(manifest.unavailablePresets) ? manifest.unavailablePresets : [];
+
+    try {
+      const team = readDocFileContent(io, path.join(root, 'TEAM.md'), 'markdown');
+      pushDocEntry(documents, {
+        id: 'role:team',
+        title: 'TEAM.md',
+        source: 'role',
+        sourcePath: 'TEAM.md',
+        format: 'markdown',
+        ...team,
+      });
+    } catch (error) {
+      pushDocEntry(documents, {
+        id: 'role:team',
+        title: 'TEAM.md',
+        source: 'role',
+        sourcePath: 'TEAM.md',
+        status: 'unavailable',
+        format: 'markdown',
+        content: null,
+        truncated: false,
+        reason: redactDiagnosticMessage(error.message),
+      });
+    }
+
+    const agentsDir = path.join(root, 'agents');
+    try {
+      const names = io.readdirSync(agentsDir).filter((name) => name.endsWith('.toml')).sort();
+      for (const name of names) {
+        const filePath = path.join(agentsDir, name);
+        const base = path.basename(name, '.toml');
+        try {
+          const stat = io.statSync(filePath);
+          if (!stat.isFile()) {
+            pushDocEntry(documents, {
+              id: `role:${base}`,
+              title: name,
+              source: 'role',
+              sourcePath: `agents/${name}`,
+              status: 'unavailable',
+              format: 'toml',
+              content: null,
+              truncated: false,
+              reason: 'Not a readable file',
+            });
+            continue;
+          }
+          const doc = readDocFileContent(io, filePath, 'toml');
+          pushDocEntry(documents, {
+            id: `role:${base}`,
+            title: name,
+            source: 'role',
+            sourcePath: `agents/${name}`,
+            format: 'toml',
+            ...doc,
+          });
+        } catch (error) {
+          pushDocEntry(documents, {
+            id: `role:${base}`,
+            title: name,
+            source: 'role',
+            sourcePath: `agents/${name}`,
+            status: 'unavailable',
+            format: 'toml',
+            content: null,
+            truncated: false,
+            reason: redactDiagnosticMessage(error.message),
+          });
+        }
+      }
+    } catch (error) {
+      pushDocEntry(documents, {
+        id: 'role:agents',
+        title: 'agents',
+        source: 'role',
+        sourcePath: 'agents',
+        status: 'unavailable',
+        format: 'toml',
+        content: null,
+        truncated: false,
+        reason: redactDiagnosticMessage(error.message),
+      });
+    }
+
+    for (const presetId of presetIds) {
+      const sourcePath = `presets/${presetId}.json`;
+      const filePath = path.join(root, sourcePath);
+      try {
+        const stat = io.statSync(filePath);
+        if (!stat.isFile()) throw new Error('Preset file is not available');
+        const doc = readDocFileContent(io, filePath, 'json');
+        pushDocEntry(documents, {
+          id: `preset:${presetId}`,
+          title: `${presetId}.json`,
+          source: 'preset',
+          sourcePath,
+          format: 'json',
+          ...doc,
+        });
+      } catch (error) {
+        pushDocEntry(documents, {
+          id: `preset:${presetId}`,
+          title: `${presetId}.json`,
+          source: 'preset',
+          sourcePath,
+          status: 'unavailable',
+          format: 'json',
+          content: null,
+          truncated: false,
+          reason: redactDiagnosticMessage(error.message),
+        });
+      }
+    }
+
+    for (const presetId of unavailablePresetIds) {
+      pushDocEntry(documents, {
+        id: `preset:${presetId}`,
+        title: `${presetId}.json`,
+        source: 'preset',
+        sourcePath: `presets/${presetId}.json`,
+        status: 'unavailable',
+        format: 'json',
+        content: null,
+        truncated: false,
+        reason: 'Preset file is not available',
+      });
+    }
+
+    if (projectConfig && typeof projectConfig === 'object') {
+      if (projectConfig.source === 'file' && projectConfigPath) {
+        try {
+          const doc = readDocFileContent(io, projectConfigPath, 'json');
+          pushDocEntry(documents, {
+            id: 'project:config',
+            title: path.basename(projectConfigPath),
+            source: 'project',
+            sourcePath: relativeSourcePath(projectConfigPath),
+            format: 'json',
+            ...doc,
+          });
+        } catch (error) {
+          pushDocEntry(documents, {
+            id: 'project:config',
+            title: path.basename(String(projectConfigPath)),
+            source: 'project',
+            sourcePath: relativeSourcePath(String(projectConfigPath)),
+            status: 'unavailable',
+            format: 'json',
+            content: null,
+            truncated: false,
+            reason: redactDiagnosticMessage(error.message),
+          });
+        }
+      } else {
+        const publicFields = {
+          source: projectConfig.source,
+          revision: projectConfig.revision,
+          baseRef: projectConfig.baseRef,
+          branchPrefixes: projectConfig.branchPrefixes,
+          rolePack: projectConfig.rolePack,
+          delivery: projectConfig.delivery,
+          checks: projectConfig.checks,
+        };
+        let content = redactDiagnosticMessage(JSON.stringify(publicFields, null, 2));
+        let truncated = false;
+        let status = 'available';
+        let reason = null;
+        if (content.length > DOC_MAX_CHARS) {
+          content = content.slice(0, DOC_MAX_CHARS);
+          truncated = true;
+          status = 'truncated';
+          reason = 'Content truncated';
+        }
+        pushDocEntry(documents, {
+          id: 'project:config',
+          title: 'Project config',
+          source: 'project',
+          sourcePath: 'defaults',
+          status,
+          format: 'json',
+          content,
+          truncated,
+          reason,
+        });
+      }
+    } else {
+      pushDocEntry(documents, {
+        id: 'project:config',
+        title: 'Project config',
+        source: 'project',
+        sourcePath: 'defaults',
+        status: 'unavailable',
+        format: 'json',
+        content: null,
+        truncated: false,
+        reason: 'Project config is not available',
+      });
+    }
+
+    return { ok: true, documents };
+  } catch (error) {
+    return { ok: false, reason: redactDiagnosticMessage(error && error.message ? error.message : 'Docs are unavailable'), documents: [] };
+  }
+}
+
+function projectDocs(read) {
+  if (!read || read.ok !== true) {
+    return {
+      available: false,
+      reason: redactDiagnosticMessage(read && read.reason ? read.reason : 'Docs are unavailable'),
+      documents: [],
+    };
+  }
+  const documents = [];
+  for (const doc of read.documents || []) {
+    if (!doc || typeof doc.id !== 'string' || !doc.id || !DOC_SOURCES.has(doc.source)) continue;
+    const content = doc.content == null ? null : redactDiagnosticMessage(String(doc.content));
+    documents.push({
+      id: doc.id,
+      title: typeof doc.title === 'string' ? redactDiagnosticMessage(doc.title) : 'unavailable',
+      source: doc.source,
+      sourcePath: relativeSourcePath(doc.sourcePath),
+      status: doc.status,
+      format: doc.format,
+      content,
+      truncated: Boolean(doc.truncated),
+      reason: doc.reason ? redactDiagnosticMessage(String(doc.reason)) : null,
+    });
+  }
+  return { available: true, documents };
+}
+
 
 function createProjection({ db, roleIds = [], projectId = null, productStore = null } = {}) {
   if (!db || typeof db.prepare !== 'function') throw new TypeError('createProjection requires a better-sqlite3 db');
@@ -560,6 +1178,13 @@ function createProjection({ db, roleIds = [], projectId = null, productStore = n
       if (status === 'complete' && (coverage.attemptsWithoutUsage > 0 || leadRows === 0)) coverage.status = 'partial';
     }
     report.coverage = coverage;
+    // Attach cacheShare using the same rule as ticket-telemetry (ratio of sums over paired rows).
+    report.totals.cacheShare = cachedInputShare(report.attempts);
+    const roleIds = Object.keys(report.byRole);
+    for (const roleId of roleIds) {
+      const roleAttempts = report.attempts.filter((a) => a.role === roleId);
+      report.byRole[roleId].cacheShare = cachedInputShare(roleAttempts);
+    }
     return report;
   }
 
@@ -578,4 +1203,14 @@ function createProjection({ db, roleIds = [], projectId = null, productStore = n
   };
 }
 
-module.exports = { createProjection, encodeCardId, canReturnToBacklog };
+module.exports = {
+  createProjection,
+  encodeCardId,
+  canReturnToBacklog,
+  projectMonitor,
+  projectDecisions,
+  collectDecisions,
+  projectDocs,
+  readDocsCatalog,
+  DOC_MAX_CHARS,
+};

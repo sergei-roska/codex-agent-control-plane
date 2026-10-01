@@ -46,12 +46,30 @@ function sanitizeValue(value, depth = 0) {
   return undefined;
 }
 
+const ASSIGNMENT_SECRET_KEYS = 'access_token|access_key|client_secret|api_key|apikey|password|passwd|pwd|token|secret';
+
+function redactDiagnosticMessage(text) {
+  return String(text)
+    .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/?#]*@/g, '$1')
+    .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s?#]*)\?[^\s#]*/g, '$1?<redacted>')
+    .replace(new RegExp(`\\b(${ASSIGNMENT_SECRET_KEYS})\\b(\\s*[:=]\\s*)\\S+`, 'gi'), '$1$2[REDACTED]')
+    .replace(/(authorization\s*:\s*)[^\r\n]*/gi, '$1[REDACTED]')
+    .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, '[REDACTED]');
+}
+
 function sanitizePayload(payload) {
   const out = {};
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return out;
   for (const key of PAYLOAD_FIELDS) {
     if (!Object.prototype.hasOwnProperty.call(payload, key)) continue;
-    const value = sanitizeValue(payload[key]);
+    let value;
+    if (key === 'message' && typeof payload[key] === 'string') {
+      const redacted = redactDiagnosticMessage(payload[key]);
+      value = redacted.length > MAX_STRING ? redacted.slice(0, MAX_STRING) : redacted;
+    } else {
+      value = sanitizeValue(payload[key]);
+    }
     if (value !== undefined) out[key] = value;
   }
   if (Buffer.byteLength(JSON.stringify(out), 'utf8') > MAX_PAYLOAD_BYTES) return { truncated: true };
@@ -205,6 +223,17 @@ class EventJournal {
       return [];
     }
   }
+
+  listRecent({ limit = DEFAULT_LIMIT } = {}) {
+    try {
+      const events = this.db.prepare(
+        'SELECT * FROM (SELECT * FROM runtime_events ORDER BY sequence DESC LIMIT ?) ORDER BY sequence ASC',
+      ).all(clampLimit(limit)).map(fromRow);
+      return { ok: true, events };
+    } catch (_) {
+      return { ok: false, events: [] };
+    }
+  }
 }
 
 function outcomeOf(result) {
@@ -259,4 +288,4 @@ function withDispatchEvents(journal, events) {
 
 const NOOP_EVENTS = Object.freeze({ record() { return null; } });
 
-module.exports = { EventJournal, withDispatchEvents, sanitizePayload, EVENT_TYPES, NOOP_EVENTS };
+module.exports = { EventJournal, withDispatchEvents, sanitizePayload, redactDiagnosticMessage, EVENT_TYPES, NOOP_EVENTS };

@@ -14,9 +14,10 @@
 
       <div class="sub-tabs">
         <button class="sub-tab-btn active" data-subtab="m1-overview">Overview</button>
-        <button class="sub-tab-btn" data-subtab="m1-runlog">Events</button>
+        <button class="sub-tab-btn" data-subtab="m1-runlog">Run Log</button>
+        <button class="sub-tab-btn" data-subtab="m1-turns">Turns/events</button>
         <button class="sub-tab-btn" data-subtab="m1-attempts">Attempts</button>
-        <button class="sub-tab-btn" data-subtab="m1-metrics">Usage</button>
+        <button class="sub-tab-btn" data-subtab="m1-metrics">Tokens</button>
       </div>
 
       <div id="m1-overview" class="sub-tab-pane active">
@@ -66,6 +67,10 @@
         <div id="m1-runlog-list" class="event-timeline"></div>
       </div>
 
+      <div id="m1-turns" class="sub-tab-pane">
+        <div id="m1-turns-list" class="event-timeline"></div>
+      </div>
+
       <div id="m1-attempts" class="sub-tab-pane">
         <div class="attempts-table-wrapper">
           <table class="attempts-table">
@@ -109,7 +114,7 @@
             <div id="m1-metric-elapsed-sub" class="metrics-stat-sub"></div>
           </div>
         </div>
-        <div class="detail-note">Cost is not measured: usage is billed through a subscription. Values the runtime did not report are shown as unavailable, never as 0.</div>
+        <div id="m1-cost-note" class="detail-note"></div>
 
         <div style="background: var(--nm-surface); box-shadow: var(--nm-shadow-in-sm); border: var(--nm-border-inset); padding: 14px; border-radius: 14px;">
           <strong style="font-size: 13px; color: var(--text-primary); display: block; margin-bottom: 10px;">Per-role usage</strong>
@@ -125,6 +130,7 @@
                   <th style="text-align: right;">Total</th>
                   <th style="text-align: right;">Turns</th>
                   <th style="text-align: right;">Elapsed</th>
+                  <th style="text-align: right;">Cache share</th>
                 </tr>
               </thead>
               <tbody id="m1-metrics-role-body"></tbody>

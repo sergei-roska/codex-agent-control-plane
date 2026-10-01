@@ -36,7 +36,7 @@ report a real model run separately if deliberately performed.
 | M5 / complete | Catalog-backed OpenAI defaults, account health and effective snapshots | New defaults cannot reconfigure active/resumed work; unsupported Fast unavailable |
 | M6 / in_progress | Read-only Jira/Confluence Intake into internal tracking | 729 tests pass, zero skips; Gemini fixture QA reports 12/12 PASS; lead directly verifies 390px browser layout; approved live pilots pending; see [M6 acceptance](../m6/acceptance.md) |
 | M7 / complete | Guarded operator commands, version-bound review and Git adapter | 782 tests pass, zero skips; two independent audits fixed; fixture browser acceptance incl. commit/push to a bare remote; live OpenAI/real remote not exercised; see [M7 acceptance](../m7/acceptance.md) |
-| M8 / planned | Remaining views, cache/quality evidence and bounded MLflow experiment | No fake data; correlated sanitized traces; explicit adopt/defer and prompt comparison |
+| M8 / complete | Remaining views, cache/quality evidence and bounded MLflow experiment | 846 tests pass; browser flow and local MLflow Tracking readback verified; live prompt comparison 2/2 vs 2/2; production MLflow deferred; see [M8 acceptance](../m8/acceptance.md) |
 | M9 / planned | Live pilots, recovery/security checks, packaging and beta review | Exact candidate evidence and owner release authority; no implicit merge/publication |
 
 Resolve owned open choices by their milestone in [decisions.md](decisions.md).

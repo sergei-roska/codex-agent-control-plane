@@ -1,5 +1,4 @@
 <section id="tab-docs" class="tab-pane">
-  <div class="preview-banner" role="note">Prototype preview - sample data, not connected to the orchestrator</div>
   <div class="docs-layout">
     <div class="doc-sidebar" id="docs-list">
       <!-- Injected via JS -->
@@ -7,7 +6,8 @@
     <div class="doc-viewer">
       <div class="doc-viewer-header">
         <span id="active-doc-title" style="font-weight: 700;">Document Viewer</span>
-        <div style="display: flex; gap: 10px;">
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <span id="doc-copy-status" role="status" class="doc-copy-status"></span>
           <button class="btn btn-secondary" id="btn-toggle-raw">Raw / Rendered</button>
           <button class="btn btn-secondary" id="btn-copy-doc">Copy</button>
         </div>

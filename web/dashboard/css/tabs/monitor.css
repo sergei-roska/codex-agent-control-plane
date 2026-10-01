@@ -60,3 +60,5 @@
 .log-msg { color: var(--text-primary); }
 .log-msg.error { color: var(--accent-red); }
 .log-msg.warning { color: var(--accent-amber); }
+.log-level { color: var(--text-muted); }
+.monitor-status { color: var(--text-muted); }

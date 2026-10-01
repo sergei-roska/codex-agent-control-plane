@@ -1,0 +1,22 @@
+{
+  "version": "trace-v1",
+  "ticket": {
+    "ticketId": "tkt_m8_001",
+    "title": "Summarize the fixture outcome",
+    "text": "Operator note with Authorization: Bearer fixture-token-value and key sk-fixturekey1234 at https://user:s3cret-pass@example.com/hook?token=abc"
+  },
+  "run": {
+    "runId": "run_m8_001",
+    "ticketId": "tkt_m8_001"
+  },
+  "attempt": {
+    "attemptId": "att_m8_001",
+    "runId": "run_m8_001",
+    "output": "Finished. Bearer fixture-token-value leaked beside sk-fixturekey1234."
+  },
+  "outcome": {
+    "outcomeId": "out_m8_001",
+    "status": "accepted",
+    "feedback": "Reviewer pasted https://user:s3cret-pass@example.com/hook?token=abc into the note."
+  }
+}

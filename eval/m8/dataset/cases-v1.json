@@ -1,0 +1,66 @@
+{
+  "version": "cases-v2",
+  "protocol": "m8-runtime-contract-v1",
+  "cases": [
+    {
+      "id": "case-trace-sanitization",
+      "task": "sanitize-trace",
+      "input": { "fixture": "trace-v1.json" },
+      "expect": {
+        "traceId": "trace:trace-v1:tkt_m8_001:run_m8_001:att_m8_001",
+        "correlationFields": ["ticketId", "runId", "attemptId", "outcomeId"],
+        "correlation": {
+          "ticketId": "tkt_m8_001",
+          "runId": "run_m8_001",
+          "attemptId": "att_m8_001",
+          "outcomeId": "out_m8_001"
+        },
+        "secrets": [
+          "fixture-token-value",
+          "sk-fixturekey1234",
+          "s3cret-pass",
+          "token=abc"
+        ]
+      }
+    },
+    {
+      "id": "case-export-correlation-feedback",
+      "task": "export-trace-and-feedback",
+      "input": { "fixture": "trace-v1.json" },
+      "expect": {
+        "traceId": "trace:trace-v1:tkt_m8_001:run_m8_001:att_m8_001",
+        "outcomeId": "out_m8_001",
+        "correlationFields": ["traceId", "ticketId", "runId", "attemptId", "outcomeId"],
+        "correlation": {
+          "ticketId": "tkt_m8_001",
+          "runId": "run_m8_001",
+          "attemptId": "att_m8_001",
+          "outcomeId": "out_m8_001"
+        }
+      }
+    },
+    {
+      "id": "case-manual-adoption-review",
+      "task": "defer-production-adoption",
+      "input": {
+        "inProcessStatus": "accepted",
+        "comparisonOk": true,
+        "liveStatus": "deferred"
+      },
+      "expect": {
+        "adoptDefer": "defer",
+        "productionAdoption": "defer"
+      }
+    },
+    {
+      "id": "case-isolated-artifact",
+      "task": "write-isolated-artifact",
+      "input": {
+        "filename": "evaluation-checklist.txt",
+        "content": "review artifact isolation"
+      },
+      "expect": { "artifactCreated": true },
+      "writesFiles": true
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+Summarize the ticket outcome for the operator.
+preserve correlation ids
