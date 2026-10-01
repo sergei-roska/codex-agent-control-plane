@@ -255,6 +255,9 @@ test('adapter passes the required exec options', async () => {
   assert.equal(calls[0].options.cwd, '/nowhere');
   assert.equal(calls[0].options.env.GIT_TERMINAL_PROMPT, '0');
   assert.equal(calls[0].options.env.LC_ALL, 'C');
+  assert.equal(calls[0].options.env.GIT_ASKPASS, 'true');
+  assert.equal(calls[0].options.env.SSH_ASKPASS, undefined);
+  assert.equal(calls[0].options.timeout, 60 * 1000);
   assert.ok(calls[0].options.maxBuffer >= 4 * 1024 * 1024);
 });
 
@@ -348,4 +351,73 @@ test('the manifest is capped at 2000 entries and flagged', async (t) => {
   fs.writeFileSync(path.join(dir, 'one.txt'), 'x\n');
   const small = await adapter.captureCandidate({ baseCommit: head });
   assert.equal(small.manifestTruncated, false);
+});
+
+test('preflight allows a dirty checkout on the owned branch with an informational note', async (t) => {
+  const { dir, head, adapter } = setup(t);
+  await adapter.prepareBranch({ name: 'feature/own-aaaaaa', baseCommit: head });
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'changed\n');
+  fs.writeFileSync(path.join(dir, 'new.txt'), 'n');
+  const owned = await adapter.preflight({ baseRef: 'main', ownedBranch: 'feature/own-aaaaaa' });
+  assert.equal(owned.ok, true);
+  assert.deepEqual(owned.problems, []);
+  assert.deepEqual(owned.notes.map((n) => n.code), ['owned_branch_dirty']);
+  assert.equal(owned.branch, 'feature/own-aaaaaa');
+  const other = await adapter.preflight({ baseRef: 'main', ownedBranch: 'feature/other-bbbbbb' });
+  assert.deepEqual(other.problems.map((p) => p.code), ['dirty_worktree']);
+  const none = await adapter.preflight({ baseRef: 'main' });
+  assert.deepEqual(none.problems.map((p) => p.code), ['dirty_worktree']);
+  assert.ok(!none.notes.some((n) => n.code === 'owned_branch_dirty'));
+});
+
+test('prepareBranch is a no-op success on the owned branch even when dirty', async (t) => {
+  const { dir, head, adapter } = setup(t);
+  await adapter.prepareBranch({ name: 'feature/own-aaaaaa', baseCommit: head });
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'changed\n');
+  const again = await adapter.prepareBranch({ name: 'feature/own-aaaaaa', baseCommit: head, ownedByThisTicket: true });
+  assert.equal(again.ok, true);
+  assert.equal(again.reused, true);
+  assert.equal(git(dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'feature/own-aaaaaa');
+  assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'changed\n');
+});
+
+test('manifest entries carry the file mode and a chmod after capture changes the integrity hash', async (t) => {
+  const { dir, head, adapter } = setup(t);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'one\nTWO\n');
+  fs.unlinkSync(path.join(dir, 'b.txt'));
+  fs.writeFileSync(path.join(dir, 'run.sh'), '#!/bin/sh\n', { mode: 0o755 });
+  fs.symlinkSync('a.txt', path.join(dir, 'link'));
+  const one = await adapter.captureCandidate({ baseCommit: head });
+  const by = Object.fromEntries(one.manifest.map((m) => [m.path, m]));
+  assert.equal(by['a.txt'].mode, 'file');
+  assert.equal(by['b.txt'].mode, null);
+  assert.equal(by['run.sh'].mode, 'exec');
+  assert.equal(by.link.mode, 'symlink');
+  assert.deepEqual(Object.keys(by['a.txt']), ['path', 'status', 'sha256', 'size', 'mode']);
+  fs.chmodSync(path.join(dir, 'a.txt'), 0o755);
+  const two = await adapter.captureCandidate({ baseCommit: head });
+  assert.equal(two.manifest.find((m) => m.path === 'a.txt').mode, 'exec');
+  assert.notEqual(one.integrityHash, two.integrityHash);
+});
+
+test('the adapter honours a custom timeout and keeps a user GIT_SSH_COMMAND', async () => {
+  const calls = [];
+  const saved = process.env.GIT_SSH_COMMAND;
+  process.env.GIT_SSH_COMMAND = 'ssh -i /custom/key';
+  try {
+    const adapter = createGitAdapter({
+      workspace: '/nowhere',
+      timeoutMs: 1234,
+      execFile: async (cmd, argv, options) => {
+        calls.push(options);
+        throw new Error('fail');
+      },
+    });
+    await adapter.preflight({ baseRef: 'main' });
+  } finally {
+    if (saved === undefined) delete process.env.GIT_SSH_COMMAND;
+    else process.env.GIT_SSH_COMMAND = saved;
+  }
+  assert.equal(calls[0].timeout, 1234);
+  assert.equal(calls[0].env.GIT_SSH_COMMAND, 'ssh -i /custom/key');
 });

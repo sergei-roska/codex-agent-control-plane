@@ -21,8 +21,18 @@ const NO_GOAL_TITLE = '(no goal text)';
 const CARD_ID_PREFIX = 'lr_';
 const TICKET_ID_PREFIX = 'tkt_';
 const TICKET_API_PATH = '/api/dashboard/v1/tickets/';
+// Legacy lr_ cards are read-only: operator commands apply to tickets only.
 const UNAVAILABLE_ACTIONS = ['pause', 'resume', 'stop', 'cancel', 'edit', 'return_to_backlog', 'review', 'commit', 'push']
-  .map((action) => ({ action, reason: 'Operator commands are not available in this release', milestone: 'M7' }));
+  .map((action) => ({ action, reason: 'Legacy runs are read-only in the dashboard; operator commands apply to tickets' }));
+const RETURNABLE_TICKET_STATUSES = ['pending', 'in_progress', 'paused', 'waiting_human', 'blocked'];
+// A pending return_to_backlog or cancel request on the active run outranks another return (store CONTROL_RANK).
+const BLOCKING_CONTROLS = ['return_to_backlog', 'cancel'];
+
+// Whether Return to Backlog is offered (shared with the ticket API's availableActions).
+function canReturnToBacklog(ticket, activeRun) {
+  if (!RETURNABLE_TICKET_STATUSES.includes(ticket.status)) return false;
+  return !(activeRun && BLOCKING_CONTROLS.includes(activeRun.controlRequest));
+}
 
 const WAIT_REASONS = {
   human_decision: 'human_decision',
@@ -294,14 +304,21 @@ function createProjection({ db, roleIds = [], projectId = null, productStore = n
   }
 
   // Run-derived card fields: active (else latest) run for phase/waitReason, latest valid intake, latest candidate.
-  function ticketRunFields(ticketId) {
-    const out = { phase: null, classification: null, disposition: null, waitReason: null, waitMessage: null };
+  function ticketRunFields(ticket) {
+    const ticketId = ticket.ticketId;
+    const out = {
+      phase: null, classification: null, disposition: null, waitReason: null, waitMessage: null, controlRequest: null, returnable: false, runStatus: null,
+    };
     if (!productStore || typeof productStore.latestRunOf !== 'function') return out;
     try {
       const active = productStore.getActiveRun(ticketId);
       const latest = active || productStore.latestRunOf(ticketId);
       if (active) out.phase = active.phase;
-      if (latest) out.waitReason = latest.waitReason || null;
+      out.controlRequest = active && active.controlRequest ? active.controlRequest : null;
+      out.returnable = canReturnToBacklog(ticket, active);
+      // A closed or idle ticket must not show the wait reason of its last run.
+      if (latest && (active || ['waiting_human', 'blocked', 'paused'].includes(ticket.status))) out.waitReason = latest.waitReason || null;
+      if (latest) out.runStatus = latest.status;
       if (active && active.waitDetail && typeof active.waitDetail.message === 'string' && active.waitDetail.message) out.waitMessage = active.waitDetail.message;
       const runs = productStore.listRuns(ticketId);
       for (const summary of runs) {
@@ -320,8 +337,13 @@ function createProjection({ db, roleIds = [], projectId = null, productStore = n
   }
 
   function buildTicketCard(ticket) {
-    const [boardColumn, displayStatus] = TICKET_STATE_TABLE[ticket.status] || ['needs_attention', String(ticket.status)];
-    const runFields = ticketRunFields(ticket.ticketId);
+    const [boardColumn, tableStatus] = TICKET_STATE_TABLE[ticket.status] || ['needs_attention', String(ticket.status)];
+    const runFields = ticketRunFields(ticket);
+    // A stopped run is shown as such, not as a generic block.
+    const displayStatus = ticket.status === 'blocked' && runFields.runStatus === 'stopped' ? 'Stopped' : tableStatus;
+    const dragActions = [];
+    if (ticket.status === 'backlog') dragActions.push('submit');
+    if (runFields.returnable) dragActions.push('return_to_backlog');
     return {
       cardId: ticket.ticketId,
       cardKind: 'ticket',
@@ -339,6 +361,8 @@ function createProjection({ db, roleIds = [], projectId = null, productStore = n
       waitMessage: runFields.waitMessage,
       ticketStatus: ticket.status,
       phase: runFields.phase,
+      controlRequest: runFields.controlRequest,
+      dragActions,
       classification: runFields.classification,
       disposition: runFields.disposition,
       primaryRole: null,
@@ -554,4 +578,4 @@ function createProjection({ db, roleIds = [], projectId = null, productStore = n
   };
 }
 
-module.exports = { createProjection, encodeCardId };
+module.exports = { createProjection, encodeCardId, canReturnToBacklog };

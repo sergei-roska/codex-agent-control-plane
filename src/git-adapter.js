@@ -12,6 +12,7 @@ const MAX_DIFF_BYTES = 2 * 1024 * 1024;
 const MAX_UNTRACKED_INLINE_BYTES = 256 * 1024;
 const GIT_MAX_BUFFER = 16 * 1024 * 1024;
 const MAX_MANIFEST_ENTRIES = 2000;
+const DEFAULT_GIT_TIMEOUT_MS = 60 * 1000;
 // Repository config is untrusted input: no fsmonitor hook, no hooks path, no external diff driver.
 const HARDENING_ARGS = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external='];
 const SLUG_MAX = 40;
@@ -27,6 +28,20 @@ const BRANCH_PREFIXES = {
 
 function sha256(data) {
   return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+// Shared with git-delivery.js so verification recomputes exactly what captureCandidate hashed.
+function computeIntegrityHash(head, manifest) {
+  return sha256(`${head}\n${JSON.stringify(manifest)}`);
+}
+
+// Environment for every Git call: never prompt for credentials. GIT_SSH_COMMAND is not set here
+// (it would override core.sshCommand); network callers add batch mode themselves.
+function nonInteractiveEnv(base = process.env) {
+  const env = { ...base, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'true', LC_ALL: 'C' };
+  delete env.SSH_ASKPASS;
+  delete env.SSH_ASKPASS_REQUIRE;
+  return env;
 }
 
 function slugify(text) {
@@ -96,11 +111,11 @@ function hashFileStream(absolute) {
 async function describeFile(absolute) {
   try {
     const stat = fs.lstatSync(absolute);
-    if (stat.isSymbolicLink()) return { sha256: sha256(fs.readlinkSync(absolute)), size: stat.size, kind: 'symlink' };
-    if (stat.isDirectory()) return { sha256: null, size: null, kind: 'directory' };
-    return { sha256: await hashFileStream(absolute), size: stat.size, kind: 'file' };
+    if (stat.isSymbolicLink()) return { sha256: sha256(fs.readlinkSync(absolute)), size: stat.size, kind: 'symlink', mode: 'symlink' };
+    if (stat.isDirectory()) return { sha256: null, size: null, kind: 'directory', mode: null };
+    return { sha256: await hashFileStream(absolute), size: stat.size, kind: 'file', mode: stat.mode & 0o111 ? 'exec' : 'file' };
   } catch (_) {
-    return { sha256: null, size: null, kind: 'missing' };
+    return { sha256: null, size: null, kind: 'missing', mode: null };
   }
 }
 
@@ -129,13 +144,13 @@ function syntheticDiff(relative, text) {
   return header + body;
 }
 
-function createGitAdapter({ workspace, execFile } = {}) {
+function createGitAdapter({ workspace, execFile, timeoutMs = DEFAULT_GIT_TIMEOUT_MS } = {}) {
   if (typeof workspace !== 'string' || !workspace) throw new TypeError('workspace is required');
   const exec = execFile || promisify(childProcess.execFile);
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' };
+  const env = nonInteractiveEnv();
 
   async function git(argv) {
-    const result = await exec('git', [...HARDENING_ARGS, ...argv], { cwd: workspace, env, maxBuffer: GIT_MAX_BUFFER, encoding: 'utf8' });
+    const result = await exec('git', [...HARDENING_ARGS, ...argv], { cwd: workspace, env, maxBuffer: GIT_MAX_BUFFER, encoding: 'utf8', timeout: timeoutMs });
     return typeof result === 'string' ? result : result.stdout;
   }
 
@@ -192,7 +207,7 @@ function createGitAdapter({ workspace, execFile } = {}) {
     return parsePorcelain(await git(['status', '--porcelain=v1', '-z', '--untracked-files=all']));
   }
 
-  async function preflight({ baseRef = 'HEAD' } = {}) {
+  async function preflight({ baseRef = 'HEAD', ownedBranch = null } = {}) {
     const result = { ok: false, problems: [], notes: [], head: null, branch: null, baseCommit: null };
     const problem = (code, message) => result.problems.push({ code, message });
     if (!(await isRepoRoot())) {
@@ -202,9 +217,13 @@ function createGitAdapter({ workspace, execFile } = {}) {
     const operations = await operationInProgress();
     if (operations.length) problem('operation_in_progress', `Git operation in progress (${operations.join(', ')})`);
     const dirty = await porcelain();
-    if (dirty.length) problem('dirty_worktree', `The checkout has ${dirty.length} uncommitted or untracked path(s)`);
     result.head = await currentHead();
     result.branch = await currentBranch();
+    if (dirty.length) {
+      const message = `The checkout has ${dirty.length} uncommitted or untracked path(s)`;
+      if (ownedBranch && result.branch === ownedBranch) result.notes.push({ code: 'owned_branch_dirty', message });
+      else problem('dirty_worktree', message);
+    }
     if (!result.branch && result.head) result.notes.push({ code: 'detached_head_allowed', message: 'HEAD is detached' });
     result.baseCommit = await resolveCommit(baseRef);
     if (!result.baseCommit) problem('base_ref_missing', 'The base ref does not resolve to a commit');
@@ -239,7 +258,9 @@ function createGitAdapter({ workspace, execFile } = {}) {
     if (!commit) return fail('base_ref_missing', 'The base commit does not resolve');
     const exists = await branchExists(name);
     if (exists && !ownedByThisTicket) return fail('branch_collision', 'A branch with this name already exists and is not owned by this ticket');
-    if ((await porcelain()).length) return fail('dirty_worktree', 'The checkout is not clean');
+    const onOwnedBranch = exists && (await currentBranch()) === name;
+    // Continuing on the ticket's own (possibly dirty) branch needs no switch, so no clean checkout.
+    if (!onOwnedBranch && (await porcelain()).length) return fail('dirty_worktree', 'The checkout is not clean');
     if (exists) {
       if ((await currentBranch()) !== name) await git(['switch', name]);
     } else {
@@ -270,8 +291,8 @@ function createGitAdapter({ workspace, execFile } = {}) {
     const sorted = [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     const manifestTruncated = sorted.length > MAX_MANIFEST_ENTRIES;
     for (const entry of sorted.slice(0, MAX_MANIFEST_ENTRIES)) {
-      const info = entry.status === 'D' ? { sha256: null, size: null, kind: 'missing' } : await describeFile(path.join(workspace, entry.path));
-      manifest.push({ path: entry.path, status: entry.status, sha256: info.sha256, size: info.size, ...(entry.oldPath ? { oldPath: entry.oldPath } : {}) });
+      const info = entry.status === 'D' ? { sha256: null, size: null, kind: 'missing', mode: null } : await describeFile(path.join(workspace, entry.path));
+      manifest.push({ path: entry.path, status: entry.status, sha256: info.sha256, size: info.size, mode: info.mode, ...(entry.oldPath ? { oldPath: entry.oldPath } : {}) });
       if (entry.status === '??') untracked.push({ entry, info });
     }
 
@@ -320,11 +341,11 @@ function createGitAdapter({ workspace, execFile } = {}) {
       manifestTruncated,
       diffText,
       truncated,
-      integrityHash: sha256(`${head}\n${JSON.stringify(manifest)}`),
+      integrityHash: computeIntegrityHash(head, manifest),
     };
   }
 
   return { preflight, branchName, prepareBranch, captureCandidate, branchExists };
 }
 
-module.exports = { createGitAdapter, slugify, parsePorcelain, MAX_DIFF_BYTES, MAX_UNTRACKED_INLINE_BYTES };
+module.exports = { createGitAdapter, computeIntegrityHash, nonInteractiveEnv, slugify, parsePorcelain, MAX_DIFF_BYTES, MAX_UNTRACKED_INLINE_BYTES };

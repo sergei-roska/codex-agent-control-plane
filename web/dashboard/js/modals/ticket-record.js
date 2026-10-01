@@ -88,7 +88,8 @@ async function loadTicketRecord() {
   tr.eventsError = events.status === 'rejected' ? events.reason.message : null;
   tr.pollSig = null;
   renderTicketRecord();
-  loadTicketSource(ticketId, seq);
+  if (tr.detail && tr.detail.ticket && tr.detail.ticket.source === 'jira') loadTicketSource(ticketId, seq);
+  else { tr.sourceLoading = false; renderRecordSource(); }
   await trrFetchRun(ticketId, seq);
 }
 
@@ -373,6 +374,12 @@ async function viewRevision(revisionId) {
   }
 }
 
+// Friendly text for M7 error codes; any other error shows the server message plus its code.
+const TR_ERROR_TEXT = {
+  candidate_changed: 'The checkout changed since this candidate was reviewed. Nothing was recorded. The candidate must be reviewed again.',
+  rework_exhausted: 'The limit of 3 rework runs for this revision is reached. Another correction request is not possible.'
+};
+
 function actionName(a) {
   return typeof a === 'string' ? a : String((a && (a.action || a.name)) || '');
 }
@@ -405,6 +412,7 @@ function renderTicketRecord() {
   desc.textContent = shown.description ? shown.description : '';
   if (!shown.description) desc.appendChild(h('span', { class: 'detail-empty', text: 'No description.' }));
 
+  renderStagedNotice(d);
   renderRecordCriteria(shown.criteria);
   renderRecordReferences(shown.references);
   renderRecordSource();
@@ -510,6 +518,36 @@ function renderRevisionHistory(d, shown) {
   if (!revs.length) box.appendChild(h('span', { class: 'detail-empty', text: 'No revisions.' }));
 }
 
+// Operator controls driven by availableActions. Each entry: label and the handler; a control is shown
+// enabled only when the server lists it, and disabled with the server reason when it is in unavailableActions.
+const TR_CONTROLS = [
+  { key: 'pause', label: 'Pause', danger: false },
+  { key: 'resume', label: 'Resume', danger: false },
+  { key: 'stop', label: 'Stop run', danger: true },
+  { key: 'return_to_backlog', label: 'Return to Backlog', danger: false }
+];
+// Actions rendered by the run panel (review) and the delivery panel instead of the action bar.
+const TR_PANEL_ACTIONS = ['accept', 'corrections', 'commit', 'push', 'release_repository'];
+
+function trControlRunId(d) {
+  if (d.activeRun && d.activeRun.runId) return d.activeRun.runId;
+  const runs = Array.isArray(d.runs) ? d.runs : [];
+  return runs[0] && runs[0].runId ? runs[0].runId : null;
+}
+
+function renderStagedNotice(d) {
+  const el = document.getElementById('tr-staged-notice');
+  if (!el) return;
+  const staged = d.stagedRevision;
+  el.style.display = staged ? 'flex' : 'none';
+  el.textContent = '';
+  if (!staged) return;
+  el.appendChild(h('span', {
+    text: 'A revised requirement is staged' + (isNumber(staged.ordinal) ? ' (r' + staged.ordinal + ')' : '')
+      + '; it applies when the ticket returns to backlog or is resubmitted.'
+  }));
+}
+
 function renderRecordActions(d) {
   const box = trClear('tr-actions');
   const available = (Array.isArray(d.availableActions) ? d.availableActions : []).map(actionName);
@@ -540,17 +578,24 @@ function renderRecordActions(d) {
     const milestone = u.milestone ? (reason.includes(u.milestone) ? '' : ' (' + u.milestone + ')') : '';
     return reason + milestone;
   };
+  const listed = (key) => available.includes(key) || unavailable.some(u => actionName(u) === key);
   const submitAvailable = available.includes('submit');
-  addButton('edit', 'Edit', available.includes('edit'), reasonFor('edit'), openEditFromRecord, false);
+  const reviseKey = unavailable.some(u => actionName(u) === 'revise') ? 'revise' : 'edit';
+  addButton('edit', 'Edit', available.includes('edit') || available.includes('revise'), reasonFor(reviseKey), openEditFromRecord, false);
   if (submitAvailable) {
     addButton('submit', d.ticket.status === 'blocked' ? 'Submit new run' : 'Submit to Intake', true, '', submitTicketFromRecord, false);
   } else if (d.ticket.status === 'backlog' || unavailable.some(u => actionName(u) === 'submit')) {
     addButton('submit', 'Submit to Intake', false, reasonFor('submit'), null, false);
   }
+  TR_CONTROLS.forEach(c => {
+    if (!listed(c.key)) return;
+    addButton(c.key, c.label, available.includes(c.key), reasonFor(c.key), () => runTicketControl(c.key), c.danger);
+  });
   addButton('cancel', 'Cancel ticket', available.includes('cancel'), reasonFor('cancel'), cancelTicketFromRecord, true);
+  const handled = ['edit', 'revise', 'cancel', 'submit'].concat(TR_CONTROLS.map(c => c.key), TR_PANEL_ACTIONS);
   unavailable.forEach(u => {
     const key = actionName(u);
-    if (key === 'edit' || key === 'cancel' || key === 'submit' || !key) return;
+    if (!key || handled.includes(key)) return;
     if (hideReview && /accept|correction|rework/.test(key)) return;
     const label = key.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
     addButton(key, label, false, reasonFor(key));
@@ -597,6 +642,10 @@ async function sendTicketCommand(slot, path, extra, onError) {
       delete tr.cmds[slot];
       reload = true;
       message = 'This question is no longer current (already answered or replaced). The latest state is shown.';
+    } else if (err instanceof ApiError && TR_ERROR_TEXT[err.code]) {
+      delete tr.cmds[slot];
+      reload = true;
+      message = TR_ERROR_TEXT[err.code];
     } else {
       delete tr.cmds[slot];
       message = (err && err.message ? err.message : 'Request failed') + (err && err.code ? ' (' + err.code + ')' : '');
@@ -609,10 +658,33 @@ async function sendTicketCommand(slot, path, extra, onError) {
   }
 }
 
+const TR_CONTROL_SPECS = {
+  pause: { path: '/pause', run: true, confirm: 'Pause this run?\n\nNew work stops being dispatched. Work already in progress finishes its current step first, so the run pauses only after active work settles. You can resume it later.' },
+  resume: { path: '/resume', run: true, confirm: 'Resume this run?\n\nThe run continues from where it paused.' },
+  stop: { path: '/stop', run: true, confirm: 'Stop this run?\n\nActive work is interrupted and the run ends as stopped. File changes already made in the checkout are kept, not reverted, and the run evidence is retained. The ticket becomes blocked; you can submit a new run.' },
+  return_to_backlog: { path: '/return-to-backlog', run: false, confirm: 'Return this ticket to Backlog?\n\nAn active run is stopped. File changes already made in the checkout are kept. Revisions, attachments and run history are kept. A staged revision becomes the current requirement.' }
+};
+
+// Pause, Resume, Stop and Return to Backlog. Pause/Resume/Stop name the run they act on.
+async function runTicketControl(key) {
+  const d = tr.detail;
+  const spec = TR_CONTROL_SPECS[key];
+  if (!d || !spec) return;
+  const extra = {};
+  if (spec.run) {
+    const runId = trControlRunId(d);
+    if (!runId) { trText('tr-action-error', 'This ticket has no run to act on.'); return; }
+    extra.runId = runId;
+  }
+  if (!window.confirm(spec.confirm)) return;
+  trText('tr-action-error', '');
+  await sendTicketCommand(key, spec.path, extra, (m) => trText('tr-action-error', m));
+}
+
 async function cancelTicketFromRecord() {
   const d = tr.detail;
   if (!d) return;
-  if (!window.confirm('Cancel this ticket? Its revisions, attachments and run history are kept, but it cannot be edited or run afterwards.')) return;
+  if (!window.confirm('Cancel this ticket? An active run is stopped. File changes already made in the checkout are kept. Revisions, attachments and run history are kept, but the ticket cannot be edited or run afterwards.')) return;
   trText('tr-action-error', '');
   await sendTicketCommand('cancel', '/cancel', {}, (m) => trText('tr-action-error', m));
 }

@@ -25,6 +25,22 @@ const trr = {
   pick: null, runId: null, data: null, dataRunId: null, error: null, tab: 'requirements',
   sigs: {}, drafts: {}, answering: null, answerError: {}, diff: null, usage: null
 };
+const TRR_FINDINGS_MAX = 8000;
+const TRD_MESSAGE_MAX = 2000;
+
+// Delivery panel state (GET /tickets/:id/delivery). Inputs live here so a rebuild never resets them.
+const trd = { ticketId: null, key: null, fetchedAt: 0, data: null, error: null, message: null, remote: null, loading: false };
+
+function trdReset() {
+  trd.ticketId = null;
+  trd.key = null;
+  trd.fetchedAt = 0;
+  trd.data = null;
+  trd.error = null;
+  trd.message = null;
+  trd.remote = null;
+  trd.loading = false;
+}
 
 function trrReset() {
   trr.pick = null;
@@ -39,6 +55,7 @@ function trrReset() {
   trr.answering = null;
   trr.answerError = {};
   trr.diff = null;
+  trdReset();
 }
 
 function trrSelectedRun(d) {
@@ -72,7 +89,7 @@ async function trrFetchRun(ticketId, seq) {
   renderRecordActions(tr.detail);
 }
 
-// True when the "ready for review" banner (with its disabled M7 buttons) is on screen.
+// True when the "ready for review" banner (with its Accept / Request corrections controls) is on screen.
 function trrReviewBannerShown() {
   const d = tr.detail;
   if (!d) return false;
@@ -129,11 +146,12 @@ function renderRunPanel() {
 
   trrGuard('head', JSON.stringify([d.ticket.status, d.ticket.version, runs.map(r => r.runId), trr.pick, run,
     data ? [data.plan && data.plan.classification, data.candidate && data.candidate.acceptance, data.intake && data.intake.length] : null,
-    trr.error, tr.busy]),
+    trr.error, tr.busy, d.availableActions, d.review || null, trrReviewDraft().open]),
     document.getElementById('tr-run-head'), (el) => trrBuildHead(el, d, runs, run, data));
   trrGuard('decisions', JSON.stringify([data ? data.decisions : null, trr.answering, trr.answerError, tr.busy]),
     document.getElementById('tr-run-decisions'), (el) => trrBuildDecisions(el, run, data));
   renderRunTabs(d, run, data);
+  renderDeliveryPanel(d);
 }
 
 // ---------- head: status, step indicator, wait info, truthfulness banner ----------
@@ -197,9 +215,9 @@ function trrBanner(d, run, data) {
     }
     if (!data) return { tone: 'neutral', text: 'Loading review evidence...', review: false };
     if (!disp) {
-      return { tone: 'neutral', text: 'Ready for your review - accept/corrections arrive in M7 (no acceptance evidence was recorded for this candidate)', review: true };
+      return { tone: 'neutral', text: 'Ready for your review (no acceptance evidence was recorded for this candidate)', review: true };
     }
-    return { tone: 'ok', text: 'Ready for your review - accept/corrections arrive in M7', review: true };
+    return { tone: 'ok', text: 'Ready for your review', review: true };
   }
   if (status === 'blocked' || status === 'paused') {
     if (disp && !disp.passing) return { tone: 'bad', text: 'Checks did not pass - not ready for review', review: false };
@@ -222,6 +240,138 @@ function trrCopyText(text, btn) {
   } else {
     btn.textContent = 'Select and copy manually';
   }
+}
+
+// ---------- M7: pending control request, review controls, latest review ----------
+
+const TRR_CONTROL_LABELS = {
+  pause: 'Pause requested',
+  stop: 'Stop requested',
+  cancel: 'Cancel requested',
+  return_to_backlog: 'Return to Backlog requested'
+};
+
+function trrControlKind(run) {
+  const c = run && run.controlRequest;
+  if (!c) return null;
+  if (typeof c === 'string') return c;
+  return String(c.kind || c.type || c.request || '') || null;
+}
+
+function trrControlBanner(run) {
+  const kind = trrControlKind(run);
+  if (!kind) return null;
+  const label = TRR_CONTROL_LABELS[kind] || ('Control requested (' + kind + ')');
+  const parts = [label + ' - waiting for active work to settle'];
+  const wd = run.waitDetail && typeof run.waitDetail === 'object' ? run.waitDetail : null;
+  if (run.waitReason === 'writer_unresolved') {
+    parts.push((wd && wd.message) || 'Stop requested; writer outcome unresolved');
+  }
+  const box = h('div', { class: 'tr-banner tone-warn', attrs: { role: 'status' } }, [h('span', { text: parts.join('. ') })]);
+  box.appendChild(h('span', { class: 'form-hint', text: 'Not settled yet. File changes already made are kept.' }));
+  return box;
+}
+
+function trrReviewDraft() {
+  if (!trr.drafts.review) trr.drafts.review = { open: false, text: '' };
+  return trr.drafts.review;
+}
+
+function trrIsLatestRun(d, run) {
+  const runs = Array.isArray(d.runs) ? d.runs : [];
+  const latest = d.activeRun || runs[0];
+  return Boolean(latest && latest.runId === run.runId);
+}
+
+// Accept / corrections are bound to the displayed run's candidate id and integrity hash.
+function trrReviewState(d, run, data, key) {
+  const avail = (Array.isArray(d.availableActions) ? d.availableActions : []).map(actionName);
+  const candidate = data && data.candidate;
+  if (!avail.includes(key)) {
+    const u = (Array.isArray(d.unavailableActions) ? d.unavailableActions : []).find(x => actionName(x) === key);
+    return { ok: false, reason: u && u.reason ? u.reason : 'Not available' };
+  }
+  if (!trrIsLatestRun(d, run)) return { ok: false, reason: 'Only the latest run can be reviewed' };
+  if (!candidate || !candidate.candidateId || !candidate.integrityHash) return { ok: false, reason: 'No candidate evidence to bind the review to' };
+  return { ok: true, reason: '' };
+}
+
+function trrReviewControls(d, run, data) {
+  const btns = h('span', { class: 'tr-banner-actions' });
+  const add = (key, label, handler) => {
+    const st = trrReviewState(d, run, data, key);
+    const b = h('button', { class: 'btn btn-secondary', title: st.ok ? '' : st.reason, attrs: { type: 'button', 'data-action': key } }, [h('span', { text: label })]);
+    if (!st.ok) {
+      b.disabled = true;
+      b.setAttribute('aria-disabled', 'true');
+      b.appendChild(h('span', { class: 'btn-milestone', text: st.reason }));
+    } else {
+      if (tr.busy) b.disabled = true;
+      b.addEventListener('click', handler);
+    }
+    btns.appendChild(b);
+  };
+  add('accept', 'Accept result', () => trrSubmitReview(d, run, data, 'accept'));
+  add('corrections', trrReviewDraft().open ? 'Cancel corrections' : 'Request corrections', () => {
+    const draft = trrReviewDraft();
+    draft.open = !draft.open;
+    trr.sigs.head = null;
+    renderRunPanel();
+  });
+  return btns;
+}
+
+function trrCorrectionsForm(d, run, data) {
+  const draft = trrReviewDraft();
+  const st = trrReviewState(d, run, data, 'corrections');
+  const area = h('textarea', {
+    class: 'form-textarea tr-answer-input',
+    attrs: { rows: '5', maxlength: String(TRR_FINDINGS_MAX), 'aria-label': 'Review findings', placeholder: 'What must change? These findings go to the next run.' }
+  });
+  area.value = draft.text;
+  const counter = h('span', { class: 'form-hint', text: draft.text.length + ' / ' + TRR_FINDINGS_MAX });
+  const err = h('div', { class: 'tf-field-error', attrs: { role: 'alert' } });
+  area.addEventListener('input', () => {
+    draft.text = area.value;
+    counter.textContent = area.value.length + ' / ' + TRR_FINDINGS_MAX;
+    err.textContent = '';
+  });
+  const send = h('button', { class: 'btn btn-secondary', text: 'Send corrections', attrs: { type: 'button' } });
+  if (!st.ok || tr.busy) { send.disabled = true; send.title = st.reason; }
+  send.addEventListener('click', () => {
+    const text = area.value.trim();
+    if (!text) { err.textContent = 'Describe the corrections (1 to ' + TRR_FINDINGS_MAX + ' characters).'; return; }
+    if (text.length > TRR_FINDINGS_MAX) { err.textContent = 'Findings are limited to ' + TRR_FINDINGS_MAX + ' characters.'; return; }
+    trrSubmitReview(d, run, data, 'corrections', text);
+  });
+  return h('div', { class: 'tr-decision detail-block' }, [
+    h('div', { class: 'tr-sub-title', text: 'Request corrections' }),
+    h('div', { class: 'form-hint', text: 'A new rework run starts from this candidate on the same branch, with your findings added to its goal. At most 3 rework runs per revision.' }),
+    area, h('div', { class: 'tr-answer-foot' }, [send, counter]), err
+  ]);
+}
+
+async function trrSubmitReview(d, run, data, verdict, findings) {
+  const st = trrReviewState(d, run, data, verdict === 'accept' ? 'accept' : 'corrections');
+  if (!st.ok) return;
+  if (verdict === 'accept' && !window.confirm('Accept this result?\n\nThe ticket becomes done. Nothing is committed or pushed yet; you do that from the delivery panel. Accepting is bound to the candidate you are viewing and fails if the checkout changed since.')) return;
+  const extra = { runId: run.runId, candidateId: data.candidate.candidateId, integrityHash: data.candidate.integrityHash, verdict };
+  if (verdict === 'corrections') extra.findings = findings;
+  trText('tr-action-error', '');
+  const ok = await sendTicketCommand('review-' + verdict, '/review', extra, (m) => trText('tr-action-error', m));
+  if (ok && verdict === 'corrections') { const draft = trrReviewDraft(); draft.open = false; draft.text = ''; trr.sigs.head = null; }
+}
+
+function trrLatestReview(d) {
+  const r = d.review;
+  if (!r || typeof r !== 'object') return null;
+  const accepted = r.verdict === 'accepted';
+  const box = h('div', { class: 'tr-banner tone-' + (accepted ? 'ok' : 'warn'), attrs: { role: 'status' } }, [
+    h('span', { text: 'Latest review: ' + (accepted ? 'accepted' : 'corrections requested') + ' on ' + formatAbsTime(r.createdAt)
+      + (r.runId ? ' (run ' + String(r.runId).slice(0, 12) + ')' : '') })
+  ]);
+  if (r.findings) box.appendChild(h('div', { class: 'detail-pre detail-block', text: r.findings }));
+  return box;
 }
 
 function trrBuildHead(el, d, runs, run, data) {
@@ -256,22 +406,18 @@ function trrBuildHead(el, d, runs, run, data) {
   meta.appendChild(h('span', { class: 'tr-marker', text: 'updated ' + formatAbsTime(run.updatedAt) }));
   el.appendChild(meta);
 
+  const control = trrControlBanner(run);
+  if (control) el.appendChild(control);
+
   const banner = trrBanner(d, run, data);
   if (banner) {
     const box = h('div', { class: 'tr-banner tone-' + banner.tone, attrs: { role: 'status' } }, [h('span', { text: banner.text })]);
-    if (banner.review) {
-      const btns = h('span', { class: 'tr-banner-actions' });
-      ['Accept result', 'Request corrections'].forEach(label => {
-        const b = h('button', { class: 'btn btn-secondary', title: 'Arrives in M7', attrs: { type: 'button', 'aria-disabled': 'true' } }, [
-          h('span', { text: label }), h('span', { class: 'btn-milestone', text: 'Arrives in M7' })
-        ]);
-        b.disabled = true;
-        btns.appendChild(b);
-      });
-      box.appendChild(btns);
-    }
+    if (banner.review) box.appendChild(trrReviewControls(d, run, data));
     el.appendChild(box);
+    if (banner.review && trrReviewDraft().open) el.appendChild(trrCorrectionsForm(d, run, data));
   }
+  const reviewBox = trrLatestReview(d);
+  if (reviewBox) el.appendChild(reviewBox);
 
   const steps = trrStepStates(d, run, data);
   const ol = h('ol', { class: 'tr-steps', attrs: { 'aria-label': 'Run progress' } });
@@ -310,12 +456,13 @@ function trrBuildHead(el, d, runs, run, data) {
       ])));
       box.appendChild(ul);
     }
-    if (wd.resumeCommand) {
+    const resumeListed = Array.isArray(d.availableActions) && d.availableActions.map(actionName).includes('resume');
+    if (wd.resumeCommand && !resumeListed) {
       const pre = h('pre', { class: 'tr-cmd', text: String(wd.resumeCommand) });
       const copy = h('button', { class: 'btn btn-secondary tr-copy', text: 'Copy', attrs: { type: 'button' } });
       copy.addEventListener('click', () => trrCopyText(String(wd.resumeCommand), copy));
       box.appendChild(h('div', { class: 'tr-cmd-row' }, [pre, copy]));
-      box.appendChild(h('div', { class: 'form-hint', text: 'Resume from the dashboard arrives in M7. Until then run this command on the orchestrator host.' }));
+      box.appendChild(h('div', { class: 'form-hint', text: 'Resume is not available from the dashboard for this run. Run this command on the orchestrator host.' }));
     }
     el.appendChild(box);
   }
@@ -880,4 +1027,202 @@ function trrTabExecution(el, data) {
     openTicketDetailModal(cardId);
   });
   el.appendChild(btn);
+}
+
+// ---------- M7: delivery panel (GET /tickets/:id/delivery, commit, push, release repository) ----------
+
+const TRD_STATE_TEXT = {
+  intended: 'In progress',
+  succeeded: 'Succeeded',
+  failed: 'Failed',
+  unknown: 'Unknown - outcome could not be confirmed; retry is safe'
+};
+
+function trdShown(d) {
+  const accepted = d.review && d.review.verdict === 'accepted';
+  return d.ticket.status === 'done' || Boolean(accepted);
+}
+
+function trdAvailable(d, key) {
+  return (Array.isArray(d.availableActions) ? d.availableActions : []).map(actionName).includes(key);
+}
+
+function trdReason(d, key) {
+  const u = (Array.isArray(d.unavailableActions) ? d.unavailableActions : []).find(x => actionName(x) === key);
+  return u && u.reason ? u.reason : 'Not available';
+}
+
+async function trdFetch(ticketId, key) {
+  trd.loading = true;
+  let res = null;
+  let error = null;
+  try {
+    res = await apiGet('/tickets/' + encodeURIComponent(ticketId) + '/delivery');
+  } catch (err) {
+    error = err && err.message ? err.message : 'Could not load delivery state';
+  }
+  trd.loading = false;
+  if (ticketId !== tr.ticketId || trd.key !== key) { if (ticketId === tr.ticketId) renderDeliveryPanel(tr.detail); return; }
+  if (error) trd.error = error; else { trd.data = res; trd.error = null; }
+  trd.fetchedAt = Date.now();
+  renderDeliveryPanel(tr.detail);
+}
+
+// Refetch when the ticket changed, after our own commands (key reset), and while a delivery is in progress.
+function trdSync(d) {
+  const pending = trd.data && Array.isArray(trd.data.deliveries) && trd.data.deliveries.some(x => x && x.state === 'intended');
+  const key = [d.ticket.ticketId || tr.ticketId, d.ticket.version, d.ticket.updatedAt, d.review ? d.review.reviewId : ''].join('|');
+  const stale = pending && Date.now() - trd.fetchedAt > 2500;
+  if (trd.loading || (trd.key === key && !stale)) return;
+  trd.ticketId = tr.ticketId;
+  trd.key = key;
+  trdFetch(tr.ticketId, key);
+}
+
+function trdOwnSig(d) {
+  return JSON.stringify([trd.data, trd.error, trd.loading, d.availableActions, d.unavailableActions, tr.busy, d.revision && d.revision.title]);
+}
+
+function renderDeliveryPanel(d) {
+  const el = document.getElementById('tr-run-delivery');
+  if (!el || !d) return;
+  if (!trdShown(d)) {
+    trrGuard('delivery', 'hidden', el, () => {});
+    return;
+  }
+  trdSync(d);
+  trrGuard('delivery', trdOwnSig(d), el, (box) => trdBuild(box, d));
+}
+
+function trdCommand(slot, path, extra, confirmText) {
+  if (confirmText && !window.confirm(confirmText)) return;
+  trText('tr-action-error', '');
+  trd.key = null;
+  sendTicketCommand(slot, path, extra, (m) => trText('tr-action-error', m));
+}
+
+function trdRemoteSelect(remotes) {
+  const select = h('select', { class: 'form-select', attrs: { 'aria-label': 'Remote' } });
+  remotes.forEach(r => {
+    select.appendChild(h('option', { text: (r.name || '?') + (r.url ? ' - ' + r.url : ''), attrs: { value: r.name || '' } }));
+  });
+  if (!remotes.some(r => r.name === trd.remote)) trd.remote = remotes[0] ? remotes[0].name : null;
+  select.value = trd.remote || '';
+  select.addEventListener('change', () => { trd.remote = select.value; });
+  return select;
+}
+
+function trdBuild(el, d) {
+  el.appendChild(h('div', { class: 'tr-sub-title', text: 'Delivery' }));
+  const data = trd.data;
+  if (trd.error) el.appendChild(h('div', { class: 'tf-field-error', text: 'Delivery state unavailable: ' + trd.error, attrs: { role: 'alert' } }));
+  if (!data) {
+    if (!trd.error) el.appendChild(h('div', { class: 'detail-empty', text: 'Loading delivery state...' }));
+    return;
+  }
+  const plan = data.commitPlan;
+  const candidate = data.candidate || null;
+  const deliveries = Array.isArray(data.deliveries) ? data.deliveries : [];
+  const remotes = (Array.isArray(data.remotes) ? data.remotes : []).filter(r => r && r.name);
+  const commit = deliveries.filter(x => x && x.kind === 'commit' && x.state === 'succeeded')[0] || null;
+  const committing = deliveries.some(x => x && x.kind === 'commit' && x.state === 'intended');
+  const pushing = deliveries.some(x => x && x.kind === 'push' && x.state === 'intended');
+
+  el.appendChild(h('div', { class: 'form-hint', text: 'Commit and push run in a deterministic Git step, never through agents. No force push and no pull request is created. Release repository leaves all changes in the checkout.' }));
+  if (plan) {
+    el.appendChild(trrKv([
+      ['branch', plan.branch],
+      ['base -> head', shortSha(plan.baseCommit) + ' -> ' + shortSha(plan.head)],
+      ['files', isNumber(plan.files) ? plan.files : null],
+      ['remote ref', plan.remoteRef]
+    ]));
+    if (plan.manifestTruncated) {
+      el.appendChild(h('div', { class: 'tr-banner tone-warn', attrs: { role: 'status' } }, [
+        h('span', { text: 'The file manifest was truncated; the file count above may be lower than the real number of changed files.' })
+      ]));
+    }
+  } else if (!commit) {
+    el.appendChild(h('div', { class: 'detail-empty', text: 'No commit plan is available for this ticket.' }));
+  }
+
+  // Commit
+  const canCommit = trdAvailable(d, 'commit') && candidate && candidate.candidateId && candidate.integrityHash && !committing;
+  if (!commit) {
+    if (trd.message === null) trd.message = (d.revision && d.revision.title) || '';
+    const input = h('input', { class: 'form-input', attrs: { type: 'text', maxlength: String(TRD_MESSAGE_MAX), 'aria-label': 'Commit message' } });
+    input.value = trd.message;
+    const err = h('div', { class: 'tf-field-error', attrs: { role: 'alert' } });
+    input.addEventListener('input', () => { trd.message = input.value; err.textContent = ''; });
+    const btn = h('button', { class: 'btn btn-secondary', attrs: { type: 'button', 'data-action': 'commit' } }, [h('span', { text: 'Commit' })]);
+    if (!canCommit || tr.busy) {
+      btn.disabled = true;
+      btn.setAttribute('aria-disabled', 'true');
+      const why = committing ? 'A commit is in progress' : (trdAvailable(d, 'commit') ? 'No candidate evidence to bind the commit to' : trdReason(d, 'commit'));
+      btn.title = why;
+      if (!tr.busy) btn.appendChild(h('span', { class: 'btn-milestone', text: why }));
+    }
+    btn.addEventListener('click', () => {
+      const msg = input.value;
+      if (!msg.trim() || msg.length > TRD_MESSAGE_MAX || msg.indexOf('\u0000') !== -1) { err.textContent = 'Enter a commit message of 1 to ' + TRD_MESSAGE_MAX + ' characters.'; return; }
+      trdCommand('commit', '/commit', { candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, message: msg },
+        'Commit the accepted changes on branch ' + (plan && plan.branch ? plan.branch : 'the task branch') + '?\n\nThis creates a local commit. Nothing is pushed.');
+    });
+    el.appendChild(h('div', { class: 'tr-decision detail-block' }, [
+      h('div', { class: 'form-hint', text: 'Commit message' }), input, h('div', { class: 'tr-answer-foot' }, [btn]), err
+    ]));
+  }
+
+  // Push
+  if (commit) {
+    const canPush = trdAvailable(d, 'push') && remotes.length > 0 && !pushing;
+    const select = trdRemoteSelect(remotes);
+    const btn = h('button', { class: 'btn btn-secondary', attrs: { type: 'button', 'data-action': 'push' } }, [h('span', { text: 'Push' })]);
+    if (!canPush || tr.busy) {
+      btn.disabled = true;
+      btn.setAttribute('aria-disabled', 'true');
+      const why = pushing ? 'A push is in progress' : (!remotes.length ? 'No remote is configured' : trdReason(d, 'push'));
+      btn.title = why;
+      if (!tr.busy) btn.appendChild(h('span', { class: 'btn-milestone', text: why }));
+    }
+    btn.addEventListener('click', () => {
+      const remote = select.value;
+      if (!remote) return;
+      trdCommand('push', '/push', { deliveryId: commit.deliveryId, commitSha: commit.commitSha, remote },
+        'Push commit ' + shortSha(commit.commitSha) + ' to remote "' + remote + '"?\n\nThis is a normal push, never forced.');
+    });
+    el.appendChild(h('div', { class: 'tr-decision detail-block' }, [
+      h('div', { class: 'form-hint', text: 'Committed ' + shortSha(commit.commitSha) + ' on ' + (commit.branch || 'the task branch') + '. Push to a remote:' }),
+      remotes.length ? select : h('span', { class: 'detail-empty', text: 'No remote is configured.' }),
+      h('div', { class: 'tr-answer-foot' }, [btn])
+    ]));
+  }
+
+  // Release repository
+  if (trdAvailable(d, 'release_repository')) {
+    const btn = h('button', { class: 'btn btn-secondary', attrs: { type: 'button', 'data-action': 'release_repository' } }, [h('span', { text: 'Release repository' })]);
+    if (tr.busy) btn.disabled = true;
+    btn.addEventListener('click', () => trdCommand('release_repository', '/release-repository', {},
+      'Release the repository without committing?\n\nThe changes stay in the checkout, uncommitted. The repository becomes available to other tickets, which will see those changes as a dirty checkout.'));
+    el.appendChild(h('div', { class: 'tr-answer-foot' }, [btn,
+      h('span', { class: 'form-hint', text: 'Gives up the repository without committing. Changes stay in the checkout.' })]));
+  }
+
+  // History
+  if (deliveries.length) {
+    const hist = h('details', { class: 'tr-history', attrs: { open: 'open' } }, [h('summary', { text: 'Delivery history (' + deliveries.length + ')' })]);
+    deliveries.slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).forEach(x => {
+      const row = h('div', { class: 'tr-hist-item' }, [
+        h('span', { class: 'tr-token', text: x.kind || 'delivery' }),
+        h('span', { class: 'badge tone-' + (x.state === 'succeeded' ? 'ok' : (x.state === 'failed' ? 'bad' : 'warn')), text: x.state || 'unknown' }),
+        h('span', { class: 'tr-marker', text: [x.commitSha ? shortSha(x.commitSha) : null, x.remote, formatAbsTime(x.updatedAt || x.createdAt)].filter(Boolean).join(' | ') })
+      ]);
+      const explain = x.state === 'unknown' ? TRD_STATE_TEXT.unknown : (x.state === 'intended' ? 'The Git step is running or was interrupted; it is reconciled automatically.' : null);
+      if (explain) row.appendChild(h('div', { class: 'form-hint', text: explain }));
+      if (x.error && (x.error.message || x.error.code)) {
+        row.appendChild(h('div', { class: 'tf-field-error', text: (x.error.code ? '[' + x.error.code + '] ' : '') + (x.error.message || '') }));
+      }
+      hist.appendChild(row);
+    });
+    el.appendChild(hist);
+  }
 }

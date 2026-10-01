@@ -123,12 +123,40 @@ function backfillPlanIdentity(db) {
   }
 }
 
+const MIGRATION_6_SQL = `
+ALTER TABLE runs ADD COLUMN control_request TEXT;
+ALTER TABLE runs ADD COLUMN control_command_id TEXT;
+ALTER TABLE runs ADD COLUMN control_requested_at TEXT;
+ALTER TABLE runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'initial';
+ALTER TABLE runs ADD COLUMN parent_run_id TEXT;
+ALTER TABLE runs ADD COLUMN rework_review_id TEXT;
+ALTER TABLE tickets ADD COLUMN staged_revision_id TEXT;
+CREATE TABLE reviews (
+  review_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, run_id TEXT NOT NULL,
+  revision_id TEXT NOT NULL, plan_revision_id TEXT, candidate_id TEXT, integrity_hash TEXT,
+  verdict TEXT NOT NULL,
+  findings TEXT, actor TEXT NOT NULL, command_id TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX reviews_one_per_run ON reviews (run_id);
+CREATE TABLE deliveries (
+  delivery_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, run_id TEXT NOT NULL,
+  candidate_id TEXT NOT NULL, review_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  state TEXT NOT NULL,
+  parent_delivery_id TEXT,
+  branch TEXT NOT NULL, base_head TEXT NOT NULL, commit_sha TEXT,
+  remote TEXT, remote_ref TEXT, message TEXT, error_json TEXT,
+  command_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+`;
+
 const MIGRATIONS = [
   { version: 1, name: 'product_tickets', sql: MIGRATION_1_SQL },
   { version: 2, name: 'delivery_runs', sql: MIGRATION_2_SQL },
   { version: 3, name: 'role_settings', sql: MIGRATION_3_SQL },
   { version: 4, name: 'plan_identity', sql: MIGRATION_4_SQL, after: backfillPlanIdentity },
   { version: 5, name: 'jira_source_tracking', sql: MIGRATION_5_SQL },
+  { version: 6, name: 'operator_controls', sql: MIGRATION_6_SQL },
 ];
 
 const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -29,6 +29,28 @@ const CARD_ID_PREFIX = 'lr_';
 const ANSWER_MAX = 4000;
 const LEAD_ANSWER_MAX = 8000;
 const INTAKE_READINESS = Object.freeze(['ready', 'needs_input', 'unsupported']);
+const CONTROL_RANK = Object.freeze({ pause: 1, stop: 2, return_to_backlog: 3, cancel: 4 });
+const OPEN_TICKET_STATUSES = Object.freeze(['pending', 'in_progress', 'paused', 'waiting_human', 'blocked']);
+const REVIEW_VERDICTS = Object.freeze(['accept', 'corrections']);
+const RUN_CONTROL_FIELDS = Object.freeze(['commandId', 'expectedVersion', 'runId']);
+const REVIEW_FIELDS = Object.freeze(['commandId', 'expectedVersion', 'runId', 'candidateId', 'integrityHash', 'verdict', 'findings']);
+const COMMIT_FIELDS = Object.freeze(['commandId', 'expectedVersion', 'candidateId', 'integrityHash', 'message']);
+const PUSH_FIELDS = Object.freeze(['commandId', 'expectedVersion', 'deliveryId', 'commitSha', 'remote']);
+const COMMAND_FIELDS = Object.freeze({
+  pause: RUN_CONTROL_FIELDS,
+  resume: RUN_CONTROL_FIELDS,
+  stop: RUN_CONTROL_FIELDS,
+  cancel: Object.freeze(['commandId', 'expectedVersion']),
+  return_to_backlog: Object.freeze(['commandId', 'expectedVersion']),
+  review: REVIEW_FIELDS,
+  commit: COMMIT_FIELDS,
+  push: PUSH_FIELDS,
+  release_repository: Object.freeze(['commandId', 'expectedVersion']),
+});
+const FINDINGS_MAX = 8000;
+const COMMIT_MESSAGE_MAX = 2000;
+const MAX_REWORKS = 3;
+const REMOTE_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/;
 const CONTENT_FIELDS = ['title', 'description', 'criteria', 'references', 'artifactIds', 'priority', 'requestedSpecialty'];
 
 const STATUS_BY_CODE = Object.freeze({
@@ -41,6 +63,9 @@ const STATUS_BY_CODE = Object.freeze({
   settings_invalid: 409,
   catalog_unavailable: 503,
   command_conflict: 409,
+  candidate_changed: 409,
+  rework_exhausted: 409,
+  git_failed: 502,
 });
 
 class ProductError extends Error {
@@ -310,6 +335,12 @@ function runFromRow(row) {
     startedAt: row.started_at,
     finishedAt: row.finished_at,
     updatedAt: row.updated_at,
+    controlRequest: row.control_request || null,
+    controlCommandId: row.control_command_id || null,
+    controlRequestedAt: row.control_requested_at || null,
+    runKind: row.run_kind || 'initial',
+    parentRunId: row.parent_run_id || null,
+    reworkReviewId: row.rework_review_id || null,
   };
 }
 
@@ -331,6 +362,47 @@ function runSummary(run) {
     startedAt: run.startedAt || null,
     finishedAt: run.finishedAt || null,
     updatedAt: run.updatedAt,
+    controlRequest: run.controlRequest || null,
+    runKind: run.runKind || 'initial',
+    parentRunId: run.parentRunId || null,
+  };
+}
+
+function reviewFromRow(row) {
+  return {
+    reviewId: row.review_id,
+    ticketId: row.ticket_id,
+    runId: row.run_id,
+    revisionId: row.revision_id,
+    planRevisionId: row.plan_revision_id,
+    candidateId: row.candidate_id,
+    integrityHash: row.integrity_hash,
+    verdict: row.verdict,
+    findings: row.findings,
+    actor: row.actor,
+    createdAt: row.created_at,
+  };
+}
+
+function deliveryFromRow(row) {
+  return {
+    deliveryId: row.delivery_id,
+    ticketId: row.ticket_id,
+    runId: row.run_id,
+    candidateId: row.candidate_id,
+    reviewId: row.review_id,
+    kind: row.kind,
+    state: row.state,
+    parentDeliveryId: row.parent_delivery_id,
+    branch: row.branch,
+    baseHead: row.base_head,
+    commitSha: row.commit_sha,
+    remote: row.remote,
+    remoteRef: row.remote_ref,
+    message: row.message,
+    error: parseJson(row.error_json, null),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -1000,57 +1072,570 @@ class ProductStore {
   }
 
   reviseTicket(ticketId, command) {
-    return this.runCommand('revise', String(ticketId), command,
+    const result = this.runCommand('revise', String(ticketId), command,
       ['commandId', 'expectedVersion', ...CONTENT_FIELDS], (body, at) => {
         const content = validateContent(body);
         const ticket = this.requireTicket(ticketId);
-        this.requireBacklog(ticket);
+        const staged = ticket.status !== 'backlog';
+        if (staged && !OPEN_TICKET_STATUSES.includes(ticket.status)) {
+          throw new ProductError('invalid_state', `ticket is ${ticket.status}; only open tickets accept this command`);
+        }
         this.requireVersion(ticket, body.expectedVersion);
-        const parent = this.stmt('SELECT revision_id, ordinal FROM requirement_revisions WHERE revision_id = ?')
-          .get(ticket.currentRevisionId);
+        // Open non-backlog tickets keep their current revision; the edit is staged (D-M7-1).
+        const parent = staged
+          ? this.stmt('SELECT revision_id, ordinal FROM requirement_revisions WHERE ticket_id = ? ORDER BY ordinal DESC LIMIT 1').get(ticket.ticketId)
+          : this.stmt('SELECT revision_id, ordinal FROM requirement_revisions WHERE revision_id = ?').get(ticket.currentRevisionId);
         const revisionId = this.randomId('rev_');
         this.insertRevision(revisionId, ticket.ticketId, parent.revision_id, parent.ordinal + 1, content, body.commandId, at);
         this.attachArtifacts(ticket.ticketId, content.artifactIds, true);
+        if (staged) {
+          this.stmt('UPDATE tickets SET staged_revision_id = ?, version = version + 1, updated_at = ? WHERE ticket_id = ?')
+            .run(revisionId, at, ticket.ticketId);
+          return { ticketId: ticket.ticketId, revisionId, extra: { staged: true } };
+        }
         this.stmt('UPDATE tickets SET title = ?, priority = ?, current_revision_id = ?, version = version + 1, updated_at = ? WHERE ticket_id = ?')
           .run(content.title, content.priority, revisionId, at, ticket.ticketId);
         return { ticketId: ticket.ticketId, revisionId };
       });
+    return result;
+  }
+
+  // The staged (not yet applied) revision of an open ticket, or null.
+  getStagedRevision(ticketId) {
+    const row = this.stmt('SELECT staged_revision_id FROM tickets WHERE ticket_id = ?').get(String(ticketId));
+    return row && row.staged_revision_id ? this.getRevision(String(ticketId), row.staged_revision_id) : null;
+  }
+
+  promoteStagedRevision(ticketId, at) {
+    const row = this.stmt('SELECT staged_revision_id FROM tickets WHERE ticket_id = ?').get(ticketId);
+    if (!row || !row.staged_revision_id) return false;
+    const revision = this.stmt('SELECT title, priority FROM requirement_revisions WHERE revision_id = ?').get(row.staged_revision_id);
+    if (!revision) return false;
+    this.stmt('UPDATE tickets SET current_revision_id = ?, title = ?, priority = ?, staged_revision_id = NULL, updated_at = ? WHERE ticket_id = ?')
+      .run(row.staged_revision_id, revision.title, revision.priority, at, ticketId);
+    return true;
+  }
+
+  // ---------------------------------------------- operator controls (M7)
+
+  bumpTicket(ticketId, at) {
+    this.stmt('UPDATE tickets SET version = version + 1, updated_at = ? WHERE ticket_id = ?').run(at, ticketId);
+  }
+
+  requireRun(ticket, runId) {
+    if (typeof runId !== 'string' || !runId) throw invalid('runId', 'must be a run id');
+    const run = this.getRun(runId);
+    if (!run || run.ticketId !== ticket.ticketId) throw new ProductError('not_found', 'run not found');
+    return run;
+  }
+
+  // True when any run of the ticket prepared a branch or started a lead task (files may have changed).
+  hasRepositoryEffect(ticketId) {
+    return Boolean(this.stmt('SELECT 1 FROM runs WHERE ticket_id = ? AND (branch_name IS NOT NULL OR lead_task_id IS NOT NULL) LIMIT 1').get(String(ticketId)));
+  }
+
+  // Terminal effect of a stop-like control request on a run (no transaction of its own).
+  settleStopLike(run, control, at) {
+    const cancelled = control === 'cancel';
+    this.stmt("UPDATE decisions SET state = 'stale' WHERE run_id = ? AND state = 'pending'").run(run.runId);
+    this.patchRun(run.runId, {
+      status: cancelled ? 'cancelled' : 'stopped',
+      phase: 'settled',
+      wait_reason: cancelled ? null : 'run_stopped',
+      wait_detail_json: cancelled ? null : JSON.stringify({
+        code: 'run_stopped',
+        message: control === 'return_to_backlog' ? 'Returned to Backlog by the operator' : 'Stopped by the operator',
+      }),
+      control_request: null,
+      finished_at: at,
+    }, at);
+    if (cancelled || !this.hasRepositoryEffect(run.ticketId)) {
+      this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(run.ticketId);
+    }
+    if (control === 'return_to_backlog') {
+      this.promoteStagedRevision(run.ticketId, at);
+      this.setTicketStatus(run.ticketId, 'backlog', at);
+    } else {
+      this.setTicketStatus(run.ticketId, cancelled ? 'cancelled' : 'blocked', at);
+    }
+  }
+
+  settlePauseRun(run, at) {
+    this.patchRun(run.runId, {
+      status: 'paused',
+      wait_reason: 'operator_pause',
+      wait_detail_json: JSON.stringify({ code: 'operator_pause', message: 'Paused by the operator' }),
+      control_request: null,
+    }, at);
+    this.setTicketStatus(run.ticketId, 'paused', at);
+  }
+
+  // A run ended on its own while a control request was pending: the request is never dropped silently.
+  // Returns the ticket status and lease decision the settle must use, and records the superseded request.
+  applyNaturalControl(run, { ticketStatus, releaseLease }, at, { moot = [] } = {}) {
+    const control = run.controlRequest;
+    const out = { ticketStatus, releaseLease };
+    if (!control) return out;
+    let outcome = 'moot';
+    if (control === 'cancel') {
+      outcome = 'settled';
+      out.ticketStatus = 'cancelled';
+      out.releaseLease = true;
+    } else if (control === 'return_to_backlog') {
+      outcome = 'settled';
+      this.promoteStagedRevision(run.ticketId, at);
+      out.ticketStatus = 'backlog';
+      out.releaseLease = !this.hasRepositoryEffect(run.ticketId);
+    } else if (control === 'stop' && !moot.includes('stop')) {
+      outcome = 'settled';
+    }
+    this.emit('control_requested', { ticketId: run.ticketId, runId: run.runId, payload: { control, outcome } });
+    return out;
+  }
+
+  // Settles the pending control request of a run (controller use). Returns the run, or null when nothing was pending.
+  // `expected` is the control the caller evaluated: a request that changed since is left for the next tick.
+  settleControlRequest(runId, expected) {
+    return this.tx(() => {
+      const run = this.getRun(runId);
+      if (!run || !ACTIVE_RUN_STATUSES.includes(run.status) || !run.controlRequest) return null;
+      if (expected !== undefined && run.controlRequest !== expected) return null;
+      const at = this.now();
+      if (run.controlRequest === 'pause') {
+        // A run waiting for a human answer stays answerable: the pause is moot.
+        if (run.phase === 'awaiting_answer' || run.waitReason === 'human_decision') {
+          this.patchRun(run.runId, { control_request: null }, at);
+          this.emit('control_requested', { ticketId: run.ticketId, runId: run.runId, payload: { control: 'pause', outcome: 'moot' } });
+        } else this.settlePauseRun(run, at);
+      } else this.settleStopLike(run, run.controlRequest, at);
+      return this.getRun(run.runId);
+    });
+  }
+
+  // Stores a stop-like control request, or settles at once for runs that have not started executing.
+  requestOrSettle(run, control, body, at) {
+    if (run.controlRequest && CONTROL_RANK[run.controlRequest] >= CONTROL_RANK[control]) {
+      throw new ProductError('invalid_state', `a ${run.controlRequest} request is already pending`);
+    }
+    if (run.phase === 'queued' || run.phase === 'awaiting_answer') {
+      this.settleStopLike(run, control, at);
+      return 'settled';
+    }
+    this.patchRun(run.runId, { control_request: control, control_command_id: body.commandId, control_requested_at: at }, at);
+    this.bumpTicket(run.ticketId, at);
+    return 'requested';
+  }
+
+  controlResult(ticketId, runId, outcome) {
+    return { ticketId, revisionId: this.getTicket(ticketId).currentRevisionId, extra: { run: runId ? runSummary(this.getRun(runId)) : null, outcome } };
+  }
+
+  emitControl(result, control) {
+    if (result.replayed) return;
+    const ticketId = result.ticket.ticketId;
+    const runId = result.run ? result.run.runId : undefined;
+    if (result.outcome === 'requested') this.emit('control_requested', { ticketId, runId, payload: { control } });
+    else if (result.outcome === 'settled') {
+      if (control === 'pause') this.emit('run_paused', { ticketId, runId, payload: { waitReason: 'operator_pause' } });
+      else if (control === 'return_to_backlog') this.emit('ticket_returned_to_backlog', { ticketId, runId, payload: {} });
+      else if (runId) this.emit('run_stopped', { ticketId, runId, payload: { control } });
+    }
+  }
+
+  requestPause(ticketId, command) {
+    const result = this.runCommand('pause', String(ticketId), command, RUN_CONTROL_FIELDS, (body, at) => {
+      const ticket = this.requireTicket(ticketId);
+      const run = this.requireRun(ticket, body.runId);
+      this.requireVersion(ticket, body.expectedVersion);
+      if (run.status !== 'queued' && run.status !== 'running') {
+        throw new ProductError('invalid_state', `run is ${run.status}; pause is available for queued or running runs`);
+      }
+      if (!['queued', 'intake', 'branch', 'engineering'].includes(run.phase)) {
+        throw new ProductError('invalid_state', `run is in phase ${run.phase}; pause is not available now`);
+      }
+      if (run.controlRequest) throw new ProductError('invalid_state', `a ${run.controlRequest} request is already pending`);
+      this.patchRun(run.runId, { control_request: 'pause', control_command_id: body.commandId, control_requested_at: at }, at);
+      let outcome = 'requested';
+      if (run.phase === 'queued') {
+        this.settlePauseRun(this.getRun(run.runId), at);
+        outcome = 'settled';
+      } else {
+        this.bumpTicket(ticket.ticketId, at);
+      }
+      return this.controlResult(ticket.ticketId, run.runId, outcome);
+    });
+    this.emitControl(result, 'pause');
+    return result;
+  }
+
+  // Store side of Resume. `resumeLead` tells the controller to send the A2A resume message (engineering with a lead task).
+  resume(ticketId, command) {
+    const result = this.runCommand('resume', String(ticketId), command, RUN_CONTROL_FIELDS, (body, at) => {
+      const ticket = this.requireTicket(ticketId);
+      const run = this.requireRun(ticket, body.runId);
+      this.requireVersion(ticket, body.expectedVersion);
+      if (run.phase === 'awaiting_answer' || run.waitReason === 'human_decision') {
+        throw new ProductError('invalid_state', 'the run is waiting for a human decision; answer it instead of resuming');
+      }
+      const operatorPaused = run.status === 'paused' && run.waitReason === 'operator_pause';
+      if (!operatorPaused && run.status !== 'interrupted') {
+        throw new ProductError('invalid_state', `run is ${run.status}; resume is available for paused or interrupted runs`);
+      }
+      if (run.controlRequest && run.controlRequest !== 'pause') {
+        throw new ProductError('invalid_state', `a ${run.controlRequest} request is pending`);
+      }
+      const queued = run.phase === 'queued';
+      this.patchRun(run.runId, {
+        status: queued ? 'queued' : 'running', wait_reason: null, wait_detail_json: null, control_request: null,
+      }, at);
+      this.setTicketStatus(ticket.ticketId, queued ? 'pending' : 'in_progress', at);
+      const out = this.controlResult(ticket.ticketId, run.runId, 'resumed');
+      out.extra.resumeLead = run.phase === 'engineering' && run.leadTaskId
+        ? { taskId: run.leadTaskId, contextId: run.leadContextId || null } : null;
+      return out;
+    });
+    if (!result.replayed) this.emit('run_resumed', { ticketId: result.ticket.ticketId, runId: result.run.runId, payload: { phase: result.run.phase } });
+    return result;
+  }
+
+  requestStop(ticketId, command) {
+    const result = this.runCommand('stop', String(ticketId), command, RUN_CONTROL_FIELDS, (body, at) => {
+      const ticket = this.requireTicket(ticketId);
+      const run = this.requireRun(ticket, body.runId);
+      this.requireVersion(ticket, body.expectedVersion);
+      if (!ACTIVE_RUN_STATUSES.includes(run.status)) {
+        throw new ProductError('invalid_state', `run is ${run.status}; stop is available for runs that have not finished`);
+      }
+      const outcome = this.requestOrSettle(run, 'stop', body, at);
+      return this.controlResult(ticket.ticketId, run.runId, outcome);
+    });
+    this.emitControl(result, 'stop');
+    return result;
   }
 
   cancelTicket(ticketId, command) {
-    return this.runCommand('cancel', String(ticketId), command, ['commandId', 'expectedVersion'], (body, at) => {
+    const result = this.runCommand('cancel', String(ticketId), command, ['commandId', 'expectedVersion'], (body, at) => {
       const ticket = this.requireTicket(ticketId);
-      if (ticket.status === 'backlog') {
-        this.requireVersion(ticket, body.expectedVersion);
-        this.stmt("UPDATE tickets SET status = 'cancelled', version = version + 1, updated_at = ? WHERE ticket_id = ?")
-          .run(at, ticket.ticketId);
-        return { ticketId: ticket.ticketId, revisionId: ticket.currentRevisionId };
-      }
-      if (ticket.status !== 'waiting_human' && ticket.status !== 'blocked') {
-        if (ticket.status === 'pending' || ticket.status === 'in_progress') {
-          throw new ProductError('invalid_state', 'Stopping active work arrives in M7');
-        }
-        throw new ProductError('invalid_state', `ticket is ${ticket.status}; cancel is available for backlog, waiting_human and blocked tickets`);
-      }
-      const run = this.latestRunOf(ticket.ticketId);
-      if (run && run.status === 'running') {
-        throw new ProductError('invalid_state', 'Stopping active work arrives in M7');
+      if (ticket.status === 'done' || ticket.status === 'cancelled') {
+        throw new ProductError('invalid_state', `ticket is ${ticket.status}; cancel is available for open tickets`);
       }
       this.requireVersion(ticket, body.expectedVersion);
-      if (run) {
-        this.stmt("UPDATE decisions SET state = 'stale' WHERE ticket_id = ? AND state = 'pending'").run(ticket.ticketId);
-        if (run.status !== 'failed') {
-          this.stmt(
-            "UPDATE runs SET status = 'cancelled', phase = 'settled', wait_reason = NULL, wait_detail_json = NULL, "
-            + 'finished_at = COALESCE(finished_at, ?), updated_at = ? WHERE run_id = ?',
-          ).run(at, at, run.runId);
+      if (ticket.status === 'backlog') {
+        // A ticket returned to backlog after repository effects still holds the lease.
+        this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(ticket.ticketId);
+        this.stmt("UPDATE tickets SET status = 'cancelled', version = version + 1, updated_at = ? WHERE ticket_id = ?")
+          .run(at, ticket.ticketId);
+        return { ticketId: ticket.ticketId, revisionId: ticket.currentRevisionId, extra: { run: null, outcome: 'settled' } };
+      }
+      const active = this.getActiveRun(ticket.ticketId);
+      if (active) {
+        const outcome = this.requestOrSettle(active, 'cancel', body, at);
+        return this.controlResult(ticket.ticketId, active.runId, outcome);
+      }
+      // Settled work (a candidate under review, a blocked run): a completed run stays completed.
+      this.stmt("UPDATE decisions SET state = 'stale' WHERE ticket_id = ? AND state = 'pending'").run(ticket.ticketId);
+      this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(ticket.ticketId);
+      this.setTicketStatus(ticket.ticketId, 'cancelled', at);
+      const latest = this.latestRunOf(ticket.ticketId);
+      return this.controlResult(ticket.ticketId, latest ? latest.runId : null, 'settled');
+    });
+    this.emitControl(result, 'cancel');
+    return result;
+  }
+
+  returnToBacklog(ticketId, command) {
+    const result = this.runCommand('return_to_backlog', String(ticketId), command, ['commandId', 'expectedVersion'], (body, at) => {
+      const ticket = this.requireTicket(ticketId);
+      if (!OPEN_TICKET_STATUSES.includes(ticket.status)) {
+        throw new ProductError('invalid_state', `ticket is ${ticket.status}; return to backlog is available for started tickets`);
+      }
+      this.requireVersion(ticket, body.expectedVersion);
+      const active = this.getActiveRun(ticket.ticketId);
+      if (active) {
+        const outcome = this.requestOrSettle(active, 'return_to_backlog', body, at);
+        return this.controlResult(ticket.ticketId, active.runId, outcome);
+      }
+      this.stmt("UPDATE decisions SET state = 'stale' WHERE ticket_id = ? AND state = 'pending'").run(ticket.ticketId);
+      this.promoteStagedRevision(ticket.ticketId, at);
+      this.setTicketStatus(ticket.ticketId, 'backlog', at);
+      const latest = this.latestRunOf(ticket.ticketId);
+      return this.controlResult(ticket.ticketId, latest ? latest.runId : null, 'settled');
+    });
+    this.emitControl(result, 'return_to_backlog');
+    return result;
+  }
+
+  // Control a lead task should honour at its next safe boundary (lead graph hook): null | 'pause' | 'stop'.
+  controlForLeadTask(leadTaskId) {
+    const row = this.stmt("SELECT control_request FROM runs WHERE lead_task_id = ? AND status IN ('queued','running','paused','interrupted')")
+      .get(String(leadTaskId));
+    if (!row || !row.control_request) return null;
+    return row.control_request === 'pause' ? 'pause' : 'stop';
+  }
+
+  // Stored outcome of an already-applied command (null when new); validates the envelope like runCommand.
+  lookupCommand(kind, ticketId, command) {
+    const allowed = COMMAND_FIELDS[kind];
+    if (!allowed) throw new TypeError(`unknown command kind ${kind}`);
+    validateEnvelope(command, allowed);
+    const { commandId, ...rest } = command;
+    const payloadHash = sha256(canonicalJson({ kind, ticketId: String(ticketId), body: rest }));
+    const prior = this.stmt('SELECT payload_sha256, result_json FROM product_commands WHERE command_id = ?').get(commandId);
+    if (!prior) return null;
+    if (prior.payload_sha256 !== payloadHash) throw new ProductError('conflict', 'commandId was already used with a different payload');
+    return { ...JSON.parse(prior.result_json), replayed: true };
+  }
+
+  // The ticket's most recently reserved branch, or null.
+  getTicketBranch(ticketId) {
+    const row = this.stmt('SELECT branch_name FROM ticket_branches WHERE ticket_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(String(ticketId));
+    return row ? row.branch_name : null;
+  }
+
+  // ------------------------------------------------------- reviews (M7)
+
+  getReview(reviewId) {
+    const row = this.stmt('SELECT * FROM reviews WHERE review_id = ?').get(String(reviewId));
+    return row ? reviewFromRow(row) : null;
+  }
+
+  getReviewForRun(runId) {
+    const row = this.stmt('SELECT * FROM reviews WHERE run_id = ?').get(String(runId));
+    return row ? reviewFromRow(row) : null;
+  }
+
+  getLatestReview(ticketId) {
+    const row = this.stmt('SELECT * FROM reviews WHERE ticket_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(String(ticketId));
+    return row ? reviewFromRow(row) : null;
+  }
+
+  getAcceptedReview(ticketId) {
+    const row = this.stmt("SELECT * FROM reviews WHERE ticket_id = ? AND verdict = 'accepted' ORDER BY created_at DESC, rowid DESC LIMIT 1")
+      .get(String(ticketId));
+    return row ? reviewFromRow(row) : null;
+  }
+
+  // Validates a review command against durable state without writing; returns { ticket, run, candidate }.
+  checkReview(ticketId, command) {
+    validateEnvelope(command, REVIEW_FIELDS);
+    const errors = [];
+    if (!REVIEW_VERDICTS.includes(command.verdict)) errors.push({ field: 'verdict', message: `must be one of ${REVIEW_VERDICTS.join(', ')}` });
+    for (const field of ['runId', 'candidateId', 'integrityHash']) {
+      if (typeof command[field] !== 'string' || !command[field]) errors.push({ field, message: 'must be a non-empty string' });
+    }
+    if (command.verdict === 'corrections') {
+      if (checkString(errors, 'findings', command.findings)
+        && (command.findings.trim().length < 1 || command.findings.length > FINDINGS_MAX)) {
+        errors.push({ field: 'findings', message: `must be 1..${FINDINGS_MAX} characters` });
+      }
+    } else if (command.findings !== undefined) {
+      errors.push({ field: 'findings', message: 'is accepted only with corrections' });
+    }
+    if (errors.length > 0) throw new ProductError('invalid_request', 'invalid request', errors);
+    const ticket = this.requireTicket(ticketId);
+    this.requireVersion(ticket, command.expectedVersion);
+    const run = this.requireRun(ticket, command.runId);
+    const latest = this.latestRunOf(ticket.ticketId);
+    if (ticket.status !== 'waiting_human' || !latest || latest.runId !== run.runId
+      || run.status !== 'completed' || run.waitReason !== 'human_review') {
+      throw new ProductError('invalid_state', 'the ticket has no candidate waiting for review');
+    }
+    const candidate = run.candidateId ? this.getCandidate(run.candidateId) : null;
+    if (!candidate) throw new ProductError('invalid_state', 'the run has no candidate');
+    if (candidate.candidateId !== command.candidateId || candidate.integrityHash !== command.integrityHash) {
+      throw new ProductError('candidate_changed', 'The candidate shown is not the one under review');
+    }
+    if (this.getReviewForRun(run.runId)) throw new ProductError('invalid_state', 'this run was already reviewed');
+    return { ticket, run, candidate };
+  }
+
+  // Accept (ticket done) or request corrections (new rework run on the same revision, lease transferred).
+  recordReview(ticketId, command) {
+    const result = this.runCommand('review', String(ticketId), command, REVIEW_FIELDS, (body, at) => {
+      const { ticket, run, candidate } = this.checkReview(ticketId, body);
+      const accepted = body.verdict === 'accept';
+      if (!accepted) {
+        const used = this.stmt("SELECT COUNT(*) AS c FROM runs WHERE ticket_id = ? AND revision_id = ? AND run_kind = 'rework'")
+          .get(ticket.ticketId, run.revisionId).c;
+        if (used >= MAX_REWORKS) {
+          throw new ProductError('rework_exhausted', `at most ${MAX_REWORKS} rework runs are allowed for one revision`);
         }
       }
+      const reviewId = this.randomId('rvw_');
+      this.stmt(
+        'INSERT INTO reviews (review_id, ticket_id, run_id, revision_id, plan_revision_id, candidate_id, integrity_hash, verdict, '
+        + "findings, actor, command_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'operator', ?, ?)",
+      ).run(reviewId, ticket.ticketId, run.runId, run.revisionId, run.planRevisionId, candidate.candidateId,
+        candidate.integrityHash, accepted ? 'accepted' : 'corrections', accepted ? null : body.findings.trim(), body.commandId, at);
+      if (accepted) {
+        if (candidate.manifest.length === 0) this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(ticket.ticketId);
+        this.setTicketStatus(ticket.ticketId, 'done', at);
+        return { ticketId: ticket.ticketId, revisionId: ticket.currentRevisionId, extra: { review: this.getReview(reviewId), run: runSummary(run) } };
+      }
+      const rework = this.insertReworkRun(ticket, run, reviewId, body.commandId, at);
+      this.patchRun(run.runId, {
+        wait_reason: null,
+        wait_detail_json: JSON.stringify({ code: 'corrections_requested', message: `Corrections requested; superseded by rework run ${rework.runId}` }),
+      }, at);
+      this.setTicketStatus(ticket.ticketId, 'in_progress', at);
+      return { ticketId: ticket.ticketId, revisionId: ticket.currentRevisionId, extra: { review: this.getReview(reviewId), run: runSummary(rework) } };
+    });
+    if (!result.replayed) {
+      const ticketId2 = result.ticket.ticketId;
+      this.emit('review_recorded', { ticketId: ticketId2, runId: result.review.runId, payload: { verdict: result.review.verdict } });
+      if (result.review.verdict === 'corrections') {
+        this.emit('rework_started', { ticketId: ticketId2, runId: result.run.runId, payload: { parentRunId: result.review.runId, reviewId: result.review.reviewId } });
+      }
+    }
+    return result;
+  }
+
+  insertReworkRun(ticket, parent, reviewId, commandId, at) {
+    const lease = this.getLease(parent.projectId);
+    if (lease && lease.ticketId !== ticket.ticketId) throw new ProductError('invalid_state', 'the repository is in use by another ticket');
+    const runId = this.randomId('run_');
+    const planId = this.randomId('plan_');
+    const plan = this.stmt('SELECT * FROM plan_revisions WHERE plan_revision_id = ?').get(parent.planRevisionId);
+    if (!plan) throw new ProductError('invalid_state', 'the reviewed run has no saved plan');
+    this.stmt(
+      'INSERT INTO plan_revisions (plan_revision_id, run_id, parent_plan_revision_id, classification, stages_json, '
+      + 'check_ids_json, checks_json, requirements_json, validator_version, reason, created_at, '
+      + 'preset_id, preset_version, role_pack, role_pack_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(planId, runId, plan.plan_revision_id, plan.classification, plan.stages_json, plan.check_ids_json, plan.checks_json,
+      plan.requirements_json, plan.validator_version, `rework: ${reviewId}`, at,
+      plan.preset_id, plan.preset_version, plan.role_pack, plan.role_pack_version);
+    this.stmt(
+      'INSERT INTO runs (run_id, ticket_id, revision_id, project_id, status, phase, plan_revision_id, branch_name, '
+      + "settings_snapshot_json, intake_turns, command_id, created_at, started_at, updated_at, run_kind, parent_run_id, rework_review_id) "
+      + "VALUES (?, ?, ?, ?, 'running', 'branch', ?, ?, ?, ?, ?, ?, ?, ?, 'rework', ?, ?)",
+    ).run(runId, ticket.ticketId, parent.revisionId, parent.projectId, planId, parent.branchName,
+      JSON.stringify(parent.settings), parent.intakeTurns, commandId, at, at, at, parent.runId, reviewId);
+    this.stmt('INSERT OR REPLACE INTO repository_leases (project_id, run_id, ticket_id, acquired_at) VALUES (?, ?, ?, ?)')
+      .run(parent.projectId, runId, ticket.ticketId, lease ? lease.acquiredAt : at);
+    return this.getRun(runId);
+  }
+
+  // ---------------------------------------------------- deliveries (M7)
+
+  getDelivery(deliveryId) {
+    const row = this.stmt('SELECT * FROM deliveries WHERE delivery_id = ?').get(String(deliveryId));
+    return row ? deliveryFromRow(row) : null;
+  }
+
+  listDeliveries(ticketId) {
+    return this.stmt('SELECT * FROM deliveries WHERE ticket_id = ? ORDER BY created_at ASC, rowid ASC').all(String(ticketId)).map(deliveryFromRow);
+  }
+
+  listIntendedDeliveries() {
+    return this.stmt("SELECT * FROM deliveries WHERE state = 'intended' ORDER BY created_at ASC, rowid ASC").all().map(deliveryFromRow);
+  }
+
+  requireDone(ticket) {
+    if (ticket.status !== 'done') throw new ProductError('invalid_state', `ticket is ${ticket.status}; only accepted (done) tickets can be delivered`);
+  }
+
+  // Persists a commit delivery as `intended` before Git runs (D-M7-7).
+  beginCommit(ticketId, command) {
+    return this.runCommand('commit', String(ticketId), command, COMMIT_FIELDS, (body, at) => {
+      const ticket = this.requireTicket(ticketId);
+      this.requireDone(ticket);
+      this.requireVersion(ticket, body.expectedVersion);
+      const errors = [];
+      if (typeof body.message !== 'string' || body.message.trim().length < 1 || body.message.length > COMMIT_MESSAGE_MAX
+        || body.message.includes('\u0000')) {
+        errors.push({ field: 'message', message: `must be 1..${COMMIT_MESSAGE_MAX} characters without NUL` });
+      }
+      for (const field of ['candidateId', 'integrityHash']) {
+        if (typeof body[field] !== 'string' || !body[field]) errors.push({ field, message: 'must be a non-empty string' });
+      }
+      if (errors.length > 0) throw new ProductError('invalid_request', 'invalid request', errors);
+      const review = this.getAcceptedReview(ticket.ticketId);
+      if (!review) throw new ProductError('invalid_state', 'the ticket has no accepted review');
+      if (review.candidateId !== body.candidateId || review.integrityHash !== body.integrityHash) {
+        throw new ProductError('candidate_changed', 'The candidate does not match the accepted review');
+      }
+      const candidate = this.getCandidate(review.candidateId);
+      if (!candidate || candidate.manifest.length === 0) throw new ProductError('invalid_state', 'the accepted candidate has no changes to commit');
+      const existing = this.stmt("SELECT 1 FROM deliveries WHERE candidate_id = ? AND kind = 'commit' AND state IN ('succeeded','intended')")
+        .get(candidate.candidateId);
+      if (existing) throw new ProductError('invalid_state', 'this candidate already has a commit in progress or committed');
+      const lease = this.getLease();
+      if (!lease || lease.ticketId !== ticket.ticketId) throw new ProductError('invalid_state', 'the ticket does not hold the repository');
+      const deliveryId = this.randomId('dlv_');
+      this.stmt(
+        'INSERT INTO deliveries (delivery_id, ticket_id, run_id, candidate_id, review_id, kind, state, branch, base_head, message, '
+        + "command_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'commit', 'intended', ?, ?, ?, ?, ?, ?)",
+      ).run(deliveryId, ticket.ticketId, review.runId, candidate.candidateId, review.reviewId, candidate.branch, candidate.head,
+        body.message.trim(), body.commandId, at, at);
+      this.bumpTicket(ticket.ticketId, at);
+      return { ticketId: ticket.ticketId, revisionId: ticket.currentRevisionId, extra: { delivery: this.getDelivery(deliveryId) } };
+    });
+  }
+
+  // Persists a push delivery as `intended` for a succeeded commit delivery.
+  beginPush(ticketId, command) {
+    return this.runCommand('push', String(ticketId), command, PUSH_FIELDS, (body, at) => {
+      const ticket = this.requireTicket(ticketId);
+      this.requireDone(ticket);
+      this.requireVersion(ticket, body.expectedVersion);
+      const errors = [];
+      for (const field of ['deliveryId', 'commitSha']) {
+        if (typeof body[field] !== 'string' || !body[field]) errors.push({ field, message: 'must be a non-empty string' });
+      }
+      if (typeof body.remote !== 'string' || !REMOTE_RE.test(body.remote)) errors.push({ field: 'remote', message: 'must be a remote name' });
+      if (errors.length > 0) throw new ProductError('invalid_request', 'invalid request', errors);
+      const commit = this.getDelivery(body.deliveryId);
+      if (!commit || commit.ticketId !== ticket.ticketId || commit.kind !== 'commit') throw new ProductError('not_found', 'commit delivery not found');
+      if (commit.state !== 'succeeded' || commit.commitSha !== body.commitSha) {
+        throw new ProductError('conflict', 'the push does not match a succeeded commit delivery');
+      }
+      const open = this.stmt("SELECT 1 FROM deliveries WHERE parent_delivery_id = ? AND kind = 'push' AND state = 'intended'").get(commit.deliveryId);
+      if (open) throw new ProductError('invalid_state', 'a push for this commit is already in progress');
+      const deliveryId = this.randomId('dlv_');
+      this.stmt(
+        'INSERT INTO deliveries (delivery_id, ticket_id, run_id, candidate_id, review_id, kind, state, parent_delivery_id, branch, base_head, '
+        + 'commit_sha, remote, remote_ref, command_id, created_at, updated_at) '
+        + "VALUES (?, ?, ?, ?, ?, 'push', 'intended', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(deliveryId, ticket.ticketId, commit.runId, commit.candidateId, commit.reviewId, commit.deliveryId, commit.branch,
+        commit.baseHead, commit.commitSha, body.remote, `refs/heads/${commit.branch}`, body.commandId, at, at);
+      this.bumpTicket(ticket.ticketId, at);
+      return { ticketId: ticket.ticketId, revisionId: ticket.currentRevisionId, extra: { delivery: this.getDelivery(deliveryId) } };
+    });
+  }
+
+  // Records the outcome of an intended delivery; a succeeded commit releases the repository lease.
+  finishDelivery(deliveryId, { state, commitSha, error } = {}) {
+    if (!['succeeded', 'failed', 'unknown'].includes(state)) throw new TypeError('finishDelivery requires a final state');
+    return this.tx(() => {
+      const row = this.getDelivery(deliveryId);
+      if (!row || row.state !== 'intended') return null;
+      const at = this.now();
+      this.stmt('UPDATE deliveries SET state = ?, commit_sha = COALESCE(?, commit_sha), error_json = ?, updated_at = ? WHERE delivery_id = ?')
+        .run(state, commitSha || null, error ? JSON.stringify(error) : null, at, row.deliveryId);
+      if (row.kind === 'commit' && state === 'succeeded') {
+        this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(row.ticketId);
+      }
+      this.bumpTicket(row.ticketId, at);
+      return this.getDelivery(row.deliveryId);
+    });
+  }
+
+  releaseRepository(ticketId, command) {
+    const result = this.runCommand('release_repository', String(ticketId), command, ['commandId', 'expectedVersion'], (body, at) => {
+      const ticket = this.requireTicket(ticketId);
+      this.requireDone(ticket);
+      this.requireVersion(ticket, body.expectedVersion);
+      const committed = this.stmt("SELECT 1 FROM deliveries WHERE ticket_id = ? AND kind = 'commit' AND state IN ('succeeded','intended')")
+        .get(ticket.ticketId);
+      if (committed) throw new ProductError('invalid_state', 'the candidate is committed or being committed; nothing to release');
+      const lease = this.getLease();
+      if (!lease || lease.ticketId !== ticket.ticketId) throw new ProductError('invalid_state', 'the ticket does not hold the repository');
       this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(ticket.ticketId);
-      this.stmt("UPDATE tickets SET status = 'cancelled', version = version + 1, updated_at = ? WHERE ticket_id = ?")
-        .run(at, ticket.ticketId);
+      this.bumpTicket(ticket.ticketId, at);
       return { ticketId: ticket.ticketId, revisionId: ticket.currentRevisionId };
     });
+    if (!result.replayed) this.emit('repository_released', { ticketId: result.ticket.ticketId, payload: {} });
+    return result;
   }
 
   // ------------------------------------------------------------ runs (M3)
@@ -1192,17 +1777,21 @@ class ProductStore {
       }
       this.requireVersion(ticket, body.expectedVersion);
       if (this.getActiveRun(ticket.ticketId)) throw new ProductError('invalid_state', 'ticket already has an active run');
-      if (ticket.status === 'blocked' && !this.latestRunOf(ticket.ticketId)) {
+      const prior = this.latestRunOf(ticket.ticketId);
+      if (ticket.status === 'blocked' && !prior) {
         throw new ProductError('invalid_state', 'a blocked ticket can be submitted again only after a settled run');
       }
+      // A staged revision applies when the ticket is submitted again (D-M7-1).
+      this.promoteStagedRevision(ticket.ticketId, at);
+      const revisionId = this.requireTicket(ticket.ticketId).currentRevisionId;
       const runId = this.randomId('run_');
       this.stmt(
         'INSERT INTO runs (run_id, ticket_id, revision_id, project_id, status, phase, settings_snapshot_json, '
-        + 'intake_turns, command_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
-      ).run(runId, ticket.ticketId, ticket.currentRevisionId, this.projectId, 'queued', 'queued',
-        JSON.stringify(settingsSnapshot), body.commandId, at, at);
+        + 'intake_turns, command_id, created_at, updated_at, run_kind) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)',
+      ).run(runId, ticket.ticketId, revisionId, this.projectId, 'queued', 'queued',
+        JSON.stringify(settingsSnapshot), body.commandId, at, at, prior ? 'resubmit' : 'initial');
       this.setTicketStatus(ticket.ticketId, 'pending', at);
-      return { ticketId: ticket.ticketId, revisionId: ticket.currentRevisionId, extra: { run: runSummary(this.getRun(runId)) } };
+      return { ticketId: ticket.ticketId, revisionId, extra: { run: runSummary(this.getRun(runId)) } };
     });
     if (!result.replayed) this.emit('run_queued', { ticketId: result.ticket.ticketId, runId: result.run.runId, payload: { status: 'queued' } });
     return result;
@@ -1246,7 +1835,8 @@ class ProductStore {
   // Column whitelist keeps dynamic SQL limited to known run columns.
   patchRun(runId, fields, at) {
     const allowed = new Set(['status', 'phase', 'wait_reason', 'wait_detail_json', 'plan_revision_id', 'lead_task_id',
-      'lead_context_id', 'branch_name', 'base_commit', 'candidate_id', 'intake_turns', 'started_at', 'finished_at']);
+      'lead_context_id', 'branch_name', 'base_commit', 'candidate_id', 'intake_turns', 'started_at', 'finished_at',
+      'control_request', 'control_command_id', 'control_requested_at']);
     const keys = Object.keys(fields).filter((key) => allowed.has(key));
     const sets = keys.map((key) => `${key} = ?`).concat('updated_at = ?');
     this.db.prepare(`UPDATE runs SET ${sets.join(', ')} WHERE run_id = ?`).run(...keys.map((key) => fields[key]), at, runId);
@@ -1332,6 +1922,10 @@ class ProductStore {
         + "VALUES (?, 'intake_clarification', ?, ?, ?, NULL, 'pending', ?, ?)",
       ).run(decisionId, run.ticketId, run.runId, run.revisionId,
         JSON.stringify({ questions: output.questions.map((q) => ({ id: q.id, question: q.question, why: q.why })) }), at);
+      if (run.controlRequest === 'pause') {
+        this.patchRun(run.runId, { control_request: null }, at);
+        this.emit('control_requested', { ticketId: run.ticketId, runId: run.runId, payload: { control: 'pause', outcome: 'moot' } });
+      }
       this.patchRun(run.runId, {
         status: 'paused',
         phase: 'awaiting_answer',
@@ -1361,10 +1955,12 @@ class ProductStore {
         phase: 'settled',
         wait_reason: waitReason || null,
         wait_detail_json: waitDetail ? JSON.stringify(waitDetail) : null,
+        control_request: null,
         finished_at: at,
       }, at);
-      if (releaseLease) this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(run.ticketId);
-      this.setTicketStatus(run.ticketId, ticketStatus, at);
+      const applied = this.applyNaturalControl(run, { ticketStatus, releaseLease: Boolean(releaseLease) && !this.hasRepositoryEffect(run.ticketId) }, at);
+      if (applied.releaseLease) this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(run.ticketId);
+      this.setTicketStatus(run.ticketId, applied.ticketStatus, at);
       return this.getRun(run.runId);
     });
   }
@@ -1424,6 +2020,10 @@ class ProductStore {
         'INSERT INTO decisions (decision_id, kind, ticket_id, run_id, revision_id, plan_revision_id, state, request_json, created_at) '
         + "VALUES (?, 'lead_decision', ?, ?, ?, ?, 'pending', ?, ?)",
       ).run(decisionId, run.ticketId, run.runId, run.revisionId, run.planRevisionId, JSON.stringify(pause), at);
+      if (run.controlRequest === 'pause') {
+        this.patchRun(run.runId, { control_request: null }, at);
+        this.emit('control_requested', { ticketId: run.ticketId, runId: run.runId, payload: { control: 'pause', outcome: 'moot' } });
+      }
       this.patchRun(run.runId, {
         status: 'paused',
         wait_reason: 'human_decision',
@@ -1478,9 +2078,16 @@ class ProductStore {
         candidate_id: candidateId,
         wait_reason: review ? 'human_review' : 'execution_error',
         wait_detail_json: JSON.stringify(review ? { code: 'human_review', message: 'The candidate is ready for review' } : waitDetail),
+        control_request: null,
         finished_at: at,
       }, at);
-      this.setTicketStatus(run.ticketId, review ? 'waiting_human' : 'blocked', at);
+      // stop and pause are moot once a candidate exists; cancel and return to backlog still apply to the ticket.
+      const applied = this.applyNaturalControl(run, { ticketStatus: review ? 'waiting_human' : 'blocked', releaseLease: false }, at, { moot: ['stop'] });
+      if (run.controlRequest === 'cancel' || run.controlRequest === 'return_to_backlog') {
+        this.stmt("UPDATE decisions SET state = 'stale' WHERE run_id = ? AND state = 'pending'").run(run.runId);
+      }
+      if (applied.releaseLease) this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(run.ticketId);
+      this.setTicketStatus(run.ticketId, applied.ticketStatus, at);
       return this.getCandidate(candidateId);
     });
   }
@@ -1580,5 +2187,5 @@ class ProductStore {
 
 module.exports = {
   ProductStore, ProductError, LIMITS, SPECIALTIES, PRIORITIES, REFERENCE_KINDS, ACTIVE_RUN_STATUSES, canonicalJson, runSummary,
-  validateEnvelope, sha256, defaultRandomId,
+  validateEnvelope, sha256, defaultRandomId, MAX_REWORKS,
 };

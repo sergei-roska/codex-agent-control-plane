@@ -13,6 +13,7 @@ const { startServer } = require('../src/server');
 const { LeadOrchestrator } = require('../src/lead-orchestrator');
 const { decision, assignment, makeFakeAppServer } = require('./fixtures/fake-app-server');
 
+const OPERATOR_COMMANDS = ['pause', 'resume', 'stop', 'return_to_backlog', 'review', 'commit', 'push', 'release_repository'];
 process.env.CODEX_A2A_WORKSPACE_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-ws-lock-'));
 
 async function canBind() {
@@ -128,7 +129,7 @@ test('dashboard api', async (suite) => {
     assert.equal(context.apiVersion, 1);
     assert.match(context.project.projectId, /^prj_[0-9a-f]{16}$/);
     assert.equal(context.project.displayName, 'workspace');
-    assert.deepEqual(context.capabilities, { mutations: true, liveStream: false, events: true, ticketCommands: ['create', 'revise', 'cancel'] });
+    assert.deepEqual(context.capabilities, { mutations: true, liveStream: false, events: true, ticketCommands: ['create', 'revise', 'cancel', ...OPERATOR_COMMANDS] });
     assert.equal(context.health.eventJournal.status, 'ok');
     assert.equal(typeof context.lastEventSequence, 'number');
     assert.ok(context.server.startedAt && context.server.now);

@@ -132,7 +132,7 @@ test('migration 2 creates the delivery tables and the one-active-run index', asy
   const result = await migrateProductSchema({ db, now: fixedNow });
   assert.equal(result.toVersion, MIGRATIONS.length);
   assert.deepEqual(MIGRATIONS.map((m) => [m.version, m.name]), [
-    [1, 'product_tickets'], [2, 'delivery_runs'], [3, 'role_settings'], [4, 'plan_identity'], [5, 'jira_source_tracking'],
+    [1, 'product_tickets'], [2, 'delivery_runs'], [3, 'role_settings'], [4, 'plan_identity'], [5, 'jira_source_tracking'], [6, 'operator_controls'],
   ]);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
   for (const name of DELIVERY_TABLES) assert.ok(tables.includes(name), name);
@@ -142,7 +142,8 @@ test('migration 2 creates the delivery tables and the one-active-run index', asy
   assert.deepEqual(db.prepare('PRAGMA table_info(runs)').all().map((c) => c.name), [
     'run_id', 'ticket_id', 'revision_id', 'project_id', 'status', 'phase', 'wait_reason', 'wait_detail_json', 'plan_revision_id',
     'lead_task_id', 'lead_context_id', 'branch_name', 'base_commit', 'candidate_id', 'settings_snapshot_json', 'intake_turns',
-    'command_id', 'created_at', 'started_at', 'finished_at', 'updated_at']);
+    'command_id', 'created_at', 'started_at', 'finished_at', 'updated_at',
+    'control_request', 'control_command_id', 'control_requested_at', 'run_kind', 'parent_run_id', 'rework_review_id']);
   assert.equal(db.prepare("SELECT dflt_value FROM pragma_table_info('runs') WHERE name = 'intake_turns'").get().dflt_value, '0');
   db.close();
 });
@@ -248,5 +249,37 @@ test('a version 3 database with a planMeta row is backfilled, cleaned and backed
   const p2 = db.prepare("SELECT * FROM plan_revisions WHERE plan_revision_id = 'p2'").get();
   assert.deepEqual([p2.preset_id, p2.role_pack], [null, null]);
   assert.deepEqual(JSON.parse(p2.requirements_json), { goal: 'y' });
+  db.close();
+});
+
+test('migration 6 adds operator controls, reviews and deliveries and keeps version 5 rows', async () => {
+  const db = new Database(':memory:');
+  for (const migration of MIGRATIONS.slice(0, 5)) db.exec(migration.sql);
+  db.exec('CREATE TABLE product_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+  for (const migration of MIGRATIONS.slice(0, 5)) {
+    db.prepare('INSERT INTO product_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
+      .run(migration.version, migration.name, 'then');
+  }
+  db.exec(`INSERT INTO tickets (ticket_id, project_id, source, title, priority, status, current_revision_id, version, created_at, updated_at, created_by)
+    VALUES ('keep', 'project', 'direct', 'Kept', 'normal', 'blocked', 'keep-rev', 3, 'a', 'a', 'operator')`);
+  db.exec(`INSERT INTO runs (run_id, ticket_id, revision_id, project_id, status, phase, settings_snapshot_json, command_id, created_at, updated_at)
+    VALUES ('run1', 'keep', 'keep-rev', 'project', 'failed', 'settled', '{}', 'cmd', 'a', 'a')`);
+  const result = await migrateProductSchema({ db, now: fixedNow });
+  assert.deepEqual([result.fromVersion, result.toVersion], [5, 6]);
+  const run = db.prepare("SELECT * FROM runs WHERE run_id = 'run1'").get();
+  assert.equal(run.run_kind, 'initial');
+  assert.equal(run.control_request, null);
+  assert.equal(run.parent_run_id, null);
+  assert.equal(db.prepare("SELECT staged_revision_id FROM tickets WHERE ticket_id = 'keep'").get().staged_revision_id, null);
+  assert.equal(db.prepare("SELECT dflt_value FROM pragma_table_info('runs') WHERE name = 'run_kind'").get().dflt_value, "'initial'");
+  assert.deepEqual(db.prepare('PRAGMA table_info(reviews)').all().map((c) => c.name), [
+    'review_id', 'ticket_id', 'run_id', 'revision_id', 'plan_revision_id', 'candidate_id', 'integrity_hash',
+    'verdict', 'findings', 'actor', 'command_id', 'created_at']);
+  assert.deepEqual(db.prepare('PRAGMA table_info(deliveries)').all().map((c) => c.name), [
+    'delivery_id', 'ticket_id', 'run_id', 'candidate_id', 'review_id', 'kind', 'state', 'parent_delivery_id', 'branch',
+    'base_head', 'commit_sha', 'remote', 'remote_ref', 'message', 'error_json', 'command_id', 'created_at', 'updated_at']);
+  const insert = db.prepare("INSERT INTO reviews (review_id, ticket_id, run_id, revision_id, verdict, actor, command_id, created_at) VALUES (?, 'keep', ?, 'keep-rev', 'accepted', 'operator', 'c', 'a')");
+  insert.run('rv1', 'run1');
+  assert.throws(() => insert.run('rv2', 'run1'), /UNIQUE/);
   db.close();
 });

@@ -2,7 +2,8 @@
 
 Date: 2026-09-30
 Branch: `feature/dashboard-integration`
-Status: M0 contracts and baseline complete; M1-M9 implementation planned.
+Status: M0-M5 and M7 complete on the fake protocol; M6 local acceptance done, live pilots
+pending; M8-M9 planned. M7 evidence: [M7 acceptance](m7/acceptance.md).
 M0 evidence and requirement audit: [M0 index](m0/README.md).
 
 ## Release outcome

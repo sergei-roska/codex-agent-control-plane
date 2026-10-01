@@ -30,6 +30,7 @@ const { createAccountHealth } = require('./account-health');
 const { createSettingsStore } = require('./settings-store');
 const { loadProjectConfig, defaultProjectConfigPath } = require('./project-config');
 const { createGitAdapter } = require('./git-adapter');
+const { createGitDelivery } = require('./git-delivery');
 const {
   createDeliveryController, computeRolePackHash, LEAD_PROMPT_VERSION,
 } = require('./delivery-controller');
@@ -54,13 +55,13 @@ function assertWebDirOutsideArtifacts(webDir) {
 
 function mountDashboard(app, {
   auth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController,
-  activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration,
+  activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration, gitDeliveryFactory,
 }) {
   assertWebDirOutsideArtifacts(DASHBOARD_WEB_DIR);
   const projection = createProjection({ db: state.db, roleIds: [...roles.keys()], projectId, productStore });
   const api = createDashboardApi({
     projection, events, roles, leadRole, workspace, projectId, startedAt: new Date().toISOString(), version: PACKAGE_VERSION,
-    auth, productStore, artifactStore, deliveryController, activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration,
+    auth, productStore, artifactStore, deliveryController, activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration, gitDeliveryFactory,
   });
   app.use('/api/dashboard/v1', auth.hostGuard, auth.noStore);
   if (atlassianIntegration) app.use('/api/dashboard/v1', atlassianCallbackRoute({ integration: atlassianIntegration, auth }));
@@ -137,6 +138,8 @@ function describePause(taskId, pause) {
   } else if (pause?.kind === 'error') {
     lines.push(`The run stopped on an error${pause.errorName ? ` (${pause.errorName})` : ''}: ${pause.message || 'unknown error'}`);
     lines.push('Send a message to this task to retry the failed step.');
+  } else if (pause?.kind === 'operator_pause') {
+    lines.push('Paused by the operator. No new work is dispatched until the run is resumed.');
   } else if (pause?.kind === 'restart') {
     lines.push('Run interrupted by server restart. Send a message to this task to resume.');
   } else {
@@ -681,6 +684,7 @@ async function startServer({
   projectConfigFile,
   deliveryTickMs,
   catalogNow,
+  operatorControl,
   atlassianConfigPath = process.env.CODEX_ATLASSIAN_CONFIG,
   atlassianConfig: suppliedAtlassianConfig,
   atlassianIntegration: suppliedAtlassianIntegration,
@@ -780,6 +784,8 @@ async function startServer({
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger,
     });
+    // Product runs (both packs) read operator control requests from the store; non-product lead tasks map to null.
+    const controlOf = typeof operatorControl === 'function' ? operatorControl : (leadTaskId) => productStore.controlForLeadTask(leadTaskId);
     // Both delivery orchestrators exist so a run keeps the role pack pinned at submit whatever the project config says now.
     const deliveryOrchestrators = new Map([
       [deliveryPack.packId, {
@@ -787,12 +793,14 @@ async function startServer({
         orchestrator: orchestratorFactory({
           appServer, roles: deliveryPack.runtimeRoles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger,
           leadRole: { ...deliveryPack.coordinator.role, promptVersion: LEAD_PROMPT_VERSION }, repairChains: deliveryPack.repairChains,
+          operatorControl: controlOf,
         }),
       }],
       ['legacy-orch', {
         pack: null,
         orchestrator: orchestratorFactory({
           appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger, leadRole: { ...createPmLeadRole(leadRole), promptVersion: LEAD_PROMPT_VERSION },
+          operatorControl: controlOf,
         }),
       }],
     ]);
@@ -830,6 +838,7 @@ async function startServer({
         store: productStore,
         artifactStore,
         gitAdapterFactory: () => createGitAdapter({ workspace }),
+        gitDeliveryFactory: () => createGitDelivery({ workspace, remotes: projectConfig.delivery.remotes }),
         projectConfig,
         appServer,
         leadRole,
@@ -852,6 +861,7 @@ async function startServer({
     mountDashboard(app, {
       auth: dashboardAuth, authMiddleware, state, roles: allRoles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController,
       activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration,
+      gitDeliveryFactory: () => createGitDelivery({ workspace, remotes: projectConfig.delivery.remotes }),
     });
     deliveryController?.start();
     return {

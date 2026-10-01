@@ -291,6 +291,9 @@ function pauseMessage(value) {
       'Send any message to this task to resume once the earlier writer is proven stopped; the run reconciles again before the lead continues.',
     ].join('\n');
   }
+  if (value?.kind === 'operator_pause') {
+    return 'Paused by the operator. No new work is dispatched. Send a message to this task (or resume the run) to continue.';
+  }
   const hint = value?.resetsAt ? ` The usage window may reset around ${value.resetsAt} (a hint only).` : '';
   return `Waiting for Codex usage budget (${value?.source || 'unknown'} turn hit a usage limit).${hint} Send a message to this task to resume once budget is available.`;
 }
@@ -325,6 +328,7 @@ const LeadState = Annotation.Root({
   acceptanceAttempts: last(() => 0),
   acceptance: last(() => null),
   status: last(() => null),
+  reason: last(() => null),
   text: last(() => ''),
   result: last(() => null),
 });
@@ -338,6 +342,7 @@ const LeadState = Annotation.Root({
  *   emit(onEvent, event), checkpointer?,
  *   admission?: WriterAdmission, reconcileWaitMs?: number,
  *   usageLedger?: UsageLedger, runCheckImpl?, snapshot?,
+ *   operatorControl?(leadTaskId) -> null | 'pause' | 'stop',   // sync, side-effect free
  * }
  * Returns the compiled graph when deps.checkpointer is given, else the StateGraph.
  */
@@ -354,6 +359,18 @@ function buildLeadGraph(deps) {
     ? { ...role, model: entry.model, effort: entry.effort, ...(entry.serviceTier ? { serviceTier: entry.serviceTier } : {}) }
     : role);
   const reconcileWaitMs = Number.isFinite(deps.reconcileWaitMs) ? deps.reconcileWaitMs : DEFAULT_RECONCILE_WAIT_MS;
+
+  // Operator hold: sync, side-effect free; a throwing or unknown answer means no hold.
+  const holdOf = (state) => {
+    if (typeof deps.operatorControl !== 'function') return null;
+    try {
+      const control = deps.operatorControl(state.runId);
+      return control === 'pause' || control === 'stop' ? control : null;
+    } catch (_) {
+      return null;
+    }
+  };
+  const toDecide = (state) => (holdOf(state) ? 'operator_hold' : 'decide');
 
   const runtimeOf = (config) => deps.runtimeFor(config?.configurable?.thread_id) || {};
   const requestOptions = (signal) => ({ ...(signal ? { signal } : {}), ...deps.authOptions() });
@@ -798,6 +815,8 @@ function buildLeadGraph(deps) {
         }),
       };
     }
+    // Operator hold: submit nothing. The batch (with its pending items) is kept so a resume continues it.
+    if (holdOf(state)) return { ...update, batch };
     const targets = batch.parallel
       ? batch.items.filter((item) => item.state === 'pending')
       : batch.items.filter((item) => item.state === 'pending').slice(0, 1);
@@ -997,6 +1016,17 @@ function buildLeadGraph(deps) {
     };
   }
 
+  async function operatorHold(state) {
+    const stop = () => ({ status: 'canceled', reason: 'operator_stop', text: CANCELED_TEXT });
+    // Everything before interrupt() re-runs on resume, so it must stay side-effect free.
+    if (holdOf(state) === 'stop') return stop();
+    const value = { kind: 'operator_pause' };
+    value.message = pauseMessage(value);
+    interrupt(value);
+    if (holdOf(state) === 'stop') return stop();
+    return {};
+  }
+
   async function budgetPause(state) {
     // Everything before interrupt() re-runs on resume, so it must stay side-effect free.
     let resetsAt = null;
@@ -1109,6 +1139,7 @@ function buildLeadGraph(deps) {
       result: {
         runId: state.runId,
         status: state.status,
+        ...(state.reason ? { reason: state.reason } : {}),
         text: state.text,
         rounds: state.round,
         assignments: state.outcomes,
@@ -1127,12 +1158,12 @@ function buildLeadGraph(deps) {
   const afterDecide = (state) => {
     if (state.status === 'completed') return 'accept';
     if (state.status) return 'finish';
-    if (state.planRetry) return 'decide';
+    if (state.planRetry) return toDecide(state);
     if (state.budget) return 'budget_pause';
     if (state.humanRequest) return 'human_input';
     return 'dispatch';
   };
-  const afterAccept = (state) => (state.status ? 'finish' : 'decide');
+  const afterAccept = (state) => (state.status ? 'finish' : toDecide(state));
   const afterCollect = (state) => {
     if (state.status === 'canceled') return 'verify';
     if (state.batch.items.some((item) => item.state === 'pending')) return 'dispatch';
@@ -1142,9 +1173,24 @@ function buildLeadGraph(deps) {
     if (state.status === 'canceled') return 'finish';
     if (state.unresolvedWriters.length > 0) return 'reconcile';
     if (state.budget) return 'budget_pause';
+    return toDecide(state);
+  };
+  const afterReconcile = (state) => (state.budget ? 'budget_pause' : toDecide(state));
+  const afterIntake = (state) => toDecide(state);
+  const afterBudgetPause = (state) => toDecide(state);
+  const afterHumanInput = (state) => toDecide(state);
+  // A held dispatch submitted nothing and left pending items behind: park instead of collecting.
+  const afterDispatch = (state) => {
+    const items = state.batch?.items || [];
+    if (holdOf(state) && !items.some((item) => item.state === 'submitted') && items.some((item) => item.state === 'pending')) return 'operator_hold';
+    return 'collect';
+  };
+  const afterOperatorHold = (state) => {
+    // A stopped mid-batch run still verifies (and reconciles) the writers it already finished.
+    if (state.status === 'canceled') return state.batch ? 'verify' : 'finish';
+    if (state.batch?.items?.some((item) => item.state === 'pending')) return 'dispatch';
     return 'decide';
   };
-  const afterReconcile = (state) => (state.budget ? 'budget_pause' : 'decide');
 
   const graph = new StateGraph(LeadState)
     .addNode('intake', intake)
@@ -1155,18 +1201,20 @@ function buildLeadGraph(deps) {
     .addNode('reconcile', reconcile)
     .addNode('human_input', humanInput)
     .addNode('budget_pause', budgetPause)
+    .addNode('operator_hold', operatorHold)
     .addNode('accept', accept)
     .addNode('finish', finish)
     .addEdge(START, 'intake')
-    .addEdge('intake', 'decide')
-    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'decide', 'budget_pause', 'human_input', 'dispatch'])
-    .addConditionalEdges('accept', afterAccept, ['finish', 'decide'])
-    .addEdge('dispatch', 'collect')
+    .addConditionalEdges('intake', afterIntake, ['decide', 'operator_hold'])
+    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'decide', 'operator_hold', 'budget_pause', 'human_input', 'dispatch'])
+    .addConditionalEdges('accept', afterAccept, ['finish', 'decide', 'operator_hold'])
+    .addConditionalEdges('dispatch', afterDispatch, ['collect', 'operator_hold'])
     .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify'])
-    .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'decide'])
-    .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'decide'])
-    .addEdge('human_input', 'decide')
-    .addEdge('budget_pause', 'decide')
+    .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'decide', 'operator_hold'])
+    .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'decide', 'operator_hold'])
+    .addConditionalEdges('human_input', afterHumanInput, ['decide', 'operator_hold'])
+    .addConditionalEdges('budget_pause', afterBudgetPause, ['decide', 'operator_hold'])
+    .addConditionalEdges('operator_hold', afterOperatorHold, ['finish', 'verify', 'dispatch', 'decide'])
     .addEdge('finish', END);
 
   return deps.checkpointer ? graph.compile({ checkpointer: deps.checkpointer }) : graph;

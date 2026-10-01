@@ -12,6 +12,7 @@
 //
 // DASHBOARD_DEV_SCENARIO=delivery: the workspace becomes a tiny node project (one passing test on main)
 // with a project.json check "unit"; ticket Submit drives PM Intake -> plan -> branch -> lead run -> review.
+// The harness also creates <DEV_DIR>/remote.git (bare) and adds it as `origin` of the workspace (idempotent).
 // Ticket title keywords: "[ask]" intake asks 2 questions first; "[break]" Developer breaks the test and the
 // repair executor (dlv-developer-xhigh) fixes it after the rejected acceptance; "[bug]" / "[docs]" / "[audit]"
 // pick the bugfix / docs / audit preset, otherwise a ready feature. Env DASHBOARD_DEV_CATALOG_DOWN=1 fails listModels.
@@ -68,6 +69,14 @@ function setupDeliveryWorkspace(workspace) {
   git(workspace, 'config', 'user.name', 'Dev Harness');
   git(workspace, 'add', '-A');
   git(workspace, 'commit', '-q', '-m', 'base');
+}
+
+// Fixture remote: a bare repo inside DEV_DIR, registered as `origin` of the workspace. Idempotent.
+function setupDeliveryRemote(workspace) {
+  const remote = path.join(DEV_DIR, 'remote.git');
+  if (!fs.existsSync(remote)) git(DEV_DIR, 'init', '-q', '--bare', remote);
+  const remotes = git(workspace, 'remote').split('\n');
+  if (!remotes.includes('origin')) git(workspace, 'remote', 'add', 'origin', remote);
 }
 
 // Presets (feature/bugfix/docs/audit) as scripted V2 Intake plans. Stage ids equal preset stage keys;
@@ -271,6 +280,7 @@ async function main() {
   fs.mkdirSync(workspace, { recursive: true });
   if (delivery) {
     setupDeliveryWorkspace(workspace);
+    setupDeliveryRemote(workspace);
   } else if (!fs.existsSync(path.join(workspace, '.git'))) {
     execFileSync('git', ['init', '-q'], { cwd: workspace });
     fs.writeFileSync(path.join(workspace, 'README.md'), '# Dev workspace\n');

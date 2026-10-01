@@ -22,6 +22,7 @@ async function canBind() {
   });
 }
 
+const OPERATOR_COMMANDS = ['pause', 'resume', 'stop', 'return_to_backlog', 'review', 'commit', 'push', 'release_repository'];
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 7)]);
 const PDF = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(32, 1)]);
 const newId = () => crypto.randomUUID();
@@ -111,7 +112,7 @@ test('dashboard tickets', async (suite) => {
 
   await suite.test('context advertises ticket commands and the pinned policy shape', async () => {
     const context = await api.json('/context');
-    assert.deepEqual(context.capabilities, { mutations: true, liveStream: false, events: true, ticketCommands: ['create', 'revise', 'cancel'] });
+    assert.deepEqual(context.capabilities, { mutations: true, liveStream: false, events: true, ticketCommands: ['create', 'revise', 'cancel', ...OPERATOR_COMMANDS] });
     assert.equal(context.trackingMode, 'internal');
     assert.equal(context.requestedSpecialties.length, 9);
     assert.deepEqual(context.requestedSpecialties.find((s) => s.id === 'qa'), { id: 'qa', displayName: 'QA' });
@@ -201,16 +202,18 @@ test('dashboard tickets', async (suite) => {
     assert.equal(revised.ticket.title, 'Revised title');
 
     const detail = await api.json(`/tickets/${ticket.ticketId}`);
-    assert.deepEqual(Object.keys(detail).sort(), ['activeRun', 'artifacts', 'availableActions', 'revision', 'revisions', 'runs', 'ticket', 'unavailableActions']);
+    assert.deepEqual(Object.keys(detail).sort(), ['activeRun', 'artifacts', 'availableActions', 'review', 'revision', 'revisions', 'runs', 'stagedRevision', 'ticket', 'unavailableActions']);
     assert.equal(detail.revisions.length, 2);
     assert.deepEqual(Object.keys(detail.revisions[0]).sort(), ['actor', 'createdAt', 'parentRevisionId', 'ordinal', 'revisionId'].sort());
     assert.equal(detail.revision.revisionId, revised.revision.revisionId);
-    assert.deepEqual(detail.availableActions, ['edit', 'submit', 'cancel']);
+    assert.deepEqual(detail.availableActions, ['revise', 'submit', 'cancel']);
+    assert.equal(detail.stagedRevision, null);
+    assert.equal(detail.review, null);
     assert.deepEqual(detail.runs, []);
     assert.equal(detail.activeRun, null);
     assert.deepEqual(detail.unavailableActions.map((a) => a.action),
-      ['accept', 'corrections', 'pause', 'resume', 'stop', 'return_to_backlog', 'commit', 'push']);
-    assert.ok(detail.unavailableActions.every((a) => a.action && a.reason && a.milestone === 'M7'));
+      ['pause', 'resume', 'stop', 'return_to_backlog', 'accept', 'corrections', 'commit', 'push', 'release_repository']);
+    assert.ok(detail.unavailableActions.every((a) => a.action && a.reason && !('milestone' in a)));
 
     const old = await api.json(`/tickets/${ticket.ticketId}/revisions/${revision.revisionId}`);
     assert.deepEqual(Object.keys(old).sort(), ['artifacts', 'revision']);

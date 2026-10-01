@@ -80,6 +80,7 @@ class LeadOrchestrator {
     runCheckImpl,
     snapshot,
     repairChains,
+    operatorControl,
   } = {}) {
     if (!appServer || typeof appServer.run !== 'function') throw new TypeError('appServer.run is required');
     if (!(roles instanceof Map)) throw new TypeError('roles must be a Map');
@@ -123,6 +124,7 @@ class LeadOrchestrator {
       runCheckImpl,
       snapshot,
       ...(repairChains ? { repairChains } : {}),
+      ...(typeof operatorControl === 'function' ? { operatorControl } : {}),
       runtimeFor: (runId) => this.runtimes.get(runId),
       clientFor: (roleName) => this._clientFor(roleName),
       authOptions: () => this._authRequestOptions(),

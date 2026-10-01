@@ -1254,3 +1254,121 @@ test('a finished writer outcome without an execution row but with a task is lega
     assert.equal(reconciliation.reason, 'no_execution_record');
   });
 });
+
+// ----------------------------------------------------- operator control
+
+const holdControl = (initial = null) => {
+  const control = { value: initial };
+  control.fn = (runId) => (runId === RUN_ID ? control.value : null);
+  return control;
+};
+
+test('operator pause before decide parks without a lead turn, and resume continues the same plan', async () => {
+  const control = holdControl('pause');
+  const world = makeWorld({ script: [dispatch(brief('orch-builder')), finish('Done')], workerFinal: okWriterFinal() });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'operator_pause');
+    assert.match(paused.text, /Paused by the operator/);
+    assert.equal(world.leadTurns, 0);
+    assert.equal(world.sends.length, 0);
+    assert.equal((await session.orchestrator.getPause(RUN_ID)).kind, 'operator_pause');
+
+    control.value = null;
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'go' } });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 2);
+    assert.equal(world.sends.length, 1);
+  }, { orchestrator: { operatorControl: control.fn } });
+});
+
+test('operator pause while a worker runs lets it finish, dispatches nothing new, then parks', async () => {
+  const control = holdControl(null);
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), dispatch(brief('orch-builder', ['src/b.js'])), finish('Done')],
+    workerFinal: okWriterFinal(),
+    pollsNeeded: 1,
+    getTaskFault: (id, count) => { if (count === 1 && world.sends.length === 1) control.value = 'pause'; },
+  });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(paused.pause.kind, 'operator_pause');
+    assert.equal(world.leadTurns, 1);
+    assert.equal(world.sends.length, 1);
+    const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(snapshot.values.outcomes.length, 1);
+    assert.equal(snapshot.values.outcomes[0].status, 'TASK_STATE_COMPLETED');
+
+    control.value = null;
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'go' } });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 2);
+    assert.equal(world.leadTurns, 3);
+  }, { orchestrator: { operatorControl: control.fn } });
+});
+
+test('operator stop while parked at operator_pause finishes canceled with reason operator_stop', async () => {
+  const control = holdControl('pause');
+  const world = makeWorld({ script: [finish('Done')] });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(paused.pause.kind, 'operator_pause');
+    control.value = 'stop';
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'go' } });
+    assert.equal(result.status, 'canceled');
+    assert.equal(result.reason, 'operator_stop');
+    assert.equal(world.leadTurns, 0);
+    assert.notEqual(result.acceptance?.disposition, 'accepted');
+  }, { orchestrator: { operatorControl: control.fn } });
+});
+
+test('operator stop at a writer_unresolved resume reconciles first and then stops', async () => {
+  const control = holdControl(null);
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('Done')],
+    workerFinal: (roleName, contextId) => {
+      world.admission.rows.set(contextId, admissionRow(contextId, 'unresolved'));
+      return unresolvedWriterTask(roleName);
+    },
+  });
+  world.admission.canProve = false;
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(paused.pause.kind, 'writer_unresolved');
+    control.value = 'stop';
+    // Still unproven: the stop cannot take effect while the writer outcome is unknown.
+    const still = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'retry' } });
+    assert.equal(still.pause.kind, 'writer_unresolved');
+
+    world.admission.canProve = true;
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'retry' } });
+    assert.equal(result.status, 'canceled');
+    assert.equal(result.reason, 'operator_stop');
+    assert.equal(result.assignments.filter((entry) => entry.kind === 'reconciliation').length, 1);
+    assert.equal(world.leadTurns, 1);
+  }, { orchestrator: { operatorControl: control.fn } });
+});
+
+test('resuming into a mid-batch dispatch with a pause still set submits nothing', async () => {
+  const control = holdControl(null);
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder', ['src/a.js']), brief('orch-builder', ['src/b.js'])), finish('Done')],
+    workerFinal: okWriterFinal(),
+  });
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, interruptAfter: ['collect'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    assert.equal(world.sends.length, 1);
+    control.value = 'pause';
+    const paused = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(paused.pause.kind, 'operator_pause');
+    assert.equal(world.sends.length, 1);
+
+    control.value = null;
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'go' } });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 2);
+    assert.equal(world.leadTurns, 2);
+  }, { orchestrator: { operatorControl: control.fn } });
+});

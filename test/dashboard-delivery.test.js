@@ -192,7 +192,7 @@ test('dashboard delivery api', async (suite) => {
     }), async ({ runtime, api, appServer }) => {
       const ticket = await api.create();
       const before = await api.ticket(ticket.ticketId);
-      assert.deepEqual(before.availableActions, ['edit', 'submit', 'cancel']);
+      assert.deepEqual(before.availableActions, ['revise', 'submit', 'cancel']);
       assert.deepEqual(before.runs, []);
       assert.equal(before.activeRun, null);
       assert.equal((await api.card(ticket.ticketId)).ticketStatus, 'backlog');
@@ -205,8 +205,8 @@ test('dashboard delivery api', async (suite) => {
       assert.equal(submitted.ticket.status, 'pending');
       assert.equal(submitted.run.status, 'queued');
       assert.deepEqual(Object.keys(submitted.run).sort(), [
-        'baseCommit', 'branchName', 'candidateId', 'createdAt', 'finishedAt', 'phase', 'planRevisionId', 'revisionId', 'runId',
-        'startedAt', 'status', 'ticketId', 'updatedAt', 'waitDetail', 'waitReason',
+        'baseCommit', 'branchName', 'candidateId', 'controlRequest', 'createdAt', 'finishedAt', 'parentRunId', 'phase', 'planRevisionId',
+        'revisionId', 'runId', 'runKind', 'startedAt', 'status', 'ticketId', 'updatedAt', 'waitDetail', 'waitReason',
       ]);
       const replay = await api.post(`/tickets/${ticket.ticketId}/submit`, { commandId, expectedVersion: ticket.version });
       assert.equal(replay.status, 200);
@@ -294,7 +294,7 @@ test('dashboard delivery api', async (suite) => {
       const done = await api.waitTicket(ticket.ticketId, 'waiting_human', (d) => d.runs[0].phase === 'settled');
       assert.equal(done.runs[0].status, 'completed');
       assert.equal(done.activeRun, null);
-      assert.deepEqual(done.availableActions, ['cancel']);
+      assert.deepEqual(done.availableActions, ['revise', 'cancel', 'return_to_backlog', 'accept', 'corrections']);
       const finalCard = await api.card(ticket.ticketId);
       assert.equal(finalCard.boardColumn, 'needs_attention');
       assert.equal(finalCard.ticketStatus, 'waiting_human');
@@ -348,7 +348,7 @@ test('dashboard delivery api', async (suite) => {
       await api.submit(ticket);
       const blocked = await api.waitTicket(ticket.ticketId, 'blocked', (d) => d.runs[0].phase === 'settled');
       assert.equal(blocked.runs[0].waitDetail.disposition, 'rejected');
-      assert.deepEqual(blocked.availableActions, ['submit', 'cancel']);
+      assert.deepEqual(blocked.availableActions, ['revise', 'submit', 'cancel', 'return_to_backlog']);
       const card = await api.card(ticket.ticketId);
       assert.equal(card.boardColumn, 'needs_attention');
       assert.equal(card.ticketStatus, 'blocked');
@@ -385,6 +385,7 @@ test('dashboard delivery api', async (suite) => {
       const cancelledCard = await api.card(first.ticketId);
       assert.equal(cancelledCard.boardColumn, 'closed');
       assert.equal(cancelledCard.ticketStatus, 'cancelled');
+      assert.equal(cancelledCard.waitReason, null);
 
       await api.waitTicket(second.ticketId, 'blocked', (d) => d.runs[0].phase === 'settled');
       assert.equal(appServer.intakeCalls.length, 2);
@@ -408,7 +409,10 @@ test('dashboard delivery api', async (suite) => {
 
       const res = await api.post(`/tickets/${ticket.ticketId}/cancel`, { commandId: cmd(), expectedVersion: waiting.ticket.version });
       assert.equal(res.status, 201);
-      assert.equal((await res.json()).ticket.status, 'cancelled');
+      // Active work: the cancel is a request that the delivery controller settles on a tick.
+      assert.equal((await res.json()).outcome, 'requested');
+      await api.waitTicket(ticket.ticketId, 'cancelled');
+      await until(() => runtime.productStore.getRun(run.runId).status === 'cancelled', 'run to be cancelled');
       assert.equal(runtime.productStore.getRun(run.runId).status, 'cancelled');
       assert.equal(runtime.productStore.getLease(), null);
       const task = await client.getTask({ tenant: '', id: run.leadTaskId }, requestOptions);

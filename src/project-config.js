@@ -9,7 +9,10 @@ const MAX_CHECKS = 20;
 const MAX_BASE_REF = 200;
 const MAX_DESCRIPTION = 200;
 const PREFIX_PATTERN = /^[a-z0-9][a-z0-9/_-]{0,30}$/;
-const TOP_KEYS = ['baseRef', 'branchPrefixes', 'checks', 'rolePack'];
+const TOP_KEYS = ['baseRef', 'branchPrefixes', 'checks', 'rolePack', 'delivery'];
+const REMOTE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const MAX_REMOTES = 10;
+const DELIVERY_KEYS = ['remotes'];
 const ROLE_PACKS = ['delivery', 'legacy-orch'];
 const PREFIX_KEYS = ['feature', 'bugfix', 'docs'];
 const CHECK_KEYS = ['id', 'argv', 'timeoutMs', 'description'];
@@ -19,6 +22,7 @@ const DEFAULT_CONFIG = Object.freeze({
   branchPrefixes: Object.freeze({ feature: 'feature/', bugfix: 'fix/', docs: 'docs/' }),
   checks: Object.freeze([]),
   rolePack: 'delivery',
+  delivery: Object.freeze({ remotes: Object.freeze(['origin']) }),
 });
 
 function sha256(data) {
@@ -55,6 +59,16 @@ function normalizeConfig(raw) {
     }
     branchPrefixes[key] = prefix;
   }
+  const deliveryRaw = raw.delivery === undefined ? {} : raw.delivery;
+  if (!isPlainObject(deliveryRaw)) throw new TypeError('delivery must be an object');
+  rejectUnknown(deliveryRaw, DELIVERY_KEYS, 'delivery');
+  const remotes = deliveryRaw.remotes === undefined ? [...DEFAULT_CONFIG.delivery.remotes] : deliveryRaw.remotes;
+  if (!Array.isArray(remotes) || remotes.length < 1 || remotes.length > MAX_REMOTES) {
+    throw new TypeError(`delivery.remotes must be an array of 1..${MAX_REMOTES} remote names`);
+  }
+  for (const name of remotes) {
+    if (typeof name !== 'string' || !REMOTE_PATTERN.test(name)) throw new TypeError(`delivery.remotes entries must match ${REMOTE_PATTERN}`);
+  }
   const checksRaw = raw.checks === undefined ? [] : raw.checks;
   if (!Array.isArray(checksRaw)) throw new TypeError('checks must be an array');
   if (checksRaw.length > MAX_CHECKS) throw new TypeError(`checks has more than ${MAX_CHECKS} entries`);
@@ -83,7 +97,7 @@ function normalizeConfig(raw) {
     seen.add(check.id);
     return { id: check.id, argv: check.argv, timeoutMs: check.timeoutMs, description: descriptions[index] };
   });
-  return { baseRef: baseRef.trim(), branchPrefixes, checks, rolePack };
+  return { baseRef: baseRef.trim(), branchPrefixes, checks, rolePack, delivery: { remotes: [...new Set(remotes)] } };
 }
 
 function loadProjectConfig({ filePath } = {}) {

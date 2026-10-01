@@ -458,8 +458,8 @@ test('submit creates a queued run bound to the current revision and moves the ti
   assert.equal(out.run.phase, 'queued');
   assert.equal(out.run.revisionId, revised.revision.revisionId);
   assert.deepEqual(Object.keys(out.run).sort(), [
-    'baseCommit', 'branchName', 'candidateId', 'createdAt', 'finishedAt', 'phase', 'planRevisionId', 'revisionId', 'runId',
-    'startedAt', 'status', 'ticketId', 'updatedAt', 'waitDetail', 'waitReason']);
+    'baseCommit', 'branchName', 'candidateId', 'controlRequest', 'createdAt', 'finishedAt', 'parentRunId', 'phase', 'planRevisionId',
+    'revisionId', 'runId', 'runKind', 'startedAt', 'status', 'ticketId', 'updatedAt', 'waitDetail', 'waitReason']);
   assert.deepEqual(store.getRun(out.run.runId).settings, SNAPSHOT);
   const replay = store.submitTicket(created.ticketId, command, SNAPSHOT);
   assert.equal(replay.replayed, true);
@@ -556,22 +556,21 @@ test('lead decisions carry the lead pause payload, validate the choice and resum
   assert.deepEqual([run.status, run.phase, run.waitReason], ['running', 'engineering', null]);
 });
 
-test('cancel: backlog as before, settled waiting_human/blocked tickets release the lease, active work is refused', async () => {
+test('cancel: backlog as before, queued and settled work settle at once, a completed run is not overwritten', async () => {
   const { store, db } = await makeStore();
   const pending = submitNew(store, 'pending');
-  const refusal = expectError(() => store.cancelTicket(pending.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(pending.ticketId).version }), 'invalid_state');
-  assert.equal(refusal.message, 'Stopping active work arrives in M7');
-  store.acquireLease(pending.runId);
-  assert.equal(expectError(() => store.cancelTicket(pending.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(pending.ticketId).version }), 'invalid_state').message, 'Stopping active work arrives in M7');
+  const queued = store.cancelTicket(pending.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(pending.ticketId).version });
+  assert.equal(queued.ticket.status, 'cancelled');
+  assert.equal(store.getRun(pending.runId).status, 'cancelled');
 
-  // A blocked ticket whose run is still marked running counts as active execution.
-  db.prepare("UPDATE tickets SET status = 'blocked' WHERE ticket_id = ?").run(pending.ticketId);
-  assert.equal(expectError(() => store.cancelTicket(pending.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(pending.ticketId).version }), 'invalid_state').message, 'Stopping active work arrives in M7');
-  store.settleRun(pending.runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', waitDetail: { code: 'x', message: 'y' } });
-  const cancelled = store.cancelTicket(pending.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(pending.ticketId).version });
+  // A blocked ticket whose run failed releases the lease and keeps the failed run as it was.
+  const failed = submitNew(store, 'failed');
+  store.acquireLease(failed.runId);
+  store.settleRun(failed.runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', waitDetail: { code: 'x', message: 'y' } });
+  const cancelled = store.cancelTicket(failed.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(failed.ticketId).version });
   assert.equal(cancelled.ticket.status, 'cancelled');
   assert.equal(store.getLease(), null);
-  assert.equal(store.getRun(pending.runId).status, 'failed');
+  assert.equal(store.getRun(failed.runId).status, 'failed');
 
   const review = submitNew(store, 'review');
   toReview(store, review.runId);
@@ -579,9 +578,10 @@ test('cancel: backlog as before, settled waiting_human/blocked tickets release t
   assert.equal(store.getLease().ticketId, review.ticketId);
   const out = store.cancelTicket(review.ticketId, { commandId: cmd(), expectedVersion: store.getTicket(review.ticketId).version });
   assert.equal(out.ticket.status, 'cancelled');
-  assert.equal(store.getRun(review.runId).status, 'cancelled');
+  assert.equal(store.getRun(review.runId).status, 'completed');
   assert.equal(store.getLease(), null);
   expectError(() => store.cancelTicket(review.ticketId, { commandId: cmd(), expectedVersion: out.ticket.version }), 'invalid_state');
+  assert.ok(db);
 });
 
 test('a blocked ticket can be submitted again after a settled run and takes over its own lease', async () => {
@@ -672,4 +672,478 @@ test('live stages map journal attempts by stageId, so two stages with one role s
   // Legacy rows without a stage id are ignored for stage mapping.
   const legacy = liveStages(db, { leadTaskId: 'nobody' }, plan);
   assert.deepEqual(legacy.map((s) => [s.status, s.attempts.length]), [['eligible', 0], ['pending', 0]]);
+});
+
+// ------------------------------------------------------------------ M7 operator controls
+
+const ver = (store, ticketId) => store.getTicket(ticketId).version;
+const cc = (store, ticketId, extra = {}) => ({ commandId: cmd(), expectedVersion: ver(store, ticketId), ...extra });
+
+// Runs a rework run (started at phase 'branch') through to a new candidate under review.
+function reworkToReview(store, runId, hash) {
+  store.recordBranch(runId, { branchName: 'feature/work-abcdef', baseCommit: 'a'.repeat(40) });
+  store.recordLeadTask(runId, `task-${runId}`, 'ctx');
+  store.moveToCandidate(runId);
+  return store.completeRun(runId, {
+    candidate: {
+      baseCommit: 'a'.repeat(40), head: 'a'.repeat(40), branch: 'feature/work-abcdef', headMoved: false,
+      manifest: [{ path: 'a.js', status: 'M', sha256: 'f'.repeat(64), size: 3 }], truncated: false,
+      acceptance: { disposition: 'accepted', reasons: [], checks: [], stages: [] }, integrityHash: hash,
+    },
+    diffArtifact: null,
+    outcome: 'review',
+  });
+}
+
+const reviewBody = (store, ticketId, runId, candidate, extra = {}) => cc(store, ticketId, {
+  runId, candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, verdict: 'accept', ...extra,
+});
+
+test('pause settles a queued run at once and Resume restores it; commands are idempotent and version checked', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  const pauseCmd = cc(store, ticketId, { runId });
+  expectError(() => store.requestPause(ticketId, { ...pauseCmd, expectedVersion: 99 }), 'stale_version');
+  const out = store.requestPause(ticketId, pauseCmd);
+  assert.equal(out.outcome, 'settled');
+  assert.equal(out.ticket.status, 'paused');
+  assert.deepEqual([out.run.status, out.run.waitReason, out.run.controlRequest], ['paused', 'operator_pause', null]);
+  assert.equal(out.ticket.version, 3);
+  const replay = store.requestPause(ticketId, pauseCmd);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.ticket.version, 3);
+  expectError(() => store.requestPause(ticketId, cc(store, ticketId, { runId })), 'invalid_state');
+  expectError(() => store.requestPause(ticketId, cc(store, ticketId, { runId: 'run_nope' })), 'not_found');
+  expectError(() => store.requestPause(ticketId, cc(store, ticketId, {})), 'invalid_request');
+
+  const resumed = store.resume(ticketId, cc(store, ticketId, { runId }));
+  assert.deepEqual([resumed.run.status, resumed.run.phase, resumed.ticket.status, resumed.resumeLead], ['queued', 'queued', 'pending', null]);
+  expectError(() => store.resume(ticketId, cc(store, ticketId, { runId })), 'invalid_state');
+  assert.equal(store.acquireLease(runId).acquired, true);
+});
+
+test('pause on a running run is a request; the controller-side settle makes it paused and Resume continues the same plan', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  store.acquireLease(runId);
+  store.saveIntakePlan(runId, {
+    turn: 1, output: { ...NEEDS_INPUT, readiness: 'ready', questions: [], plan: PLAN }, classification: 'feature', plan: PLAN,
+    checks: [], requirements: NEEDS_INPUT.requirements, validatorVersion: 'm3-plan-v1',
+  });
+  const planId = store.getRun(runId).planRevisionId;
+  store.recordBranch(runId, { branchName: 'feature/x', baseCommit: 'a'.repeat(40) });
+  store.recordLeadTask(runId, 'task-9', 'ctx-9');
+  const requested = store.requestPause(ticketId, cc(store, ticketId, { runId }));
+  assert.equal(requested.outcome, 'requested');
+  assert.equal(requested.run.controlRequest, 'pause');
+  assert.equal(requested.ticket.status, 'in_progress');
+  assert.equal(store.controlForLeadTask('task-9'), 'pause');
+  expectError(() => store.requestPause(ticketId, cc(store, ticketId, { runId })), 'invalid_state');
+
+  const settled = store.settleControlRequest(runId);
+  assert.deepEqual([settled.status, settled.waitReason, settled.controlRequest], ['paused', 'operator_pause', null]);
+  assert.equal(store.getTicket(ticketId).status, 'paused');
+  assert.equal(store.controlForLeadTask('task-9'), null);
+  assert.equal(store.settleControlRequest(runId), null);
+
+  const resumed = store.resume(ticketId, cc(store, ticketId, { runId }));
+  assert.deepEqual(resumed.resumeLead, { taskId: 'task-9', contextId: 'ctx-9' });
+  assert.deepEqual([resumed.run.status, resumed.run.phase, resumed.ticket.status], ['running', 'engineering', 'in_progress']);
+  assert.equal(store.getRun(runId).planRevisionId, planId);
+  assert.equal(store.listRuns(ticketId).length, 1);
+});
+
+test('stop, cancel and return-to-backlog: queued and awaiting_answer settle at once, others store a request', async () => {
+  const { store } = await makeStore();
+  // awaiting_answer: pending decision goes stale, no repository effect releases the lease.
+  const waiting = submitNew(store, 'waiting');
+  store.acquireLease(waiting.runId);
+  const decision = store.requestIntakeAnswer(waiting.runId, { turn: 1, output: NEEDS_INPUT });
+  const stopped = store.requestStop(waiting.ticketId, cc(store, waiting.ticketId, { runId: waiting.runId }));
+  assert.equal(stopped.outcome, 'settled');
+  assert.deepEqual([stopped.run.status, stopped.run.waitReason, stopped.ticket.status], ['stopped', 'run_stopped', 'blocked']);
+  assert.equal(store.getDecision(decision.decisionId).state, 'stale');
+  assert.equal(store.getLease(), null);
+
+  // A stopped ticket can be submitted again (new run, resubmit kind).
+  const again = store.submitTicket(waiting.ticketId, cc(store, waiting.ticketId), SNAPSHOT);
+  assert.equal(again.run.runKind, 'resubmit');
+
+  // Running run: a request, stop < return < cancel precedence, no duplicate of an equal or weaker request.
+  const busy = submitNew(store, 'busy');
+  store.settleRun(again.run.runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', releaseLease: true });
+  store.acquireLease(busy.runId);
+  const stopCmd = cc(store, busy.ticketId, { runId: busy.runId });
+  const req = store.requestStop(busy.ticketId, stopCmd);
+  assert.equal(req.outcome, 'requested');
+  assert.equal(req.run.controlRequest, 'stop');
+  assert.equal(store.getRun(busy.runId).controlCommandId, stopCmd.commandId);
+  expectError(() => store.requestStop(busy.ticketId, cc(store, busy.ticketId, { runId: busy.runId })), 'invalid_state');
+  expectError(() => store.requestPause(busy.ticketId, cc(store, busy.ticketId, { runId: busy.runId })), 'invalid_state');
+  const cancel = store.cancelTicket(busy.ticketId, cc(store, busy.ticketId));
+  assert.equal(cancel.outcome, 'requested');
+  assert.equal(cancel.run.controlRequest, 'cancel');
+  expectError(() => store.returnToBacklog(busy.ticketId, cc(store, busy.ticketId)), 'invalid_state');
+  assert.equal(store.controlForLeadTask('none'), null);
+  const settled = store.settleControlRequest(busy.runId);
+  assert.deepEqual([settled.status, settled.phase, settled.controlRequest], ['cancelled', 'settled', null]);
+  assert.equal(store.getTicket(busy.ticketId).status, 'cancelled');
+  assert.equal(store.getLease(), null);
+});
+
+test('a stop with repository effect keeps the lease; return to backlog promotes the staged revision', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store, 'effect');
+  store.acquireLease(runId);
+  store.saveIntakePlan(runId, {
+    turn: 1, output: { ...NEEDS_INPUT, readiness: 'ready', questions: [], plan: PLAN }, classification: 'feature', plan: PLAN,
+    checks: [], requirements: NEEDS_INPUT.requirements, validatorVersion: 'm3-plan-v1',
+  });
+  store.recordBranch(runId, { branchName: 'feature/effect', baseCommit: 'a'.repeat(40) });
+  store.recordLeadTask(runId, 'task-e', 'ctx-e');
+
+  // Non-backlog edit is staged: the ticket keeps its revision and title.
+  const original = store.getTicket(ticketId);
+  const staged = store.reviseTicket(ticketId, cc(store, ticketId, { title: 'Edited while running', description: 'new' }));
+  assert.equal(staged.staged, true);
+  assert.equal(staged.ticket.currentRevisionId, original.currentRevisionId);
+  assert.equal(staged.ticket.title, 'effect');
+  assert.equal(store.getStagedRevision(ticketId).title, 'Edited while running');
+  assert.equal(store.getStagedRevision(ticketId).parentRevisionId, original.currentRevisionId);
+  assert.equal(store.getRun(runId).revisionId, original.currentRevisionId);
+
+  const out = store.returnToBacklog(ticketId, cc(store, ticketId));
+  assert.equal(out.outcome, 'requested');
+  assert.equal(out.run.controlRequest, 'return_to_backlog');
+  assert.equal(store.controlForLeadTask('task-e'), 'stop');
+  const settled = store.settleControlRequest(runId);
+  assert.deepEqual([settled.status, settled.waitReason], ['stopped', 'run_stopped']);
+  const ticket = store.getTicket(ticketId);
+  assert.deepEqual([ticket.status, ticket.title, ticket.currentRevisionId], ['backlog', 'Edited while running', staged.revision.revisionId]);
+  assert.equal(store.getStagedRevision(ticketId), null);
+  assert.equal(store.getLease().ticketId, ticketId);
+
+  // Backlog keeps the M2 behavior: no staging.
+  const direct = store.reviseTicket(ticketId, cc(store, ticketId, { title: 'Backlog edit' }));
+  assert.equal(direct.staged, undefined);
+  assert.equal(direct.ticket.title, 'Backlog edit');
+  assert.equal(store.getStagedRevision(ticketId), null);
+});
+
+test('submit from blocked promotes the staged revision first; done and cancelled tickets cannot be edited', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  store.acquireLease(runId);
+  store.settleRun(runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', waitDetail: { code: 'x', message: 'y' } });
+  const staged = store.reviseTicket(ticketId, cc(store, ticketId, { title: 'Staged title' }));
+  assert.equal(staged.staged, true);
+  const second = store.reviseTicket(ticketId, cc(store, ticketId, { title: 'Staged twice' }));
+  assert.equal(second.revision.parentRevisionId, staged.revision.revisionId);
+  const out = store.submitTicket(ticketId, cc(store, ticketId), SNAPSHOT);
+  assert.equal(out.run.revisionId, second.revision.revisionId);
+  assert.equal(out.ticket.title, 'Staged twice');
+  assert.equal(out.run.runKind, 'resubmit');
+  assert.equal(store.getStagedRevision(ticketId), null);
+
+  const fresh = (await makeStore()).store;
+  const done = submitNew(fresh, 'done');
+  toReview(fresh, done.runId);
+  const candidate = fresh.getCandidate(fresh.getRun(done.runId).candidateId);
+  fresh.recordReview(done.ticketId, reviewBody(fresh, done.ticketId, done.runId, candidate));
+  expectError(() => fresh.reviseTicket(done.ticketId, cc(fresh, done.ticketId, { title: 'x' })), 'invalid_state');
+  expectError(() => fresh.cancelTicket(done.ticketId, cc(fresh, done.ticketId)), 'invalid_state');
+  expectError(() => fresh.returnToBacklog(done.ticketId, cc(fresh, done.ticketId)), 'invalid_state');
+});
+
+test('review: stale binding has no effect, accept makes the ticket done, replay is idempotent', async () => {
+  const { store, db } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  const candidate = toReview(store, runId);
+  const before = db.prepare('SELECT COUNT(*) AS c FROM reviews').get().c;
+  const bad = reviewBody(store, ticketId, runId, candidate, { integrityHash: 'x'.repeat(64) });
+  expectError(() => store.recordReview(ticketId, bad), 'candidate_changed', (e) => assert.equal(e.status, 409));
+  expectError(() => store.recordReview(ticketId, reviewBody(store, ticketId, runId, { ...candidate, candidateId: 'cand_other' })), 'candidate_changed');
+  expectError(() => store.recordReview(ticketId, reviewBody(store, ticketId, runId, candidate, { verdict: 'maybe' })), 'invalid_request');
+  expectError(() => store.recordReview(ticketId, reviewBody(store, ticketId, runId, candidate, { verdict: 'corrections' })), 'invalid_request');
+  expectError(() => store.recordReview(ticketId, reviewBody(store, ticketId, runId, candidate, { findings: 'x' })), 'invalid_request');
+  expectError(() => store.recordReview(ticketId, { ...reviewBody(store, ticketId, runId, candidate), expectedVersion: 1 }), 'stale_version');
+  assert.equal(db.prepare('SELECT COUNT(*) AS c FROM reviews').get().c, before);
+  assert.equal(store.getTicket(ticketId).status, 'waiting_human');
+
+  const body = reviewBody(store, ticketId, runId, candidate);
+  const out = store.recordReview(ticketId, body);
+  assert.equal(out.ticket.status, 'done');
+  assert.equal(out.review.verdict, 'accepted');
+  assert.equal(out.review.candidateId, candidate.candidateId);
+  assert.equal(store.getLatestReview(ticketId).reviewId, out.review.reviewId);
+  assert.equal(store.getAcceptedReview(ticketId).reviewId, out.review.reviewId);
+  assert.equal(store.recordReview(ticketId, body).replayed, true);
+  assert.equal(store.getLease().ticketId, ticketId, 'a changed candidate keeps the lease until committed or released');
+  expectError(() => store.recordReview(ticketId, reviewBody(store, ticketId, runId, candidate)), 'invalid_state');
+});
+
+test('an accepted read-only run with an empty manifest releases the lease', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  store.acquireLease(runId);
+  store.saveIntakePlan(runId, {
+    turn: 1, output: { ...NEEDS_INPUT, readiness: 'ready', questions: [], plan: PLAN }, classification: 'feature', plan: PLAN,
+    checks: [], requirements: NEEDS_INPUT.requirements, validatorVersion: 'm3-plan-v1',
+  });
+  store.recordBranch(runId, { branchName: null, baseCommit: 'a'.repeat(40) });
+  store.recordLeadTask(runId, 'task-ro', 'ctx');
+  store.moveToCandidate(runId);
+  const candidate = store.completeRun(runId, {
+    candidate: { baseCommit: 'a'.repeat(40), head: 'a'.repeat(40), branch: 'main', headMoved: false, manifest: [], truncated: false, acceptance: null, integrityHash: 'e'.repeat(64) },
+    diffArtifact: null, outcome: 'review',
+  });
+  store.recordReview(ticketId, reviewBody(store, ticketId, runId, candidate));
+  assert.equal(store.getTicket(ticketId).status, 'done');
+  assert.equal(store.getLease(), null);
+});
+
+test('corrections create a rework run on the same revision, transfer the lease, copy the plan and cap at three', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  let candidate = toReview(store, runId);
+  const firstPlan = store.getRun(runId).planRevisionId;
+  const leaseSince = store.getLease().acquiredAt;
+  let parent = runId;
+  const reworks = [];
+  for (let n = 1; n <= 3; n += 1) {
+    const out = store.recordReview(ticketId, reviewBody(store, ticketId, parent, candidate, { verdict: 'corrections', findings: `  fix round ${n} ` }));
+    assert.equal(out.ticket.status, 'in_progress');
+    assert.equal(out.review.verdict, 'corrections');
+    assert.equal(out.review.findings, `fix round ${n}`);
+    const rework = store.getRun(out.run.runId);
+    const superseded = store.getRun(parent);
+    assert.equal(superseded.status, 'completed');
+    assert.equal(superseded.waitReason, null);
+    assert.deepEqual(superseded.waitDetail, { code: 'corrections_requested', message: `Corrections requested; superseded by rework run ${rework.runId}` });
+    assert.deepEqual([rework.runKind, rework.parentRunId, rework.reworkReviewId, rework.status, rework.phase],
+      ['rework', parent, out.review.reviewId, 'running', 'branch']);
+    assert.equal(rework.revisionId, store.getRun(runId).revisionId);
+    assert.equal(rework.branchName, 'feature/work-abcdef');
+    const plan = store.getPlanRevision(rework.planRevisionId);
+    assert.equal(plan.parentPlanRevisionId, parent === runId ? firstPlan : store.getRun(parent).planRevisionId);
+    assert.equal(plan.reason, `rework: ${out.review.reviewId}`);
+    assert.deepEqual(plan.stages, PLAN.stages);
+    assert.deepEqual(store.getLease(), { projectId: 'proj', runId: rework.runId, ticketId, acquiredAt: leaseSince });
+    // The old review is spent and cannot be reused.
+    expectError(() => store.recordReview(ticketId, reviewBody(store, ticketId, parent, candidate)), 'invalid_state');
+    reworks.push(rework.runId);
+    candidate = reworkToReview(store, rework.runId, `h${n}`.padEnd(64, '0'));
+    parent = rework.runId;
+    assert.equal(store.getTicket(ticketId).status, 'waiting_human');
+  }
+  const refused = expectError(() => store.recordReview(ticketId, reviewBody(store, ticketId, parent, candidate, { verdict: 'corrections', findings: 'again' })), 'rework_exhausted');
+  assert.equal(refused.status, 409);
+  assert.equal(store.getTicket(ticketId).status, 'waiting_human');
+  assert.equal(store.getReviewForRun(parent), null);
+  // Accepting the last candidate is still possible.
+  assert.equal(store.recordReview(ticketId, reviewBody(store, ticketId, parent, candidate)).ticket.status, 'done');
+  assert.equal(store.listRuns(ticketId).filter((r) => r.runKind === 'rework').length, 3);
+});
+
+test('commit and push records: intended, succeeded, failed, unknown; the lease follows the commit', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  const candidate = toReview(store, runId);
+  const commitBody = (extra = {}) => cc(store, ticketId, { candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, message: 'Add feature', ...extra });
+  expectError(() => store.beginCommit(ticketId, commitBody()), 'invalid_state'); // not done yet
+  store.recordReview(ticketId, reviewBody(store, ticketId, runId, candidate));
+  expectError(() => store.beginCommit(ticketId, commitBody({ integrityHash: 'z'.repeat(64) })), 'candidate_changed');
+  expectError(() => store.beginCommit(ticketId, commitBody({ message: '' })), 'invalid_request');
+  expectError(() => store.beginCommit(ticketId, commitBody({ message: 'a\u0000b' })), 'invalid_request');
+  expectError(() => store.beginCommit(ticketId, commitBody({ message: 'x'.repeat(2001) })), 'invalid_request');
+
+  const body = commitBody();
+  const begun = store.beginCommit(ticketId, body);
+  assert.equal(begun.delivery.state, 'intended');
+  assert.deepEqual([begun.delivery.kind, begun.delivery.branch, begun.delivery.baseHead], ['commit', 'feature/work-abcdef', 'a'.repeat(40)]);
+  assert.equal(store.beginCommit(ticketId, body).replayed, true);
+  expectError(() => store.beginCommit(ticketId, commitBody()), 'invalid_state'); // one intended commit per candidate
+  expectError(() => store.releaseRepository(ticketId, cc(store, ticketId)), 'invalid_state');
+  assert.deepEqual(store.listIntendedDeliveries().map((d) => d.deliveryId), [begun.delivery.deliveryId]);
+
+  // A failed commit keeps the lease and allows a new commit command.
+  const failed = store.finishDelivery(begun.delivery.deliveryId, { state: 'failed', error: { code: 'git_identity_missing', message: 'no identity' } });
+  assert.deepEqual([failed.state, failed.error.code], ['failed', 'git_identity_missing']);
+  assert.equal(store.finishDelivery(begun.delivery.deliveryId, { state: 'succeeded' }), null);
+  assert.equal(store.getLease().ticketId, ticketId);
+  const second = store.beginCommit(ticketId, commitBody());
+  const sha = 'c'.repeat(40);
+  const ok = store.finishDelivery(second.delivery.deliveryId, { state: 'succeeded', commitSha: sha });
+  assert.equal(ok.commitSha, sha);
+  assert.equal(store.getLease(), null);
+  expectError(() => store.beginCommit(ticketId, commitBody()), 'invalid_state');
+
+  const pushBody = (extra = {}) => cc(store, ticketId, { deliveryId: ok.deliveryId, commitSha: sha, remote: 'origin', ...extra });
+  expectError(() => store.beginPush(ticketId, pushBody({ commitSha: 'd'.repeat(40) })), 'conflict');
+  expectError(() => store.beginPush(ticketId, pushBody({ deliveryId: failed.deliveryId, commitSha: undefined })), 'invalid_request');
+  expectError(() => store.beginPush(ticketId, pushBody({ deliveryId: failed.deliveryId })), 'conflict');
+  expectError(() => store.beginPush(ticketId, pushBody({ deliveryId: 'dlv_none' })), 'not_found');
+  expectError(() => store.beginPush(ticketId, pushBody({ remote: '-evil' })), 'invalid_request');
+  const push = store.beginPush(ticketId, pushBody());
+  assert.deepEqual([push.delivery.kind, push.delivery.parentDeliveryId, push.delivery.remoteRef, push.delivery.commitSha],
+    ['push', ok.deliveryId, 'refs/heads/feature/work-abcdef', sha]);
+  expectError(() => store.beginPush(ticketId, pushBody()), 'invalid_state'); // already in progress
+  assert.equal(store.finishDelivery(push.delivery.deliveryId, { state: 'unknown', error: { code: 'git_failed', message: 'timeout' } }).state, 'unknown');
+  const retry = store.beginPush(ticketId, pushBody());
+  assert.notEqual(retry.delivery.deliveryId, push.delivery.deliveryId);
+  assert.equal(store.finishDelivery(retry.delivery.deliveryId, { state: 'succeeded' }).state, 'succeeded');
+  assert.deepEqual(store.listDeliveries(ticketId).map((d) => [d.kind, d.state]),
+    [['commit', 'failed'], ['commit', 'succeeded'], ['push', 'unknown'], ['push', 'succeeded']]);
+});
+
+test('release repository frees the lease of a done ticket without a commit', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  const candidate = toReview(store, runId);
+  expectError(() => store.releaseRepository(ticketId, cc(store, ticketId)), 'invalid_state'); // not done
+  store.recordReview(ticketId, reviewBody(store, ticketId, runId, candidate));
+  const body = cc(store, ticketId);
+  const out = store.releaseRepository(ticketId, body);
+  assert.equal(store.getLease(), null);
+  assert.equal(out.ticket.status, 'done');
+  assert.equal(store.releaseRepository(ticketId, body).replayed, true);
+  expectError(() => store.releaseRepository(ticketId, cc(store, ticketId)), 'invalid_state'); // nothing held
+  expectError(() => store.beginCommit(ticketId, cc(store, ticketId, { candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, message: 'm' })), 'invalid_state');
+});
+
+// ---- natural settle never drops a pending control request (D-M7-3)
+
+function toEngineeringRun(store, title) {
+  const made = submitNew(store, title);
+  store.acquireLease(made.runId);
+  store.saveIntakePlan(made.runId, {
+    turn: 1, output: { ...NEEDS_INPUT, readiness: 'ready', questions: [], plan: PLAN }, classification: 'feature', plan: PLAN,
+    checks: [], requirements: NEEDS_INPUT.requirements, validatorVersion: 'm3-plan-v1',
+  });
+  store.recordBranch(made.runId, { branchName: `feature/${title}`, baseCommit: 'a'.repeat(40) });
+  store.recordLeadTask(made.runId, `task-${title}`, `ctx-${title}`);
+  return made;
+}
+
+const CANDIDATE = {
+  baseCommit: 'a'.repeat(40), head: 'a'.repeat(40), branch: 'feature/x', headMoved: false,
+  manifest: [{ path: 'a.js', status: 'M', sha256: 'f'.repeat(64), size: 3 }], truncated: false,
+  acceptance: { disposition: 'accepted', reasons: [], checks: [], stages: [] }, integrityHash: 'h'.repeat(64),
+};
+
+test('settleRun keeps the natural status and applies a pending cancel or return to backlog', async () => {
+  const events = [];
+  const { store } = await makeStore({ events: { record: (type, e) => events.push({ type, ...e }) } });
+  const a = toEngineeringRun(store, 'cancelme');
+  store.cancelTicket(a.ticketId, cc(store, a.ticketId));
+  const settledA = store.settleRun(a.runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', releaseLease: false });
+  assert.deepEqual([settledA.status, settledA.controlRequest], ['failed', null]);
+  assert.equal(store.getTicket(a.ticketId).status, 'cancelled');
+  assert.equal(store.getLease(), null);
+  assert.ok(events.some((e) => e.type === 'control_requested' && e.runId === a.runId && e.payload.control === 'cancel' && e.payload.outcome === 'settled'));
+
+  const b = toEngineeringRun(store, 'backlogme');
+  const staged = store.reviseTicket(b.ticketId, cc(store, b.ticketId, { title: 'Edited', description: 'n' }));
+  store.returnToBacklog(b.ticketId, cc(store, b.ticketId));
+  const settledB = store.settleRun(b.runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error' });
+  assert.equal(settledB.status, 'failed');
+  const ticket = store.getTicket(b.ticketId);
+  assert.deepEqual([ticket.status, ticket.currentRevisionId], ['backlog', staged.revision.revisionId]);
+  assert.equal(store.getLease().ticketId, b.ticketId); // repository effect keeps the lease
+});
+
+test('settleRun with a pending stop keeps the natural wait; a pending pause is moot; both are recorded', async () => {
+  const events = [];
+  const { store } = await makeStore({ events: { record: (type, e) => events.push({ type, ...e }) } });
+  const a = toEngineeringRun(store, 'stopme');
+  store.requestStop(a.ticketId, cc(store, a.ticketId, { runId: a.runId }));
+  const settled = store.settleRun(a.runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error' });
+  assert.deepEqual([settled.status, settled.waitReason, settled.controlRequest], ['failed', 'execution_error', null]);
+  assert.equal(store.getTicket(a.ticketId).status, 'blocked');
+  assert.ok(events.some((e) => e.type === 'control_requested' && e.runId === a.runId && e.payload.control === 'stop' && e.payload.outcome === 'settled'));
+
+  store.cancelTicket(a.ticketId, cc(store, a.ticketId)); // frees the lease the stopped run kept
+  const b = submitNew(store, 'pauseme');
+  assert.equal(store.acquireLease(b.runId).acquired, true);
+  store.requestPause(b.ticketId, cc(store, b.ticketId, { runId: b.runId }));
+  assert.equal(store.getRun(b.runId).controlRequest, 'pause');
+  store.settleRun(b.runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', releaseLease: true });
+  assert.equal(store.getRun(b.runId).controlRequest, null);
+  assert.ok(events.some((e) => e.type === 'control_requested' && e.runId === b.runId && e.payload.control === 'pause' && e.payload.outcome === 'moot'));
+});
+
+test('settleRun releases the lease only when the ticket had no repository effect', async () => {
+  const { store } = await makeStore();
+  const a = toEngineeringRun(store, 'effect2');
+  store.settleRun(a.runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', releaseLease: true });
+  assert.equal(store.getLease().ticketId, a.ticketId);
+});
+
+test('completeRun with a pending control: cancel and return to backlog apply, stop and pause are moot', async () => {
+  const events = [];
+  const { store } = await makeStore({ events: { record: (type, e) => events.push({ type, ...e }) } });
+  const finish = (made) => {
+    store.moveToCandidate(made.runId);
+    return store.completeRun(made.runId, { candidate: CANDIDATE, outcome: 'review' });
+  };
+  const a = toEngineeringRun(store, 'c1');
+  store.cancelTicket(a.ticketId, cc(store, a.ticketId));
+  assert.ok(finish(a));
+  const runA = store.getRun(a.runId);
+  assert.deepEqual([runA.status, runA.controlRequest, store.getTicket(a.ticketId).status], ['completed', null, 'cancelled']);
+  assert.ok(runA.candidateId);
+  assert.equal(store.getLease(), null);
+
+  const b = toEngineeringRun(store, 'c2');
+  store.returnToBacklog(b.ticketId, cc(store, b.ticketId));
+  assert.ok(finish(b));
+  assert.deepEqual([store.getRun(b.runId).status, store.getTicket(b.ticketId).status], ['completed', 'backlog']);
+  assert.equal(store.getLease().ticketId, b.ticketId);
+  store.cancelTicket(b.ticketId, cc(store, b.ticketId)); // free the lease for the next run
+
+  const c = toEngineeringRun(store, 'c3');
+  store.requestStop(c.ticketId, cc(store, c.ticketId, { runId: c.runId }));
+  assert.ok(finish(c));
+  assert.deepEqual([store.getRun(c.runId).controlRequest, store.getTicket(c.ticketId).status], [null, 'waiting_human']);
+  assert.ok(events.some((e) => e.type === 'control_requested' && e.runId === c.runId && e.payload.control === 'stop' && e.payload.outcome === 'moot'));
+  store.cancelTicket(c.ticketId, cc(store, c.ticketId));
+
+  const d = toEngineeringRun(store, 'c4');
+  store.requestPause(d.ticketId, cc(store, d.ticketId, { runId: d.runId }));
+  assert.ok(finish(d));
+  assert.deepEqual([store.getRun(d.runId).controlRequest, store.getTicket(d.ticketId).status], [null, 'waiting_human']);
+});
+
+test('a pending pause is moot once the run waits for a human answer, and Resume never applies to such a run', async () => {
+  const { store } = await makeStore();
+  const a = submitNew(store, 'intake-wait');
+  store.acquireLease(a.runId);
+  store.requestPause(a.ticketId, cc(store, a.ticketId, { runId: a.runId }));
+  const decision = store.requestIntakeAnswer(a.runId, { turn: 1, output: NEEDS_INPUT });
+  const run = store.getRun(a.runId);
+  assert.deepEqual([run.status, run.phase, run.waitReason, run.controlRequest], ['paused', 'awaiting_answer', 'human_decision', null]);
+  assert.equal(store.getDecision(decision.decisionId).state, 'pending');
+  expectError(() => store.resume(a.ticketId, cc(store, a.ticketId, { runId: a.runId })), 'invalid_state');
+  assert.equal(store.settleControlRequest(a.runId, 'pause'), null);
+  store.answerDecision(a.ticketId, decision.decisionId, cc(store, a.ticketId, { answers: [{ questionId: 'q1', answer: 'x' }] }));
+
+  store.cancelTicket(a.ticketId, cc(store, a.ticketId));
+  store.settleControlRequest(a.runId, 'cancel');
+  const b = toEngineeringRun(store, 'lead-wait');
+  store.requestPause(b.ticketId, cc(store, b.ticketId, { runId: b.runId }));
+  const pause = { kind: 'human_decision', decisionId: 'lead-dec-9', question: 'Which?', reason: 'product_choice', options: [{ id: 'a', description: 'A' }], recommendation: 'a' };
+  const lead = store.requestLeadDecision(b.runId, pause);
+  const runB = store.getRun(b.runId);
+  assert.deepEqual([runB.waitReason, runB.controlRequest], ['human_decision', null]);
+  expectError(() => store.resume(b.ticketId, cc(store, b.ticketId, { runId: b.runId })), 'invalid_state');
+  assert.equal(store.getDecision(lead.decisionId).state, 'pending');
+});
+
+test('settleControlRequest settles only the request the caller evaluated', async () => {
+  const { store } = await makeStore();
+  const a = toEngineeringRun(store, 'cas');
+  store.requestPause(a.ticketId, cc(store, a.ticketId, { runId: a.runId }));
+  assert.equal(store.settleControlRequest(a.runId, 'stop'), null);
+  assert.equal(store.getRun(a.runId).controlRequest, 'pause');
+  assert.equal(store.settleControlRequest(a.runId, 'pause').status, 'paused');
 });

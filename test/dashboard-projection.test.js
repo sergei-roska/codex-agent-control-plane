@@ -198,8 +198,8 @@ test('detail: caps, pause sanitizing, user messages, actions', async () => {
   assert.deepEqual(detail.availableActions, []);
   assert.deepEqual(detail.unavailableActions.map((a) => a.action), ['pause', 'resume', 'stop', 'cancel', 'edit', 'return_to_backlog', 'review', 'commit', 'push']);
   for (const action of detail.unavailableActions) {
-    assert.equal(action.reason, 'Operator commands are not available in this release');
-    assert.equal(action.milestone, 'M7');
+    assert.match(action.reason, /read-only/);
+    assert.ok(!('milestone' in action));
   }
   await save('orchestrator', makeTask('d-2', { history: [] }));
   const empty = projection.getCard(refId(projection, 'orchestrator', 'd-2'));

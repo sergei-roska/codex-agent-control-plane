@@ -188,3 +188,10 @@
   font-size: 13px;
   font-weight: 500;
 }
+
+/* M7 drag and drop: only cards that advertise a drag action are draggable */
+.ticket-card.draggable { cursor: grab; }
+.ticket-card.dragging { opacity: 0.5; }
+.board-column.drop-ok { outline: 2px dashed var(--accent-green); outline-offset: -4px; }
+.board-column.drop-bad { outline: 2px dashed var(--accent-red); outline-offset: -4px; }
+.board-drag-error { margin-bottom: 8px; }

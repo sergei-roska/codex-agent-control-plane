@@ -92,3 +92,24 @@ test('rolePack defaults to delivery, accepts legacy-orch, is strict and changes 
     assert.throws(() => load({ rolePack: bad }), /rolePack must be one of/, JSON.stringify(bad));
   }
 });
+
+test('delivery.remotes defaults to origin, validates names and count, and changes the revision', () => {
+  const defaults = loadProjectConfig({ filePath: path.join(os.tmpdir(), 'nope-none', 'project.json') });
+  assert.deepEqual(defaults.delivery, { remotes: ['origin'] });
+  assert.deepEqual(load({}).delivery, { remotes: ['origin'] });
+  assert.deepEqual(load({ delivery: { remotes: ['origin', 'up.stream_1'] } }).delivery.remotes, ['origin', 'up.stream_1']);
+  assert.equal(load({ delivery: { remotes: Array.from({ length: 10 }, (_, i) => `r${i}`) } }).delivery.remotes.length, 10);
+  assert.equal(load({ delivery: { remotes: ['a'.repeat(100)] } }).delivery.remotes[0].length, 100);
+  assert.notEqual(load({ delivery: { remotes: ['origin', 'mirror'] } }).revision, load({}).revision);
+  assert.throws(() => load({ delivery: { remotes: [] } }), /delivery.remotes/);
+  assert.throws(() => load({ delivery: { remotes: Array.from({ length: 11 }, (_, i) => `r${i}`) } }), /delivery.remotes/);
+  assert.throws(() => load({ delivery: { remotes: 'origin' } }), /delivery.remotes/);
+  assert.throws(() => load({ delivery: { remotes: ['bad name'] } }), /delivery.remotes entries/);
+  assert.throws(() => load({ delivery: { remotes: ['a'.repeat(101)] } }), /delivery.remotes entries/);
+  assert.throws(() => load({ delivery: { remotes: [1] } }), /delivery.remotes entries/);
+  for (const bad of ['-x', '--upload-pack=evil', '.hidden', '_x']) {
+    assert.throws(() => load({ delivery: { remotes: [bad] } }), /delivery.remotes entries/, bad);
+  }
+  assert.throws(() => load({ delivery: { other: 1 } }), /unknown field/);
+  assert.throws(() => load({ delivery: [] }), /delivery must be an object/);
+});

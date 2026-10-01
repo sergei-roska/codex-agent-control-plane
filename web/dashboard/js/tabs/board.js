@@ -16,6 +16,13 @@ const boardData = {
   context: null
 };
 
+// Drag actions a card may advertise (card.dragActions) and the board column each one is dropped on.
+const BOARD_DROP_TARGETS = {
+  submit: { column: 'pending', path: '/submit', confirm: 'Submit this ticket to Intake?\n\nThe PM will read the ticket and the repository (read-only) and may ask you clarifying questions before planning. While a run is active the ticket cannot be edited.' },
+  return_to_backlog: { column: 'backlog', path: '/return-to-backlog', confirm: 'Return this ticket to Backlog?\n\nAn active run is stopped. File changes already made in the checkout are kept. Revisions, attachments and run history are kept. A staged revision becomes the current requirement.' }
+};
+
+let boardDrag = null;
 let boardSearchTimer = null;
 let boardLastSignature = null;
 
@@ -150,6 +157,27 @@ function createDirectTicketCard(card) {
     class: 'ticket-time', text: 'Updated ' + formatRelative(card.updatedAt), title: formatAbsTime(card.updatedAt)
   }));
 
+  const dragActions = Array.isArray(card.dragActions) ? card.dragActions.filter(a => BOARD_DROP_TARGETS[a]) : [];
+  if (dragActions.length) {
+    el.setAttribute('draggable', 'true');
+    el.classList.add('draggable');
+    el.title = (card.title || '') + ' (drag to move; the ticket actions also work from the card)';
+    el.addEventListener('dragstart', (e) => {
+      boardDrag = { ticketId, cardId: card.cardId, actions: dragActions };
+      el.classList.add('dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(ticketId));
+      }
+      boardSetDragError('');
+    });
+    el.addEventListener('dragend', () => {
+      el.classList.remove('dragging');
+      boardDrag = null;
+      boardClearDropMarks();
+    });
+  }
+
   const open = () => openTicketRecord(ticketId);
   el.addEventListener('click', open);
   el.addEventListener('keydown', (e) => {
@@ -238,6 +266,7 @@ function renderBoard() {
   const statusContainer = document.getElementById('status-view-container');
   const roleContainer = document.getElementById('role-view-container');
   if (!statusContainer || !roleContainer) return;
+  if (boardDrag) return;
 
   const signature = JSON.stringify([state.boardView, boardData.loaded, boardData.cards, boardData.counts,
     boardData.roles, boardData.total, boardData.truncated, Math.floor(Date.now() / 60000)]);
@@ -300,6 +329,84 @@ function setBoardView(view) {
   renderBoard();
 }
 
+function boardSetDragError(message) {
+  let el = document.getElementById('board-drag-error');
+  if (!el) {
+    const status = document.getElementById('board-status');
+    if (!status || !status.parentNode) return;
+    el = h('div', { class: 'tf-field-error board-drag-error', attrs: { id: 'board-drag-error', role: 'alert' } });
+    status.parentNode.insertBefore(el, status.nextSibling);
+  }
+  el.textContent = message || '';
+}
+
+function boardClearDropMarks() {
+  document.querySelectorAll('.board-column.drop-ok, .board-column.drop-bad').forEach(c => c.classList.remove('drop-ok', 'drop-bad'));
+}
+
+// The board always shows the last backend state: after any drop (valid or not) it is rebuilt from boardData.
+function boardRevert() {
+  boardLastSignature = null;
+  renderBoard();
+  Poller.trigger();
+}
+
+function boardDropAction(drag, column) {
+  return drag.actions.find(a => BOARD_DROP_TARGETS[a].column === column) || null;
+}
+
+async function boardHandleDrop(drag, column) {
+  const action = boardDropAction(drag, column);
+  if (!action) {
+    boardSetDragError('That move is not allowed. Only Pending (submit) and Backlog (return to backlog) accept a drop, and only when the ticket allows it.');
+    boardRevert();
+    return;
+  }
+  const target = BOARD_DROP_TARGETS[action];
+  if (!window.confirm(target.confirm)) { boardRevert(); return; }
+  const base = '/tickets/' + encodeURIComponent(drag.ticketId);
+  try {
+    // Cards carry no ticket version, so read the current one; the server still rejects a stale move.
+    const detail = await apiGet(base);
+    const version = detail && detail.ticket ? detail.ticket.version : null;
+    if (!isNumber(version)) throw new ApiError(0, 'bad_response', 'The ticket version is unavailable');
+    await apiPost(base + target.path, { commandId: newCommandId(), expectedVersion: version });
+    boardSetDragError('');
+  } catch (err) {
+    boardSetDragError('Move rejected: ' + (err && err.message ? err.message : 'request failed') + (err && err.code ? ' (' + err.code + ')' : ''));
+  }
+  boardRevert();
+}
+
+function initBoardDragDrop() {
+  const container = document.getElementById('status-view-container');
+  if (!container) return;
+  const columnOf = (e) => e.target && e.target.closest ? e.target.closest('.board-column') : null;
+  container.addEventListener('dragover', (e) => {
+    const col = columnOf(e);
+    if (!col || !boardDrag) return;
+    e.preventDefault();
+    // Every column accepts the drop so the browser fires `drop`; the handler rejects disallowed targets with a message.
+    const ok = Boolean(boardDropAction(boardDrag, col.dataset.col));
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    boardClearDropMarks();
+    col.classList.add(ok ? 'drop-ok' : 'drop-bad');
+  });
+  container.addEventListener('dragleave', (e) => {
+    const col = columnOf(e);
+    if (col && !col.contains(e.relatedTarget)) col.classList.remove('drop-ok', 'drop-bad');
+  });
+  container.addEventListener('drop', (e) => {
+    const col = columnOf(e);
+    if (!col || !boardDrag) return;
+    e.preventDefault();
+    boardClearDropMarks();
+    const drag = boardDrag;
+    boardDrag = null;
+    boardHandleDrop(drag, col.dataset.col);
+  });
+}
+
 function applyBoardFilters() {
   boardLastSignature = null;
   Poller.trigger();
@@ -311,6 +418,7 @@ function initBoardEvents() {
   const boardSearch = document.getElementById('board-search');
   const boardRoleFilter = document.getElementById('board-role-filter');
 
+  initBoardDragDrop();
   if (btnStatus) btnStatus.addEventListener('click', () => setBoardView('status'));
   if (btnRole) btnRole.addEventListener('click', () => setBoardView('role'));
 
