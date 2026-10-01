@@ -691,8 +691,12 @@ class ProductStore {
     const latestAvailable = identity.latest_available_snapshot_id
       ? this.sourceSnapshotMeta(identity.latest_available_snapshot_id) : null;
     const appliedSnapshotId = applied?.snapshot_id || null;
-    const pendingSnapshotId = identity.latest_snapshot_id && identity.latest_snapshot_id !== appliedSnapshotId
-      ? identity.latest_snapshot_id : null;
+    // Pending is an available snapshot whose content differs from the applied content;
+    // unavailable observations stay in history only.
+    const appliedMeta = appliedSnapshotId ? this.sourceSnapshotMeta(appliedSnapshotId) : null;
+    const pendingSnapshotId = latestAvailable && latestAvailable.snapshotId !== appliedSnapshotId
+      && latestAvailable.contentHash !== appliedMeta?.contentHash
+      ? latestAvailable.snapshotId : null;
     return {
       identityId: identity.identity_id,
       sourceKind: identity.source_kind,
@@ -966,7 +970,12 @@ class ProductStore {
       const appliedRow = this.stmt(`SELECT l.snapshot_id FROM ticket_source_revision_links l
         JOIN requirement_revisions r ON r.revision_id = l.revision_id
         WHERE l.ticket_id = ? ORDER BY r.ordinal DESC LIMIT 1`).get(ticket.ticketId);
-      const alreadyApplied = appliedRow?.snapshot_id === snapshot.snapshotId;
+      // Compare content, not snapshot identity: A -> unavailable -> A records a new snapshot with A's content.
+      const appliedHash = appliedRow
+        ? this.stmt('SELECT content_hash FROM m6_source_snapshots WHERE snapshot_id = ?').get(appliedRow.snapshot_id)?.content_hash
+        : null;
+      const alreadyApplied = appliedRow?.snapshot_id === snapshot.snapshotId || appliedHash === snapshot.contentHash;
+      const changed = snapshot.rootAvailable ? !alreadyApplied : recorded.changed;
       let applied = false;
       let artifactAttached = false;
       let revision = this.getRevision(ticket.ticketId, ticket.currentRevisionId);
@@ -990,7 +999,7 @@ class ProductStore {
       const result = {
         ticket: this.getTicket(ticket.ticketId), revision,
         source: this.getTicketSource(ticket.ticketId), duplicate: false, applied,
-        changed: recorded.changed, artifactAttached,
+        changed, artifactAttached,
       };
       this.recordSourceCommand(commandId, 'source_refresh', fingerprint, result);
       return { ...result, replayed: false };

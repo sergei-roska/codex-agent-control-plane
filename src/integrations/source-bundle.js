@@ -198,9 +198,14 @@ async function collectSourceBundle({ provider, root: rawRoot, origins = [], limi
     let received;
     try {
       received = await provider.read({ ...ref });
-    } catch {
-      received = { ...ref, availability: 'unavailable', title: 'Source context unavailable', text: '', links: [] };
-      warnings.push({ code: 'provider_unavailable', source: ref, message: 'The configured source could not be read.' });
+    } catch (error) {
+      // A rejected credential is not source state: abort the whole collection at any depth.
+      if (error?.code === 'reconnect_required') throw error;
+      const denied = error?.code === 'unauthorized';
+      received = { ...ref, availability: denied ? 'unauthorized' : 'unavailable', title: 'Source context unavailable', text: '', links: [] };
+      warnings.push(denied
+        ? { code: 'provider_unauthorized', source: ref, message: 'Access to the source was denied for the connected account.' }
+        : { code: 'provider_unavailable', source: ref, message: 'The configured source could not be read.' });
     }
     const doc = safeDocument(received, ref, origin, limits, warnings);
     if (ref.sourceKind === 'jira' && depth === 0 && doc.availability === 'available' && doc.externalId !== ref.externalId) {

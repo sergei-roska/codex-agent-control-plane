@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { createAuditedFetch } = require('./atlassian-egress');
 const { createAtlassianOAuthClient } = require('./atlassian-oauth');
 const { createAtlassianReadClient } = require('./atlassian-read-client');
 const { createAtlassianSourceProvider } = require('./atlassian-source-provider');
@@ -45,13 +46,16 @@ function rootFromSource(source) {
   return { sourceKind: root.sourceKind, originId: root.originId, externalId: root.externalId };
 }
 
-function createAtlassianIntegration({ db, productStore, artifactStore, workspace, config = null, fetchImpl, now = () => Date.now(), oauth: suppliedOAuth, provider: suppliedProvider } = {}) {
+function createAtlassianIntegration({ db, productStore, artifactStore, workspace, config = null, fetchImpl, now = () => Date.now(), oauth: suppliedOAuth, provider: suppliedProvider, events } = {}) {
   if (!db || !productStore || !artifactStore || typeof workspace !== 'string') throw new TypeError('Atlassian integration dependencies are required');
   db.exec(`CREATE TABLE IF NOT EXISTS m6_atlassian_selected_sites (
     cloud_id TEXT PRIMARY KEY,
     resource_json TEXT NOT NULL,
     selected_at TEXT NOT NULL
   )`);
+  // All Atlassian egress passes through one guarded, journaled fetch.
+  const auditedFetch = createAuditedFetch(fetchImpl || globalThis.fetch,
+    { record: (payload) => events?.record('atlassian_egress', { payload }) });
   let oauth = suppliedOAuth || null;
   let handoff = null;
   const callbackOrigin = typeof config?.callbackOrigin === 'string' ? config.callbackOrigin : (() => {
@@ -67,7 +71,7 @@ function createAtlassianIntegration({ db, productStore, artifactStore, workspace
     const tokenStore = createEncryptedTokenStore({ filePath: config.tokenStorePath, workspaceRoot: workspace,
       bindingId, resolveEncryptionKey: config.resolveEncryptionKey });
     oauth = createAtlassianOAuthClient({ clientId: config.clientId, redirectUri: config.redirectUri,
-      tokenStore, resolveClientSecret: config.resolveClientSecret, fetchImpl, now });
+      tokenStore, resolveClientSecret: config.resolveClientSecret, fetchImpl: auditedFetch, now });
   }
   if (oauth) {
     handoff = createOAuthHandoff({ oauth, now });
@@ -110,17 +114,28 @@ function createAtlassianIntegration({ db, productStore, artifactStore, workspace
   }
   function removeArtifact(stored) { try { artifactStore.remove(stored.storageRef); } catch { /* best effort cleanup of this request's unreferenced file */ } }
 
+  // The selected site missing from a successful accessible-resources response, or lacking the Jira scope, is an authorization loss
+  // (for example a revoked app grant whose refresh token still works): treat it like a rejected credential. Confluence-only loss is not checked here.
+  async function assertSelectedSiteAccess(origin, expectedConnection, signal) {
+    const resource = (await freshResources(signal)).find((item) => item.id === origin.cloudId);
+    if (resource && resource.scopes.includes(REQUIRED.jira)) return;
+    try { oauth.markReconnectRequired?.({ revision: expectedConnection ?? undefined }); } catch { /* the credential error below still propagates */ }
+    throw fail('reconnect_required');
+  }
+
   async function retrieveBundle({ expectedLocal, expectedConnection, origin, issueIdOrKey, signal }) {
     const check = () => {
       if (signal.aborted) throw fail('request_timeout');
       current(expectedLocal, expectedConnection);
     };
-    const scopedFetch = typeof fetchImpl === 'function' ? (url, options = {}) => {
+    const scopedFetch = (url, options = {}) => {
       check();
       const signals = [options.signal, signal].filter(Boolean);
       const combined = signals.length > 1 && typeof AbortSignal.any === 'function' ? AbortSignal.any(signals) : (signals[0] || signal);
-      return fetchImpl(url, { ...options, signal: combined });
-    } : undefined;
+      return auditedFetch(url, { ...options, signal: combined });
+    };
+    await assertSelectedSiteAccess(origin, expectedConnection, signal);
+    check();
     const client = createAtlassianReadClient({ oauth, sites: selectedOrigins(), fetchImpl: scopedFetch });
     const underlying = suppliedProvider || createAtlassianSourceProvider({ client, sites: selectedOrigins() });
     const provider = { async read(ref) { check(); const doc = await underlying.read(ref); check(); return doc; } };
@@ -230,7 +245,10 @@ function createAtlassianIntegration({ db, productStore, artifactStore, workspace
         return value;
       } catch (error) { throw safeError(error, 'invalid_state'); }
     },
-    async resources() { const resources = await freshResources(); return { resources: resources.map(({ id, url, name, scopes }) => ({ id, url, name, scopes })) }; },
+    async resources() {
+      const resources = await freshResources();
+      if (!resources.length && selected().length) { try { oauth.markReconnectRequired?.(); } catch { /* health reports the state */ } }
+      return { resources: resources.map(({ id, url, name, scopes }) => ({ id, url, name, scopes })) }; },
     async selectSite({ cloudId } = {}) {
       if (!validCloudId(cloudId)) throw fail('invalid_request');
       const expectedLocal = generation;

@@ -88,7 +88,7 @@ async function readBounded(response, maxBytes = MAX_BODY_BYTES, signal) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function requestJson(fetchImpl, url, options, timeoutMs, maxBytes = MAX_BODY_BYTES, { signal, recognizeInvalidGrant = false } = {}) {
+async function requestJson(fetchImpl, url, options, timeoutMs, maxBytes = MAX_BODY_BYTES, { signal, recognizeInvalidGrant = false, unauthorizedCode = null } = {}) {
   if (signal?.aborted) throw safeError('request_timeout');
   const controller = new AbortController();
   const abortExternal = () => controller.abort();
@@ -104,6 +104,7 @@ async function requestJson(fetchImpl, url, options, timeoutMs, maxBytes = MAX_BO
       if (response.status >= 300 && response.status < 400) throw safeError('redirect_rejected');
       const body = await readBounded(response, maxBytes, controller.signal);
       if (!response.ok) {
+        if (unauthorizedCode && response.status === 401) throw safeError(unauthorizedCode);
         if (recognizeInvalidGrant && [400, 401].includes(response.status)) {
           try { if (JSON.parse(body)?.error === 'invalid_grant') throw safeError('invalid_grant'); } catch (error) {
             if (safeCode(error) === 'invalid_grant') throw error;
@@ -161,6 +162,7 @@ function createAtlassianOAuthClient(options = {}) {
   let inMemoryTokens = null;
   let pendingRotated = null;
   let reconnectRequired = false;
+  let reconnectReported = false; // true only when credentials were revoked or rejected, not on disconnect or a handoff in progress.
   let generationController = new AbortController();
 
   function clockNow() {
@@ -282,6 +284,7 @@ function createAtlassianOAuthClient(options = {}) {
           if (safeCode(error, '') === 'invalid_grant') {
             const revokedGeneration = advanceGeneration();
             reconnectRequired = true;
+            reconnectReported = true;
             inMemoryTokens = null;
             pendingRotated = null;
             try { await enqueuePersist(async () => { try { await tokenStore.clear(); } catch { throw safeError('credential_store_failed'); } }); }
@@ -298,6 +301,17 @@ function createAtlassianOAuthClient(options = {}) {
       promise.finally(() => { if (refreshPromise?.promise === promise) refreshPromise = null; }).catch(() => {});
     }
     return refreshPromise.promise;
+  }
+
+  // A resource call returned 401 for the current token: require a reconnect without deleting stored tokens.
+  function markReconnectRequired({ revision } = {}) {
+    if (revision !== undefined && revision !== null && revision !== generation) return false;
+    advanceGeneration();
+    reconnectRequired = true;
+    reconnectReported = true;
+    inMemoryTokens = null;
+    pendingRotated = null;
+    return true;
   }
 
   return Object.freeze({
@@ -337,10 +351,12 @@ function createAtlassianOAuthClient(options = {}) {
       await storeForGeneration(await exchange({ grant_type: 'authorization_code', code }, expectedGeneration), expectedGeneration);
       if (generation !== expectedGeneration) throw safeError('connection_changed');
       reconnectRequired = false;
+      reconnectReported = false;
       return { connected: true };
     },
     getAccessToken,
     getConnectionRevision() { return generation; },
+    markReconnectRequired,
     async getResources({ signal } = {}) {
       const startedAt = generation;
       const token = await getAccessToken({ signal });
@@ -350,7 +366,11 @@ function createAtlassianOAuthClient(options = {}) {
       let result;
       try { result = await requestJson(fetchImpl, RESOURCES_URL, {
         method: 'GET', headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
-      }, timeoutMs, MAX_BODY_BYTES, { signal: combined.signal }); }
+      }, timeoutMs, MAX_BODY_BYTES, { signal: combined.signal, unauthorizedCode: 'reconnect_required' }); }
+      catch (error) {
+        if (safeCode(error, '') === 'reconnect_required') markReconnectRequired({ revision: startedAt });
+        throw error;
+      }
       finally { combined.dispose(); }
       if (generation !== startedAt || reconnectRequired || signal?.aborted) throw safeError(signal?.aborted ? 'request_timeout' : 'connection_changed');
       if (!Array.isArray(result) || result.some((resource) => !resource || typeof resource.id !== 'string' ||
@@ -364,12 +384,13 @@ function createAtlassianOAuthClient(options = {}) {
         return { connected: Boolean(tokens), expiresAt: tokens ? tokens.expiresAt : null,
           scopes: tokens ? [...tokens.scopes] : [], pendingAuthorizations: pending.size };
       } catch {
-        return { connected: false, expiresAt: null, scopes: [], pendingAuthorizations: pending.size };
+        return { connected: false, ...(reconnectReported ? { reconnectRequired: true } : {}), expiresAt: null, scopes: [], pendingAuthorizations: pending.size };
       }
     },
     async disconnect() {
       advanceGeneration();
       reconnectRequired = true;
+      reconnectReported = false;
       inMemoryTokens = null;
       pendingRotated = null;
       for (const [state, item] of pending) if (item) pending.delete(state);

@@ -220,16 +220,18 @@ function renderAtlassian() {
     return;
   }
   if (!ac.health.connected) {
-    badge.className = 'status-badge disconnected'; badge.textContent = 'Disconnected';
+    const needsReconnect = ac.health.state === 'reconnect_required';
+    badge.className = 'status-badge disconnected'; badge.textContent = needsReconnect ? 'Reconnect required' : 'Disconnected';
     const originMismatch = acCallbackOriginMismatch();
     desc.textContent = originMismatch
       ? 'Open this dashboard at the orchestrator callback origin before connecting. Browser sessions do not cross between localhost and 127.0.0.1.'
+      : needsReconnect ? 'Atlassian rejected the saved credentials. Reconnect to resume Jira and Confluence reads.'
       : 'Connect an Atlassian account to retrieve Jira and Confluence context. The orchestrator requests read-only access.';
     state.textContent = 'OAuth tokens remain on the orchestrator; this page never receives them.';
     if (originMismatch) {
       const target = acCallbackTarget();
       actions.appendChild(acButton('Open dashboard at configured origin', () => { if (target) window.location.assign(target); }, Boolean(ac.busy)));
-    } else actions.appendChild(acButton(ac.busy === 'begin' ? 'Connecting...' : 'Connect Atlassian', beginAtlassianAuthorization, Boolean(ac.busy)));
+    } else actions.appendChild(acButton(ac.busy === 'begin' ? 'Connecting...' : (needsReconnect ? 'Reconnect Atlassian' : 'Connect Atlassian'), beginAtlassianAuthorization, Boolean(ac.busy)));
     if (siteRow) siteRow.hidden = true;
     if (importPanel) importPanel.hidden = true;
     return;

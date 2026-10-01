@@ -765,7 +765,7 @@ async function startServer({
         ? loadAtlassianConfig({ workspace: path.resolve(workspace), configPath: atlassianConfigPath, port: actualPort })
         : suppliedAtlassianConfig;
       atlassianIntegration = createAtlassianIntegration({ db: state.db, productStore, artifactStore, workspace: path.resolve(workspace),
-        config: atlassianConfig, oauth: atlassianOAuth, provider: atlassianProvider, fetchImpl: atlassianFetchImpl });
+        config: atlassianConfig, oauth: atlassianOAuth, provider: atlassianProvider, fetchImpl: atlassianFetchImpl, events });
     }
     events.record('server_started', { payload: {
       port: actualPort,

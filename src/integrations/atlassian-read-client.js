@@ -9,7 +9,7 @@ function fail(code) { return new AtlassianOAuthError(code, 'Atlassian read reque
 const SAFE_AUTH_CODES = new Set(['request_timeout', 'redirect_rejected', 'unbounded_response_body', 'response_too_large',
   'upstream_request_failed', 'invalid_upstream_response', 'invalid_resource_response', 'reconnect_required',
   'connection_changed', 'credential_store_failed', 'invalid_saved_credentials', 'invalid_token_response',
-  'unexpected_scope', 'required_scope_missing', 'client_configuration_error', 'credential_refresh_failed']);
+  'unexpected_scope', 'required_scope_missing', 'client_configuration_error', 'credential_refresh_failed', 'unauthorized']);
 function authFailure(error) {
   return fail(error instanceof AtlassianOAuthError && SAFE_AUTH_CODES.has(error.code) ? error.code : 'authorization_unavailable');
 }
@@ -49,7 +49,8 @@ async function readJson(response, limit, signal) {
     } finally { signal.removeEventListener('abort', abort); reader.releaseLock?.(); }
     body = Buffer.concat(parts).toString('utf8');
   }
-  if (!response.ok) throw fail(response.status === 401 || response.status === 403 ? 'unauthorized' : 'upstream_request_failed');
+  if (response.status === 401) { const error = fail('reconnect_required'); error.credentialRejected = true; throw error; } // a 401 means the token itself was refused.
+  if (!response.ok) throw fail(response.status === 403 ? 'unauthorized' : 'upstream_request_failed'); // 403 is per-document access.
   try { return JSON.parse(body); } catch { throw fail('invalid_upstream_response'); }
 }
 
@@ -117,7 +118,10 @@ function createAtlassianReadClient({ oauth, sites, fetchImpl = globalThis.fetch,
         return value;
       })();
       try { return await Promise.race([operation, deadline]); }
-      catch (error) { if (error instanceof AtlassianOAuthError) throw authFailure(error); throw fail(controller.signal.aborted ? 'request_timeout' : 'upstream_request_failed'); }
+      catch (error) {
+        if (error?.credentialRejected) { try { oauth.markReconnectRequired?.({ revision: startedRevision }); } catch { /* the credential error below still propagates */ } }
+        if (error instanceof AtlassianOAuthError) throw authFailure(error);
+        throw fail(controller.signal.aborted ? 'request_timeout' : 'upstream_request_failed'); }
     } finally { clearTimeout(timer); }
   }
 

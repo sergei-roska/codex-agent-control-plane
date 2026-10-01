@@ -128,10 +128,10 @@ function createAtlassianSourceProvider({ client, sites = [] } = {}) {
             if (values.length < MAX_COMMENTS || startAt >= total) break;
             if (page === MAX_COMMENT_PAGES - 1) warnings.push('Jira comments were truncated at the pagination limit.');
           }
-        } catch { warnings.push('Jira comments could not be retrieved; comment context is unavailable.'); }
+        } catch (error) { if (error?.code === 'reconnect_required') throw error; warnings.push('Jira comments could not be retrieved; comment context is unavailable.'); }
         let remotes = [];
         try { remotes = await client.getRemoteLinks({ originId: ref.originId, issueIdOrKey: issue.id }); }
-        catch { warnings.push('Jira remote links could not be retrieved; linked context is unavailable.'); }
+        catch (error) { if (error?.code === 'reconnect_required') throw error; warnings.push('Jira remote links could not be retrieved; linked context is unavailable.'); }
         const links = [];
         const remoteList = Array.isArray(remotes) ? remotes : [];
         for (const remote of remoteList.slice(0, MAX_LINKS)) {

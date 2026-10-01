@@ -155,7 +155,7 @@ test('source reads and refresh are scoped to the configured project', async () =
   }), (error) => error.code === 'not_found');
 });
 
-test('unavailable root is retained as pending history without replacing prior applied evidence', async () => {
+test('unavailable root is retained as history only, never pending, without replacing prior applied evidence', async () => {
   const { store, artifactStore } = await makeStores();
   const first = store.importSourceBundle(importArgs(artifactStore, bundle('usable')));
   const missing = bundle('', { key: 'OPS-42', availability: 'missing', fetchedAt: '2026-10-01T11:00:00.000Z' });
@@ -168,7 +168,8 @@ test('unavailable root is retained as pending history without replacing prior ap
   assert.equal(result.source.rootAvailable, false);
   assert.equal(result.source.latestAvailableSnapshotId, first.source.appliedSnapshotId);
   assert.equal(result.source.appliedSnapshotId, first.source.appliedSnapshotId);
-  assert.equal(result.source.pending, true);
+  assert.equal(result.source.pending, false);
+  assert.equal(result.source.pendingSnapshotId, null);
   assert.equal(result.ticket.currentRevisionId, first.revision.revisionId);
   assert.equal(store.getTicketSourceHistory(first.ticket.ticketId).snapshots.length, 2);
   const page = store.getTicketSourceHistory(first.ticket.ticketId, { limit: 1 });
@@ -189,4 +190,68 @@ test('failed import rolls back command, ticket, artifact row, identity and snaps
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM m6_source_identities').get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM m6_source_snapshots').get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM artifacts').get().n, 0);
+});
+
+function refresher(store, artifactStore, ticketId) {
+  let n = 0;
+  return (sourceBundle, expectedVersion, withArtifact = true) => store.refreshSourceBundle(ticketId, {
+    commandId: `cd-refresh-${++n}`, request: { ticketId, expectedVersion }, bundle: sourceBundle,
+    artifact: withArtifact ? evidenceArtifact(artifactStore, sourceBundle) : undefined,
+  });
+}
+const missingBundle = (at) => bundle('', { availability: 'missing', fetchedAt: at });
+
+test('backlog A -> unavailable -> A creates no revision and reports unchanged', async () => {
+  const { store, artifactStore } = await makeStores();
+  const first = store.importSourceBundle(importArgs(artifactStore, bundle('A')));
+  const ticketId = first.ticket.ticketId;
+  const refresh = refresher(store, artifactStore, ticketId);
+  const gone = refresh(missingBundle('2026-10-01T11:00:00.000Z'), 1, false);
+  assert.equal(gone.applied, false);
+  assert.equal(gone.source.pending, false);
+  const again = refresh(bundle('A', { fetchedAt: '2026-10-01T12:00:00.000Z' }), 1);
+  assert.equal(again.changed, false);
+  assert.equal(again.applied, false);
+  assert.equal(again.source.pending, false);
+  assert.equal(again.source.appliedSnapshotId, first.source.appliedSnapshotId);
+  assert.equal(again.ticket.version, 1);
+  assert.equal(again.revision.revisionId, first.revision.revisionId);
+});
+
+test('active A -> unavailable -> A clears pending; B is pending and A again clears it', async () => {
+  const { store, artifactStore } = await makeStores();
+  const first = store.importSourceBundle(importArgs(artifactStore, bundle('A')));
+  const ticketId = first.ticket.ticketId;
+  const submitted = store.submitTicket(ticketId, { commandId: 'submit-cd-01', expectedVersion: 1 }, {});
+  const version = submitted.ticket.version;
+  const refresh = refresher(store, artifactStore, ticketId);
+  const gone = refresh(missingBundle('2026-10-01T11:00:00.000Z'), version, false);
+  assert.equal(gone.source.pending, false);
+  const same = refresh(bundle('A', { fetchedAt: '2026-10-01T12:00:00.000Z' }), version, false);
+  assert.equal(same.changed, false);
+  assert.equal(same.source.pending, false);
+  assert.equal(same.source.pendingSnapshotId, null);
+  const b = refresh(bundle('B', { fetchedAt: '2026-10-01T13:00:00.000Z' }), version, false);
+  assert.equal(b.changed, true);
+  assert.equal(b.applied, false);
+  assert.equal(b.source.pending, true);
+  assert.equal(b.source.pendingSnapshotId, b.source.latestSnapshotId);
+  const back = refresh(bundle('A', { fetchedAt: '2026-10-01T14:00:00.000Z' }), version, false);
+  assert.equal(back.changed, false);
+  assert.equal(back.source.pending, false);
+  assert.equal(back.source.pendingSnapshotId, null);
+  assert.equal(back.source.appliedSnapshotId, first.source.appliedSnapshotId);
+});
+
+test('backlog A -> unavailable -> B applies a new revision as before', async () => {
+  const { store, artifactStore } = await makeStores();
+  const first = store.importSourceBundle(importArgs(artifactStore, bundle('A')));
+  const ticketId = first.ticket.ticketId;
+  const refresh = refresher(store, artifactStore, ticketId);
+  refresh(missingBundle('2026-10-01T11:00:00.000Z'), 1, false);
+  const b = refresh(bundle('B', { fetchedAt: '2026-10-01T12:00:00.000Z' }), 1);
+  assert.equal(b.changed, true);
+  assert.equal(b.applied, true);
+  assert.equal(b.revision.description, 'B');
+  assert.equal(b.source.pending, false);
 });

@@ -2,8 +2,8 @@
 
 Date: 2026-09-30
 Branch: `feature/dashboard-integration`
-Status: M0-M5, M7, and M8 complete locally; M6 local acceptance done, live pilots
-pending; M9 planned. M8 includes a live model-backed prompt comparison and a verified
+Status: M0-M8 complete locally; M6 live exit gate passed on 2026-10-01
+([M6 acceptance](m6/acceptance.md)); M9 planned. M8 includes a live model-backed prompt comparison and a verified
 temporary MLflow Tracking export; production MLflow adoption is deferred. Evidence:
 [M7 acceptance](m7/acceptance.md), [M8 acceptance](m8/acceptance.md).
 M0 evidence and requirement audit: [M0 index](m0/README.md).

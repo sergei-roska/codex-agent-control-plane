@@ -1,8 +1,35 @@
 # M6 local integration acceptance
 
-Date: 2026-10-01. Status: local integration verified; M6 live exit gate incomplete.
-M7 is not implemented in this checkpoint. After local M6 acceptance, the owner
-authorized Claude to start M7 and will hand that work back to Codex later.
+Date: 2026-10-01. Status: M6 complete. Local integration verified; live exit gate
+passed on 2026-10-01 per [live pilot report](live-pilot-report.md) (see "Live exit
+gate" below). The historical text in the next sections predates the live pilot.
+
+## Live exit gate
+
+| Gate item | Evidence |
+| --- | --- |
+| One Jira feature and one bugfix pass Intake with provenance | INSDEV-406 classified feature, INSDEV-408 (Jira type Story) classified bugfix from content; epic, comments and three Confluence pages captured with revision metadata |
+| Repeated requests | Re-import by key and by numeric id 58652 returns the same ticket and snapshot, no new run |
+| Expired credentials | Owner removed the app grant; refresh returns 409 `reconnect_required`, health flips, no snapshot, revision or ticket change; reconnect restores service |
+| No publication | Runtime egress guard allows only Atlassian GET reads and the OAuth token POST and journals each request; 117 requests, 0 violations; app registered with read scopes only |
+| Outage does not erase progress | Live: authorization outage and recovery left applied input, ticket and evidence intact, with no false change after recovery. Network outage: owner decision to accept fixture evidence (see below) |
+| Missing epic/page, external edits | Owner decision to accept fixture evidence: these states cannot be produced on approved sources without writing to Jira, which the owner forbade |
+
+Owner decisions, 2026-10-01: zero traces in Jira (no writes of any kind, including by
+the lead); live network-outage, missing-context and external-edit checks waived in
+favor of the fixture and browser evidence below, because the M6 code path is the
+same and producing them live needs Jira writes or adds no signal.
+
+Live defects found and fixed during the pilot: 401 recorded as an unavailable source
+instead of `reconnect_required`; a revoked grant with a still-valid refresh token
+(empty accessible-resources) not treated as reconnect; change detection reporting a
+false change after A -> unavailable -> A. Each has regression tests; full suite
+960/960.
+
+Known follow-ups (not M6 blockers): Jira issue links are out of M6 scope and not
+traversed; repeat imports re-read the full tree before dedupe; a paused Intake
+clarification holds the repository lease; a `ready` Intake proceeds to branch and
+engineering, so pilots on this repository rely on the dirty-checkout preflight.
 
 ## Delivered behavior
 

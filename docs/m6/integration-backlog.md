@@ -12,12 +12,12 @@ the owner delegated M7 to Claude; Codex resumes M7 only after the owner's handof
 | M6-F3 | complete | OAuth and typed read-only client | 18 tests pass; independent response-race and session-bound cancellation reviews; no live account wiring |
 | M6-F4 | complete | Encrypted server-side token store | 10 foundation tests pass; now wired into optional runtime configuration |
 | M6-F5 | complete | Session-bound OAuth callback handoff coordinator | 17 foundation tests pass; now mounted and verified through actual local HTTP |
-| M6-I1 | in_progress | Operator OAuth configuration and token-store activation | Adapter and 6 config/service tests pass; real dedicated app/client/callback/key references still absent |
+| M6-I1 | complete | Operator OAuth configuration and token-store activation | Dedicated read-only app connected 2026-10-01 through browser OAuth; encrypted token store active; site insomniacdesign selected with `read:jira-work` and `read:page:confluence` only |
 | M6-I2 | complete_local | Authenticated OAuth routes and resource/site selection | Actual local HTTP suite passes 5/5, zero skips; paired-session callback, CSRF, one-use handoff, explicit site choice and account clearing |
 | M6-I3 | complete_local | Atomic imported-ticket identity mapping in product database | Product suite passes 6/6; unique identity and immediate transaction, command replay, reopen/two handles, project boundaries; simultaneous-process race not executed |
 | M6-I4 | complete_local | Persist retrieved evidence and attach to explicit requirement revisions | Stored artifact feeds Intake prompt; source history and revision links persist; active input remains pinned; rollback and outage tests pass |
 | M6-I5 | complete_local | Import/refresh API and dashboard source states | Actual HTTP passes; Gemini reports 12/12 functional fixture cases PASS; lead directly verifies 390x844 layout, import, saved history and unchanged refresh through Chrome DevTools MCP |
-| M6-I6 | planned | Real approved feature and bugfix pilots | Actual PM Intake, expired credentials, missing epic/page, external edits, repeated imports, outage recovery; no publication |
+| M6-I6 | complete | Real approved feature and bugfix pilots | Feature INSDEV-406 and bugfix INSDEV-408 through Intake with provenance; repeat import deduped; revoked grant yields 409 `reconnect_required` with no writes; reconnect and recovery without false change; 117 egress rows, 0 violations. Three live defects found and fixed. Owner waived live outage, missing context and external edits in favor of fixture evidence. See [live pilot report](live-pilot-report.md) |
 
 `complete_local` means implemented and fixture-verified, not the live M6 exit
 gate. See [local acceptance](acceptance.md) and
