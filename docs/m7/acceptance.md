@@ -47,7 +47,41 @@ Owner delegated M7 to Claude; Codex inspects the actual changes and this evidenc
   "Stop/Cancel requested" banners were not observable because the fake settles in < 0.3 s.
 - QA defects fixed afterwards: silent native drag rejection, stale wait reason on closed cards,
   parent run still "human_review" after corrections, 404 source requests for direct tickets.
-  Covered by unit/projection tests; the drag and source-request fixes were not re-run in a browser.
+  Covered by unit/projection tests; the drag and source-request fixes were subsequently re-run
+  in a browser during the Codex handoff follow-up below.
+
+## Codex handoff follow-up
+
+Date: 2026-10-01. The owner requires M7 acceptance before any M8 implementation.
+M8 implementation was not started during this follow-up.
+
+- The handoff audit found that fresh checkout verification ran only for Accept, despite the
+  documented requirement covering Request corrections too. Both verdicts now verify non-empty
+  candidate manifests before recording a review. Empty-manifest and command replay behavior
+  remain unchanged.
+- A real-checkout HTTP regression modifies a file after candidate capture and confirms that
+  Corrections returns 409 `candidate_changed`: no review or rework is recorded, ticket version
+  and lease are unchanged, and the modified file is retained. Controller coverage confirms
+  successful Corrections verification and replay without another verification or duplicate run.
+- Focused checks: controller 49/49 and HTTP operator controls 12/12 pass. The lead reran the
+  full suite after the fix: 782/782 pass, zero failed/skipped. The HTTP regression appears in
+  that run; standalone nested HTTP results are reported separately by the current runner.
+  Initial sandbox execution lacked temporary Git/local-port access; successful checks ran with
+  approved execution access. Independent read-only re-audit found the original defect closed
+  and no new finding in the fix.
+- Chrome DevTools follow-up used the fake delivery harness at port 38713 with all runtime
+  state, checkout and bare remote under `/tmp/m7-codex-browser-closure`. Native drag to Closed
+  displayed the invalid-move alert and kept the card in Backlog; drag to the Pending column
+  body submitted the ticket through Intake to human review. Opening the direct ticket showed
+  its real detail/run/events and issued no source endpoint requests. The local harness was
+  stopped and the browser tab closed afterwards.
+- `git diff --check` and the protected reference SHA-256 manifest check passed. The follow-up
+  fix and regression tests are recorded separately from the original M7 implementation;
+  no protected reference file changed.
+
+This closes the confirmed Corrections defect and the two outstanding browser retests.
+The live-validation limitations and unobserved transient Stop/Cancel banners below remain
+explicit; this follow-up does not provide live OpenAI or network-remote evidence.
 
 ## Limits and open items
 

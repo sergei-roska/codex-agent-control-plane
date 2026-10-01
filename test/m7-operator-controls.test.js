@@ -360,6 +360,32 @@ test('m7 operator controls over HTTP', async (suite) => {
     });
   });
 
+  await suite.test('corrections refuse a checkout changed after candidate capture', async () => {
+    await withStack({ leadScript: leadRound() }, async ({ api, runtime, workspace }) => {
+      const { ticketId, run, candidate } = await api.toReview();
+      const file = path.join(workspace, 'src', 'greet.js');
+      fs.appendFileSync(file, '// changed after candidate capture\n');
+      const changed = fs.readFileSync(file, 'utf8');
+      const before = await api.ticket(ticketId);
+      const leaseBefore = runtime.productStore.getLease();
+
+      const res = await api.review(ticketId, run, candidate, {
+        verdict: 'corrections', findings: 'Please also add a docblock.',
+      });
+
+      assert.equal(res.status, 409);
+      assert.equal(res.body.error.code, 'candidate_changed');
+      const after = await api.ticket(ticketId);
+      assert.equal(after.ticket.status, 'waiting_human');
+      assert.equal(after.ticket.version, before.ticket.version);
+      assert.equal(after.review, null);
+      assert.equal(after.runs.length, 1);
+      assert.equal(after.runs[0].runId, run.runId);
+      assert.deepEqual(runtime.productStore.getLease(), leaseBefore);
+      assert.equal(fs.readFileSync(file, 'utf8'), changed, 'the changed checkout is retained');
+    });
+  });
+
   await suite.test('commit, replay and push deliver to the local bare remote', async () => {
     await withStack({ leadScript: leadRound() }, async ({ api, workspace, remote }) => {
       const { ticketId, run, candidate } = await api.toReview();

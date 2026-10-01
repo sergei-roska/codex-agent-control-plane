@@ -1113,13 +1113,13 @@ function createDeliveryController({
     return finished || store.getDelivery(delivery.deliveryId);
   }
 
-  // Review: accept (checkout verified first for non-empty manifests) or request corrections (starts a rework run).
+  // Review: verify the checkout before recording either verdict for non-empty manifests.
   function review(ticketId, command) {
     return lane(async () => {
       const replay = store.lookupCommand('review', ticketId, command);
       if (replay) return replay;
       const { candidate } = store.checkReview(ticketId, command);
-      if (command.verdict === 'accept' && candidate.manifest.length > 0) {
+      if (candidate.manifest.length > 0) {
         const verdict = await requireDelivery().verifyCandidate({
           baseCommit: candidate.baseCommit, branch: candidate.branch, head: candidate.head, integrityHash: candidate.integrityHash,
         });
