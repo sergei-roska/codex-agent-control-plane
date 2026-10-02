@@ -77,6 +77,39 @@ Gate: [M9 plan and release checklist](../beta-master-plan.md#m9-prove-and-packag
   with regressions using different parent and child task IDs. The full suite
   passed after these changes.
 
+## Second M9 pass (2026-10-02, lead session)
+
+Details, ids, and the follow-up list are in the [session handoff](session-handoff.md).
+
+- Live direct-ticket pilot through the browser with every role on gpt-6-luna
+  (owner choice): it found a critical Codex 0.160 sandbox placeholder defect, a
+  writer path to project Codex config, an acceptance false rejection on rework,
+  and two lead-decision recovery gaps; all were fixed with regressions
+  (`77da677`, `6a88756`). The resubmit run reached review in about 8 minutes with
+  a passing check, a confined diff, and a settings snapshot pinning gpt-6-luna for
+  all 11 roles plus the App Server version; usage 2.65M tokens, 75% cached share,
+  monetary cost unavailable. The correction run resumed after the fixes and was
+  accepted and committed (task commit `b99cb0e`). Jira `KAN-1` (temporary issue)
+  was in engineering at the time of writing.
+- Manual recovery on the fake model: upgrade v2 to v6 with a 0600 backup, crash
+  and Resume, clean stop and resubmit, offline and online backup and restore,
+  two-ticket lease order, and revision history all passed; the procedures were
+  corrected where they were wrong.
+- Browser checks: six tabs, server down/up, session revoke, and 390/1280/1600
+  layouts; the defects found were fixed.
+- Idempotency review of the six duplicate/stale properties; the push-after-success
+  gap was fixed and missing tests were added. An independent pre-merge audit of
+  the sandbox and Git changes found the `.codex` writer path (fixed) and two
+  accepted low limits.
+- Live role cases: architect (Sol) and tech-writer (Luna, live-workers) passed;
+  qa, performance, and devops failed one case each on model behavior; reviewer and
+  security have no live case (owner kept all live spend on Luna).
+- Network-fresh install in a clean copy: `npm ci` 130 packages, 0
+  vulnerabilities, 941/941. Current tree: full suite 960/960, fake role cases
+  10/10, protected reference unchanged.
+- Hosted Git remote is waived for beta by the owner; pushes go to a local bare
+  remote.
+
 ## Release checklist
 
 `Automated` means the named test evidence passed on the current tree; the row is

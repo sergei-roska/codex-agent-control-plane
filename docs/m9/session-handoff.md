@@ -73,6 +73,58 @@ reference unchanged). The pilot resumed on that commit.
    Plan after the fix: commit, restart the server, and press Resume on the
    interrupted rework run (cheaper than a new resubmit, about 2.6M tokens per run).
 
+7. Fixed in `6a88756` (960/960): read-only roles read `.codex` (auth/sessions
+   globs denied); resolutions for already closed decisions are ignored; other
+   invalid lead decisions are discarded with feedback, two in a row end the run.
+   README rewritten as an operator quickstart in `4d6ffa2`.
+
+## Latest pilot status (13:16 UTC)
+
+- Direct ticket done end to end on real gpt-6-luna turns: the interrupted rework
+  run resumed after the fix, reached review, and was accepted and committed:
+  task repo commit `b99cb0e` "Add formatPrice(cents) helper" on
+  `feature/add-formatprice-cents-helper-lnlh4w`. Push and the "Push no longer
+  offered" check: confirm from the pilot worker report or `git ls-remote`.
+- `KAN-1` imported and running engineering (`run_nh9ltH1R5NQxfv8bUMBnrw`, since
+  13:05 UTC). Remaining: review, Accept, Commit, read-only egress audit.
+- If the session ended before the pilot worker reported: check the run state in
+  `<root>/state/state.sqlite` (read-only), finish the `KAN-1` review through the
+  dashboard on port 3000, then stop the server.
+
+## Deferred follow-ups (not fixed in M9; plan for later)
+
+- `src/server.js` passes a nonexistent `appServer.version`; drop it (the
+  controller now reads `appServer.appServerVersion`).
+- `docs/operations/state-upgrade.md` table lacks `CODEX_PROJECT_CONFIG` and
+  `CODEX_A2A_WORKSPACE_LOCK_DIR`; the operator guide attributes the CODEX_HOME
+  check to the server preflight, but it is enforced in `src/permission-profile.js`.
+- A run whose finish gate is rejected after all stages succeeded cannot reopen
+  stages and the lead loops on decisions; add a terminal path or an operator
+  "reopen stage" action.
+- `unknown` commit deliveries are never re-reconciled; re-reconcile them and
+  consider blocking Release Repository while one exists.
+- Commit/push uniqueness has no DB constraint; add a partial unique index.
+- With several push remotes the UI stops offering Push after the first success
+  (ticketActions has no remote list); the API still allows other remotes.
+- Reasoning effort reported by Codex differs from the requested one (architect
+  xhigh reported high; others "high/default"); find out whether the effort is
+  sent per turn correctly or Luna caps it.
+- Live role evidence: rerun performance and devops on Luna after the schema
+  hints; reviewer and security live cases are still missing.
+- Session cookies are host-scoped across loopback ports (per-origin secret);
+  Atlassian project/space allowlist; Atlassian PKCE verification; remove or
+  escape the inactive escalation modal `innerHTML`.
+- `.gitignore` only ignores `data/` and `runtime/` as directories; the zero-byte
+  placeholder files `data`, `runtime`, `.codex/auth.json`, `.codex/sessions` in
+  this repository root should be deleted and ignored.
+- Screenshot evidence from browser workers sits in the session scratchpad
+  (`/tmp/claude-1000/...`), which does not survive the session; the MCP screenshot
+  tool refuses paths outside its roots. Copy needed evidence into
+  `/home/sr/Projects/Workspace/m9-pilot/` next time.
+- Close M9: update `acceptance.md` and `release-notes.md` with the final evidence
+  and limits, recompute the fingerprint, rerun the release checklist checks, ask
+  the owner to delete `KAN-1`, remove `m9-pilot/` scratch directories.
+
 ## Pilot state at handoff
 
 - Server: `node src/server.js` on port 3000 with `CODEX_WORKSPACE=/home/sr/Projects/Workspace/m9-pilot/direct/task`,
