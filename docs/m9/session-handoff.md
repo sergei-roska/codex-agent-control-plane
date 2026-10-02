@@ -78,18 +78,29 @@ reference unchanged). The pilot resumed on that commit.
    invalid lead decisions are discarded with feedback, two in a row end the run.
    README rewritten as an operator quickstart in `4d6ffa2`.
 
-## Latest pilot status (13:16 UTC)
+## Final pilot status (lead verified, 2026-10-02)
 
-- Direct ticket done end to end on real gpt-6-luna turns: the interrupted rework
-  run resumed after the fix, reached review, and was accepted and committed:
-  task repo commit `b99cb0e` "Add formatPrice(cents) helper" on
-  `feature/add-formatprice-cents-helper-lnlh4w`. Push and the "Push no longer
-  offered" check: confirm from the pilot worker report or `git ls-remote`.
-- `KAN-1` imported and running engineering (`run_nh9ltH1R5NQxfv8bUMBnrw`, since
-  13:05 UTC). Remaining: review, Accept, Commit, read-only egress audit.
-- If the session ended before the pilot worker reported: check the run state in
-  `<root>/state/state.sqlite` (read-only), finish the `KAN-1` review through the
-  dashboard on port 3000, then stop the server.
+Both primary scenarios completed on real gpt-6-luna turns through the browser;
+the pilot server is stopped and the task repository is clean.
+
+- Direct ticket `tkt_J4zzRx3DYKRC6c7Llnlh4w`: the interrupted rework run
+  `run_uXRuaXCgW4jyfR6CjQ2eMw` resumed cleanly on `6a88756` (reviewer had no
+  `.codex` problem), reached review about 3.5 minutes later with an accepted
+  candidate (check passed, diff only `src/price.js` and `test/price.test.js`),
+  then Accept, Commit `b99cb0e`, Push. The bare remote has
+  `refs/heads/feature/add-formatprice-cents-helper-lnlh4w b99cb0e`; `main` is
+  unchanged at `626e392`. After the push the dashboard shows "This commit was
+  already pushed" and "The candidate is already committed".
+- Jira `KAN-1` as `tkt_zkq4qvb46RERTRprU7R_yw`: Jira identity, source revision,
+  snapshot, and "Internal ticket only" tracking shown; run
+  `run_nh9ltH1R5NQxfv8bUMBnrw` reached review in about 21 minutes with an accepted
+  candidate confined to `src/discount.js` and `test/discount.test.js`; Accept and
+  Commit `8fdb8d5` (not pushed). Egress audit: 16 events, two OAuth token POSTs
+  plus GETs only, violation query `[]`.
+- Quota before the last model work: 5 h window 10% used, 7 d window 73% used.
+- Pause/Resume during engineering was exercised on the first run: no dispatch
+  while paused.
+- Logs: `/home/sr/Projects/Workspace/m9-pilot/direct/server-3000*.log`.
 
 ## Deferred follow-ups (not fixed in M9; plan for later)
 

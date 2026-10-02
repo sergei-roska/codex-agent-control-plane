@@ -89,8 +89,11 @@ Details, ids, and the follow-up list are in the [session handoff](session-handof
   a passing check, a confined diff, and a settings snapshot pinning gpt-6-luna for
   all 11 roles plus the App Server version; usage 2.65M tokens, 75% cached share,
   monetary cost unavailable. The correction run resumed after the fixes and was
-  accepted and committed (task commit `b99cb0e`). Jira `KAN-1` (temporary issue)
-  was in engineering at the time of writing.
+  accepted, committed (`b99cb0e`), and pushed to the local bare remote; Push is
+  no longer offered afterwards. Jira `KAN-1` (temporary issue) was imported with
+  its identity, revision, and internal tracking, reached review in about 21
+  minutes with a confined passing candidate, and was accepted and committed
+  (`8fdb8d5`); the egress audit found only the OAuth token POSTs and GETs.
 - Manual recovery on the fake model: upgrade v2 to v6 with a 0600 backup, crash
   and Resume, clean stop and resubmit, offline and online backup and restore,
   two-ticket lease order, and revision history all passed; the procedures were
