@@ -102,6 +102,27 @@ the pilot server is stopped and the task repository is clean.
   while paused.
 - Logs: `/home/sr/Projects/Workspace/m9-pilot/direct/server-3000*.log`.
 
+## Next phase: owner plan (week of 2026-10-05)
+
+1. Role deep dive for the nine delivery roles: system prompts
+   (`profiles/delivery/agents/*.toml`), a skills matrix, permissions (sandbox and
+   the generated permission profile in `src/permission-profile.js`), and MCP
+   servers per role, keeping the number of tools and skills at the useful minimum.
+   Starting points: `docs/m0/roles-tools.md`, `docs/m4/implementation.md`,
+   `src/role-pack.js`, `scripts/role-capability-check.js` (fake and live cases to
+   measure each change).
+2. Observer mode: when real work arrives, the owner runs Jira tickets through the
+   dashboard while a Claude session observes read-only (state DB, server log,
+   dashboard API, task repository status) and records findings into the backlog;
+   it does not drive the run or write to Jira.
+3. Delivery path end to end: how the orchestrator starts a task, creates and owns
+   the branch (`branchPrefixes`, ticket-owned branch, lease), drives it to an
+   accepted candidate, commits and pushes, and, if feasible, opens a Bitbucket
+   pull request. A PR is a new outward write: it changes the beta decision "the
+   owner creates the pull request" and needs an owner decision, candidate-bound
+   authorization, Bitbucket credentials and egress allowlist, idempotency, and a
+   hosted-remote push test first (still waived in M9).
+
 ## Deferred follow-ups (not fixed in M9; plan for later)
 
 - `src/server.js` passes a nonexistent `appServer.version`; drop it (the
