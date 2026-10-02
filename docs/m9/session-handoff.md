@@ -135,9 +135,15 @@ the pilot server is stopped and the task repository is clean.
 - M9 closure done on 2026-10-02: acceptance and release notes final, release
   checks rerun on `e8eca67` (960/960, fake 10/10, diff check, reference check),
   fingerprint `d7169fa124a7fb1da31841f27b19fe77346d47b3ce781e0d36115b776a360a90`.
-  Waiting on the owner: delete `KAN-1` in Jira; decide whether to remove the
-  `/home/sr/Projects/Workspace/m9-pilot/` evidence directories; version, merge,
-  tag, and publication per the release checklist.
+  Owner decisions: keep `/home/sr/Projects/Workspace/m9-pilot/`; `KAN-1` cannot be
+  deleted by the owner (no permission) or the connectors, the owner handles it
+  with a KAN administrator - do not write to Jira again without the owner's
+  explicit request. Version, merge, tag, and publication per the release checklist.
+- Not 100%: the release checklist table rows in `acceptance.md` were not each
+  rewritten (the "Second M9 pass" section and release decision carry the result);
+  align them. The shipped Sol profiles were not exercised live (pilots ran on
+  Luna); run one pilot on the shipped profiles before building on them. The
+  owner has not yet reproduced the scenarios personally from the README.
 
 ## Pilot state at handoff
 

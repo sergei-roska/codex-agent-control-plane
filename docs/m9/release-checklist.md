@@ -58,7 +58,8 @@ behavior, not a gate for unchanged code.
 
 ## Pilot cleanup
 
-- Remove scratch pilot directories under `/home/sr/Projects/Workspace/m9-pilot/`
-  once their evidence is recorded.
-- The temporary Jira issue `KAN-1` created for the M9 pilot must be deleted in
-  Jira by the owner; the read-only connector cannot delete it.
+- Keep `/home/sr/Projects/Workspace/m9-pilot/`: it holds the pilot evidence and
+  logs (owner decision, 2026-10-02).
+- The temporary Jira issue `KAN-1` created for the M9 pilot cannot be deleted by
+  the owner or by the connectors; deletion needs a KAN project administrator.
+  Do not create issues in shared Jira projects for future pilots.
