@@ -104,6 +104,13 @@ the pilot server is stopped and the task repository is clean.
 
 ## Next phase: owner plan (week of 2026-10-05)
 
+0. Visual review of the dashboard working copy (`web/dashboard`) on a running
+   server: walk every tab, modal, and state (empty, loading, error, reconnecting,
+   not paired) at desktop and 390 px, and fix obvious visible inconsistencies or
+   errors. Use the protected reference `artifacts/dashboard` only as read-only
+   design evidence; never edit or rebuild it, and include the reference integrity
+   check in verification. Screenshots must be saved under
+   `/home/sr/Projects/Workspace/m9-pilot/` (the session scratchpad does not persist).
 1. Role deep dive for the nine delivery roles: system prompts
    (`profiles/delivery/agents/*.toml`), a skills matrix, permissions (sandbox and
    the generated permission profile in `src/permission-profile.js`), and MCP

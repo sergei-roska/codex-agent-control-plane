@@ -5,7 +5,7 @@ Branch: `feature/dashboard-integration`
 Status: M0-M8 complete locally; M6 live exit gate passed on 2026-10-01
 ([M6 acceptance](m6/acceptance.md)); M9 exit gate met for the release candidate on 2026-10-02; publication awaits the
 owner ([acceptance ledger](m9/acceptance.md), [release notes](m9/release-notes.md)).
-Next phase (owner plan): role deep dive, observer-mode Jira pilots, and the
+Next phase (owner plan): visual review and fixes of the dashboard first, then role deep dive, observer-mode Jira pilots, and the
 branch-to-PR delivery path; see the [M9 handoff](m9/session-handoff.md#next-phase-owner-plan-week-of-2026-10-05). M8 includes a live model-backed prompt comparison and a verified
 temporary MLflow Tracking export; production MLflow adoption is deferred. Evidence:
 [M7 acceptance](m7/acceptance.md), [M8 acceptance](m8/acceptance.md).
