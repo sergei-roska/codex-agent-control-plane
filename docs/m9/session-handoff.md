@@ -1,9 +1,10 @@
 # M9 session handoff
 
-Last updated: 2026-10-02 (lead session). Read this first when resuming M9; then
-[acceptance](acceptance.md), [security review](security-review.md), and the
-[release checklist](release-checklist.md). Nothing is committed yet; all M9 work
-is in the working tree of `feature/dashboard-integration` on top of `7f1906f`.
+Last updated: 2026-10-02 after M9 closure. The release candidate is recorded in
+[acceptance](acceptance.md); also review the [security review](security-review.md)
+and [release checklist](release-checklist.md). M9 implementation and pilot work
+is complete on `feature/dashboard-integration`; merge, tag, and publication remain
+owner decisions.
 
 ## Owner decisions in force
 
@@ -118,10 +119,12 @@ the pilot server is stopped and the task repository is clean.
    Starting points: `docs/m0/roles-tools.md`, `docs/m4/implementation.md`,
    `src/role-pack.js`, `scripts/role-capability-check.js` (fake and live cases to
    measure each change).
-2. Observer mode: when real work arrives, the owner runs Jira tickets through the
-   dashboard while a Claude session observes read-only (state DB, server log,
-   dashboard API, task repository status) and records findings into the backlog;
-   it does not drive the run or write to Jira.
+2. Live-project validation: the owner runs a varied set of real Jira tasks through
+   the dashboard and reviews outcomes. Where available, include epic and
+   Confluence context through the full delivery lifecycle. This repeats and broadens
+   the M9 issue pilot; it is a follow-up, not an M9 exit gate. A Claude observer can
+   inspect state DB, server log, dashboard API, and task repository status read-only
+   and record findings into the backlog; it does not drive runs or write to Jira.
 3. Delivery path end to end: how the orchestrator starts a task, creates and owns
    the branch (`branchPrefixes`, ticket-owned branch, lease), drives it to an
    accepted candidate, commits and pushes, and, if feasible, opens a Bitbucket
@@ -167,41 +170,11 @@ the pilot server is stopped and the task repository is clean.
   deleted by the owner (no permission) or the connectors, the owner handles it
   with a KAN administrator - do not write to Jira again without the owner's
   explicit request. Version, merge, tag, and publication per the release checklist.
-- Not 100%: the release checklist table rows in `acceptance.md` were not each
-  rewritten (the "Second M9 pass" section and release decision carry the result);
-  align them. The shipped Sol profiles were not exercised live (pilots ran on
-  Luna); run one pilot on the shipped profiles before building on them. The
-  owner has not yet reproduced the scenarios personally from the README.
-
-## Pilot state at handoff
-
-- Server: `node src/server.js` on port 3000 with `CODEX_WORKSPACE=/home/sr/Projects/Workspace/m9-pilot/direct/task`,
-  `CODEX_A2A_STATE_DB=.../direct/state/state.sqlite`, `CODEX_A2A_TOKEN_FILE=.../direct/state/a2a-token`,
-  `CODEX_ATLASSIAN_CONFIG=/home/sr/.config/orchestrator-atlassian/config.json`. Restart it after the
-  acceptance fix lands (backend code changed).
-- Ticket `tkt_J4zzRx3DYKRC6c7Llnlh4w` is `blocked` on branch
-  `feature/add-formatprice-cents-helper-lnlh4w`; untracked `src/price.js` and
-  `test/price.test.js` are the latest correct candidate files (RangeError version).
-  Runs: `run_d5PYJyH1fi4oifr2o8iYMQ` (rejected, sandbox bug), `run_OqPqYY8OmcQ4ZYalWqg7Pw`
-  (resubmit, reached review), `run_2EBmv6E6SPMvTSTrZlpVtA` (rework, rejected by the gate defect).
-- Bare remote: `/home/sr/Projects/Workspace/m9-pilot/direct/remote.git` (main only so far).
-
-## Next steps
-
-1. Verify the acceptance fix diff, run the full suite, then restart the pilot
-   server on port 3000 with the same environment.
-2. Return to Backlog and Submit the direct ticket; at review request one small
-   correction; confirm the rework candidate is accepted with any warning shown;
-   Accept, Commit, Push; confirm Push is no longer offered; `git ls-remote` the bare remote.
-3. Import `KAN-1`, check provenance and internal tracking, run it to review,
-   Accept, Commit; run the read-only egress audit (docs/m6/operator-setup.md).
-4. Stop the server. Update [acceptance](acceptance.md) and
-   [release notes](release-notes.md) with the evidence and limits below; recompute
-   the fingerprint with the command in the [release checklist](release-checklist.md);
-   rerun the full suite, `--fake` role cases, `git diff --check`, and the reference check.
-5. Ask the owner to delete `KAN-1` in Jira and decide on commit. The zero-byte
-   placeholders `data`, `runtime`, `.codex/auth.json`, `.codex/sessions` in this
-   repository root must not be committed.
+- The owner has not personally repeated the pilot scenarios. Repeated owner-run
+  checks across varied Jira tasks, including epic and Confluence context where
+  available, are deferred to the next live project and do not block M9 closure.
+  Shipped Sol profiles were not exercised live; run a pilot on those profiles
+  before building on them.
 
 ## Limits to record in release notes
 

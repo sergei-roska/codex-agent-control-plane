@@ -440,16 +440,21 @@ Deliverables:
 
 Exit gate: no unresolved critical defect in the primary flows, command lifecycle,
 data durability, repository ownership, or protected actions. Remaining limitations
-are explicit, and the owner can reproduce both primary scenarios from a clean setup.
+are explicit, and documented procedures support reproducing both primary scenarios
+from a clean setup. Repeated owner-run validation across varied Jira tasks,
+including epic and Confluence context where available, is a follow-up for the next
+live project and is not an M9 exit gate.
 
 ## Release acceptance checklist
 
-Every item below is pending; completion requires attached evidence.
+The cases below define expected behavior. The M9 acceptance ledger records the
+evidence and disposition for this candidate; future live-project validation is
+identified separately from the M9 exit gate.
 
 | Case | Required result |
 | --- | --- |
 | Direct ticket | Save, reload, Intake, implementation, independent checks, human review |
-| Jira ticket | Issue/epic/Confluence provenance and the same delivery lifecycle |
+| Jira ticket | Jira issue provenance and the same delivery lifecycle. Full-cycle validation of epic and Confluence context is deferred to the next live-project pilot and is not an M9 exit gate. |
 | Tracking intent | Both sources use internal tracking; read-only connectors never publish to Jira/Confluence |
 | Nine roles | Valid role contracts and real participation/capability evidence |
 | Pipeline | Saved plan before dispatch; history survives retries and revisions |

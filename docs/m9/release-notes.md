@@ -87,6 +87,10 @@ ChatGPT login. This is not a support range.
   shows the difference per attempt.
 - Atlassian: read-only, no project or space allowlist (use a dedicated
   restricted account), linked issues are not traversed, PKCE not verified.
+- The M9 live Jira pilot completed one issue through review and commit.
+  Repeated validation across varied real Jira tasks, including epic and
+  Confluence context through delivery where available, is planned for the next
+  live project and is outside the M9 exit gate.
 - Production MLflow adoption is deferred; the exporter logs bounded sanitized
   Tracking runs. The M8 prompt candidate showed no improvement and was not
   promoted.

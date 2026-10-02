@@ -1,6 +1,6 @@
 # Beta operator guide
 
-Status: M9 candidate procedure. The release gate remains open; see [acceptance](acceptance.md).
+Status: Operator procedure for the M9 release candidate; the M9 exit gate is met. See [acceptance](acceptance.md) for evidence and limits.
 
 ## Install and start
 

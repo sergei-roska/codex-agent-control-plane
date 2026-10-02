@@ -117,31 +117,32 @@ Details, ids, and the follow-up list are in the [session handoff](session-handof
 
 ## Release checklist
 
-`Automated` means the named test evidence passed on the current tree; the row is
-not closed until the M9 scenario and review evidence are attached where required.
+The table records the final M9 disposition. Epic and Confluence context across
+the full delivery lifecycle will be exercised during the next live-project pilot;
+it is deferred from M9 and does not block this candidate.
 
-| Plan case | Current evidence | M9 closure still needed |
+| Plan case | Current evidence | M9 disposition |
 | --- | --- | --- |
-| Direct ticket | Controller/dashboard/M7 tests; live Developer direct fixture passed 1/1; clean install passed | Browser human review used a fake worker; repeat a full operator-reviewed real-model delivery |
-| Jira ticket | [M6 live source pilot](../m6/live-pilot-report.md), M6 integration tests; current browser fixture reached human review | Real imported issue through engineering and review on this candidate |
-| Tracking intent | M6 egress tests and [read-only connector contract](../m6/operator-setup.md) | Candidate egress review during Jira pilot |
-| Nine roles | 10/10 fake capability cases; real Developer and PM cases each passed 1/1 | Real evidence for remaining specialist roles, or an explicit beta limit |
-| Pipeline | Controller and plan tests; direct and Jira browser fixtures reached review | Real-model end-to-end operator flow |
-| Acceptance | Acceptance/controller tests; live Developer check passed; Jira fixture showed passed check but unrelated diff | Inspect real operator-reviewed candidate outcome |
-| Corrections | M7 tests; browser correction request created a new run | Live candidate rework outcome |
-| Protected Git | Git delivery, real local bare-remote tests, M7 HTTP tests, owned-branch and staged-blob guards | Hosted remote/credential behavior or documented waiver |
-| Pause/stop/cancel | M7 tests plus M9 hold/reconciliation/lease regressions | Live interruption or explicit pilot limit |
-| Edits/backlog | Product store and dashboard ticket tests | Browser revision history check |
-| Restart | E2E/controller/server tests; `test/m9-recovery.test.js` stopped-server backup/restore/reconciliation passed | Manual operator restore and resume exercise |
-| Duplicates/stale results | Store, server and M7 tests | Candidate review of idempotent replay evidence |
-| Repository concurrency | Writer admission, checkout, controller tests | Two-ticket operator scenario |
-| Model settings | Catalog/settings tests | Pinning visible in live run |
-| Usage/cache | Usage, projection and M8 tests | Live run coverage/unknown-state inspection |
-| Six tabs | All six tabs opened on current working copy; 1280px and 390px layouts inspected; Jira fixture used after source fixes | Browser reconnect/error variants beyond the fixture |
-| Credentials/content | Independent read-only M9 security audit, [disposition](security-review.md), self-hosting/branch/commit/redaction fixes, 932/932 tests | Real Codex sandbox behavior beyond bounded live pilots |
-| MLflow experiment | [M8 result and deferral](../m8/acceptance.md) | Keep deferral visible in release notes |
-| Prompt comparison | [M8 live evaluation](../m8/live-eval-result.json) | Keep non-promotion visible in release notes |
-| Installation/recovery | Migration/restart/E2E tests; stopped-server backup/restore/reconcile test passed; offline cached `npm ci` and 932/932 in a clean copy | Manual operator resume reproduction and network-fresh install if required |
+| Direct ticket | Real-model direct ticket completed through correction, review, Accept, Commit, and Push; see the second M9 pass above | Passed |
+| Jira ticket | Real Jira issue `KAN-1` completed through review, Accept, and Commit with source identity and revision recorded | Passed for issue delivery. Epic and Confluence context across the full delivery lifecycle is deferred to the next live-project pilot. |
+| Tracking intent | Jira egress audit found only OAuth token requests and GETs; no write violations | Passed for the M9 Jira issue pilot |
+| Nine roles | 10/10 fake capability cases; live results and limits are recorded above and in release notes | Passed with the stated live-evidence limits |
+| Pipeline | Direct and Jira real-model runs reached accepted review candidates | Passed for the two piloted scenarios |
+| Acceptance | Both live candidates passed checks and were accepted by the operator | Passed |
+| Corrections | Direct-ticket rework was resumed, accepted, committed, and pushed | Passed |
+| Protected Git | Direct candidate pushed to a local bare remote; Jira candidate committed; owned-branch and staged-blob guards passed | Passed under the hosted-remote waiver |
+| Pause/stop/cancel | Pause/Resume, crash recovery, and clean-stop recovery exercised; regressions pass | Passed within the documented operating limits |
+| Edits/backlog | Revision history and two-ticket lease behavior exercised in manual recovery checks | Passed |
+| Restart | Manual upgrade, backup/restore, interruption, and resume checks passed | Passed |
+| Duplicates/stale results | Idempotency review fixed push-after-success behavior and added regressions | Passed |
+| Repository concurrency | Two-ticket lease scenario passed; writer admission and checkout regressions pass | Passed |
+| Model settings | Live run snapshots recorded gpt-6-luna settings for all roles | Passed for the owner-approved pilot configuration |
+| Usage/cache | Live usage and cache coverage recorded; monetary cost unavailable for subscription usage | Passed with partial-coverage limitation disclosed |
+| Six tabs | All six tabs and desktop/mobile layouts exercised; reconnect and error variants checked | Passed for the tested states; visual review follow-up remains in the handoff |
+| Credentials/content | Independent security audit, Jira egress audit, and bounded real Codex sandbox pilots completed | Passed within the documented beta limits |
+| MLflow experiment | [M8 result and deferral](../m8/acceptance.md) | Deferred and disclosed in release notes |
+| Prompt comparison | [M8 live evaluation](../m8/live-eval-result.json) | Not promoted; disclosed in release notes |
+| Installation/recovery | Network-fresh `npm ci`, full suite, and manual recovery checks passed | Passed for the tested environment |
 
 ## Release decision
 
