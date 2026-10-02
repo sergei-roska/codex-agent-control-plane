@@ -1,6 +1,8 @@
 # M9 acceptance ledger
 
-Date: 2026-10-02. Status: in progress; no beta release or tag authorized.
+Date: 2026-10-02. Status: M9 exit gate met for the release candidate at `e8eca67`
+(fingerprint `d7169fa124a7fb1da31841f27b19fe77346d47b3ce781e0d36115b776a360a90`);
+no beta release or tag authorized.
 Gate: [M9 plan and release checklist](../beta-master-plan.md#m9-prove-and-package-beta).
 
 ## Candidate and executed checks
@@ -143,9 +145,18 @@ not closed until the M9 scenario and review evidence are attached where required
 
 ## Release decision
 
-The candidate is not ready for publication while a real imported Jira issue has
-not completed engineering and operator review on this candidate, hosted Git
-credentials have not been exercised, and manual operator recovery remains
-unverified. The proposed
-`v0.1.0-beta.1` tag in [release notes](release-notes.md) is a proposal only.
-The [operator guide](operator-guide.md) covers setup and known operational limits.
+The M9 exit gate is met for the candidate at `e8eca67`. No critical defect remains
+open in the primary flows, command lifecycle, data durability, repository
+ownership, or protected actions: every defect found by the live pilots and audits
+was fixed with regressions, and both primary scenarios ran end to end on real
+model turns from a clean pilot setup. Remaining limitations and the owner's
+waivers (hosted Git remote; Luna for every role in pilots) are explicit in the
+[release notes](release-notes.md). The full suite (960/960), fake role cases
+(10/10), `git diff --check`, and the protected reference check passed on that
+commit.
+
+Publication is not authorized by this ledger. The proposed `v0.1.0-beta.1` tag,
+the package version, merge, and publication follow the
+[release checklist](release-checklist.md) under the owner's release authority.
+The [operator guide](operator-guide.md) and README cover setup and operation;
+follow-ups are in the [session handoff](session-handoff.md).

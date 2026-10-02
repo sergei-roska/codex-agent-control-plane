@@ -132,9 +132,12 @@ the pilot server is stopped and the task repository is clean.
   (`/tmp/claude-1000/...`), which does not survive the session; the MCP screenshot
   tool refuses paths outside its roots. Copy needed evidence into
   `/home/sr/Projects/Workspace/m9-pilot/` next time.
-- Close M9: update `acceptance.md` and `release-notes.md` with the final evidence
-  and limits, recompute the fingerprint, rerun the release checklist checks, ask
-  the owner to delete `KAN-1`, remove `m9-pilot/` scratch directories.
+- M9 closure done on 2026-10-02: acceptance and release notes final, release
+  checks rerun on `e8eca67` (960/960, fake 10/10, diff check, reference check),
+  fingerprint `d7169fa124a7fb1da31841f27b19fe77346d47b3ce781e0d36115b776a360a90`.
+  Waiting on the owner: delete `KAN-1` in Jira; decide whether to remove the
+  `/home/sr/Projects/Workspace/m9-pilot/` evidence directories; version, merge,
+  tag, and publication per the release checklist.
 
 ## Pilot state at handoff
 

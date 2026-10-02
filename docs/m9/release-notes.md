@@ -1,8 +1,9 @@
 # Beta candidate release notes
 
-Status: proposal, not an authorized release. Proposed tag: `v0.1.0-beta.1` after
-the M9 exit gate passes. `package.json` currently says `1.0.0`; the proposal does
-not change the package version or create a tag.
+Status: release candidate; publication is not authorized by these notes.
+Proposed tag: `v0.1.0-beta.1`. `package.json` still says `1.0.0`; changing it,
+merging, tagging, and publishing are the owner's decisions. Evidence:
+[M9 acceptance](acceptance.md). Procedure: [release checklist](release-checklist.md).
 
 ## Changelog for the candidate
 
@@ -16,40 +17,80 @@ not change the package version or create a tag.
   review, and explicit commit/push with repository ownership checks.
 - M8 completed six backend-driven tabs, run/usage views, durable telemetry,
   an isolated prompt comparison, and an optional bounded MLflow Tracking export.
-- M9 candidate hardening adds permission-profile checks for Codex threads,
-  protected runtime path preflight, stricter acceptance execution isolation,
-  scope-aware workspace snapshots, and dashboard status/navigation corrections.
-  It also rejects application-overlapping workspaces, holds writer admission
-  during operator commit, binds commits to ticket branches and reviewed staged
-  blobs, redacts diagnostics across persisted/operator-visible paths, and
-  closes Stop/Cancel hold and writer-lease gaps. M9 final acceptance remains open.
+- M9 hardening:
+  - Codex permission profiles: application-overlapping workspaces rejected;
+    carve-outs emitted only for existing paths, so Codex 0.160 no longer leaves
+    placeholder files in task repositories; `.codex`, `.agents`, and `.claude`
+    are real directories that roles can only read; thread bindings stay stable.
+  - Acceptance: stricter check isolation, scope-aware snapshots; a role's
+    self-reported out-of-scope file is a visible non-blocking warning when the
+    server attested the real delta, while attested violations still block.
+  - Lead recovery: invalid lead decisions are discarded with the error fed back
+    (two in a row end the run); resolutions for decisions the operator already
+    answered are ignored; schemas state their cross-field rules.
+  - Protected Git: commits bound to ticket branches and reviewed staged blobs,
+    writer admission held during commit, one push per commit and remote.
+  - Operator controls: Stop/Cancel reconciliation and hold boundaries fail closed.
+  - Diagnostics redaction across persisted and operator-visible paths.
+  - Dashboard: Connections tab loads reliably with bounded requests, role table
+    scrolls, mutating ticket actions are disabled while disconnected, the Board
+    marks stale data, the header works at 390 px; settings snapshots record the
+    App Server version.
+  - Docs: operator guide, state upgrade/backup/restore corrections, security
+    review, release checklist, README quickstart, session handoff.
+
+## Verified on the candidate
+
+- Commit `e8eca67` on `feature/dashboard-integration`, functional fingerprint
+  `d7169fa124a7fb1da31841f27b19fe77346d47b3ce781e0d36115b776a360a90`
+  (command in the release checklist).
+- Full suite 960/960, fake role cases 10/10, `git diff --check` clean, protected
+  dashboard reference unchanged, server serves `web/dashboard` only.
+- Network-fresh install in a clean copy: `npm ci` 130 packages, 0
+  vulnerabilities, full suite green (941/941 on the tree of that day).
+- Both primary scenarios end to end on real model turns through the browser:
+  a direct ticket with a correction round, Accept, Commit, Push; a Jira issue
+  imported read-only, reviewed, accepted, and committed, with a clean egress audit.
+- Manual recovery, upgrade, backup/restore, two-ticket lease, revision history,
+  reconnect/error states, and layouts; see acceptance.
+
+Tested combination: Node.js 24.21.0, npm 12.1.0, Codex CLI 0.160.0 with a
+ChatGPT login. This is not a support range.
+
+## Waivers by the owner
+
+- Hosted Git remote and credential helper were not exercised; pushes were
+  verified against a local bare remote. The owner creates pull requests.
+- Live pilots ran every role on `gpt-6-luna` to save quota, not on the shipped
+  Sol profiles for the coordinator, architect, reviewer, security, and the Sol
+  repair executor.
 
 ## Known limits
 
-- The release is designed for one local operator and a trusted task repository.
-  It is not a hosted multi-user service.
-- A real network Git remote and credential helper have not been included in
-  the current M9 evidence. Local bare-remote commit/push tests passed. The owner
-  creates the pull request.
-- Live Atlassian source traversal has been exercised, but linked issues are not
-  traversed by the current provider. The current M9 browser fixture reached
-  human review from an imported Jira issue, while the earlier real Atlassian
-  pilot stopped at Intake. A real imported issue has not completed engineering
-  and review on this candidate.
-- Session cookies are host-scoped across loopback ports, and the connector has
-  no Jira project or Confluence space allowlist. Operate on a trusted local
-  machine with a dedicated, restricted Atlassian account; see the
-  [security review](security-review.md).
-- Production MLflow adoption is deferred. The exporter logs bounded sanitized
-  fields to Tracking runs, not GenAI trace records. The M8 prompt candidate had
-  no measured quality improvement and was not promoted.
-- Usage and cached-token coverage can be partial. Monetary cost remains
-  unavailable without measured data; hypothetical API cost is labeled separately.
-- Full candidate tests passed 932/932 in the source checkout and a clean
-  offline-cached install. Bounded real Developer and PM pilots each passed 1/1.
-  Remaining Jira, hosted Git, and manual recovery evidence is tracked in
-  [M9 acceptance](acceptance.md).
+- One local operator, a trusted task repository, one writer at a time; not a
+  hosted multi-user service. Session cookies are host-scoped across loopback
+  ports; run on a trusted machine.
+- Model quality is uneven and only bounded live evidence exists: developer, PM,
+  architect, and technical writer passed their live case; QA, performance, and
+  DevOps each failed one case on model behavior; reviewer and security have only
+  fake-protocol evidence. The product fails closed on invalid model output.
+- A run whose finish gate rejects after every stage succeeded cannot reopen
+  stages; answer the stop/leave option, then Return to Backlog and Submit.
+- A clean stop cancels executing runs (Pause first); a crash leaves them
+  resumable.
+- A commit recorded as `unknown` is terminal; inspect the branch and push with
+  Git directly if needed.
+- Paths an agent creates during a run are not carved out for already loaded
+  threads. Top-level `.runtime`, `runtime`, `data`, and `.env` in a task
+  repository are hidden from agents.
+- Codex may report a different reasoning effort than requested; the run view
+  shows the difference per attempt.
+- Atlassian: read-only, no project or space allowlist (use a dedicated
+  restricted account), linked issues are not traversed, PKCE not verified.
+- Production MLflow adoption is deferred; the exporter logs bounded sanitized
+  Tracking runs. The M8 prompt candidate showed no improvement and was not
+  promoted.
+- Usage and cached-token coverage can be partial; monetary cost is unavailable
+  for subscription usage.
 
-The [operator guide](operator-guide.md) covers installation, both ticket sources,
-recovery, and troubleshooting. Release publication, merge, and tag creation need
-the owner's separate release authority.
+Deferred follow-ups are listed in the [session handoff](session-handoff.md).
