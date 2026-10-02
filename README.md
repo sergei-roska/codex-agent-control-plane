@@ -1,135 +1,185 @@
-# Codex Universal A2A Orchestrator
+# Codex Agent Control Plane
 
-This project runs the eight development-team roles adapted from `codex-universal` as independent Agent2Agent (A2A) agents. A read-only lead plans and dispatches bounded work to those agents over A2A. Every role runs in its own Codex App Server thread under the local Codex ChatGPT sign-in.
+A local, single-operator dashboard over a Codex App Server delivery team. You
+write a ticket (or import a Jira issue), a nine-role delivery team plans and
+implements it in a task repository, and you review the candidate, accept it, and
+commit it. Every role runs in its own Codex App Server thread under your local
+Codex ChatGPT sign-in and talks to the lead over the Agent2Agent (A2A) protocol.
 
-```text
-A2A client -> /orchestrator (lead)
-                  | A2A dispatch
-                  +-> /agents/orch-explorer -> Codex App Server thread
-                  +-> /agents/orch-builder  -> Codex App Server thread
-                  +-> /agents/...           -> Codex App Server thread
-```
+Beta scope:
 
-The role profiles, team rules, and skills are bundled in [`profiles/`](profiles/) so this project does not depend on the original pack path. The profiles were adapted to act as A2A workers while keeping their model choices and task boundaries. The lead uses structured decisions, checks role names and file paths, runs read-only assignments in parallel, and runs batches containing a writer serially. Repair roles follow the pack's escalation order.
-
-The agreed scope and open decisions for the dashboard are recorded in
-[dashboard-plan.md](docs/dashboard-plan.md).
-The roadmap through the first beta is in
-[beta-master-plan.md](docs/beta-master-plan.md).
-M0 contracts, screen inventory, verification and the next implementation backlog
-are indexed in [docs/m0/README.md](docs/m0/README.md). Beta Jira/Confluence access
-is read-only; work tracking stays inside the dashboard.
+- Local and loopback-only (the server binds `127.0.0.1`), one operator, one
+  writer at a time, a trusted task repository.
+- The app can commit and push a reviewed candidate branch. You open the pull
+  request yourself; the app does not create one.
+- Jira and Confluence access is read-only intake. Nothing is ever written back
+  to Atlassian.
+- This is a beta candidate, not a hosted multi-user service. Known limits are in
+  the [release notes](docs/m9/release-notes.md).
 
 ## Requirements
 
-- Node.js with `npm`.
-- A local Codex CLI with `codex app-server` support.
-- A Codex sign-in through ChatGPT OAuth. Check with `codex login status`; it should say `Logged in using ChatGPT`.
+Tested combination (not a support range): Node.js 24.21.0, npm 12.1.0, Codex CLI
+0.160.0.
 
-The server checks App Server's active account on startup and rejects API-key mode. It binds only to `127.0.0.1` and does not need `OPENAI_API_KEY`.
+- Codex signed in with ChatGPT: `codex login status` must say
+  `Logged in using ChatGPT`. Startup refuses any other Codex account type,
+  including API-key sign-in.
+- A separate Git task repository, outside this checkout and clean before you
+  submit a ticket. The server refuses a workspace that overlaps the application
+  directory (parent, child, or symlink alias).
 
-## Run
+## Install and start
 
 ```bash
 npm ci
-CODEX_WORKSPACE=/absolute/path/to/trusted-task-repo npm start
+CODEX_WORKSPACE=/absolute/path/to/task-repo PORT=3000 npm start
 ```
 
-In another terminal:
+Start from this project directory. The server prints the listen URL and a
+`Dashboard pairing URL: ...` line. Open that URL in a browser on the same
+machine; the one-time code creates a local session. If the session is lost or
+the code is used up, run `npm run dashboard:pair` for a fresh URL (it reads the
+local token and uses the same `PORT`). Use the printed host string
+(`127.0.0.1`) as-is: `localhost` and `127.0.0.1` have separate cookies. Do not
+share the URL or the token file.
 
-```bash
-npm run ask -- "Inspect this repository and propose the next implementation step"
-```
+Environment variables the server reads:
 
-Start the server from this project directory so it can load `profiles/`, and set `CODEX_WORKSPACE` to a separate trusted task repository. The server refuses a task workspace that overlaps its own application directory, including a parent, child, or symlink alias: writable agents must not be able to change the dashboard code that the server is serving. If `CODEX_WORKSPACE` is omitted, the current directory is used only when it does not overlap the application. Set `PORT=3000` to choose the A2A listener port.
-
-Codex App Server RPC requests time out after 120 seconds. Model turns have a separate 10-minute completion timeout; set `CODEX_A2A_TURN_TIMEOUT_MS` to a positive integer number of milliseconds to change it.
-
-The lead Agent Card is at `http://127.0.0.1:3000/orchestrator/agent-card.json`. Each specialist has a card at `http://127.0.0.1:3000/agents/<role>/agent-card.json`; for example, `/agents/orch-explorer/agent-card.json`. A2A clients can discover these cards without credentials. Requests to the JSON-RPC endpoints require `Authorization: Bearer <token>`. The server creates the token at `.runtime/a2a-token` with owner-only access, and `npm run ask` reads it automatically. Keep that file private. For a custom client, read the token locally and send it as the bearer value. Set `CODEX_A2A_TOKEN_FILE` to use a different token path.
-
-## Roles
-
-| Agent | Workspace access |
+| Variable | Meaning and default |
 | --- | --- |
-| `orch-explorer` | Read-only |
-| `orch-builder` | Workspace write |
-| `orch-verifier` | Workspace write |
-| `orch-auditor` | Read-only |
-| `orch-repair-xhigh` | Workspace write |
-| `orch-repair-sol` | Workspace write |
-| `orch-architect` | Read-only |
-| `orch-scout` | Read-only |
+| `CODEX_WORKSPACE` | Task repository. Default: current directory (accepted only if it does not overlap the application). |
+| `PORT` | Listener port. Default `3000`. |
+| `CODEX_A2A_STATE_DB` | SQLite state file. Default `.runtime/state.sqlite` in this checkout. One server per state file. |
+| `CODEX_A2A_TOKEN_FILE` | Local bearer token. Default `.runtime/a2a-token` (created owner-only). |
+| `CODEX_A2A_ARTIFACT_DIR` | Attachment bytes. Default `artifacts/` next to the state file. |
+| `CODEX_PROJECT_CONFIG` | Project policy file. Default `project.json` next to the state file. |
+| `CODEX_ATLASSIAN_CONFIG` | Absolute path to the Atlassian connector config. Optional; see below. |
+| `CODEX_A2A_WORKSPACE_LOCK_DIR` | Directory for the per-workspace lock file. Default: the task repository's Git common directory (`.git/codex-a2a-writer.lockdb`); the OS temp dir only for a non-Git workspace. |
+| `CODEX_A2A_TURN_TIMEOUT_MS` | Model turn timeout in ms. Default 10 minutes. |
 
-The lead uses GPT-6 Sol at high effort in a read-only Codex thread. Specialist model and effort settings are read from the bundled TOML profiles and can be changed for the signed-in Codex account.
+Path rules checked at startup: the token, state database, artifact root,
+workspace lock directory, project config, and Atlassian config must be outside
+the task repository, and the Codex home/session storage must be too. The task
+repository must be outside this checkout. A violation stops startup; move the
+file rather than weakening the check. A second server on the same workspace or
+state file is refused.
 
-## Role tool surface
+### project.json
 
-Every role gets a fixed tool surface declared in its profile; everything not declared is off. Each thread is started (and resumed) with config overrides that disable Codex apps and plugins, the Codex skills listing, and every user or project MCP server not on the role's allowlist. This cuts roughly 70k input tokens per turn of inherited tool schemas and skill text, and a stable per-role surface keeps prompt caching effective. The lead model does not choose tools.
+Optional operator-owned policy, read once at startup (restart after editing).
+Without it the defaults are base ref `main`, branch prefixes `feature/`, `fix/`,
+`docs/`, remote `origin`, and no approved checks. Put it next to the state file
+(default `.runtime/project.json`):
 
-To allow an MCP server or skills for a role, add a table at the end of its `profiles/agents/<role>.toml`:
-
-```toml
-[a2a_tools]
-mcp_servers = ["some-server"]  # names as in [mcp_servers.*] of your Codex config
-skills = false                 # true keeps the Codex skills listing
+```json
+{
+  "baseRef": "main",
+  "checks": [
+    { "id": "unit", "argv": ["npm", "test"], "timeoutMs": 120000, "description": "Unit tests" }
+  ]
+}
 ```
 
-A missing table means no MCP servers and no skills. The pack's own `orch-*` skills are read as files by path and do not need the listing. An allowlisted name that is not configured is ignored and reported in `permissionConfig.toolPolicy.mcpMissing`. If the configured servers cannot be enumerated, the turn still runs and the policy is marked `enforced: false` (a cost problem, not a safety boundary). Sandbox and approvals are unaffected.
+Other fields: `branchPrefixes` (`feature`, `bugfix`, `docs`), `delivery.remotes`
+(allowed push remotes), and `rolePack` (`delivery` or `legacy-orch`). Checks run
+as argv (no shell) in the task repository. Unknown fields are rejected.
 
-## Writer admission
+## Using the dashboard
 
-Every writable Codex turn passes through the role executor, which admits at most one writer per workspace (canonical path) using the state database.
+Tabs:
 
-- Waits: a second writer stays `SUBMITTED` (FIFO) while the holder is `active`; canceling while waiting ends `CANCELED` with no effects. Read-only roles never take admission and run alongside a writer.
-- Blocks: while the holder is `unresolved` (its outcome is unknown), one reconciliation is attempted; if the process group cannot be proven gone, the new writer fails with `failureKind: "admission_blocked"` and no effects.
-- Workspace lock: a second server on the same workspace is refused by a lock file in the OS temp dir (`codex-a2a-workspace-<hash>.lock`).
-- Every writer records a before/after workspace snapshot (git); the server attests `changedPaths` (ignored files are invisible).
+- **Board**: tickets by state; create tickets and open a ticket's detail, run
+  log, checks, and diff.
+- **Pipelines**: runs and the ticket presets (feature, bugfix, docs, audit).
+- **Monitor**: live event console with category and role filters.
+- **Decisions & Escalations**: Intake questions, escalations, reviews, and the
+  answered history.
+- **Docs**: read-only viewer for the role-pack documents and the active project policy.
+- **Connections & Models**: Codex account status, the Atlassian connector, and
+  per-role model and effort settings.
 
-### Reconciliation pause
+Direct ticket:
 
-After a batch, the lead graph settles every writable outcome that is not provably finished, without asking a model. If quiescence cannot be proven, the lead task is `INPUT_REQUIRED` with pause `writer_unresolved`. Send any message to the task to retry once the earlier writer is stopped. Writable dispatch is refused while a writer is unresolved, and in a serial batch the remaining writers are skipped (`skipped_unresolved_writer`) after an unsettled one.
+1. **New Ticket**: enter a bounded request and acceptance criteria, attach only
+   needed files, and save.
+2. Check it on **Board** and Submit from Backlog. PM Intake and a saved plan come
+   first; answer any Intake questions in **Decisions & Escalations**.
+3. Review the run log, attempts, checks, and candidate diff. A failed or
+   unavailable check is not a verified candidate. **Request corrections** with
+   concrete findings if it needs rework.
+4. **Accept** only the candidate you reviewed, then **Commit**, and optionally
+   **Push**. Commit and push are separate operator actions bound to the reviewed
+   candidate. The repository lease follows the ticket: normal order is review,
+   Accept, Commit, optional Push, then the next ticket. A second ticket waits
+   (`repository_busy`) until the lease clears. Do not touch the checkout while a
+   run is active or awaiting review.
 
-## Acceptance
+Jira ticket (optional): follow the [connector setup](docs/m6/operator-setup.md)
+(dedicated Atlassian app, private secret files outside the task repository,
+`CODEX_ATLASSIAN_CONFIG`), then use **Connect** in **Connections & Models** from
+the same origin as the registered callback port. Import by issue key or numeric
+ID, inspect the issue and Confluence provenance, then Submit. The lifecycle is
+the same as a direct ticket. **Refresh Source** stages changed source content as
+pending context for a new revision. Without the connector, direct tickets work
+unchanged.
 
-Finishing a workflow is not acceptance. When the lead decides to finish, the server computes a disposition in code; the lead's final text never changes it.
+Models: set the model and effort per role in **Connections & Models**. Changes
+apply to new runs; a running run keeps the settings pinned at its start.
+
+Pause, Resume, Stop, Cancel, Return to Backlog, and Release Repository are
+state-checked commands; see the [operator guide](docs/m9/operator-guide.md).
+
+## Operating safely
+
+- Pause active runs and wait for Paused (or review) before a planned stop. A clean
+  stop (Ctrl+C or SIGTERM) cancels runs still executing; recover with Return to
+  Backlog, then Submit. A crash leaves a run resumable (`interrupted`).
+- Back up and restore only with the server stopped, keeping the database and the
+  attachment directory together:
+  [state upgrade, backup and restore](docs/operations/state-upgrade.md).
+- Symptoms and fixes: the troubleshooting table in the
+  [operator guide](docs/m9/operator-guide.md#troubleshooting).
+
+## Trying it without model quota
 
 ```bash
-npm run ask -- --check 'npm test' --check 'node --check src/server.js' "Implement the change"
+npm test                                    # unit and integration tests, fake App Server
+node scripts/role-capability-check.js --fake  # ten role cases through the real pipeline, fake models
+npm run dashboard:dev                       # real server, fake Codex; state under .runtime/dev/
+DASHBOARD_DEV_SCENARIO=delivery npm run dashboard:dev
 ```
 
-`--check` is repeatable, split on whitespace into argv (no shell), and valid for a new run only. The checks are pinned when the run starts (resume messages cannot change them), run under writer admission in the workspace, and must leave the workspace snapshot unchanged. Dispositions:
+`npm run roles:check` is the same script as `node scripts/role-capability-check.js`.
+The dev harness listens on `PORT` (default 3000), so stop other servers on that
+port first. In `delivery` mode the workspace is a small node project with a `unit`
+check and a local bare `origin`; ticket title keywords change the scenario:
+`[ask]` (Intake asks two questions), `[break]` (Developer breaks the test and the
+repair role fixes it), `[bug]`, `[docs]`, `[audit]` (pick that preset). For a
+fresh pairing URL against the harness:
+`CODEX_A2A_TOKEN_FILE=.runtime/dev/a2a-token PORT=3000 npm run dashboard:pair`.
 
-| Disposition | Meaning |
-| --- | --- |
-| `accepted` | Every check passed and no writer issue (invalid report, scope violation, unknown delta, unresolved writer). |
-| `rejected` | Checks exist and any condition failed. The lead gets one chance to dispatch fixes; the second rejection ends the run. |
-| `unverifiable` | Checks exist but no snapshot of the candidate is available. |
-| `unverified` | No checks, at least one writer ran. |
-| `not_required` | No checks and no writer ran. |
+Live checks (`node scripts/role-capability-check.js --live` or `--live-workers`)
+need `--i-understand-this-uses-my-quota` and spend your ChatGPT plan quota.
 
-The task stays `COMPLETED`; the result text starts with `Acceptance: <disposition>` and the artifact metadata carries `acceptance`. The CLI exits 4 for `rejected` and `unverifiable`. Direct A2A clients may send `metadata.acceptance = { requiredChecks: [{ id, argv, timeoutMs? }] }` on the first message.
+## A2A and CLI
 
-## Usage
+The server also exposes the lead at `/orchestrator` and each role at
+`/agents/<role>/` with public Agent Cards and bearer-protected JSON-RPC.
+`npm run ask -- "<request>"` submits a run from a terminal (`--check '<cmd>'`
+adds acceptance checks); `npm run usage -- --run <taskId>` reports per-run model
+usage. Subscription usage is not priced; monetary cost is unavailable.
 
-Every Codex turn (worker and lead) is recorded in the state database with model, effort, elapsed time, and tokens where known (unknown stays empty, never 0). Cost is not measured: it is subscription usage.
+## More documentation
 
-```bash
-npm run usage -- --run <taskId>      # or --task <taskId>; optional --state <file> --price-table <json>
-```
+- [Operator guide](docs/m9/operator-guide.md): install, tickets, recovery, troubleshooting, limits
+- [State upgrade, backup and restore](docs/operations/state-upgrade.md)
+- [Atlassian connector setup](docs/m6/operator-setup.md)
+- [Security review](docs/m9/security-review.md)
+- [Release notes](docs/m9/release-notes.md) and [release checklist](docs/m9/release-checklist.md)
+- [Beta master plan](docs/beta-master-plan.md)
 
-The report groups usage by run, role, and attempt, counts permission denials, and reports repeated assignment objectives. A price table adds a separately labeled hypothetical API cost.
+## Protected reference
 
-The design is in [hardening-spec.md](docs/hardening-spec.md); [efficiency-comparison.md](docs/efficiency-comparison.md) describes how to compare against native subagents.
-
-## Safety and current limits
-
-- The client pins `approvalsReviewer: "user"` on thread/start, thread/resume, and turn/start, overriding any `auto_review` in the user's Codex config, so every approval request reaches the local App Server client, which declines it. A task that needs an additional permission must report that need; this service does not grant it silently.
-- Runs are durable. LangGraph checkpoints, A2A tasks, and the dispatch journal live in `.runtime/state.sqlite` (override with `CODEX_A2A_STATE_DB`), and only one server may use a state file at a time. After a crash, the lead task shows `INPUT_REQUIRED` (pause `restart`). Worker tasks that were running show `FAILED` (`interrupted`). On startup the server reconciles the interrupted writer mechanically (see Writer admission), so the lead sees attested effects instead of inspecting the workspace itself.
-- If the Codex App Server child exits or times out, the next request starts a replacement process. An interrupted writer may have changed files, so its outcome is unknown until the server proves the writer stopped (reconciliation); no new writer runs before that.
-- Pauses: a usage limit (`waiting_for_budget`), a rare human decision (`human_decision`), a restart, or a resumable error leaves the lead task `INPUT_REQUIRED` with `metadata.pause`. Continue with `npm run ask -- --task <taskId> [--decision <id>] [--choice <optionId>] "<answer>"`. The CLI exits with code 3 while a task is paused and 4 when acceptance is `rejected` or `unverifiable`.
-- The lead validates assigned file paths and passes allowed files to workers. The Codex workspace sandbox restricts writes to the workspace, but the per-file assignment is enforced by worker instructions, not by a separate filesystem boundary. Use a trusted local workspace.
-- A local bearer token protects the A2A JSON-RPC endpoints, and the server binds only to loopback. Agent Cards remain public for A2A discovery. Codex App Server is currently documented as experimental and unsupported for production workloads.
-
-The durable-run design is in [resilient-orchestration.md](docs/resilient-orchestration.md). The implemented decisions and known limits are in [resilient-orchestration-spec.md](docs/resilient-orchestration-spec.md).
-
-Run `npm test` for the protocol, orchestration, durability, and end-to-end tests. They use a fake App Server and never call Codex. The HTTP integration test skips when the environment forbids binding a local port.
+`artifacts/dashboard/**` is an immutable design reference and is never edited or
+served; the app serves the working copy in `web/dashboard`.
