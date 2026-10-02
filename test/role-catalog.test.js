@@ -27,7 +27,7 @@ test('loads all eight source roles with valid model, effort, and sandbox setting
 
   for (const [name, sandbox] of Object.entries(EXPECTED_ROLE_SANDBOXES)) {
     const role = roles.get(name);
-    assert.match(role.model, /^gpt-[a-z0-9-]+$/, `${name} model`);
+    assert.match(role.model, /^gpt-[a-z0-9]+(?:[.-][a-z0-9]+)*$/, `${name} model`);
     assert.ok(VALID_EFFORTS.has(role.effort), `${name} effort`);
     assert.equal(role.sandbox, sandbox, `${name} sandbox`);
     assert.equal(role.name, name);
@@ -57,7 +57,7 @@ test('profiles work from a copied directory without the original source pack', (
   }
 
   const lead = createLeadRole({ profilesDir: copiedProfiles });
-  assert.match(lead.model, /^gpt-[a-z0-9-]+$/);
+  assert.match(lead.model, /^gpt-[a-z0-9]+(?:[.-][a-z0-9]+)*$/);
   assert.ok(VALID_EFFORTS.has(lead.effort));
   assert.equal(lead.sandbox, 'read-only');
   assert.match(lead.instructions, /A2A dispatch/i);

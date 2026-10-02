@@ -107,7 +107,7 @@ function parseProfile(source, filePath) {
   if (!SANDBOXES.has(values.sandbox_mode)) {
     throw new Error(`${filePath}: unsupported sandbox_mode ${JSON.stringify(values.sandbox_mode)}`);
   }
-  if (!/^gpt-[a-z0-9-]+$/.test(values.model)) {
+  if (!/^gpt-[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(values.model)) {
     throw new Error(`${filePath}: invalid model ${JSON.stringify(values.model)}`);
   }
   return {
@@ -168,7 +168,7 @@ function createLeadRole({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
   return {
     name: 'orch-lead',
     description: 'Read-only orchestrator lead that plans work and dispatches bounded tasks to A2A roles.',
-    model: 'gpt-6-sol',
+    model: 'gpt-6.1-sol',
     effort: 'high',
     sandbox: 'read-only',
     tools: { mcpServers: [], skills: false },

@@ -52,7 +52,7 @@ The lead Agent Card is at `http://127.0.0.1:3000/orchestrator/agent-card.json`. 
 | `orch-architect` | Read-only |
 | `orch-scout` | Read-only |
 
-The lead uses GPT-6 Sol at high effort in a read-only Codex thread. Specialist model and effort settings are read from the bundled TOML profiles and can be changed for the signed-in Codex account.
+The lead uses GPT-6.1 Sol at high effort in a read-only Codex thread. Specialist model and effort settings are read from the bundled TOML profiles and can be changed for the signed-in Codex account.
 
 ## Role tool surface
 

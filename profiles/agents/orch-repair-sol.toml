@@ -1,6 +1,6 @@
 name = "orch-repair-sol"
 description = "Escalated bounded implementation when Luna attempts remain unable to complete correctly."
-model = "gpt-6-sol"
+model = "gpt-6.1-sol"
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = """

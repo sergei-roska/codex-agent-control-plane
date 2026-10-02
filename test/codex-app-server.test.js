@@ -80,7 +80,7 @@ function baseHandler() {
   };
 }
 
-const role = { name: 'reviewer', model: 'gpt-6-sol', effort: 'high', sandbox: 'workspace-write', instructions: 'Review carefully.' };
+const role = { name: 'reviewer', model: 'gpt-6.1-sol', effort: 'high', sandbox: 'workspace-write', instructions: 'Review carefully.' };
 
 test('performs initialize handshake and completes a turn', async (t) => {
   const fake = fakeSpawn(baseHandler());
@@ -149,7 +149,7 @@ test('resumes an unknown thread once, then reuses it', async (t) => {
     approvalPolicy: 'on-request',
     approvalsReviewer: 'user',
     sandbox: 'workspace-write',
-    model: 'gpt-6-sol',
+    model: 'gpt-6.1-sol',
     developerInstructions: role.instructions,
   });
   const methods = sent.map(({ method }) => method).filter((m) => m === 'thread/resume' || m === 'turn/start');
@@ -695,7 +695,7 @@ test('derives per-turn tokens from total deltas on a new thread and a second tur
 
   const second = await client.run({ role, cwd: '/tmp/p', input: 'b', threadId: first.threadId });
   assert.deepEqual(second.usage.tokens, { inputTokens: 20, cachedInputTokens: 2, outputTokens: 11, reasoningOutputTokens: 2, totalTokens: 31 });
-  assert.equal(second.usage.model, 'gpt-6-sol');
+  assert.equal(second.usage.model, 'gpt-6.1-sol');
   assert.equal(second.usage.effort, 'high');
 });
 
