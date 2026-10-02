@@ -32,7 +32,7 @@ The server checks App Server's active account on startup and rejects API-key mod
 
 ```bash
 npm ci
-npm start
+CODEX_WORKSPACE=/absolute/path/to/trusted-task-repo npm start
 ```
 
 In another terminal:
@@ -41,7 +41,7 @@ In another terminal:
 npm run ask -- "Inspect this repository and propose the next implementation step"
 ```
 
-The default target workspace is the current directory. Set `CODEX_WORKSPACE=/absolute/path/to/project` to work on another local project and `PORT=3000` to choose the A2A listener port. Start the server from this project directory so it can load `profiles/`.
+Start the server from this project directory so it can load `profiles/`, and set `CODEX_WORKSPACE` to a separate trusted task repository. The server refuses a task workspace that overlaps its own application directory, including a parent, child, or symlink alias: writable agents must not be able to change the dashboard code that the server is serving. If `CODEX_WORKSPACE` is omitted, the current directory is used only when it does not overlap the application. Set `PORT=3000` to choose the A2A listener port.
 
 Codex App Server RPC requests time out after 120 seconds. Model turns have a separate 10-minute completion timeout; set `CODEX_A2A_TURN_TIMEOUT_MS` to a positive integer number of milliseconds to change it.
 

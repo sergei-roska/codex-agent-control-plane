@@ -1,6 +1,7 @@
 'use strict';
 
 const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
 const { createGitAdapter, computeIntegrityHash, nonInteractiveEnv } = require('./git-adapter');
 
 // Operator-driven delivery: the only module allowed to stage, commit and push. Agents never reach it.
@@ -82,6 +83,13 @@ function createGitDelivery({ workspace, remotes: allowedRemotes, timeoutMs = DEF
     return typeof result === 'string' ? result : result.stdout;
   }
 
+  async function gitBytes(argv) {
+    const result = await exec('git', [...HARDENING_ARGS, ...argv], {
+      cwd: workspace, env, maxBuffer: GIT_MAX_BUFFER, encoding: 'buffer', timeout: LOCAL_TIMEOUT_MS,
+    });
+    return Buffer.isBuffer(result) ? result : result.stdout;
+  }
+
   // Network calls only: batch-mode ssh unless the operator configured an ssh command (env or core.sshCommand).
   async function networkEnv() {
     if (env.GIT_SSH_COMMAND) return env;
@@ -141,6 +149,41 @@ function createGitDelivery({ workspace, remotes: allowedRemotes, timeoutMs = DEF
     return splitZ(await git(['diff', '--cached', '--name-only', '--no-renames', '-z']));
   }
 
+  async function verifyStagedManifest(candidate, paths) {
+    const records = splitZ(await git(['ls-files', '--stage', '-z', '--', ...paths]));
+    const staged = new Map();
+    for (const record of records) {
+      const tab = record.indexOf('\t');
+      if (tab < 0) return false;
+      const [mode, objectId, stage] = record.slice(0, tab).split(' ');
+      if (stage !== '0' || staged.has(record.slice(tab + 1))) return false;
+      staged.set(record.slice(tab + 1), { mode, objectId });
+    }
+
+    const expected = new Map();
+    for (const entry of candidate.manifest || []) {
+      if (entry.oldPath) expected.set(entry.oldPath, null);
+      expected.set(entry.path, entry.status === 'D' ? null : entry);
+    }
+    if (staged.size !== [...expected.values()].filter(Boolean).length) return false;
+    for (const [relative, entry] of expected) {
+      const actual = staged.get(relative);
+      if (entry === null) {
+        if (actual) return false;
+        continue;
+      }
+      if (!actual) return false;
+      const expectedMode = entry.mode === 'exec' ? '100755' : entry.mode === 'symlink' ? '120000' : '100644';
+      if (actual.mode !== expectedMode) return false;
+      let content;
+      try { content = await gitBytes(['cat-file', 'blob', actual.objectId]); }
+      catch (_) { return false; }
+      const digest = crypto.createHash('sha256').update(content).digest('hex');
+      if (digest !== entry.sha256 || content.length !== entry.size) return false;
+    }
+    return true;
+  }
+
   async function commit({ candidate, message, deliveryId } = {}) {
     if (!candidate || typeof candidate !== 'object') throw new GitDeliveryError('git_failed', 'candidate is required');
     if (typeof message !== 'string' || !message.trim() || message.length > MAX_MESSAGE || message.includes('\0')) {
@@ -168,6 +211,10 @@ function createGitDelivery({ workspace, remotes: allowedRemotes, timeoutMs = DEF
     if (staged.length !== allowed.size || staged.some((name) => !allowed.has(name))) {
       await gitOrNull(['restore', '--staged', '--', ...paths]);
       throw new GitDeliveryError('staged_set_mismatch', 'The staged paths do not match the candidate manifest');
+    }
+    if (!(await verifyStagedManifest(candidate, paths))) {
+      await gitOrNull(['restore', '--staged', '--', ...paths]);
+      throw new GitDeliveryError('staged_content_mismatch', 'The staged content does not match the candidate manifest');
     }
 
     const body = `${message.trim()}\n\nTicket: ${candidate.ticketId}\nCandidate: ${candidate.candidateId}\nDelivery-Id: ${deliveryId}\n`;

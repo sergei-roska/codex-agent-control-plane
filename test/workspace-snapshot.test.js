@@ -46,6 +46,99 @@ test('snapshot records head, dirty entries with content hashes and a stable fing
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('snapshot fails closed on configured clean filters before status can execute them', () => {
+  const dir = makeRepo();
+  const marker = path.join(dir, '..', `filter-marker-${path.basename(dir)}`);
+  const script = path.join(dir, '..', `filter-${path.basename(dir)}.sh`);
+  try {
+    fs.writeFileSync(script, `#!/bin/sh\nprintf ran >> "${marker}"\ncat\n`, { mode: 0o755 });
+    sh(dir, 'config', 'filter.marker.clean', script);
+    fs.writeFileSync(path.join(dir, '.gitattributes'), '*.txt filter=marker\n');
+    const snapshot = takeSnapshot(dir);
+    assert.equal(snapshot.kind, 'unavailable');
+    assert.equal(snapshot.reason, 'git_filters_configured');
+    assert.equal(fs.existsSync(marker), false, 'configured clean filter never ran');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(marker, { force: true });
+    fs.rmSync(script, { force: true });
+  }
+});
+
+test('diff reports new ignored environment files at the root and in nested directories without exposing contents', () => {
+  const dir = makeRepo();
+  try {
+    fs.writeFileSync(path.join(dir, '.gitignore'), '.env*\nconfig/.env.*\n');
+    sh(dir, 'add', '.gitignore');
+    sh(dir, 'commit', '-q', '-m', 'ignore environment files');
+    const before = takeSnapshot(dir);
+    fs.writeFileSync(path.join(dir, '.env.test'), 'TOP_SECRET_ROOT\n');
+    fs.mkdirSync(path.join(dir, 'config'));
+    fs.writeFileSync(path.join(dir, 'config', '.env.audit'), 'TOP_SECRET_NESTED\n');
+    const after = takeSnapshot(dir);
+
+    assert.deepEqual(diffSnapshots(before, after, dir).changedPaths, ['.env.test', 'config/.env.audit']);
+    assert.equal(JSON.stringify(after).includes('TOP_SECRET_ROOT'), false);
+    assert.equal(JSON.stringify(after).includes('TOP_SECRET_NESTED'), false);
+    assert.ok(after.protectedEntries.every((entry) => !Object.hasOwn(entry, 'sha256')));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('nested environment discovery skips node_modules and .git trees', () => {
+  const dir = makeRepo();
+  try {
+    fs.mkdirSync(path.join(dir, 'node_modules', 'pkg'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'vendor', '.git'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'node_modules', 'pkg', '.env.hidden'), 'ignored');
+    fs.writeFileSync(path.join(dir, 'vendor', '.git', '.env.hidden'), 'ignored');
+    const snapshot = takeSnapshot(dir);
+    assert.equal(snapshot.kind, 'git');
+    assert.equal(snapshot.protectedEntries.some((entry) => entry.path.includes('.env.hidden')), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('snapshot covers runtime, data, and the named Codex credential and session paths', () => {
+  const dir = makeRepo();
+  try {
+    const protectedFiles = [
+      '.env', '.env.local', 'runtime/state.json', 'data/cache.bin',
+      '.codex/auth.json', '.codex/sessions/session.json',
+    ];
+    for (const relative of protectedFiles) {
+      const absolute = path.join(dir, relative);
+      fs.mkdirSync(path.dirname(absolute), { recursive: true });
+      fs.writeFileSync(absolute, 'credential-marker');
+    }
+    const snapshot = takeSnapshot(dir);
+    assert.deepEqual(snapshot.protectedEntries.map((entry) => entry.path), [
+      '.codex', '.codex/auth.json', '.codex/sessions', '.codex/sessions/session.json',
+      '.env', '.env.local', 'data', 'data/cache.bin', 'runtime', 'runtime/state.json',
+    ]);
+    assert.equal(JSON.stringify(snapshot).includes('credential-marker'), false);
+    assert.ok(snapshot.protectedEntries.every((entry) => !Object.hasOwn(entry, 'sha256')));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('diff reports changes inside protected runtime trees without following symlinks', () => {
+  const dir = makeRepo();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'snapshot-outside-'));
+  try {
+    fs.mkdirSync(path.join(dir, '.runtime'));
+    fs.writeFileSync(path.join(dir, '.runtime', 'state.json'), 'first');
+    fs.symlinkSync(outside, path.join(dir, 'data'));
+    const before = takeSnapshot(dir);
+    fs.writeFileSync(path.join(dir, '.runtime', 'state.json'), 'second');
+    fs.writeFileSync(path.join(outside, 'outside.txt'), 'outside');
+    const after = takeSnapshot(dir);
+    assert.deepEqual(diffSnapshots(before, after, dir).changedPaths, ['.runtime/state.json']);
+    assert.equal(after.protectedEntries.some((entry) => entry.path === 'data/outside.txt'), false);
+    assert.equal(JSON.stringify(after).includes(outside), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test('diff reports a modified tracked file', () => {
   const dir = makeRepo();
   try {

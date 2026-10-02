@@ -72,7 +72,10 @@ function renderHeaderContext() {
 }
 
 // Connection state drives the sidebar session line and the header status pill.
+let lastRenderedConnStatus = null;
 function renderConnectionState(conn) {
+  const previous = lastRenderedConnStatus;
+  lastRenderedConnStatus = conn.status;
   const labels = {
     connecting: 'Connecting...',
     connected: 'Connected',
@@ -93,6 +96,15 @@ function renderConnectionState(conn) {
   if (sessionText) sessionText.textContent = 'Session: ' + labels[conn.status].toLowerCase();
   const dot = document.getElementById('session-status-dot');
   if (dot) dot.className = 'status-dot conn-' + conn.status;
+
+  // Views that keep showing the last snapshot must say so, and protected controls must not stay live.
+  if (typeof renderBoard === 'function') renderBoard();
+  if (typeof trApplyLock === 'function') trApplyLock();
+  // The Connections tab only loads on activation; refresh it once when the orchestrator comes back.
+  if (conn.status === 'connected' && (previous === 'reconnecting' || previous === 'unpaired')) {
+    const pane = document.getElementById('tab-connections');
+    if (pane && pane.classList.contains('active') && typeof loadConnections === 'function') loadConnections();
+  }
 }
 
 function initSidebarEvents() {

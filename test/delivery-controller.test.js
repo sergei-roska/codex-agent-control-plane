@@ -15,6 +15,7 @@ const { startServer } = require('../src/server');
 const { LeadOrchestrator } = require('../src/lead-orchestrator');
 const { ProductError } = require('../src/product-store');
 const { createDeliveryController, planHashOf } = require('../src/delivery-controller');
+const { createProjection } = require('../src/dashboard-projection');
 const {
   decision, assignment, humanDecision, workerReport, makeFakeAppServer, planStage, readyIntake, needsInputIntake,
 } = require('./fixtures/fake-app-server');
@@ -251,6 +252,66 @@ test('delivery controller', async (suite) => {
     });
   });
 
+  await suite.test('wait diagnostics redact credentials in run details and board cards', async () => {
+    const accessToken = 'access-secret-42';
+    const githubToken = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const diagnostic = `Request failed {"access_token":"${accessToken}","GH_TOKEN":"${githubToken}"}`;
+    await withStack(() => makeFakeAppServer({ intakeScript: [() => { throw new Error(diagnostic); }] }), async ({ runtime }) => {
+      const ticket = makeTicket(runtime);
+      submit(runtime, ticket);
+      const run = await waitStatus(runtime, ticket.ticketId, 'blocked', (current) => current.phase === 'settled');
+      const runDetail = runtime.productStore.getRunView(run.runId).run.waitDetail;
+      assert.equal(runDetail.code, 'intake_error');
+      assert.match(runDetail.message, /\[REDACTED\]/);
+      assert.doesNotMatch(runDetail.message, new RegExp(`${accessToken}|${githubToken}`));
+
+      const projection = createProjection({
+        db: runtime.state.db,
+        roleIds: [...runtime.roles.keys()],
+        projectId: runtime.productStore.projectId,
+        productStore: runtime.productStore,
+      });
+      const boardCard = projection.listCards().cards.find((card) => card.ticketId === ticket.ticketId);
+      assert.ok(boardCard);
+      assert.equal(boardCard.waitMessage, null, 'settled diagnostics are not shown on the board');
+      assert.doesNotMatch(boardCard.waitMessage || '', new RegExp(`${accessToken}|${githubToken}`));
+    });
+  });
+
+  await suite.test('active board wait messages redact credentials from a lead question', async () => {
+    const accessToken = 'access-secret-91';
+    const githubToken = 'ghp_1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const diagnostic = `Please inspect {"access_token":"${accessToken}","GH_TOKEN":"${githubToken}"}`;
+    const ask = humanDecision();
+    ask.humanInput.question = diagnostic;
+    await withStack((workspace) => makeFakeAppServer({
+      intakeScript: [readyIntake({ stages: STAGES })],
+      leadScript: [ask, ...happyLeadScript()],
+      workerImpl: builderWorker(workspace),
+    }), async ({ runtime }) => {
+      const ticket = makeTicket(runtime);
+      submit(runtime, ticket);
+      const waiting = await waitStatus(runtime, ticket.ticketId, 'waiting_human', (current) => current.phase === 'engineering' && current.waitReason === 'human_decision');
+      const runDetail = runtime.productStore.getRunView(waiting.runId).run.waitDetail;
+      assert.match(runDetail.message, /\[REDACTED\]/);
+      assert.doesNotMatch(runDetail.message, new RegExp(`${accessToken}|${githubToken}`));
+      const [persistedDecision] = runtime.productStore.listDecisions(waiting.runId);
+      assert.match(persistedDecision.request.question, /\[REDACTED\]/);
+      assert.doesNotMatch(persistedDecision.request.question, new RegExp(`${accessToken}|${githubToken}`));
+
+      const projection = createProjection({
+        db: runtime.state.db,
+        roleIds: [...runtime.roles.keys()],
+        projectId: runtime.productStore.projectId,
+        productStore: runtime.productStore,
+      });
+      const boardCard = projection.listCards().cards.find((card) => card.ticketId === ticket.ticketId);
+      assert.ok(boardCard);
+      assert.equal(boardCard.waitMessage, runDetail.message);
+      assert.doesNotMatch(boardCard.waitMessage, new RegExp(`${accessToken}|${githubToken}`));
+    });
+  });
+
   await suite.test('a bugfix ticket reaches human_review on a fix/ branch', async () => {
     await withStack((workspace) => makeFakeAppServer({
       intakeScript: [readyIntake({ classification: 'bugfix', stages: STAGES })],
@@ -437,7 +498,8 @@ test('delivery controller', async (suite) => {
       submit(runtime, second);
       const queued = await waitStatus(runtime, second.ticketId, 'pending', (r) => r.waitReason === 'dependency');
       assert.equal(queued.status, 'queued');
-      assert.match(queued.waitDetail.message, new RegExp(`Repository in use by ${first.ticketId}`));
+      assert.match(queued.waitDetail.message, /repository is in use by another ticket/i);
+      assert.equal(queued.waitDetail.holderTicketId, first.ticketId);
       await new Promise((resolve) => setTimeout(resolve, 150));
       assert.equal(appServer.intakeCalls.length, 1);
       assert.equal(ticketOf(runtime, second.ticketId).status, 'pending');
@@ -455,6 +517,9 @@ test('delivery controller', async (suite) => {
       assert.equal(appServer.intakeCalls.length, 2);
       assert.equal(run.waitDetail.code, 'preflight_failed');
       assert.ok(run.waitDetail.problems.some((p) => p.code === 'dirty_worktree'));
+      const publicRun = runtime.productStore.getRunView(run.runId).run;
+      assert.match(publicRun.waitDetail.message, /git status --short and git diff/i);
+      assert.match(publicRun.waitDetail.message, /No files were removed/);
       // Failed before any branch: no repository effect, so the lease is released with the settle.
       assert.equal(runtime.productStore.getLease(), null);
     });
@@ -885,7 +950,23 @@ async function ctlHarness({ intakeScript = [], workspace = null, gitDelivery = n
   const events = { record: (type, { ticketId, runId, payload } = {}) => { eventLog.push({ type, ticketId, runId, payload }); } };
   const store = new ProductStore({ db, projectId: 'proj', events });
   const h = {
-    eventLog, root, ws, db, store, holder: null, tasks: new Map(), sends: [], cancels: [], leads: 0, captures: 0, branchCreated: false, onCancel: null,
+    eventLog, root, ws, db, store, holder: null, tasks: new Map(), sends: [], cancels: [], reconciles: [], leads: 0, captures: 0, branchCreated: false, onCancel: null,
+  };
+  h.admission = {
+    holder: () => h.holder,
+    reconcile: async (executionId) => {
+      h.reconciles.push(executionId);
+      return h.onReconcile ? h.onReconcile(executionId) : { state: h.holder?.state || 'reconciled' };
+    },
+    acquire: async ({ role, taskId }) => {
+      if (h.holder) throw new Error('workspace writer already active');
+      h.holder = { state: 'active', role, taskId };
+      return { executionId: `${role}:${taskId}` };
+    },
+    release: (executionId) => {
+      assert.match(executionId, /^operator-commit:/);
+      h.holder = null;
+    },
   };
   h.appServer = makeFakeAppServer({ intakeScript });
   h.adapter = adapter || {
@@ -928,7 +1009,7 @@ async function ctlHarness({ intakeScript = [], workspace = null, gitDelivery = n
     leadRole: { name: 'orch-lead', model: 'm', effort: 'low', instructions: 'x' },
     leadClient: h.leadClient,
     taskReader: { get: async (id) => h.tasks.get(id) || null, findByRun: async (id) => (h.onFindByRun ? h.onFindByRun(id) : null) },
-    writerAdmission: { holder: () => h.holder },
+    writerAdmission: h.admission,
     events,
     workspace: ws,
     tickMs: 3600000,
@@ -1166,20 +1247,25 @@ test('stop during engineering cancels the lead task and settles only after write
     let run = h.store.getRun(runId);
     assert.deepEqual([run.status, run.controlRequest], ['running', 'stop']); // a writer is still finishing
 
-    h.holder = { state: 'unresolved' };
+    h.holder = { state: 'unresolved', executionId: 'writer:worker-task' };
     await h.pass();
     run = h.store.getRun(runId);
     assert.deepEqual([run.status, run.waitReason, run.controlRequest], ['interrupted', 'writer_unresolved', 'stop']);
     assert.equal(run.waitDetail.message, 'Stop requested; writer outcome unresolved');
     assert.equal(h.store.getTicket(ticket.ticketId).status, 'blocked');
+    assert.deepEqual(h.reconciles, ['writer:worker-task'], 'the unresolved writer is retried while the run is stopped');
 
-    h.holder = null;
+    h.onReconcile = async () => {
+      h.holder = null; // Simulate admission proving quiescence and releasing the durable holder.
+      return { state: 'reconciled' };
+    };
     await h.pass();
     run = h.store.getRun(runId);
     assert.deepEqual([run.status, run.phase, run.waitReason, run.controlRequest], ['stopped', 'settled', 'run_stopped', null]);
     assert.equal(h.store.getTicket(ticket.ticketId).status, 'blocked');
     assert.equal(h.store.getLease().ticketId, ticket.ticketId, 'a stop with repository effect keeps the lease');
     assert.deepEqual(h.cancels, [leadTaskId], 'the cancel was sent once');
+    assert.deepEqual(h.reconciles, ['writer:worker-task', 'writer:worker-task'], 'the next tick retries reconciliation without a server restart');
     // A blocked ticket with a stopped run can be submitted again (resubmit).
     const again = h.store.submitTicket(ticket.ticketId, cmdFor(h, ticket.ticketId), h.controller.settingsSnapshot());
     assert.equal(again.run.runKind, 'resubmit');
@@ -1219,6 +1305,40 @@ test('cancel during engineering ends the lead task, cancels the run and the tick
     await h.pass();
     assert.deepEqual(h.cancels, [leadTaskId]);
     const run = h.store.getRun(runId);
+    assert.deepEqual([run.status, run.phase, run.controlRequest], ['cancelled', 'settled', null]);
+    assert.equal(h.store.getTicket(ticket.ticketId).status, 'cancelled');
+    assert.equal(h.store.getLease(), null);
+  } finally { await h.close(); }
+});
+
+test('terminal lead cancellation retains run and lease until the unresolved writer is quiescent', async () => {
+  const h = await ctlHarness({ intakeScript: [readyScript()] });
+  try {
+    const { ticket, runId, leadTaskId } = await toEngineering(h);
+    // A writer admission records the specialist child task, not its parent lead task.
+    h.holder = { state: 'unresolved', executionId: 'developer:specialist-child-1', taskId: 'specialist-child-1' };
+    h.setTask(leadTaskId, TaskState.TASK_STATE_CANCELED);
+
+    await h.pass();
+    let run = h.store.getRun(runId);
+    assert.deepEqual([run.status, run.phase, run.waitReason], ['interrupted', 'engineering', 'writer_unresolved']);
+    assert.equal(h.store.getTicket(ticket.ticketId).status, 'blocked');
+    assert.equal(h.store.getLease().ticketId, ticket.ticketId);
+    assert.deepEqual(h.reconciles, ['developer:specialist-child-1']);
+
+    const requested = h.controller.cancelTicket(ticket.ticketId, cmdFor(h, ticket.ticketId));
+    assert.equal(requested.outcome, 'requested');
+    await h.pass();
+    run = h.store.getRun(runId);
+    assert.deepEqual([run.status, run.controlRequest], ['interrupted', 'cancel']);
+    assert.equal(h.store.getLease().ticketId, ticket.ticketId, 'cancel cannot release ownership while the holder remains unresolved');
+
+    h.onReconcile = async () => {
+      h.holder = null;
+      return { state: 'reconciled' };
+    };
+    await h.pass();
+    run = h.store.getRun(runId);
     assert.deepEqual([run.status, run.phase, run.controlRequest], ['cancelled', 'settled', null]);
     assert.equal(h.store.getTicket(ticket.ticketId).status, 'cancelled');
     assert.equal(h.store.getLease(), null);
@@ -1445,6 +1565,34 @@ test('commit and push execute through the controller with persisted delivery rec
   } finally { await h.close(); }
 });
 
+test('commit holds writer admission through commit and releases it after settlement', async () => {
+  let entered;
+  let continueCommit;
+  const commitEntered = new Promise((resolve) => { entered = resolve; });
+  const commitGate = new Promise((resolve) => { continueCommit = resolve; });
+  const sha = 'a2'.repeat(20);
+  const gitDelivery = {
+    verifyCandidate: async () => ({ ok: true, problems: [] }),
+    commit: async () => { entered(); await commitGate; return { commitSha: sha }; },
+    reconcileCommit: async () => ({ state: 'unknown' }),
+  };
+  const h = await ctlHarness({ intakeScript: [readyScript()], gitDelivery });
+  try {
+    const { ticket, run, candidate } = await toReviewCandidate(h);
+    await h.controller.review(ticket.ticketId, reviewCmd(h, ticket.ticketId, run, candidate));
+    const pending = h.controller.commit(ticket.ticketId, cmdFor(h, ticket.ticketId, {
+      candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, message: 'm',
+    }));
+    await commitEntered;
+    assert.equal(h.holder.role, 'operator-commit');
+    await assert.rejects(h.admission.acquire({ role: 'writer', taskId: 'racing-writer' }), /already active/);
+    continueCommit();
+    const result = await pending;
+    assert.equal(result.delivery.state, 'succeeded');
+    assert.equal(h.holder, null);
+  } finally { continueCommit(); await h.close(); }
+});
+
 test('failed and unknown deliveries are recorded; a failed commit surfaces git_failed and may be retried', async () => {
   let mode = 'fail';
   const sha = 'c3'.repeat(20);
@@ -1556,6 +1704,7 @@ test('accept, commit and push run against a real checkout and a bare remote; a c
     const ticket = newTicket(h, 'Farewell');
     const { run } = submitIt(h, ticket);
     h.store.acquireLease(run.runId);
+    h.store.reserveBranch('feature/farewell-abc123', ticket.ticketId);
     h.store.saveIntakePlan(run.runId, {
       turn: 1, output: readyScript(), classification: 'feature', plan: { stages: STAGES, checkIds: ['unit'] },
       checks: [CHECK], requirements: readyScript().requirements, validatorVersion: 'm3-plan-v1',

@@ -5,6 +5,14 @@
 
 const CACHE_MS = 30_000;
 const MIN_FORCE_MS = 10_000;
+const APP_SERVER_TIMEOUT_MS = 10_000;
+
+// Bounds an App Server call; a call that never answers maps to the unavailable status.
+function withTimeout(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('app server timeout')), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 function toMs(value) {
   const raw = typeof value === 'function' ? value() : value;
@@ -31,7 +39,7 @@ function shapeRateLimits(raw) {
   };
 }
 
-function createAccountHealth({ appServer, now } = {}) {
+function createAccountHealth({ appServer, now, timeoutMs = APP_SERVER_TIMEOUT_MS } = {}) {
   if (!appServer || typeof appServer.getAccount !== 'function') throw new TypeError('createAccountHealth requires appServer.getAccount');
   let cached = null;
   let cachedAtMs = null;
@@ -42,7 +50,7 @@ function createAccountHealth({ appServer, now } = {}) {
     const startedMs = toMs(now);
     let result;
     try {
-      const read = await appServer.getAccount();
+      const read = await withTimeout(Promise.resolve().then(() => appServer.getAccount()), timeoutMs);
       const account = read?.account && typeof read.account === 'object' ? read.account : null;
       const version = appServer.appServerVersion ?? null;
       if (!account) {
@@ -52,7 +60,7 @@ function createAccountHealth({ appServer, now } = {}) {
       } else {
         let rateLimits = null;
         if (typeof appServer.readRateLimits === 'function') {
-          try { rateLimits = shapeRateLimits(await appServer.readRateLimits()); } catch (_) { rateLimits = null; }
+          try { rateLimits = shapeRateLimits(await withTimeout(Promise.resolve().then(() => appServer.readRateLimits()), timeoutMs)); } catch (_) { rateLimits = null; }
         }
         result = {
           status: 'connected',

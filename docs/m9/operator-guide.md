@@ -1,0 +1,114 @@
+# Beta operator guide
+
+Status: M9 candidate procedure. The release gate remains open; see [acceptance](acceptance.md).
+
+## Install and start
+
+Use a trusted local checkout and a clean task repository. The beta is a single-operator,
+loopback-only application. The M9 test host runs Node.js 24.21.0, npm 12.1.0, and
+Codex CLI 0.160.0; this is a tested combination, not a support range.
+
+1. Run `npm ci` in this project.
+2. Run `codex login status` and confirm `Logged in using ChatGPT`. If needed, run
+   `codex login` in a terminal. The dashboard does not collect an OpenAI API key.
+3. Set `CODEX_WORKSPACE` to the absolute path of the task repository. Keep the
+   state database, token file, attachment directory, and Codex credential/session
+   paths outside that writable task repository. The server checks these paths at
+   startup. The task repository must also be outside the application checkout;
+   overlapping paths are rejected. Keep the task checkout clean before submission.
+4. Start with `CODEX_WORKSPACE=/absolute/path/to/task-repo PORT=3000 npm start`.
+   Open the printed dashboard pairing URL on the same machine. The one-time code
+   creates a local session; do not share the URL or `.runtime/a2a-token`.
+
+The server serves `web/dashboard`, the application working copy. The protected
+`artifacts/dashboard` prototype is never a runtime output directory.
+
+## Direct ticket
+
+1. Select **New Ticket**, enter a bounded request and acceptance criteria, and
+   save. Attach only the files needed for the task.
+2. Check the saved ticket in **Board**, then submit it from Backlog. A saved plan
+   and pinned inputs precede engineering dispatch. Answer any Intake question in
+   **Decisions & Escalations**.
+3. Inspect the ticket's run log, attempts, checks, and candidate diff. A failed or
+   unavailable check is not a verified candidate. Use **Request corrections**
+   with concrete findings when the candidate needs rework.
+4. **Accept** only the candidate you reviewed. Commit and push are separate,
+   candidate-bound operator actions. The owner creates the pull request; the app
+   does not create one.
+
+Pause, Resume, Stop, Cancel, Return to Backlog, and Release Repository are
+state-checked commands. A stop retains file effects. Do not manually switch or
+modify the leased checkout while a run is active or awaiting review. A second
+ticket waits (`repository_busy`) for the checkout lease to clear.
+
+The lease follows the ticket, not the run. Accept does not release it; a succeeded
+Commit does. Return to Backlog keeps the lease. Release Repository is available
+only for an accepted (done) ticket or a backlog draft. It frees the lease without
+touching files: if an accepted candidate was not committed, its changes stay in the
+checkout, and the next ticket's branch preflight refuses the dirty worktree until
+you commit or clean those changes yourself. The normal order is review, Accept,
+Commit, optional Push, then the next ticket.
+
+## Jira ticket
+
+Configure the read-only Atlassian OAuth connector using the dedicated app and
+private secret files described in [connector setup](../m6/operator-setup.md).
+Grant that account only the Jira projects and Confluence spaces approved for the
+pilot; the application does not yet enforce project or space allowlists.
+Without this optional connector, direct tickets still work. Connect in
+**Connections**, select the granted site, and import an issue key or immutable
+numeric ID. Inspect the saved issue, parent/epic, and available Confluence
+provenance before submitting. Missing or inaccessible context stays marked as
+such. Re-import opens the existing internal ticket; **Refresh Source** creates
+pending context when available source content changed. Apply it through a new
+revision rather than silently changing an active run.
+
+The rest of the delivery lifecycle is the direct-ticket flow. Internal progress
+never publishes issue changes, comments, status, or pages to Atlassian. Use the
+[egress audit](../m6/operator-setup.md#egress-audit) after a pilot.
+
+## Recovery and upgrade
+
+Follow [state upgrade, backup and restore](../operations/state-upgrade.md). Stop
+the server before an offline backup or restore, retain the database and attachment
+directory together, and preserve the old state until the restored copy is checked.
+Do not copy a live SQLite database as a plain file. On restart, an interrupted
+writer is reconciled before another writer is admitted. Inspect the retained
+ticket, run, plan, attempts, and candidate state before Resume. Resume is an
+explicit operator action; it does not promise continuation at the exact model
+token where a process stopped.
+
+Before a planned stop, Pause active runs and wait for Paused, or let them reach
+review. A clean stop (Ctrl+C or SIGTERM) cancels a run that is still executing;
+Resume is then unavailable, and Return to Backlog followed by Submit starts a new
+run on the same ticket branch with the history retained. A crash leaves the run
+`interrupted`, and Resume continues it after restart.
+
+## Troubleshooting
+
+| Symptom | Operator action |
+| --- | --- |
+| Startup rejects account | Run `codex login status`; sign in with ChatGPT OAuth and restart. API-key mode is unsupported. |
+| Startup rejects a path | Move state, attachments, token, or Codex credential/session storage outside the writable task repository; do not weaken the path check. |
+| Dashboard shows unpaired or unauthorized | Use a fresh printed pairing URL on the same loopback host and port. `localhost` and `127.0.0.1` have different cookies. |
+| Ticket waits on a repository lease | Commit the owning ticket's accepted candidate, or Release Repository for an accepted ticket or backlog draft (see the lease note above). Inspect unresolved writer/reconciliation state before retrying. |
+| Branch preflight reports `dirty_worktree` | The checkout holds uncommitted changes, often an accepted candidate released without Commit. Commit or clean them in the task repository, then resubmit. |
+| Resume is unavailable after a restart | The run was cancelled by a clean stop. Return the ticket to Backlog, then Submit. |
+| Check failed or evidence unavailable | Read the recorded command and output; correct the candidate or rerun after the underlying check is available. Do not treat unavailable as pass. |
+| Atlassian reports `reconnect_required` | Reconnect the dedicated app. A failed import/refresh preserves the last valid snapshot and ticket revision. |
+| Model quota or rate limit pauses a run | Wait for capacity, inspect the retained run, then Resume with the same task. |
+| Restore loses later edits | Return to the preserved pre-restore state only if it is still available. A backup intentionally excludes changes made after it. |
+
+## Current limits
+
+This beta is local and single-operator. The project supports a trusted task
+workspace and one writer at a time. Other local services on the same loopback
+hostname can receive host-scoped browser cookies across ports; operate it on a
+trusted local machine. Atlassian access is read-only; linked issue
+traversal and inaccessible/missing live-source cases still need explicit pilot
+coverage. MLflow Tracking export is optional and production adoption is deferred;
+there is no verified GenAI trace ingestion. Usage may be partial and monetary cost
+is unavailable without measured cost data. The prompt candidate evaluated in M8
+was not promoted. See [M8 acceptance](../m8/acceptance.md) and M9
+[acceptance](acceptance.md) for the evidence boundary.

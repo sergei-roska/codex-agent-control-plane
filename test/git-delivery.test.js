@@ -134,6 +134,20 @@ test('commit stages exactly the manifest, adds trailers and parents on the candi
   assert.equal(git(ctx.dir, 'status', '--porcelain'), '', 'ignored files stay ignored, nothing else is left');
 });
 
+test('a second commit of a candidate that already landed is refused and HEAD stays put', async (t) => {
+  const ctx = setup(t);
+  dirtyUp(ctx.dir);
+  const candidate = await capture(ctx);
+  // The first commit lands; the caller then lost the outcome (delivery row unknown) and retries.
+  const { commitSha } = await ctx.service.commit({ candidate, message: 'First', deliveryId: 'del-1' });
+  const commitsBefore = git(ctx.dir, 'rev-list', '--count', 'HEAD');
+  await assert.rejects(ctx.service.commit({ candidate, message: 'Second', deliveryId: 'del-2' }),
+    (error) => error instanceof GitDeliveryError && error.code === 'head_changed');
+  assert.equal(git(ctx.dir, 'rev-parse', 'HEAD'), commitSha);
+  assert.equal(git(ctx.dir, 'rev-list', '--count', 'HEAD'), commitsBefore);
+  assert.equal(git(ctx.dir, 'diff', '--cached', '--name-only'), '');
+});
+
 test('commit refuses a changed candidate, a truncated manifest and bad input before touching the index', async (t) => {
   const ctx = setup(t);
   dirtyUp(ctx.dir);
@@ -177,6 +191,26 @@ test('a candidate whose head moved off the base is refused with nothing staged',
   assert.notEqual(candidate.head, candidate.baseCommit);
   await assert.rejects(ctx.service.commit({ candidate, message: 'm', deliveryId: 'd' }), (error) => error.code === 'head_moved');
   assert.equal(git(ctx.dir, 'diff', '--cached', '--name-only'), '');
+});
+
+test('commit refuses staged bytes changed after candidate verification', async (t) => {
+  let changed = false;
+  const ctx = {};
+  const exec = async (cmd, argv, options) => {
+    if (!changed && argv.includes('--stage') && argv.includes('ls-files')) {
+      changed = true;
+      fs.writeFileSync(path.join(ctx.dir, 'a.txt'), 'unreviewed staged content\n');
+      git(ctx.dir, 'add', '--', 'a.txt');
+    }
+    return realExec(cmd, argv, options);
+  };
+  Object.assign(ctx, setup(t, { delivery: { execFile: exec } }));
+  dirtyUp(ctx.dir);
+  const candidate = await capture(ctx);
+  await assert.rejects(ctx.service.commit({ candidate, message: 'm', deliveryId: 'd' }), (error) => error.code === 'staged_content_mismatch');
+  assert.equal(changed, true);
+  assert.equal(git(ctx.dir, 'rev-parse', 'HEAD'), candidate.head, 'no commit was made');
+  assert.equal(git(ctx.dir, 'diff', '--cached', '--name-only'), '', 'candidate paths are unstaged after failure');
 });
 
 test('a manifest path missing from the staged set fails staged_set_mismatch and restores the index', async (t) => {

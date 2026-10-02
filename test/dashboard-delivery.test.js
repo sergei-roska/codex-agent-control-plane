@@ -210,7 +210,10 @@ test('dashboard delivery api', async (suite) => {
       ]);
       const replay = await api.post(`/tickets/${ticket.ticketId}/submit`, { commandId, expectedVersion: ticket.version });
       assert.equal(replay.status, 200);
-      assert.equal((await replay.json()).run.runId, submitted.run.runId);
+      const replayed = await replay.json();
+      assert.equal(replayed.run.runId, submitted.run.runId);
+      assert.equal(replayed.replayed, true);
+      assert.equal((await api.ticket(ticket.ticketId)).runs.length, 1, 'a replayed submit creates no second run');
       const again = await api.post(`/tickets/${ticket.ticketId}/submit`, { commandId: cmd(), expectedVersion: submitted.ticket.version });
       assert.equal(again.status, 409);
       assert.equal((await again.json()).error.code, 'invalid_state');
@@ -309,7 +312,7 @@ test('dashboard delivery api', async (suite) => {
       assert.deepEqual(Object.keys(view.candidate).sort(), [
         'acceptance', 'baseCommit', 'branch', 'candidateId', 'createdAt', 'diffArtifactId', 'head', 'headMoved', 'integrityHash', 'manifest', 'truncated',
       ]);
-      assert.deepEqual(Object.keys(view.candidate.acceptance).sort(), ['checks', 'disposition', 'reasons']);
+      assert.deepEqual(Object.keys(view.candidate.acceptance).sort(), ['checks', 'disposition', 'reasons', 'warnings']);
       assert.deepEqual(Object.keys(view.candidate.acceptance.checks[0]).sort(), ['durationMs', 'exitCode', 'id', 'outputTail', 'timedOut']);
       assert.deepEqual(view.candidate.manifest.map((m) => [m.path, m.status]), [['src/greet.js', 'M']]);
       assert.equal(view.run.waitReason, 'human_review');
@@ -360,6 +363,34 @@ test('dashboard delivery api', async (suite) => {
     });
   });
 
+  await suite.test('a reported-only out-of-scope file with an empty attested delta is accepted with a warning', async () => {
+    await withStack((workspace) => {
+      const inner = builderWorker(workspace);
+      const app = makeFakeAppServer({
+        intakeScript: [readyIntake({ stages: STAGES })],
+        leadScript: happyLeadScript(),
+        workerImpl: async (args) => {
+          const out = await inner(args);
+          if (args.role !== 'orch-verifier') return out;
+          return { ...out, text: JSON.stringify({ ...workerReport('ok'), filesChanged: ['src/greet.js'] }) };
+        },
+      });
+      app.appServerVersion = 'codex-a2a-runtime/9.9.9';
+      return app;
+    }, async ({ runtime, api }) => {
+      const ticket = await api.create();
+      await api.submit(ticket);
+      const reviewing = await api.waitTicket(ticket.ticketId, 'waiting_human', (d) => d.runs[0].phase === 'settled');
+      assert.equal(reviewing.runs[0].waitReason, 'human_review');
+      const view = await api.json(`/runs/${reviewing.runs[0].runId}`);
+      assert.equal(view.candidate.acceptance.disposition, 'accepted');
+      assert.deepEqual(view.candidate.acceptance.reasons, []);
+      assert.deepEqual(view.candidate.acceptance.warnings.map((w) => w.code), ['reported_scope_mismatch']);
+      assert.match(view.candidate.acceptance.warnings[0].detail, /src\/greet\.js/);
+      assert.equal(view.settings.appServerVersion, 'codex-a2a-runtime/9.9.9');
+    });
+  });
+
   await suite.test('cancelling a waiting_human ticket releases the lease and the next pending ticket proceeds', async () => {
     await withStack((workspace) => makeFakeAppServer({
       intakeScript: [readyIntake({ stages: STAGES }), readyIntake({ stages: STAGES })],
@@ -375,7 +406,7 @@ test('dashboard delivery api', async (suite) => {
         const card = await api.card(second.ticketId);
         return card.ticketStatus === 'pending' && card.waitReason === 'dependency';
       }, 'second ticket to wait on the lease');
-      assert.match((await api.card(second.ticketId)).waitMessage, new RegExp(`Repository in use by ${first.ticketId}`));
+      assert.match((await api.card(second.ticketId)).waitMessage, /repository is in use by another ticket/i);
       assert.equal(runtime.productStore.getLease().ticketId, first.ticketId);
       assert.equal(appServer.intakeCalls.length, 1);
 
@@ -387,8 +418,10 @@ test('dashboard delivery api', async (suite) => {
       assert.equal(cancelledCard.ticketStatus, 'cancelled');
       assert.equal(cancelledCard.waitReason, null);
 
-      await api.waitTicket(second.ticketId, 'blocked', (d) => d.runs[0].phase === 'settled');
+      const blocked = await api.waitTicket(second.ticketId, 'blocked', (d) => d.runs[0].phase === 'settled');
       assert.equal(appServer.intakeCalls.length, 2);
+      assert.match(blocked.runs[0].waitDetail.message, /git status --short and git diff/i);
+      assert.match(blocked.runs[0].waitDetail.message, /No files were removed/);
       // The second run failed preflight before any branch, so it holds no lease.
       assert.equal(runtime.productStore.getLease(), null);
     });

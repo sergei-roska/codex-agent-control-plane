@@ -64,6 +64,7 @@ function openTicketDetailModal(cardId) {
   });
   renderDetailActions(null);
   modal.classList.add('open');
+  if (typeof saveDashboardNavigation === 'function') saveDashboardNavigation();
   Poller.trigger();
 }
 
@@ -222,6 +223,14 @@ function renderDetailAcceptance(acceptance) {
     const ul = h('ul', { class: 'detail-list' });
     reasons.forEach(r => ul.appendChild(h('li', { text: typeof r === 'string' ? r : JSON.stringify(r) })));
     box.appendChild(ul);
+  }
+  const warnings = Array.isArray(acceptance.warnings) ? acceptance.warnings : [];
+  if (warnings.length) {
+    const wl = h('ul', { class: 'detail-list' });
+    warnings.forEach(w => wl.appendChild(h('li', {
+      text: 'Self-reported change not observed by the server: ' + (w && typeof w === 'object' ? (w.detail || w.code || JSON.stringify(w)) : String(w))
+    })));
+    box.appendChild(wl);
   }
 }
 
@@ -448,17 +457,18 @@ function initTicketDetailEvents() {
   // Closing the modal stops its extra requests (the poller only refreshes an open modal).
   const modal = document.getElementById('modal-ticket-detail');
   document.querySelectorAll('[data-close="modal-ticket-detail"]').forEach(el => {
-    el.addEventListener('click', () => { ticketModal.cardId = null; });
+    el.addEventListener('click', () => { ticketModal.cardId = null; saveDashboardNavigation(); });
   });
   if (modal) {
     modal.addEventListener('click', (e) => {
-      if (e.target === modal) { modal.classList.remove('open'); ticketModal.cardId = null; }
+      if (e.target === modal) { modal.classList.remove('open'); ticketModal.cardId = null; saveDashboardNavigation(); }
     });
   }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && isTicketModalOpen()) {
       modal.classList.remove('open');
       ticketModal.cardId = null;
+      saveDashboardNavigation();
     }
   });
 }

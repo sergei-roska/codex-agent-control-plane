@@ -113,12 +113,21 @@ test('redactDiagnosticMessage redacts assignment secrets outside a URL', () => {
     'Token: abc',
     'API_KEY=k',
     'client_secret: s',
+    'json {"access_token":"json-secret"}',
+    'GITHUB_TOKEN=github-secret refresh_token=refresh-secret',
+    'Cookie: session=very-secret',
+    'x-api-key: header-secret',
+    'ghp_123456789012345678901234567890123456',
+    'github_pat_abcdefghijklmnopqrstuvwx0123456789',
+    'ATATT3xFfGF0abcDEF12345678901234567890',
+    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature0123456789abcdef',
     'https://user:secret@host/repo?token=abc',
     'Authorization: Bearer leak.token',
     'prefix Bearer leak.token',
     'model key sk-LEAKME99abcd',
     'mytoken=abc',
     'notpassword=visible',
+    'build.12345678.release',
   ].join('\n');
   const redacted = redactDiagnosticMessage(text);
   const lines = redacted.split('\n');
@@ -130,12 +139,26 @@ test('redactDiagnosticMessage redacts assignment secrets outside a URL', () => {
   assert.equal(redacted.includes('Token: [REDACTED]'), true);
   assert.equal(redacted.includes('API_KEY=[REDACTED]'), true);
   assert.equal(redacted.includes('client_secret: [REDACTED]'), true);
+  assert.equal(redacted.includes('json {"access_token":"[REDACTED]"}'), true);
+  assert.equal(redacted.includes('GITHUB_TOKEN=[REDACTED] refresh_token=[REDACTED]'), true);
+  assert.equal(redacted.includes('Cookie: [REDACTED]'), true);
+  assert.equal(redacted.includes('x-api-key: [REDACTED]'), true);
+  assert.equal(redacted.includes('ghp_123456789012345678901234567890123456'), false);
+  assert.equal(redacted.includes('github_pat_abcdefghijklmnopqrstuvwx0123456789'), false);
+  assert.equal(redacted.includes('ATATT3xFfGF0abcDEF12345678901234567890'), false);
+  assert.equal(redacted.includes('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature0123456789abcdef'), false);
   assert.equal(redacted.includes('https://host/repo?<redacted>'), true);
   assert.equal(redacted.includes('Authorization: [REDACTED]'), true);
   assert.equal(redacted.includes('Bearer [REDACTED]'), true);
   assert.equal(redacted.includes('sk-LEAKME99abcd'), false);
   assert.equal(redacted.includes('mytoken=abc'), true);
   assert.equal(redacted.includes('notpassword=visible'), true);
+  assert.equal(redacted.includes('build.12345678.release'), true);
+  assert.equal(redacted.includes('json-secret'), false);
+  assert.equal(redacted.includes('github-secret'), false);
+  assert.equal(redacted.includes('refresh-secret'), false);
+  assert.equal(redacted.includes('very-secret'), false);
+  assert.equal(redacted.includes('header-secret'), false);
 });
 
 test('listRecent returns the newest window oldest-first and fails closed without throwing', () => {

@@ -278,6 +278,11 @@ test('m7 operator controls over HTTP', async (suite) => {
       const ticket = await api.create();
       const { run } = await api.submit(ticket);
       await until(() => gate.reached, 'builder to hold');
+      const live = (await api.ticket(ticket.ticketId)).ticket;
+      const staleStop = await api.post(`/tickets/${ticket.ticketId}/stop`, { commandId: cmd(), expectedVersion: live.version - 1, runId: run.runId });
+      assert.equal(staleStop.status, 409);
+      assert.equal(staleStop.body.error.code, 'stale_version');
+      assert.equal((await api.ticket(ticket.ticketId)).activeRun.controlRequest, null);
       const stopped = await api.command(ticket.ticketId, 'stop', { runId: run.runId });
       assert.equal(stopped.status, 201);
       assert.equal(stopped.body.outcome, 'requested');
@@ -292,7 +297,7 @@ test('m7 operator controls over HTTP', async (suite) => {
   });
 
   await suite.test('return to backlog promotes a staged revision and the ticket can be submitted again', async () => {
-    await withStack({ leadScript: leadRound() }, async ({ api }) => {
+    await withStack({ leadScript: leadRound() }, async ({ api, runtime, workspace }) => {
       const first = await api.toReview();
       const staged = await api.command(first.ticketId, 'revisions', { title: 'Better title', description: 'Updated requirement' });
       assert.equal(staged.status, 201);
@@ -309,9 +314,18 @@ test('m7 operator controls over HTTP', async (suite) => {
       assert.equal(detail.stagedRevision, null);
       assert.equal(detail.revision.ordinal, 2);
       assert.equal(detail.ticket.title, 'Better title');
-      assert.deepEqual(detail.availableActions, ['revise', 'submit', 'cancel']);
+      assert.deepEqual(detail.availableActions, ['revise', 'submit', 'cancel', 'release_repository']);
+      assert.equal(runtime.productStore.getLease().ticketId, first.ticketId);
+
+      const checkoutBeforeRelease = fs.readFileSync(path.join(workspace, 'src', 'greet.js'), 'utf8');
+      const released = await api.command(first.ticketId, 'release-repository');
+      assert.equal(released.status, 201);
+      assert.equal(runtime.productStore.getLease(), null);
+      assert.equal(fs.readFileSync(path.join(workspace, 'src', 'greet.js'), 'utf8'), checkoutBeforeRelease);
+      assert.ok(!(await api.ticket(first.ticketId)).availableActions.includes('release_repository'));
       assert.equal(detail.runs[0].status, 'completed');
       assert.ok((await api.eventTypes(first.ticketId)).includes('ticket_returned_to_backlog'));
+      assert.ok((await api.eventTypes(first.ticketId)).includes('repository_released'));
     });
   });
 
@@ -417,6 +431,10 @@ test('m7 operator controls over HTTP', async (suite) => {
 
       const commandId = cmd();
       const { ticket } = await api.ticket(ticketId);
+      const staleCommit = await api.post(`/tickets/${ticketId}/commit`, { commandId: cmd(), expectedVersion: ticket.version - 1, ...body });
+      assert.equal(staleCommit.status, 409);
+      assert.equal(staleCommit.body.error.code, 'stale_version');
+      assert.deepEqual((await api.json(`/tickets/${ticketId}/delivery`)).deliveries, []);
       const commit = await api.post(`/tickets/${ticketId}/commit`, { commandId, expectedVersion: ticket.version, ...body });
       assert.equal(commit.status, 201);
       assert.equal(commit.body.delivery.kind, 'commit');
@@ -447,6 +465,14 @@ test('m7 operator controls over HTTP', async (suite) => {
       assert.equal(badRemote.status, 400);
       assert.equal(git(remote, 'for-each-ref', 'refs/heads'), '');
 
+      const pushedTicket = (await api.ticket(ticketId)).ticket;
+      const stalePush = await api.post(`/tickets/${ticketId}/push`, {
+        commandId: cmd(), expectedVersion: pushedTicket.version - 1, deliveryId: commit.body.delivery.deliveryId, commitSha: sha, remote: 'origin',
+      });
+      assert.equal(stalePush.status, 409);
+      assert.equal(stalePush.body.error.code, 'stale_version');
+      assert.equal(git(remote, 'for-each-ref', 'refs/heads'), '');
+
       const push = await api.command(ticketId, 'push', { deliveryId: commit.body.delivery.deliveryId, commitSha: sha, remote: 'origin' });
       assert.equal(push.status, 201);
       assert.equal(push.body.delivery.kind, 'push');
@@ -454,6 +480,16 @@ test('m7 operator controls over HTTP', async (suite) => {
       assert.equal(push.body.delivery.parentDeliveryId, commit.body.delivery.deliveryId);
       assert.equal(push.body.delivery.remoteRef, `refs/heads/${plan.branch}`);
       assert.equal(git(remote, 'rev-parse', `refs/heads/${plan.branch}`), sha);
+
+      // A second push of the same commit to the same remote is refused, not offered, and reaches no remote.
+      const pushedDetail = await api.ticket(ticketId);
+      assert.ok(!pushedDetail.availableActions.includes('push'));
+      assert.deepEqual(pushedDetail.unavailableActions.find((x) => x.action === 'push'), { action: 'push', reason: 'This commit was already pushed' });
+      const refsAfterPush = git(remote, 'for-each-ref', 'refs/heads');
+      const second = await api.command(ticketId, 'push', { deliveryId: commit.body.delivery.deliveryId, commitSha: sha, remote: 'origin' });
+      assert.equal(second.status, 409);
+      assert.equal(second.body.error.code, 'invalid_state');
+      assert.equal(git(remote, 'for-each-ref', 'refs/heads'), refsAfterPush);
 
       const state = await api.json(`/tickets/${ticketId}/delivery`);
       assert.deepEqual(state.deliveries.map((d) => [d.kind, d.state]), [['commit', 'succeeded'], ['push', 'succeeded']]);

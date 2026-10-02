@@ -10,6 +10,7 @@ const { migrateProductSchema } = require('../src/product-migrations');
 const { ProductStore, ProductError, canonicalJson } = require('../src/product-store');
 const { DispatchJournal } = require('../src/durable-store');
 const { liveStages } = require('../src/dashboard-api');
+const { WriterAdmission } = require('../src/writer-admission');
 
 const tempDirs = [];
 process.on('exit', () => {
@@ -484,7 +485,8 @@ test('the repository lease is FIFO, per ticket, and reports the holder as a depe
   assert.equal(store.acquireLease(second.runId).acquired, false);
   const waiting = store.getRun(second.runId);
   assert.equal(waiting.waitReason, 'dependency');
-  assert.equal(waiting.waitDetail.message, `Repository in use by ${first.ticketId}`);
+  assert.match(waiting.waitDetail.message, /repository is in use by another ticket/i);
+  assert.equal(waiting.waitDetail.holderTicketId, first.ticketId);
   const before = store.getTicket(second.ticketId).version;
   store.acquireLease(second.runId);
   assert.equal(store.getTicket(second.ticketId).version, before);
@@ -584,6 +586,24 @@ test('cancel: backlog as before, queued and settled work settle at once, a compl
   assert.ok(db);
 });
 
+test('cancel journals run_stopped only when it stops an active run', async () => {
+  const recorded = [];
+  const { store } = await makeStore({ events: { record: (type, event) => recorded.push({ type, ...event }) } });
+
+  const active = submitNew(store, 'active cancellation');
+  store.cancelTicket(active.ticketId, cc(store, active.ticketId));
+  assert.equal(store.getRun(active.runId).status, 'cancelled');
+  assert.equal(recorded.filter((event) => event.type === 'run_stopped' && event.runId === active.runId).length, 1);
+
+  const completed = submitNew(store, 'completed review cancellation');
+  toReview(store, completed.runId);
+  assert.equal(store.getRun(completed.runId).status, 'completed');
+  const before = recorded.filter((event) => event.type === 'run_stopped' && event.runId === completed.runId).length;
+  store.cancelTicket(completed.ticketId, cc(store, completed.ticketId));
+  assert.equal(store.getRun(completed.runId).status, 'completed');
+  assert.equal(recorded.filter((event) => event.type === 'run_stopped' && event.runId === completed.runId).length, before);
+});
+
 test('a blocked ticket can be submitted again after a settled run and takes over its own lease', async () => {
   const { store } = await makeStore();
   const first = submitNew(store);
@@ -617,7 +637,7 @@ test('getRunView returns the pinned shapes and every ticket status change bumps 
   assert.equal(view.intake[0].readiness, 'ready');
   assert.deepEqual(Object.keys(view.candidate).sort(), [
     'acceptance', 'baseCommit', 'branch', 'candidateId', 'createdAt', 'diffArtifactId', 'head', 'headMoved', 'integrityHash', 'manifest', 'truncated']);
-  assert.deepEqual(Object.keys(view.candidate.acceptance).sort(), ['checks', 'disposition', 'reasons']);
+  assert.deepEqual(Object.keys(view.candidate.acceptance).sort(), ['checks', 'disposition', 'reasons', 'warnings']);
   assert.equal(view.candidate.diffArtifactId, 'art_diff');
   assert.equal(store.getArtifact('art_diff').kind, 'candidate_diff');
   assert.deepEqual(store.listTicketArtifacts(ticketId), []);
@@ -627,6 +647,20 @@ test('getRunView returns the pinned shapes and every ticket status change bumps 
   assert.deepEqual(view.settings, SNAPSHOT);
   assert.equal(store.getRunView('run_missing'), null);
   assert.deepEqual(store.getRunView(runId, { stages: [] }).stages, []);
+});
+
+test('public dirty-worktree run summaries include safe manual recovery guidance', async () => {
+  const { store } = await makeStore();
+  const { runId } = submitNew(store);
+  const baseMessage = 'Repository preflight failed: dirty_worktree';
+  store.settleRun(runId, {
+    status: 'failed', ticketStatus: 'blocked', waitReason: 'dependency',
+    waitDetail: { code: 'preflight_failed', message: baseMessage, problems: [{ code: 'dirty_worktree', message: 'The checkout is not clean' }] },
+  });
+  const view = store.getRunView(runId);
+  assert.match(view.run.waitDetail.message, /git status --short and git diff/i);
+  assert.match(view.run.waitDetail.message, /No files were removed/);
+  assert.equal(store.getRun(runId).waitDetail.message, baseMessage);
 });
 
 test('at most one active run per ticket is enforced by the database', async () => {
@@ -902,6 +936,36 @@ test('an accepted read-only run with an empty manifest releases the lease', asyn
   assert.equal(store.getLease(), null);
 });
 
+test('an accepted read-only candidate with changes cannot be committed from main', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  store.acquireLease(runId);
+  store.saveIntakePlan(runId, {
+    turn: 1, output: { ...NEEDS_INPUT, readiness: 'ready', questions: [], plan: PLAN }, classification: 'feature', plan: PLAN,
+    checks: [], requirements: NEEDS_INPUT.requirements, validatorVersion: 'm3-plan-v1',
+  });
+  store.recordBranch(runId, { branchName: null, baseCommit: 'a'.repeat(40) });
+  store.recordLeadTask(runId, 'task-read-only', 'ctx-read-only');
+  store.moveToCandidate(runId);
+  const candidate = store.completeRun(runId, {
+    candidate: {
+      baseCommit: 'a'.repeat(40), head: 'a'.repeat(40), branch: 'main', headMoved: false,
+      manifest: [{ path: 'a.js', status: 'M', sha256: 'f'.repeat(64), size: 3 }], truncated: false,
+      acceptance: null, integrityHash: 'e'.repeat(64),
+    },
+    diffArtifact: null, outcome: 'review',
+  });
+  store.recordReview(ticketId, reviewBody(store, ticketId, runId, candidate));
+
+  const version = store.getTicket(ticketId).version;
+  assert.equal(store.getLease().ticketId, ticketId);
+  expectError(() => store.beginCommit(ticketId, cc(store, ticketId, {
+    candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, message: 'Commit read-only changes',
+  })), 'invalid_state');
+  assert.deepEqual(store.listDeliveries(ticketId), []);
+  assert.equal(store.getTicket(ticketId).version, version);
+});
+
 test('corrections create a rework run on the same revision, transfer the lease, copy the plan and cap at three', async () => {
   const { store } = await makeStore();
   const { ticketId, runId } = submitNew(store);
@@ -949,6 +1013,7 @@ test('commit and push records: intended, succeeded, failed, unknown; the lease f
   const { store } = await makeStore();
   const { ticketId, runId } = submitNew(store);
   const candidate = toReview(store, runId);
+  assert.equal(store.reserveBranch(candidate.branch, ticketId), true);
   const commitBody = (extra = {}) => cc(store, ticketId, { candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, message: 'Add feature', ...extra });
   expectError(() => store.beginCommit(ticketId, commitBody()), 'invalid_state'); // not done yet
   store.recordReview(ticketId, reviewBody(store, ticketId, runId, candidate));
@@ -996,6 +1061,90 @@ test('commit and push records: intended, succeeded, failed, unknown; the lease f
     [['commit', 'failed'], ['commit', 'succeeded'], ['push', 'unknown'], ['push', 'succeeded']]);
 });
 
+function committedTicket(store) {
+  const { ticketId, runId } = submitNew(store);
+  const candidate = toReview(store, runId);
+  assert.equal(store.reserveBranch(candidate.branch, ticketId), true);
+  store.recordReview(ticketId, reviewBody(store, ticketId, runId, candidate));
+  const begun = store.beginCommit(ticketId, cc(store, ticketId, { candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, message: 'Add feature' }));
+  const sha = 'c'.repeat(40);
+  const commit = store.finishDelivery(begun.delivery.deliveryId, { state: 'succeeded', commitSha: sha });
+  const pushBody = (extra = {}) => cc(store, ticketId, { deliveryId: commit.deliveryId, commitSha: sha, remote: 'origin', ...extra });
+  return { ticketId, runId, candidate, commit, sha, pushBody };
+}
+
+test('push is once per commit and remote: succeeded blocks a repeat, failed allows a retry, replay returns the original', async () => {
+  const { store, db } = await makeStore();
+  const { ticketId, pushBody } = committedTicket(store);
+  const pushRows = () => db.prepare("SELECT COUNT(*) AS c FROM deliveries WHERE kind = 'push'").get().c;
+
+  const failedPush = store.beginPush(ticketId, pushBody());
+  store.finishDelivery(failedPush.delivery.deliveryId, { state: 'failed', error: { code: 'git_failed', message: 'rejected' } });
+  const body = pushBody();
+  const first = store.beginPush(ticketId, body);
+  assert.notEqual(first.delivery.deliveryId, failedPush.delivery.deliveryId);
+  store.finishDelivery(first.delivery.deliveryId, { state: 'succeeded' });
+  assert.equal(pushRows(), 2);
+
+  const replay = store.beginPush(ticketId, body);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.delivery.deliveryId, first.delivery.deliveryId);
+  assert.equal(pushRows(), 2);
+
+  const before = counts(db);
+  const repeat = expectError(() => store.beginPush(ticketId, pushBody()), 'invalid_state');
+  assert.match(repeat.message, /already pushed/);
+  assert.equal(pushRows(), 2);
+  assert.deepEqual(counts(db), before);
+  // Another remote is a different effect and stays possible.
+  assert.equal(store.beginPush(ticketId, pushBody({ remote: 'upstream' })).delivery.remote, 'upstream');
+});
+
+test('stale expectedVersion on stop, commit and push is refused with no effect', async () => {
+  const { store, db } = await makeStore();
+  const done = committedTicket(store);
+  const running = submitNew(store, 'running');
+  store.acquireLease(running.runId);
+  const stale = (fn) => {
+    const before = db.prepare('SELECT COUNT(*) AS c FROM product_commands').get().c;
+    expectError(fn, 'stale_version');
+    assert.equal(db.prepare('SELECT COUNT(*) AS c FROM product_commands').get().c, before);
+  };
+  const version = store.getTicket(running.ticketId).version;
+  stale(() => store.requestStop(running.ticketId, { commandId: cmd(), expectedVersion: version - 1, runId: running.runId }));
+  assert.equal(store.getRun(running.runId).controlRequest, null);
+
+  const deliveries = store.listDeliveries(done.ticketId).length;
+  const at = store.getTicket(done.ticketId).version - 1;
+  stale(() => store.beginCommit(done.ticketId, { ...cc(store, done.ticketId, { candidateId: done.candidate.candidateId, integrityHash: done.candidate.integrityHash, message: 'again' }), expectedVersion: at }));
+  stale(() => store.beginPush(done.ticketId, { ...done.pushBody(), expectedVersion: at }));
+  assert.equal(store.listDeliveries(done.ticketId).length, deliveries);
+});
+
+test('a decision made stale by Stop or a new intake cannot be answered and has no effect', async () => {
+  const { store, db } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  store.acquireLease(runId);
+  const decision = store.requestIntakeAnswer(runId, { turn: 1, output: NEEDS_INPUT });
+  store.requestStop(ticketId, cc(store, ticketId, { runId }));
+  assert.equal(store.getDecision(decision.decisionId).state, 'stale');
+  const answer = () => cc(store, ticketId, { answers: [{ questionId: 'q1', answer: 'late' }] });
+  const commandsBefore = db.prepare('SELECT COUNT(*) AS c FROM product_commands').get().c;
+  const refused = expectError(() => store.answerDecision(ticketId, decision.decisionId, answer()), 'stale_decision');
+  assert.equal(refused.status, 409);
+  assert.equal(store.getDecision(decision.decisionId).state, 'stale');
+  assert.equal(store.getDecision(decision.decisionId).answer || null, null);
+  assert.equal(store.getRun(runId).status, 'stopped');
+  assert.equal(store.getTicket(ticketId).status, 'blocked');
+  assert.equal(db.prepare('SELECT COUNT(*) AS c FROM product_commands').get().c, commandsBefore);
+
+  // A resubmit starts a new run; the old decision stays unanswerable.
+  const again = store.submitTicket(ticketId, cc(store, ticketId), SNAPSHOT);
+  expectError(() => store.answerDecision(ticketId, decision.decisionId, answer()), 'stale_decision');
+  assert.equal(store.getRun(again.run.runId).status, 'queued');
+  assert.equal(store.getDecision(decision.decisionId).state, 'stale');
+});
+
 test('release repository frees the lease of a done ticket without a commit', async () => {
   const { store } = await makeStore();
   const { ticketId, runId } = submitNew(store);
@@ -1009,6 +1158,23 @@ test('release repository frees the lease of a done ticket without a commit', asy
   assert.equal(store.releaseRepository(ticketId, body).replayed, true);
   expectError(() => store.releaseRepository(ticketId, cc(store, ticketId)), 'invalid_state'); // nothing held
   expectError(() => store.beginCommit(ticketId, cc(store, ticketId, { candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, message: 'm' })), 'invalid_state');
+});
+
+test('release repository from a backlog draft preserves the stopped run and its branch', async () => {
+  const { store } = await makeStore();
+  const { ticketId, runId } = submitNew(store);
+  toReview(store, runId);
+  store.returnToBacklog(ticketId, cc(store, ticketId));
+  const beforeRun = store.getRun(runId);
+  assert.equal(store.getTicket(ticketId).status, 'backlog');
+  assert.equal(store.getLease().ticketId, ticketId);
+
+  const released = store.releaseRepository(ticketId, cc(store, ticketId));
+  assert.equal(released.ticket.status, 'backlog');
+  assert.equal(store.getLease(), null);
+  assert.deepEqual(store.getRun(runId), beforeRun);
+  assert.equal(store.getRun(runId).branchName, 'feature/work-abcdef');
+  assert.ok(store.listRuns(ticketId).some((run) => run.runId === runId));
 });
 
 // ---- natural settle never drops a pending control request (D-M7-3)
@@ -1077,6 +1243,38 @@ test('settleRun releases the lease only when the ticket had no repository effect
   const a = toEngineeringRun(store, 'effect2');
   store.settleRun(a.runId, { status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', releaseLease: true });
   assert.equal(store.getLease().ticketId, a.ticketId);
+});
+
+test('settle and cancel retain repository ownership while the ticket lead writer is active or unresolved', async () => {
+  const { store, db } = await makeStore();
+  const made = toEngineeringRun(store, 'writer-held-cancel');
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'product-writer-held-'));
+  tempDirs.push(workspace);
+  const admission = new WriterAdmission({ db, workspace, snapshot: () => ({ files: [] }) });
+  const leadTaskId = store.getRun(made.runId).leadTaskId;
+  const childTaskId = 'specialist-child-task';
+  assert.notEqual(childTaskId, leadTaskId);
+  const executionId = `developer:${childTaskId}`;
+  admission.tryAdmit({ executionId, role: 'developer', taskId: childTaskId, contextId: 'child-ctx' }, { files: [] });
+
+  expectError(() => store.settleRun(made.runId, {
+    status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error', releaseLease: true,
+  }), 'invalid_state');
+  assert.equal(store.getRun(made.runId).status, 'running');
+  assert.equal(store.getLease().ticketId, made.ticketId);
+
+  // A previously settled run must also refuse direct cancellation if durable writer
+  // evidence still says its process may be writing.
+  db.prepare("UPDATE runs SET status = 'failed', phase = 'settled', finished_at = ? WHERE run_id = ?")
+    .run(new Date().toISOString(), made.runId);
+  expectError(() => store.cancelTicket(made.ticketId, cc(store, made.ticketId)), 'invalid_state');
+  assert.equal(store.getLease().ticketId, made.ticketId);
+  assert.equal(store.getTicket(made.ticketId).status, 'in_progress');
+
+  admission.release(executionId);
+  const cancelled = store.cancelTicket(made.ticketId, cc(store, made.ticketId));
+  assert.equal(cancelled.ticket.status, 'cancelled');
+  assert.equal(store.getLease(), null);
 });
 
 test('completeRun with a pending control: cancel and return to backlog apply, stop and pause are moot', async () => {

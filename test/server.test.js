@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
-const { startServer, makeLeadExecutor, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts } = require('../src/server');
+const { startServer, makeLeadExecutor, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts, assertOperatorPathsOutsideWorkspace } = require('../src/server');
 const { makeLeadCard } = require('../src/server');
 const fs = require('node:fs');
 const { ResumeInputError } = require('../src/lead-orchestrator');
@@ -15,6 +15,9 @@ const { WriterAdmission } = require('../src/writer-admission');
 
 // Test files run in parallel processes; keep workspace locks private to this process.
 process.env.CODEX_A2A_WORKSPACE_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-ws-lock-'));
+const DEFAULT_TEST_WORKSPACE = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-default-workspace-'));
+process.env.CODEX_WORKSPACE = DEFAULT_TEST_WORKSPACE;
+process.once('exit', () => fs.rmSync(DEFAULT_TEST_WORKSPACE, { recursive: true, force: true }));
 
 test('startup requires a ChatGPT OAuth account and closes the app server on rejection', async () => {
   let closed = false;
@@ -27,6 +30,126 @@ test('startup requires a ChatGPT OAuth account and closes the app server on reje
     },
   }), /requires an authenticated ChatGPT account/);
   assert.equal(closed, true);
+});
+
+test('startup rejects operator-owned overrides in the writable workspace before starting App Server', async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-operator-paths-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const pathInside = (name) => path.join(workspace, name);
+  const cases = [
+    ['token option', { tokenFile: pathInside('operator-token') }],
+    ['state option', { stateFile: pathInside('state.sqlite') }],
+    ['workspace lock option', { stateFile: ':memory:', workspaceLockDir: pathInside('locks') }],
+    ['project config option', { stateFile: ':memory:', projectConfigFile: pathInside('project.json') }],
+    ['profiles option', { stateFile: ':memory:', profilesDir: pathInside('profiles') }],
+    ['Atlassian config option', { stateFile: ':memory:', atlassianConfigPath: pathInside('atlassian.json') }],
+    ['token environment override', { envKey: 'CODEX_A2A_TOKEN_FILE', stateFile: ':memory:' }],
+    ['state environment override', { envKey: 'CODEX_A2A_STATE_DB' }],
+    ['artifact environment override', { envKey: 'CODEX_A2A_ARTIFACT_DIR', stateFile: ':memory:' }],
+    ['workspace lock environment override', { envKey: 'CODEX_A2A_WORKSPACE_LOCK_DIR', stateFile: ':memory:' }],
+    ['project config environment override', { envKey: 'CODEX_PROJECT_CONFIG' }],
+    ['Atlassian environment override', { envKey: 'CODEX_ATLASSIAN_CONFIG', stateFile: ':memory:' }],
+  ];
+  for (const [label, entry] of cases) {
+    let started = false;
+    const prior = entry.envKey ? process.env[entry.envKey] : undefined;
+    if (entry.envKey) process.env[entry.envKey] = pathInside(`env-${entry.envKey}`);
+    try {
+      await assert.rejects(startServer({
+        workspace,
+        listen: false,
+        ...entry,
+        appServer: {
+          async start() { started = true; },
+          async getAccount() { return { account: { type: 'chatgpt' } }; },
+          async close() {},
+        },
+      }), /operator-owned .* path must be outside the writable workspace or inside protected \.runtime/, label);
+      assert.equal(started, false, `${label} must be rejected before App Server startup`);
+    } finally {
+      if (entry.envKey) {
+        if (prior === undefined) delete process.env[entry.envKey];
+        else process.env[entry.envKey] = prior;
+      }
+    }
+  }
+});
+
+test('startup rejects workspaces overlapping the application root before starting App Server', async (t) => {
+  const applicationRoot = path.resolve(__dirname, '..');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-app-workspace-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const alias = path.join(root, 'application-alias');
+  fs.symlinkSync(applicationRoot, alias, 'dir');
+  const cases = [applicationRoot, path.dirname(applicationRoot), path.join(applicationRoot, 'test'), alias];
+  for (const workspace of cases) {
+    let started = false;
+    await assert.rejects(startServer({
+      workspace,
+      listen: false,
+      stateFile: ':memory:',
+      appServer: { async start() { started = true; }, async close() {} },
+    }), /writable task workspace must not overlap the application root/);
+    assert.equal(started, false, `overlapping workspace must be rejected before App Server startup: ${workspace}`);
+  }
+});
+
+test('startup accepts an ordinary external workspace', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-external-workspace-'));
+  try {
+    let started = false;
+    await assert.rejects(startServer({
+      workspace,
+      listen: false,
+      stateFile: ':memory:',
+      appServer: {
+        async start() { started = true; },
+        async getAccount() { return { account: { type: 'apiKey' } }; },
+        async close() {},
+      },
+    }), /requires an authenticated ChatGPT account/);
+    assert.equal(started, true);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('startup path preflight accepts protected runtime files and resolves symlink aliases', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-operator-path-alias-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, 'workspace');
+  const aliases = path.join(root, 'aliases');
+  fs.mkdirSync(workspace);
+  fs.mkdirSync(aliases);
+  const runtime = path.join(workspace, '.runtime');
+  fs.mkdirSync(runtime);
+  assert.doesNotThrow(() => assertOperatorPathsOutsideWorkspace(workspace, [
+    ['token', path.join(runtime, 'a2a-token')],
+    ['state', path.join(runtime, 'state.sqlite')],
+  ]));
+
+  const alias = path.join(aliases, 'workspace-alias');
+  fs.symlinkSync(workspace, alias, 'dir');
+  assert.throws(
+    () => assertOperatorPathsOutsideWorkspace(workspace, [['token', path.join(alias, 'operator-token')]]),
+    /operator-owned token path must be outside the writable workspace/,
+  );
+  const external = path.join(root, 'external');
+  fs.mkdirSync(external);
+  fs.symlinkSync(external, path.join(workspace, 'operator-alias'), 'dir');
+  assert.throws(
+    () => assertOperatorPathsOutsideWorkspace(workspace, [['state', path.join(workspace, 'operator-alias', 'state.sqlite')]]),
+    /operator-owned state path must be outside the writable workspace/,
+  );
+});
+
+test('startup path preflight rejects a symlinked .runtime directory', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-operator-runtime-alias-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, 'workspace');
+  fs.mkdirSync(workspace);
+  fs.symlinkSync(path.join(root, 'outside'), path.join(workspace, '.runtime'), 'dir');
+  assert.throws(() => assertOperatorPathsOutsideWorkspace(workspace, [['token', path.join(workspace, '.runtime', 'token')]]), /\.runtime path must be a real directory/);
 });
 
 test('lead executor publishes working, artifact and completed task events', async () => {

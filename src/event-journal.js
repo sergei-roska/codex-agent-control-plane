@@ -47,15 +47,21 @@ function sanitizeValue(value, depth = 0) {
   return undefined;
 }
 
-const ASSIGNMENT_SECRET_KEYS = 'access_token|access_key|client_secret|api_key|apikey|password|passwd|pwd|token|secret';
+const ASSIGNMENT_SECRET_KEYS = 'access_token|access_key|client_secret|api_key|apikey|password|passwd|pwd|refresh_token|github_token|gh_token|token|secret';
 
 function redactDiagnosticMessage(text) {
   return String(text)
     .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/?#]*@/g, '$1')
     .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s?#]*)\?[^\s#]*/g, '$1?<redacted>')
-    .replace(new RegExp(`\\b(${ASSIGNMENT_SECRET_KEYS})\\b(\\s*[:=]\\s*)\\S+`, 'gi'), '$1$2[REDACTED]')
+    .replace(new RegExp(`(^|[^A-Za-z0-9_])(["']?)(${ASSIGNMENT_SECRET_KEYS})\\2(\\s*[:=]\\s*)(["'])(.*?)\\5`, 'gim'), '$1$2$3$2$4$5[REDACTED]$5')
+    .replace(new RegExp(`(^|[^A-Za-z0-9_])(["']?)(${ASSIGNMENT_SECRET_KEYS})\\2(\\s*[:=]\\s*)(?!["'])([^\\s,;&]+)`, 'gim'), '$1$2$3$2$4[REDACTED]')
+    .replace(/((?:^|\s)(?:cookie|set-cookie|x-api-key)\s*:\s*)[^\r\n]*/gim, '$1[REDACTED]')
     .replace(/(authorization\s*:\s*)[^\r\n]*/gi, '$1[REDACTED]')
     .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}/g, '[REDACTED]')
+    .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}/g, '[REDACTED]')
+    .replace(/\bATATT[A-Za-z0-9_-]{12,}/g, '[REDACTED]')
+    .replace(/\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
     .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, '[REDACTED]');
 }
 

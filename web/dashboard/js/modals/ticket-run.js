@@ -23,11 +23,12 @@ const TRR_TABS = [
 const TRR_DIFF_CHUNK = 2000;
 const TRR_ANSWER_MAX = 4000;
 const TRR_TERMINAL = ['completed', 'failed', 'stopped', 'cancelled'];
+const TRR_INACTIVE_TICKET_STATUSES = ['backlog', 'done', 'cancelled'];
 
 // sigs: per-section render signatures so polling never rebuilds (and so never resets) an untouched section.
 const trr = {
   pick: null, runId: null, data: null, dataRunId: null, error: null, tab: 'requirements',
-  sigs: {}, drafts: {}, answering: null, answerError: {}, diff: null, usage: null,
+  sigs: {}, drafts: {}, answering: null, answerError: {}, reviewError: '', diff: null, usage: null,
   activity: null
 };
 const TRR_FINDINGS_MAX = 8000;
@@ -59,6 +60,7 @@ function trrReset() {
   trr.drafts = {};
   trr.answering = null;
   trr.answerError = {};
+  trr.reviewError = '';
   trr.diff = null;
   trr.activity = null;
   trdReset();
@@ -129,6 +131,13 @@ function trrList(items, emptyText) {
   return ul;
 }
 
+// Non-blocking acceptance warnings (self-reported changes the server did not observe), as display lines.
+function trrWarningLines(acc) {
+  const list = acc && Array.isArray(acc.warnings) ? acc.warnings : [];
+  return list.map(w => (w && typeof w === 'object') ? (w.detail || w.message || w.code || JSON.stringify(w)) : String(w))
+    .map(text => 'Self-reported change not observed by the server: ' + text);
+}
+
 function trrSection(title, node) {
   return h('div', { class: 'tr-sub' }, [h('div', { class: 'tr-sub-title', text: title }), node]);
 }
@@ -162,7 +171,7 @@ function renderRunPanel() {
 
   trrGuard('head', JSON.stringify([d.ticket.status, d.ticket.version, runs.map(r => r.runId), trr.pick, run,
     data ? [data.plan && data.plan.classification, data.candidate && data.candidate.acceptance, data.intake && data.intake.length] : null,
-    trr.error, tr.busy, d.availableActions, d.review || null, trrReviewDraft().open]),
+    trr.error, tr.busy, d.availableActions, d.review || null, trrReviewDraft().open, trr.reviewError]),
     document.getElementById('tr-run-head'), (el) => trrBuildHead(el, d, runs, run, data));
   trrGuard('decisions', JSON.stringify([data ? data.decisions : null, trr.answering, trr.answerError, tr.busy]),
     document.getElementById('tr-run-decisions'), (el) => trrBuildDecisions(el, run, data));
@@ -374,7 +383,15 @@ async function trrSubmitReview(d, run, data, verdict, findings) {
   const extra = { runId: run.runId, candidateId: data.candidate.candidateId, integrityHash: data.candidate.integrityHash, verdict };
   if (verdict === 'corrections') extra.findings = findings;
   trText('tr-action-error', '');
-  const ok = await sendTicketCommand('review-' + verdict, '/review', extra, (m) => trText('tr-action-error', m));
+  trr.reviewError = '';
+  trr.sigs.head = null;
+  renderRunPanel();
+  const ok = await sendTicketCommand('review-' + verdict, '/review', extra, (m) => {
+    trr.reviewError = m;
+    trr.sigs.head = null;
+    renderRunPanel();
+    trText('tr-action-error', m);
+  });
   if (ok && verdict === 'corrections') { const draft = trrReviewDraft(); draft.open = false; draft.text = ''; trr.sigs.head = null; }
 }
 
@@ -388,6 +405,11 @@ function trrLatestReview(d) {
   ]);
   if (r.findings) box.appendChild(h('div', { class: 'detail-pre detail-block', text: r.findings }));
   return box;
+}
+
+function trrCurrentWaitVisible(d, run) {
+  const ticketStatus = d && d.ticket && d.ticket.status;
+  return Boolean(run && run.waitReason && !TRR_INACTIVE_TICKET_STATUSES.includes(ticketStatus));
 }
 
 function trrBuildHead(el, d, runs, run, data) {
@@ -417,10 +439,12 @@ function trrBuildHead(el, d, runs, run, data) {
     h('span', { class: 'badge tr-run-status ' + cssToken(run.status), text: 'Run: ' + (run.status || 'unknown') })
   ]);
   if (run.phase) meta.appendChild(h('span', { class: 'badge', text: 'Phase: ' + runPhaseLabel(run.phase), title: run.phase }));
-  if (run.waitReason) meta.appendChild(h('span', { class: 'badge badge-status blocked', text: waitReasonLabel(run.waitReason), title: run.waitReason }));
+  const showWait = trrCurrentWaitVisible(d, run);
+  if (showWait) meta.appendChild(h('span', { class: 'badge badge-status blocked', text: waitReasonLabel(run.waitReason), title: run.waitReason }));
   meta.appendChild(h('span', { class: 'tr-marker', text: 'run ' + String(run.runId).slice(0, 12), title: String(run.runId) }));
   meta.appendChild(h('span', { class: 'tr-marker', text: 'updated ' + formatAbsTime(run.updatedAt) }));
   el.appendChild(meta);
+  if (trr.reviewError) el.appendChild(h('div', { class: 'tf-field-error', text: trr.reviewError, attrs: { role: 'alert' } }));
 
   const control = trrControlBanner(run);
   if (control) el.appendChild(control);
@@ -456,7 +480,7 @@ function trrBuildHead(el, d, runs, run, data) {
   }
 
   const wd = run.waitDetail;
-  if (wd && typeof wd === 'object') {
+  if (showWait && wd && typeof wd === 'object') {
     const box = h('div', { class: 'tr-wait detail-block' });
     box.appendChild(h('div', { class: 'tr-wait-title', text: (waitReasonLabel(run.waitReason) || 'Wait detail') + (wd.code ? ' [' + wd.code + ']' : '') }));
     if (wd.message) box.appendChild(h('div', { text: wd.message }));
@@ -1140,6 +1164,11 @@ function trrTabCandidate(el, data) {
     ]);
     const reasons = Array.isArray(acc.reasons) ? acc.reasons : [];
     if (reasons.length) box.appendChild(trrList(reasons.map(r => (r && typeof r === 'object') ? (r.message || r.code || JSON.stringify(r)) : r)));
+    const warningLines = trrWarningLines(acc);
+    if (warningLines.length) {
+      box.appendChild(h('div', { class: 'tr-marker', text: 'Warnings (non-blocking)' }));
+      box.appendChild(trrList(warningLines));
+    }
     (Array.isArray(acc.checks) ? acc.checks : []).forEach(ch => {
       const ok = ch.exitCode === 0 && !ch.timedOut;
       const row = h('div', { class: 'tr-check-result' }, [
@@ -1313,7 +1342,11 @@ const TRD_STATE_TEXT = {
 
 function trdShown(d) {
   const accepted = d.review && d.review.verdict === 'accepted';
-  return d.ticket.status === 'done' || Boolean(accepted);
+  return d.ticket.status === 'done' || Boolean(accepted) || trdReleaseOnlyShown(d);
+}
+
+function trdReleaseOnlyShown(d) {
+  return Boolean(d && d.ticket && d.ticket.status === 'backlog' && trdAvailable(d, 'release_repository'));
 }
 
 function trdAvailable(d, key) {
@@ -1363,6 +1396,10 @@ function renderDeliveryPanel(d) {
     trrGuard('delivery', 'hidden', el, () => {});
     return;
   }
+  if (trdReleaseOnlyShown(d)) {
+    trrGuard('delivery', trdOwnSig(d), el, (box) => trdBuildReleaseOnly(box, d));
+    return;
+  }
   trdSync(d);
   trrGuard('delivery', trdOwnSig(d), el, (box) => trdBuild(box, d));
 }
@@ -1383,6 +1420,22 @@ function trdRemoteSelect(remotes) {
   select.value = trd.remote || '';
   select.addEventListener('change', () => { trd.remote = select.value; });
   return select;
+}
+
+function trdAppendReleaseAction(el, d) {
+  if (!trdAvailable(d, 'release_repository')) return;
+  const btn = h('button', { class: 'btn btn-secondary', attrs: { type: 'button', 'data-action': 'release_repository' } }, [h('span', { text: 'Release repository' })]);
+  if (tr.busy) btn.disabled = true;
+  btn.addEventListener('click', () => trdCommand('release_repository', '/release-repository', {},
+    'Release the repository without committing?\n\nThe changes stay in the checkout, uncommitted. The repository becomes available to other tickets, which will see those changes as a dirty checkout.'));
+  el.appendChild(h('div', { class: 'tr-answer-foot' }, [btn,
+    h('span', { class: 'form-hint', text: 'Gives up the repository without committing. Changes stay in the checkout.' })]));
+}
+
+function trdBuildReleaseOnly(el, d) {
+  el.appendChild(h('div', { class: 'tr-sub-title', text: 'Delivery' }));
+  el.appendChild(h('div', { class: 'form-hint', text: 'This draft holds the repository. Release it to make the checkout available to other tickets.' }));
+  trdAppendReleaseAction(el, d);
 }
 
 function trdBuild(el, d) {
@@ -1471,14 +1524,7 @@ function trdBuild(el, d) {
   }
 
   // Release repository
-  if (trdAvailable(d, 'release_repository')) {
-    const btn = h('button', { class: 'btn btn-secondary', attrs: { type: 'button', 'data-action': 'release_repository' } }, [h('span', { text: 'Release repository' })]);
-    if (tr.busy) btn.disabled = true;
-    btn.addEventListener('click', () => trdCommand('release_repository', '/release-repository', {},
-      'Release the repository without committing?\n\nThe changes stay in the checkout, uncommitted. The repository becomes available to other tickets, which will see those changes as a dirty checkout.'));
-    el.appendChild(h('div', { class: 'tr-answer-foot' }, [btn,
-      h('span', { class: 'form-hint', text: 'Gives up the repository without committing. Changes stay in the checkout.' })]));
-  }
+  trdAppendReleaseAction(el, d);
 
   // History
   if (deliveries.length) {

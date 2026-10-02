@@ -208,7 +208,7 @@ test('a failed stage keeps its dependents ineligible', async () => {
   assert.match(h.appServer.leadCalls[3].input, /Next eligible stages: build\./);
 });
 
-test('a reported scope violation is not a stage success', async () => {
+test('a reported-only scope item with a known attested delta does not fail the stage', async () => {
   const h = harness({
     leadScript: [
       dispatch(step('explore', 'orch-explorer')),
@@ -218,7 +218,8 @@ test('a reported scope violation is not a stage success', async () => {
     reportFor: (roleName) => (roleName === 'orch-builder' ? workerReport('wide', { filesChanged: ['src/other.js'] }) : workerReport('ok')),
   });
   const result = await h.orchestrator.run({ goal: 'Planned', plan: PLAN });
-  assert.equal(statuses(result).build, 'failed');
+  assert.equal(statuses(result).build, 'succeeded');
+  assert.deepEqual(result.assignments.find((a) => a.role === 'orch-builder').scopeViolations, ['src/other.js']);
 });
 
 test('optional stages need not succeed before finish', async () => {

@@ -12,6 +12,7 @@ const TR_REF_LABELS = [
 // cmds holds one retry-safe command slot per action; busy disables the action buttons while one is in flight.
 const tr = { ticketId: null, detail: null, events: null, eventsError: null, viewRevisionId: null, viewRevision: null, cmds: {}, busy: false, pollSig: null, loadSeq: 0,
   source: null, sourceError: null, sourceLoading: false, sourceHistory: [], sourceHistoryError: null, sourceHistoryBefore: null, sourceHistoryLoading: false,
+  submitError: '', loadFailed: false,
   sourceSnapshot: null, sourceSnapshotId: null, sourceSnapshotLoading: false, sourceMessage: '', sourceBusy: false, sourceCmds: {} };
 
 function isTicketRecordOpen() {
@@ -37,6 +38,7 @@ function closeTicketRecord() {
   trrReset();
   const modal = document.getElementById('modal-ticket-record');
   if (modal) modal.classList.remove('open');
+  if (typeof saveDashboardNavigation === 'function') saveDashboardNavigation();
 }
 
 function openTicketRecord(ticketId) {
@@ -49,8 +51,10 @@ function openTicketRecord(ticketId) {
   tr.viewRevisionId = null;
   tr.viewRevision = null;
   tr.cmds = {};
+  tr.submitError = '';
   tr.busy = false;
   tr.pollSig = null;
+  tr.loadFailed = false;
   trrReset();
   tr.source = null; tr.sourceError = null; tr.sourceLoading = true;
   tr.sourceHistory = []; tr.sourceHistoryError = null; tr.sourceHistoryBefore = null; tr.sourceHistoryLoading = false;
@@ -60,6 +64,7 @@ function openTicketRecord(ticketId) {
   trText('tr-action-error', '');
   trClear('tr-actions');
   modal.classList.add('open');
+  if (typeof saveDashboardNavigation === 'function') saveDashboardNavigation();
   loadTicketRecord();
 }
 
@@ -75,12 +80,15 @@ async function loadTicketRecord() {
   if (seq !== tr.loadSeq || ticketId !== tr.ticketId) return;
   const [detail, events] = settled;
   if (detail.status === 'rejected') {
+    tr.loadFailed = true;
+    trApplyLock();
     trText('tr-title', 'Ticket unavailable');
     trText('tr-note', detail.reason && detail.reason.status === 404
       ? 'This ticket no longer exists: ' + detail.reason.message
       : 'Could not load the ticket: ' + (detail.reason && detail.reason.message));
     return;
   }
+  tr.loadFailed = false;
   tr.detail = detail.value;
   tr.viewRevisionId = null;
   tr.viewRevision = null;
@@ -92,6 +100,63 @@ async function loadTicketRecord() {
   else { tr.sourceLoading = false; renderRecordSource(); }
   await trrFetchRun(ticketId, seq);
 }
+
+// Mutating controls inside the ticket modal. Read-only buttons (tabs, revisions, copy, load more) stay live.
+const TR_MUTATING_SELECTOR = '#tr-actions button, #tr-source-actions button, #tr-run-head button, #tr-run-decisions button, #tr-run-delivery button';
+
+// A reason string while protected actions must not be offered on data that could not be refreshed.
+function trLockReason() {
+  if (typeof Conn !== 'undefined' && Conn.status !== 'connected') {
+    return (Conn.status === 'unpaired' ? 'Session is not paired' : 'Orchestrator is not connected') + '; ticket data may be stale. Actions are disabled.';
+  }
+  if (tr.loadFailed) return 'The ticket could not be refreshed. Actions are disabled until it reloads.';
+  return '';
+}
+
+function trApplyLock() {
+  if (typeof document === 'undefined') return;
+  const reason = trLockReason();
+  let note = document.getElementById('tr-lock-note');
+  if (!note && reason) {
+    const anchor = document.getElementById('tr-note');
+    if (anchor && anchor.parentNode) {
+      note = document.createElement('div');
+      note.id = 'tr-lock-note';
+      note.className = 'detail-note';
+      note.setAttribute('role', 'status');
+      anchor.parentNode.insertBefore(note, anchor.nextSibling);
+    }
+  }
+  if (note) {
+    if (note.textContent !== reason) note.textContent = reason;
+    note.style.display = reason ? '' : 'none';
+  }
+  document.querySelectorAll(TR_MUTATING_SELECTOR).forEach(btn => {
+    const data = btn.dataset;
+    if (reason) {
+      if (data.trLocked !== '1') {
+        data.trLocked = '1';
+        data.trWasDisabled = btn.disabled ? '1' : '';
+        data.trTitle = btn.title || '';
+      }
+      if (!btn.disabled) btn.disabled = true;
+      if (btn.getAttribute('aria-disabled') !== 'true') btn.setAttribute('aria-disabled', 'true');
+      if (btn.title !== reason) btn.title = reason;
+    } else if (data.trLocked === '1') {
+      data.trLocked = '';
+      btn.disabled = data.trWasDisabled === '1';
+      if (!btn.disabled) btn.removeAttribute('aria-disabled');
+      btn.title = data.trTitle || '';
+    }
+  });
+}
+
+// Renders rebuild the buttons, so the lock is re-applied to whatever the modal contains.
+(function initTicketRecordLock() {
+  if (typeof document === 'undefined' || typeof MutationObserver !== 'function') return;
+  const modal = document.getElementById('modal-ticket-record');
+  if (modal) new MutationObserver(() => trApplyLock()).observe(modal, { childList: true, subtree: true });
+})();
 
 function trSourceSummary() {
   if (!tr.source) return null;
@@ -326,12 +391,19 @@ function trRenderSourceSnapshot(box, snapshot) {
 // Poller hook while the modal is open: refresh ticket, events and run; re-render only on change.
 async function refreshTicketRecordPoll(signal) {
   if (!isTicketRecordOpen() || tr.busy) return;
+  // A ticket that never loaded is retried as a full load once the orchestrator answers again.
+  if (tr.loadFailed && !tr.detail) { await loadTicketRecord(); return; }
   const ticketId = tr.ticketId;
   const seq = tr.loadSeq;
   const base = '/tickets/' + encodeURIComponent(ticketId);
   let detail;
-  try { detail = await apiGet(base, { signal }); } catch (err) { if (err && err.name === 'AbortError') throw err; return; }
+  try { detail = await apiGet(base, { signal }); } catch (err) {
+    if (err && err.name === 'AbortError') throw err;
+    if (seq === tr.loadSeq && ticketId === tr.ticketId) { tr.loadFailed = true; trApplyLock(); }
+    return;
+  }
   if (seq !== tr.loadSeq || ticketId !== tr.ticketId) return;
+  if (tr.loadFailed) { tr.loadFailed = false; tr.pollSig = null; }
   const summary = trrSelectedRun(detail).run;
   const settled = await Promise.allSettled([
     apiGet(base + '/events', { signal, params: { limit: TR_EVENT_LIMIT } }),
@@ -587,6 +659,7 @@ function renderRecordActions(d) {
   } else if (d.ticket.status === 'backlog' || unavailable.some(u => actionName(u) === 'submit')) {
     addButton('submit', 'Submit to Intake', false, reasonFor('submit'), null, false);
   }
+  if (tr.submitError) box.appendChild(h('div', { class: 'tf-field-error', text: tr.submitError, attrs: { role: 'alert' } }));
   TR_CONTROLS.forEach(c => {
     if (!listed(c.key)) return;
     addButton(c.key, c.label, available.includes(c.key), reasonFor(c.key), () => runTicketControl(c.key), c.danger);
@@ -693,8 +766,9 @@ async function submitTicketFromRecord() {
   const d = tr.detail;
   if (!d) return;
   if (!window.confirm('Submit this ticket to Intake?\n\nThe PM will read the ticket and the repository (read-only) and may ask you clarifying questions before planning. While a run is active the ticket cannot be edited.')) return;
+  tr.submitError = '';
   trText('tr-action-error', '');
-  await sendTicketCommand('submit', '/submit', {}, (m) => trText('tr-action-error', m));
+  await sendTicketCommand('submit', '/submit', {}, (m) => { tr.submitError = m; trText('tr-action-error', m); });
 }
 
 function initTicketRecordEvents() {

@@ -1283,6 +1283,53 @@ test('operator pause before decide parks without a lead turn, and resume continu
   }, { orchestrator: { operatorControl: control.fn } });
 });
 
+test('resuming while operator pause remains set parks again without a lead turn', async () => {
+  const control = holdControl('pause');
+  const world = makeWorld({ script: [finish('Done')] });
+  await withSession(world, async (session) => {
+    const first = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(first.status, 'input_required');
+
+    const stillPaused = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'go' } });
+    assert.equal(stillPaused.status, 'input_required');
+    assert.equal(stillPaused.pause.kind, 'operator_pause');
+    assert.equal(world.leadTurns, 0);
+    assert.equal(world.sends.length, 0);
+
+    control.value = null;
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'go' } });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 1);
+  }, { orchestrator: { operatorControl: control.fn } });
+});
+
+test('operator stop arriving during a finish decision cancels before acceptance', async () => {
+  const control = holdControl(null);
+  const world = makeWorld({ script: [finish('Done')] });
+  world.leadExtras = () => {
+    control.value = 'stop';
+    return {};
+  };
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'canceled');
+    assert.equal(result.reason, 'operator_stop');
+    assert.notEqual(result.acceptance?.disposition, 'accepted');
+    assert.equal(world.leadTurns, 1);
+  }, { orchestrator: { operatorControl: control.fn } });
+});
+
+test('operator control lookup failures park the run fail-closed', async () => {
+  const world = makeWorld({ script: [finish('Done')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'input_required');
+    assert.equal(result.pause.kind, 'operator_pause');
+    assert.equal(world.leadTurns, 0);
+    assert.equal(world.sends.length, 0);
+  }, { orchestrator: { operatorControl: () => { throw new Error('control store unavailable'); } } });
+});
+
 test('operator pause while a worker runs lets it finish, dispatches nothing new, then parks', async () => {
   const control = holdControl(null);
   const world = makeWorld({

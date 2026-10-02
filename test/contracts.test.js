@@ -295,3 +295,21 @@ test('validateDecision refuses a writable dispatch while writer outcomes are unr
   assert.doesNotThrow(() => validateDecision(dispatch('orch-builder'), ctx(0)));
   assert.doesNotThrow(() => validateDecision(dispatch('orch-explorer'), ctx(2)));
 });
+
+test('schemas tell the model that recommendation must be an option id', () => {
+  const requestProps = WORKER_REPORT_SCHEMA.properties.decisionRequest.anyOf[0].properties;
+  const humanProps = DECISION_SCHEMA.properties.humanInput.anyOf[0].properties;
+  for (const props of [requestProps, humanProps]) {
+    assert.equal(props.recommendation.type, 'string');
+    assert.match(props.recommendation.description, /exactly the id of one of the options/);
+    assert.match(props.options.items.properties.id.description, /identifier/);
+  }
+});
+
+test('decision schema describes the cross-field rules enforced by validateDecision', () => {
+  const props = DECISION_SCHEMA.properties;
+  assert.match(props.action.description, /dispatch.*finish.*request_human_input/s);
+  assert.match(props.assignments.description, /empty for finish and request_human_input/);
+  assert.match(props.final.description, /empty string for dispatch and request_human_input.*non-empty for finish/s);
+  assert.match(props.humanInput.description, /null for dispatch and finish/);
+});

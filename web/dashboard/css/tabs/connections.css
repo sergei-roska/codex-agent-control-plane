@@ -60,7 +60,10 @@
   box-shadow: var(--nm-shadow-out);
   border: var(--nm-border-bevel);
   border-radius: 18px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* The pane is a height-limited flex column: never shrink below the table, let .tab-content-area scroll. */
+  flex-shrink: 0;
   padding: 14px;
 }
 

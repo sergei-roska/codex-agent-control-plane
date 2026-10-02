@@ -15,6 +15,7 @@ const HUMAN_REASONS = ['missing_authority', 'irreversible_or_external', 'product
 const USAGE_LIMIT_NAMES = new Set(['usageLimitExceeded', 'rateLimitExceeded']);
 const MAX_CAUSE_DEPTH = 5;
 
+const RECOMMENDATION_HINT = 'Must be exactly the id of one of the options; any other value rejects the whole response.';
 const stringArray = { type: 'array', items: { type: 'string' } };
 const optionList = {
   type: 'array',
@@ -22,7 +23,7 @@ const optionList = {
     type: 'object',
     additionalProperties: false,
     required: ['id', 'description'],
-    properties: { id: { type: 'string' }, description: { type: 'string' } },
+    properties: { id: { type: 'string', description: 'Unique short identifier of this option.' }, description: { type: 'string' } },
   },
 };
 
@@ -68,7 +69,7 @@ const WORKER_REPORT_SCHEMA = {
             question: { type: 'string' },
             options: optionList,
             evidenceChecked: stringArray,
-            recommendation: { type: 'string' },
+            recommendation: { type: 'string', description: RECOMMENDATION_HINT },
             consequenceIfWrong: { type: 'string' },
           },
         },
@@ -83,9 +84,14 @@ const DECISION_SCHEMA = {
   additionalProperties: false,
   required: ['action', 'assignments', 'final', 'resolutions', 'humanInput'],
   properties: {
-    action: { type: 'string', enum: ['dispatch', 'finish', 'request_human_input'] },
+    action: {
+      type: 'string',
+      enum: ['dispatch', 'finish', 'request_human_input'],
+      description: 'dispatch needs 1 or more assignments, empty final, and null humanInput. finish needs no assignments, non-empty final, and null humanInput. request_human_input needs no assignments, empty final, and a humanInput object.',
+    },
     assignments: {
       type: 'array',
+      description: 'Must be empty for finish and request_human_input; for dispatch it needs at least one assignment.',
       items: {
         type: 'object',
         additionalProperties: false,
@@ -103,9 +109,10 @@ const DECISION_SCHEMA = {
         },
       },
     },
-    final: { type: 'string' },
+    final: { type: 'string', description: 'Must be an empty string for dispatch and request_human_input; must be non-empty for finish.' },
     resolutions: {
       type: 'array',
+      description: 'Resolutions of open worker decisions; use an empty array when there is none.',
       items: {
         type: 'object',
         additionalProperties: false,
@@ -114,6 +121,7 @@ const DECISION_SCHEMA = {
       },
     },
     humanInput: {
+      description: 'Must be null for dispatch and finish; must be an object only for request_human_input.',
       anyOf: [
         {
           type: 'object',
@@ -123,7 +131,7 @@ const DECISION_SCHEMA = {
             reason: { type: 'string', enum: HUMAN_REASONS },
             question: { type: 'string' },
             options: optionList,
-            recommendation: { type: 'string' },
+            recommendation: { type: 'string', description: RECOMMENDATION_HINT },
             evidenceChecked: stringArray,
             independentWork: { type: 'string' },
             relatedDecisionIds: stringArray,

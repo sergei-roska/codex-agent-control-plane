@@ -346,6 +346,13 @@ function runFromRow(row) {
 
 // Pinned run summary (D-M3-7).
 function runSummary(run) {
+  const waitDetail = run.waitDetail ? { ...run.waitDetail } : null;
+  if (waitDetail && waitDetail.code === 'preflight_failed'
+      && Array.isArray(waitDetail.problems)
+      && waitDetail.problems.some((problem) => problem && problem.code === 'dirty_worktree')) {
+    const base = typeof waitDetail.message === 'string' ? waitDetail.message : 'Repository preflight failed';
+    waitDetail.message = `${base}. Inspect the checkout with git status --short and git diff; preserve wanted changes before cleaning it. No files were removed.`;
+  }
   return {
     runId: run.runId,
     ticketId: run.ticketId,
@@ -353,7 +360,7 @@ function runSummary(run) {
     status: run.status,
     phase: run.phase,
     waitReason: run.waitReason || null,
-    waitDetail: run.waitDetail || null,
+    waitDetail,
     planRevisionId: run.planRevisionId || null,
     branchName: run.branchName || null,
     baseCommit: run.baseCommit || null,
@@ -542,6 +549,7 @@ function candidateView(candidate) {
       ? {
         disposition: acceptance.disposition,
         reasons: Array.isArray(acceptance.reasons) ? acceptance.reasons : [],
+        warnings: Array.isArray(acceptance.warnings) ? acceptance.warnings : [],
         checks: Array.isArray(acceptance.checks) ? acceptance.checks : [],
       }
       : null,
@@ -1143,9 +1151,30 @@ class ProductStore {
     return Boolean(this.stmt('SELECT 1 FROM runs WHERE ticket_id = ? AND (branch_name IS NOT NULL OR lead_task_id IS NOT NULL) LIMIT 1').get(String(ticketId)));
   }
 
+  // A settled lead task must not lose repository ownership while any workspace writer
+  // still has an active or unknown outcome. Specialist writer task IDs differ from the
+  // parent lead task ID, and dispatch journal coverage can be incomplete during submit.
+  holdingWorkspaceWriter() {
+    const table = this.stmt("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'writer_executions'").get();
+    if (!table) return null;
+    return this.stmt(`
+      SELECT execution_id, state FROM writer_executions
+      WHERE state IN ('active', 'unresolved')
+      LIMIT 1
+    `).get() || null;
+  }
+
+  requireWriterQuiescent(ticketId) {
+    const holder = this.holdingWorkspaceWriter();
+    if (holder) {
+      throw new ProductError('invalid_state', `writer ${holder.execution_id} is ${holder.state}; repository ownership is retained until it is quiescent`);
+    }
+  }
+
   // Terminal effect of a stop-like control request on a run (no transaction of its own).
   settleStopLike(run, control, at) {
     const cancelled = control === 'cancel';
+    if (cancelled) this.requireWriterQuiescent(run.ticketId);
     this.stmt("UPDATE decisions SET state = 'stale' WHERE run_id = ? AND state = 'pending'").run(run.runId);
     this.patchRun(run.runId, {
       status: cancelled ? 'cancelled' : 'stopped',
@@ -1187,6 +1216,7 @@ class ProductStore {
     if (!control) return out;
     let outcome = 'moot';
     if (control === 'cancel') {
+      this.requireWriterQuiescent(run.ticketId);
       outcome = 'settled';
       out.ticketStatus = 'cancelled';
       out.releaseLease = true;
@@ -1247,7 +1277,9 @@ class ProductStore {
     else if (result.outcome === 'settled') {
       if (control === 'pause') this.emit('run_paused', { ticketId, runId, payload: { waitReason: 'operator_pause' } });
       else if (control === 'return_to_backlog') this.emit('ticket_returned_to_backlog', { ticketId, runId, payload: {} });
-      else if (runId) this.emit('run_stopped', { ticketId, runId, payload: { control } });
+      else if (runId && ['stopped', 'cancelled'].includes(result.run?.status)) {
+        this.emit('run_stopped', { ticketId, runId, payload: { control } });
+      }
     }
   }
 
@@ -1330,6 +1362,7 @@ class ProductStore {
       }
       this.requireVersion(ticket, body.expectedVersion);
       if (ticket.status === 'backlog') {
+        this.requireWriterQuiescent(ticket.ticketId);
         // A ticket returned to backlog after repository effects still holds the lease.
         this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(ticket.ticketId);
         this.stmt("UPDATE tickets SET status = 'cancelled', version = version + 1, updated_at = ? WHERE ticket_id = ?")
@@ -1341,6 +1374,7 @@ class ProductStore {
         const outcome = this.requestOrSettle(active, 'cancel', body, at);
         return this.controlResult(ticket.ticketId, active.runId, outcome);
       }
+      this.requireWriterQuiescent(ticket.ticketId);
       // Settled work (a candidate under review, a blocked run): a completed run stays completed.
       this.stmt("UPDATE decisions SET state = 'stale' WHERE ticket_id = ? AND state = 'pending'").run(ticket.ticketId);
       this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(ticket.ticketId);
@@ -1575,6 +1609,9 @@ class ProductStore {
       }
       const candidate = this.getCandidate(review.candidateId);
       if (!candidate || candidate.manifest.length === 0) throw new ProductError('invalid_state', 'the accepted candidate has no changes to commit');
+      if (!this.isTicketBranch(candidate.branch, ticket.ticketId)) {
+        throw new ProductError('invalid_state', 'the accepted candidate is not on a ticket-owned branch');
+      }
       const existing = this.stmt("SELECT 1 FROM deliveries WHERE candidate_id = ? AND kind = 'commit' AND state IN ('succeeded','intended')")
         .get(candidate.candidateId);
       if (existing) throw new ProductError('invalid_state', 'this candidate already has a commit in progress or committed');
@@ -1610,6 +1647,9 @@ class ProductStore {
       }
       const open = this.stmt("SELECT 1 FROM deliveries WHERE parent_delivery_id = ? AND kind = 'push' AND state = 'intended'").get(commit.deliveryId);
       if (open) throw new ProductError('invalid_state', 'a push for this commit is already in progress');
+      const pushed = this.stmt("SELECT 1 FROM deliveries WHERE parent_delivery_id = ? AND kind = 'push' AND state = 'succeeded' AND remote = ?")
+        .get(commit.deliveryId, body.remote);
+      if (pushed) throw new ProductError('invalid_state', `this commit was already pushed to ${body.remote}`);
       const deliveryId = this.randomId('dlv_');
       this.stmt(
         'INSERT INTO deliveries (delivery_id, ticket_id, run_id, candidate_id, review_id, kind, state, parent_delivery_id, branch, base_head, '
@@ -1642,7 +1682,9 @@ class ProductStore {
   releaseRepository(ticketId, command) {
     const result = this.runCommand('release_repository', String(ticketId), command, ['commandId', 'expectedVersion'], (body, at) => {
       const ticket = this.requireTicket(ticketId);
-      this.requireDone(ticket);
+      if (!['done', 'backlog'].includes(ticket.status)) {
+        throw new ProductError('invalid_state', `ticket is ${ticket.status}; repository release is available for done tickets or backlog drafts`);
+      }
       this.requireVersion(ticket, body.expectedVersion);
       const committed = this.stmt("SELECT 1 FROM deliveries WHERE ticket_id = ? AND kind = 'commit' AND state IN ('succeeded','intended')")
         .get(ticket.ticketId);
@@ -1888,7 +1930,10 @@ class ProductStore {
       if (blocker) {
         const detail = {
           code: 'repository_busy',
-          message: blocker.ticketId ? `Repository in use by ${blocker.ticketId}` : 'Waiting for earlier queued work',
+          message: blocker.ticketId
+            ? 'The repository is in use by another ticket. Wait for it to settle or open that ticket and release the repository when available.'
+            : 'Waiting for earlier queued work',
+          ...(blocker.ticketId ? { holderTicketId: blocker.ticketId } : {}),
         };
         const json = JSON.stringify(detail);
         if (run.waitReason !== 'dependency' || JSON.stringify(run.waitDetail) !== json) {
@@ -1963,6 +2008,7 @@ class ProductStore {
     return this.tx(() => {
       const run = this.getRun(runId);
       if (!run || !ACTIVE_RUN_STATUSES.includes(run.status)) return null;
+      if (run.leadTaskId) this.requireWriterQuiescent(run.ticketId);
       const at = this.now();
       if (intake) {
         this.insertIntakeResult(run, intake, at);

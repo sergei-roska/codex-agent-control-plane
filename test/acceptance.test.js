@@ -10,15 +10,15 @@ const Database = require('better-sqlite3');
 const { WriterAdmission } = require('../src/writer-admission');
 const { takeSnapshot } = require('../src/workspace-snapshot');
 const {
-  validateAcceptanceContract, parseCheckCommand, runCheck, computeDisposition, runAcceptance, verifyCandidate, assessWithoutChecks, formatAcceptance,
+  validateAcceptanceContract, parseCheckCommand, buildSandboxCommand, runCheck, computeDisposition, runAcceptance, verifyCandidate, assessWithoutChecks, formatAcceptance,
 } = require('../src/acceptance');
 
 const vcs = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' });
 const node = (id, code, extra = {}) => ({ id, argv: [process.execPath, '-e', code], ...extra });
 const tick = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function repo() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'accept-'));
+function repo(parent = os.tmpdir()) {
+  const dir = fs.mkdtempSync(path.join(parent, 'accept-'));
   vcs(dir, 'init', '-q');
   vcs(dir, 'config', 'user.email', 't@example.com');
   vcs(dir, 'config', 'user.name', 't');
@@ -56,6 +56,197 @@ test('contract validation rejects bad input', () => {
 
 test('parseCheckCommand splits on whitespace', () => {
   assert.deepEqual(parseCheckCommand('  npm  test -- x ', 1), { id: 'check-2', argv: ['npm', 'test', '--', 'x'] });
+});
+
+test('acceptance sandbox rejects explicit or default CODEX_HOME inside the workspace', () => {
+  const dir = repo();
+  const tempDir = path.join(dir, '.acceptance-tmp-fixture');
+  fs.mkdirSync(tempDir);
+  try {
+    assert.throws(
+      () => buildSandboxCommand({ argv: [process.execPath, '-e', ''], cwd: dir, tempDir, env: { PATH: process.env.PATH, CODEX_HOME: path.join(dir, 'credentials') } }),
+      /CODEX_HOME must resolve outside/,
+    );
+    assert.throws(
+      () => buildSandboxCommand({ argv: [process.execPath, '-e', ''], cwd: dir, tempDir, env: { PATH: process.env.PATH, HOME: path.join(dir, 'home') } }),
+      /CODEX_HOME must resolve outside/,
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('acceptance sandbox denies existing sensitive roots without inventing absent ones', () => {
+  const dir = repo();
+  for (const relative of ['.runtime', 'runtime', 'data', '.codex/sessions']) fs.mkdirSync(path.join(dir, relative), { recursive: true });
+  for (const relative of ['.env', '.codex/auth.json']) fs.writeFileSync(path.join(dir, relative), 'fixture');
+  try {
+    const command = buildSandboxCommand({
+      argv: [process.execPath, '-e', ''],
+      cwd: dir,
+      tempDir: path.join(dir, '.acceptance-tmp-profile-fixture'),
+      env: { ...process.env, CODEX_HOME: path.join(os.tmpdir(), 'acceptance-external-codex-home') },
+    });
+    const policy = command.args[command.args.indexOf('-c') + 1];
+    for (const relative of ['.runtime', '.env', 'runtime', 'data', '.codex/auth.json', '.codex/sessions']) {
+      assert.ok(policy.includes(`${JSON.stringify(path.resolve(dir, relative))}="deny"`), `missing restriction for ${relative}`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runCheck uses the sandbox protocol, preserves argv, and strips inherited secrets', async () => {
+  const dir = repo();
+  fs.mkdirSync(path.join(dir, '.codex', 'sessions'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.codex', 'auth.json'), 'fixture');
+  fs.writeFileSync(path.join(dir, '.codex', 'sessions', 'session.json'), 'fixture');
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'accept-codex-'));
+  const untrustedBinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'accept-check-bin-'));
+  const untrustedExecutable = path.join(untrustedBinDir, 'probe');
+  const capture = path.join(os.tmpdir(), `accept-codex-args-${process.pid}-${Date.now()}.json`);
+  const fakeCodex = path.join(binDir, 'codex');
+  const previous = Object.fromEntries(['PATH', 'OPENAI_API_KEY', 'AWS_SECRET_ACCESS_KEY', 'CUSTOM_SECRET', 'CODEX_HOME'].map((key) => [key, process.env[key]]));
+  const expectedArgv = [untrustedExecutable, 'space arg', '$literal'];
+  const checkSource = `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({api:process.env.OPENAI_API_KEY,aws:process.env.AWS_SECRET_ACCESS_KEY,custom:process.env.CUSTOM_SECRET,path:process.env.PATH,codexHome:process.env.CODEX_HOME,tmpdir:process.env.TMPDIR}));\n`;
+  fs.writeFileSync(untrustedExecutable, checkSource, { mode: 0o755 });
+  const fakeSource = `#!${process.execPath}\nconst fs=require('node:fs');const cp=require('node:child_process');const args=process.argv.slice(2);fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({args,env:process.env}));const marker=args.indexOf('--');if(marker<0)process.exit(97);const child=cp.spawn(args[marker+1],args.slice(marker+2),{cwd:process.cwd(),env:process.env,stdio:'inherit'});child.on('error',()=>process.exit(98));child.on('exit',(code,signal)=>process.exit(code===null?99:code));\n`;
+  fs.writeFileSync(fakeCodex, fakeSource, { mode: 0o755 });
+  try {
+    process.env.PATH = binDir;
+    process.env.OPENAI_API_KEY = 'must-not-reach-check';
+    process.env.AWS_SECRET_ACCESS_KEY = 'must-not-reach-check';
+    process.env.CUSTOM_SECRET = 'must-not-reach-check';
+    process.env.CODEX_HOME = path.join(binDir, 'codex-home');
+    const result = await runCheck({ id: 'argv', argv: expectedArgv }, { cwd: dir });
+    assert.equal(result.result, 'passed');
+    assert.deepEqual(result.argv, expectedArgv);
+    const captured = JSON.parse(fs.readFileSync(capture, 'utf8'));
+    const separator = captured.args.indexOf('--');
+    assert.equal(captured.args[separator + 1], process.execPath);
+    assert.equal(captured.args[separator + 2], '-e');
+    assert.deepEqual(captured.args.slice(-expectedArgv.length), expectedArgv);
+    assert.equal(captured.args[0], 'sandbox');
+    assert.equal(captured.args[captured.args.indexOf('-C') + 1], dir);
+    assert.equal(captured.args[captured.args.indexOf('-P') + 1], 'codex-a2a-acceptance');
+    const policy = captured.args[captured.args.indexOf('-c') + 1];
+    const captureConfig = JSON.parse(captured.args[separator + 4]);
+    assert.match(policy, /extends=":workspace"/);
+    assert.match(policy, /network=\{enabled=false\}/);
+    assert.ok(policy.includes(JSON.stringify(binDir)));
+    assert.ok(policy.includes(JSON.stringify(path.dirname(fs.realpathSync(process.execPath)))));
+    assert.ok(!policy.includes(JSON.stringify(untrustedBinDir)), 'an argv-selected executable must not add a read grant');
+    assert.ok(policy.includes(JSON.stringify(path.basename(captureConfig.tempDir))));
+    assert.match(policy, /"\.git"="read"/);
+    for (const relativePath of ['.env.*', '.codex/auth.json', '.codex/sessions']) {
+      assert.ok(policy.includes(`${JSON.stringify(relativePath)}="deny"`), `missing workspace restriction for ${relativePath}`);
+      assert.ok(policy.includes(`${JSON.stringify(path.resolve(dir, relativePath))}="deny"`), `missing absolute restriction for ${relativePath}`);
+    }
+    for (const relativePath of ['.runtime', '.env', 'runtime', 'data']) {
+      assert.ok(!policy.includes(`${JSON.stringify(path.resolve(dir, relativePath))}="deny"`), `absent ${relativePath} must not be materialized by a deny rule`);
+    }
+    assert.equal(captured.env.OPENAI_API_KEY, undefined);
+    assert.equal(captured.env.AWS_SECRET_ACCESS_KEY, undefined);
+    assert.equal(captured.env.CUSTOM_SECRET, undefined);
+    assert.equal(captured.env.PATH, binDir);
+    assert.equal(captured.env.CODEX_HOME, path.join(binDir, 'codex-home'));
+    assert.equal(captured.env.TMPDIR, undefined);
+    const childEnv = JSON.parse(result.stdoutTail);
+    assert.equal(childEnv.api, undefined);
+    assert.equal(childEnv.aws, undefined);
+    assert.equal(childEnv.custom, undefined);
+    assert.equal(childEnv.path, binDir);
+    assert.equal(childEnv.codexHome, path.join(binDir, 'codex-home'));
+    assert.ok(childEnv.tmpdir.startsWith(`${dir}${path.sep}.acceptance-tmp-`));
+    assert.equal(fs.existsSync(childEnv.tmpdir), false);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(capture, { force: true });
+    fs.rmSync(binDir, { recursive: true, force: true });
+    fs.rmSync(untrustedBinDir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runCheck fails closed when the Codex sandbox CLI is unavailable', async () => {
+  const dir = repo();
+  const originalPath = process.env.PATH;
+  try {
+    process.env.PATH = '';
+    const result = await runCheck({ id: 'unavailable', argv: [process.execPath, '-e', 'process.exit(0)'] }, { cwd: dir });
+    assert.equal(result.result, 'failed');
+    assert.equal(result.error, 'CODEX_SANDBOX_UNAVAILABLE');
+    assert.match(result.stderrTail, /Could not resolve Codex executable/);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('npm checks can read the trusted npm installation outside the Node bin directory', async (t) => {
+  const npmOnPath = (process.env.PATH || '').split(path.delimiter).some((dir) => {
+    try { fs.accessSync(path.join(dir, 'npm'), fs.constants.X_OK); return true; } catch (_) { return false; }
+  });
+  if (!npmOnPath) return t.skip('npm is unavailable on PATH');
+  const dir = repo();
+  try {
+    const result = await runCheck({ id: 'npm-version', argv: ['npm', '--version'], timeoutMs: 30000 }, { cwd: dir });
+    assert.equal(result.result, 'passed', JSON.stringify({ error: result.error, exitCode: result.exitCode, stderr: result.stderrTail }));
+    assert.match(result.stdoutTail, /^\d+\.\d+\.\d+/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('linked-worktree Git metadata is readable and stays read-only', async () => {
+  const fixtureRoot = fs.mkdtempSync(path.join(process.cwd(), '.acceptance-linked-fixture-'));
+  const source = repo(fixtureRoot);
+  const linked = fs.mkdtempSync(path.join(os.tmpdir(), 'accept-linked-worktree-'));
+  fs.rmSync(linked, { recursive: true, force: true });
+  let marker = null;
+  try {
+    vcs(source, 'worktree', 'add', '--detach', linked, 'HEAD');
+    const match = fs.readFileSync(path.join(linked, '.git'), 'utf8').trim().match(/^gitdir:\s*(.+)$/i);
+    assert.ok(match, 'worktree .git file should point to its private gitdir');
+    const gitDir = fs.realpathSync(path.resolve(linked, match[1]));
+    const commonDir = fs.realpathSync(path.resolve(gitDir, fs.readFileSync(path.join(gitDir, 'commondir'), 'utf8').trim()));
+    marker = path.join(commonDir, `.acceptance-readonly-${process.pid}-${Date.now()}`);
+    const directGit = await runCheck({ id: 'linked-git-direct', argv: ['git', 'status', '--short'], timeoutMs: 30000 }, { cwd: linked });
+    assert.equal(directGit.result, 'passed', directGit.stderrTail);
+    const probe = `const cp=require('node:child_process');const fs=require('node:fs');const canRead=(file)=>{try{fs.accessSync(file,fs.constants.R_OK);return true}catch(_){return false}};const git=cp.spawnSync('git',['status','--short'],{encoding:'utf8'});let commonDirWriteSucceeded=false;try{fs.writeFileSync(${JSON.stringify(marker)},'probe');commonDirWriteSucceeded=true}catch(_){}if(commonDirWriteSucceeded)fs.rmSync(${JSON.stringify(marker)},{force:true});process.stdout.write(JSON.stringify({gitStatus:git.status,gitError:git.error?.message,gitStdout:git.stdout,gitStderr:git.stderr,worktreeHeadReadable:canRead(${JSON.stringify(path.join(gitDir, 'HEAD'))}),commonHeadReadable:canRead(${JSON.stringify(path.join(commonDir, 'HEAD'))}),commonDirWriteSucceeded}));if(git.status!==0||commonDirWriteSucceeded)process.exitCode=1`;
+    const result = await runCheck({ id: 'linked-git', argv: [process.execPath, '-e', probe], timeoutMs: 30000 }, { cwd: linked });
+    assert.equal(result.result, 'passed', JSON.stringify({ error: result.error, exitCode: result.exitCode, stdout: result.stdoutTail, stderr: result.stderrTail }));
+    const details = JSON.parse(result.stdoutTail);
+    assert.equal(details.gitStatus, 0);
+    assert.equal(details.worktreeHeadReadable, true);
+    assert.equal(details.commonHeadReadable, true);
+    assert.equal(details.commonDirWriteSucceeded, false);
+    assert.equal(fs.existsSync(marker), false);
+  } finally {
+    if (marker) fs.rmSync(marker, { force: true });
+    try { vcs(source, 'worktree', 'remove', '--force', linked); } catch (_) { /* Cleanup fixture when worktree creation failed. */ }
+    fs.rmSync(linked, { recursive: true, force: true });
+    fs.rmSync(source, { recursive: true, force: true });
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test('sandbox cannot see the host test runner PID through procfs', { skip: process.platform !== 'linux' }, async () => {
+  const dir = repo();
+  // This is a narrow host-PID visibility probe, not proof of same-uid process isolation.
+  const hostPid = process.pid;
+  const code = `const fs=require('node:fs');const hostPid=${hostPid};let hostPidVisible=false;let hostEnvironReadable=false;try{fs.accessSync('/proc/'+hostPid);hostPidVisible=true;fs.accessSync('/proc/'+hostPid+'/environ',fs.constants.R_OK);hostEnvironReadable=true}catch(_){}process.stdout.write(JSON.stringify({hostPid,hostPidVisible,hostEnvironReadable}))`;
+  try {
+    const result = await runCheck({ id: 'procfs', argv: [process.execPath, '-e', code] }, { cwd: dir });
+    assert.equal(result.result, 'passed');
+    assert.deepEqual(JSON.parse(result.stdoutTail), { hostPid, hostPidVisible: false, hostEnvironReadable: false });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('passing check is accepted', async () => {
@@ -108,14 +299,39 @@ test('malformed writer report is rejected with report_invalid', async () => {
   assert.deepEqual(codes(result), ['report_invalid']);
 });
 
-test('reported and attested scope violations are rejected', async () => {
+test('a reported-only scope item with a known delta is a non-blocking warning', async () => {
+  const dir = repo();
+  const result = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 1, contract: { requiredChecks: [node('ok', 'void 0')] },
+    writers: [okWriter({ reportedScopeViolations: ['x.js'] })],
+  });
+  assert.equal(result.disposition, 'accepted');
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].code, 'reported_scope_mismatch');
+  assert.match(result.warnings[0].detail, /x\.js/);
+});
+
+test('a reported scope item with an unknown delta is rejected', async () => {
+  const dir = repo();
+  const result = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 1, contract: { requiredChecks: [node('ok', 'void 0')] },
+    writers: [okWriter({ reportedScopeViolations: ['x.js'], deltaKnown: false })],
+  });
+  assert.equal(result.disposition, 'rejected');
+  assert.deepEqual(codes(result).sort(), ['delta_unknown', 'reported_scope_violation']);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('attested scope violations are rejected; a reported item beside them stays a warning', async () => {
   const dir = repo();
   const result = await runAcceptance({
     workspace: dir, runId: 'r', attempt: 1, contract: { requiredChecks: [node('ok', 'void 0')] },
     writers: [okWriter({ reportedScopeViolations: ['x.js'], attestedScopeViolations: ['y.js'] })],
   });
   assert.equal(result.disposition, 'rejected');
-  assert.deepEqual(codes(result).sort(), ['attested_scope_violation', 'reported_scope_violation']);
+  assert.deepEqual(codes(result), ['attested_scope_violation']);
+  assert.deepEqual(result.warnings.map((warning) => warning.code), ['reported_scope_mismatch']);
 });
 
 test('unknown delta is rejected', async () => {
@@ -165,7 +381,7 @@ test('non-git workspace with checks is unverifiable', async () => {
 
 test('timeout kills the whole process group including a grandchild', async () => {
   const dir = repo();
-  const pidFile = path.join(os.tmpdir(), `accept-pid-${process.pid}-${Date.now()}`);
+  const pidFile = path.join(dir, `.accept-pid-${process.pid}-${Date.now()}`);
   const code = `const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});require('fs').writeFileSync(${JSON.stringify(pidFile)},String(c.pid));setInterval(()=>{},1000)`;
   const result = await runCheck({ id: 't', argv: [process.execPath, '-e', code], timeoutMs: 1000 }, { cwd: dir });
   assert.equal(result.timedOut, true);

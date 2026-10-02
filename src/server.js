@@ -11,12 +11,12 @@ const { CodexAppServer } = require('./codex-app-server');
 const { loadRoles, createLeadRole } = require('./role-catalog');
 const { registerRoleAgents } = require('./a2a-role-service');
 const { LeadOrchestrator, ResumeInputError } = require('./lead-orchestrator');
-const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
+const { openStateDatabase, stateDbPath, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
 const { WriterAdmission } = require('./writer-admission');
 const { EventJournal, withDispatchEvents, NOOP_EVENTS } = require('./event-journal');
 const { UsageLedger } = require('./usage-ledger');
 const { validateAcceptanceContract, formatAcceptance } = require('./acceptance');
-const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
+const { loadOrCreateAuthToken, tokenPath, createAuthMiddleware } = require('./local-auth');
 const { createDashboardAuth } = require('./dashboard-auth');
 const { createProjection } = require('./dashboard-projection');
 const { migrateProductSchema } = require('./product-migrations');
@@ -51,6 +51,79 @@ function assertWebDirOutsideArtifacts(webDir) {
   if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
     throw new Error(`Dashboard web root must not be inside artifacts/: ${webDir}`);
   }
+}
+
+function realpathWithMissingTail(target) {
+  const absolute = path.isAbsolute(target) ? target : path.resolve(target);
+  const root = path.parse(absolute).root;
+  const segments = absolute.slice(root.length).split(path.sep).filter(Boolean);
+  let current = root;
+  const missingTail = [];
+  for (const segment of segments) {
+    if (segment === '.') continue;
+    if (missingTail.length > 0) {
+      if (segment === '..' && missingTail[missingTail.length - 1] !== '..') missingTail.pop();
+      else if (segment !== '..' || missingTail.length === 0) missingTail.push(segment);
+      continue;
+    }
+    const candidate = `${current.endsWith(path.sep) ? current : `${current}${path.sep}`}${segment}`;
+    try {
+      current = fs.realpathSync(candidate);
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+      try {
+        if (fs.lstatSync(candidate).isSymbolicLink()) throw new Error('Operator path resolves through an unresolved symbolic link');
+      } catch (statError) {
+        if (statError.code !== 'ENOENT' && statError.code !== 'ENOTDIR') throw statError;
+      }
+      missingTail.push(segment);
+    }
+  }
+  return path.resolve(current, ...missingTail);
+}
+
+function isPathWithin(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function assertWorkspaceOutsideApplicationRoot(workspace) {
+  const applicationRoot = path.resolve(__dirname, '..');
+  const workspacePath = path.resolve(workspace);
+  const applicationRealPath = fs.realpathSync(applicationRoot);
+  const workspaceRealPath = fs.realpathSync(workspacePath);
+  const overlaps = (left, right) => isPathWithin(left, right) || isPathWithin(right, left);
+  if (overlaps(applicationRoot, workspacePath) || overlaps(applicationRealPath, workspaceRealPath)) {
+    throw new Error(`Refusing startup: writable task workspace must not overlap the application root (${applicationRoot})`);
+  }
+  return true;
+}
+
+function assertOperatorPathsOutsideWorkspace(workspace, operatorPaths) {
+  const workspacePath = path.resolve(workspace);
+  const workspaceRealPath = fs.realpathSync(workspacePath);
+  const runtimeRoot = path.join(workspacePath, '.runtime');
+  try {
+    const runtimeStat = fs.lstatSync(runtimeRoot);
+    if (runtimeStat.isSymbolicLink() || !runtimeStat.isDirectory()) {
+      throw new Error('Workspace .runtime path must be a real directory for protected operator state');
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const runtimeRealPath = realpathWithMissingTail(runtimeRoot);
+  for (const [label, configuredPath] of operatorPaths) {
+    if (typeof configuredPath !== 'string' || !configuredPath || configuredPath === ':memory:') continue;
+    const absolutePath = path.resolve(configuredPath);
+    const canonicalPath = realpathWithMissingTail(absolutePath);
+    const insideWorkspace = isPathWithin(workspacePath, absolutePath) || isPathWithin(workspaceRealPath, canonicalPath);
+    if (!insideWorkspace) continue;
+    const protectedRuntimePath = isPathWithin(runtimeRoot, absolutePath) && isPathWithin(runtimeRealPath, canonicalPath);
+    if (!protectedRuntimePath) {
+      throw new Error(`Refusing startup: operator-owned ${label} path must be outside the writable workspace or inside protected .runtime`);
+    }
+  }
+  return true;
 }
 
 function mountDashboard(app, {
@@ -697,6 +770,7 @@ async function startServer({
   if (typeof workspace !== 'string' || !workspace || !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`workspace must be an existing directory: ${workspace}`);
   }
+  assertWorkspaceOutsideApplicationRoot(workspace);
   let httpServer = null;
   let state = providedState || null;
   const ownsState = !providedState;
@@ -704,6 +778,25 @@ async function startServer({
   let releaseWorkspaceLock = () => {};
   let deliveryController = null;
   try {
+    const effectiveStateFile = providedState
+      ? providedState.filePath
+      : stateFile ? stateFile : stateDbPath();
+    const effectiveProjectConfigPath = projectConfigFile || (effectiveStateFile && effectiveStateFile !== ':memory:'
+      ? defaultProjectConfigPath(effectiveStateFile)
+      : null);
+    const operatorPaths = [
+      ['local token', tokenPath(tokenFile || undefined)],
+      ['state database', effectiveStateFile],
+      ['artifact root', process.env.CODEX_A2A_ARTIFACT_DIR || (effectiveStateFile && effectiveStateFile !== ':memory:'
+        ? path.join(path.dirname(path.resolve(effectiveStateFile)), 'artifacts')
+        : null)],
+      ['workspace lock directory', workspaceLockDir || process.env.CODEX_A2A_WORKSPACE_LOCK_DIR || null],
+      ['project configuration', effectiveProjectConfigPath],
+      ['role profile directory', profilesDir || null],
+      ['Atlassian configuration', atlassianConfigPath || null],
+    ];
+    assertOperatorPathsOutsideWorkspace(workspace, operatorPaths);
+
     await appServer.start?.();
     const accountResult = await appServer.getAccount();
     const account = accountResult?.account || accountResult;
@@ -970,4 +1063,8 @@ if (require.main === module) {
   });
 }
 
-module.exports = { startServer, createLeadClient, createLeadTaskReader, describePause, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts };
+module.exports = {
+  startServer, createLeadClient, createLeadTaskReader, describePause, makeLeadExecutor, extractGoal, makeLeadCard,
+  registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts, assertOperatorPathsOutsideWorkspace,
+  assertWorkspaceOutsideApplicationRoot,
+};

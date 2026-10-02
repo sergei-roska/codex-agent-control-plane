@@ -329,6 +329,7 @@ test('GET /decisions failure returns 200 without breaking other routes', async (
 
 function createDocument() {
   const byId = new Map();
+  let activeElement = null;
   class El {
     constructor(tag) {
       this.tagName = String(tag).toLowerCase();
@@ -342,6 +343,9 @@ function createDocument() {
       this.dataset = {};
       this.listeners = {};
       this.id = '';
+      this.selectionStart = 0;
+      this.selectionEnd = 0;
+      this.selectionDirection = 'none';
     }
     get textContent() {
       if (this.children.length) return this.children.map((c) => c.textContent).join('');
@@ -360,9 +364,21 @@ function createDocument() {
     getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; }
     appendChild(child) { child.parentNode = this; this.children.push(child); if (child.id) byId.set(child.id, child); return child; }
     addEventListener(type, fn) { (this.listeners[type] || (this.listeners[type] = [])).push(fn); }
+    dispatch(type) { (this.listeners[type] || []).forEach((fn) => fn({ type, target: this })); }
     click() { (this.listeners.click || []).forEach((fn) => fn({ type: 'click', target: this })); }
+    focus() { activeElement = this; }
+    setSelectionRange(start, end, direction) { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction || 'none'; }
     get value() { return this._value; }
     set value(v) { this._value = String(v); }
+    querySelectorAll(selector) {
+      const matches = [];
+      const visit = (node) => {
+        if (selector === 'textarea.decisions-findings' && node.tagName === 'textarea' && /(^|\s)decisions-findings(\s|$)/.test(node.className)) matches.push(node);
+        node.children.forEach(visit);
+      };
+      visit(this);
+      return matches;
+    }
     closest(sel) {
       if (sel === '[data-action]' && this.getAttribute('data-action')) return this;
       return this.parentNode && this.parentNode.closest ? this.parentNode.closest(sel) : null;
@@ -375,7 +391,7 @@ function createDocument() {
     byId.set(id, el);
     root.appendChild(el);
   });
-  return { getElementById: (id) => byId.get(id) || null, createElement: (tag) => new El(tag), querySelector: (sel) => {
+  return { get activeElement() { return activeElement; }, getElementById: (id) => byId.get(id) || null, createElement: (tag) => new El(tag), querySelector: (sel) => {
     if (sel && sel.indexOf('data-id') !== -1) return null;
     return null;
   }, querySelectorAll: () => [] };
@@ -420,6 +436,57 @@ test('decisions UI shows stale not authorized and posts review only', async () =
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(posted);
   assert.match(posted.url, /\/tickets\/tkt_2\/review$/);
+});
+
+test('pending review findings preserve draft, focus, and caret across polls; clear after action or removal', async () => {
+  const document = createDocument();
+  let posted = null;
+  const ctx = vm.createContext({
+    document,
+    state: { activeTab: 'tab-decisions' },
+    console,
+    window: { confirm: () => true },
+    apiPost: async (url, body) => { posted = { url, body }; return {}; },
+  });
+  const root = path.join(__dirname, '..', 'web', 'dashboard', 'js');
+  vm.runInContext(fs.readFileSync(path.join(root, 'util.js'), 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(path.join(root, 'tabs', 'decisions.js'), 'utf8'), ctx);
+  const review = (extra = {}) => ({
+    id: 'review:run-1', kind: 'review', ticketId: 'tkt_1', ticketTitle: 'Review ticket', runId: 'run-1',
+    revisionId: 'rev-1', planRevisionId: 'plan-1', candidateId: 'cand-1', integrityHash: 'h'.repeat(64),
+    binding: 'current', authorized: true, actionable: true, expectedVersion: 3, ...extra,
+  });
+  const snapshot = (item) => ctx.applyDecisionsSnapshot({ available: true, pending: item ? [item] : [], responses: [] });
+  const findArea = () => document.getElementById('escalation-list').querySelectorAll('textarea.decisions-findings')[0];
+
+  snapshot(review());
+  const first = findArea();
+  first.value = 'Keep this draft while polling';
+  first.dispatch('input');
+  first.selectionStart = 8;
+  first.selectionEnd = 12;
+  first.focus();
+
+  snapshot(review({ ticketTitle: 'Updated title', expectedVersion: 4 }));
+  const refreshed = findArea();
+  assert.notEqual(refreshed, first);
+  assert.equal(refreshed.value, 'Keep this draft while polling');
+  assert.equal(document.activeElement, refreshed);
+  assert.equal(refreshed.selectionStart, 8);
+  assert.equal(refreshed.selectionEnd, 12);
+  assert.match(document.getElementById('escalation-list').textContent, /Updated title/);
+
+  await ctx.handleDecisionsAction('corrections', 'review:run-1');
+  assert.ok(posted);
+  assert.equal(posted.body.findings, 'Keep this draft while polling');
+  assert.equal(findArea().value, '');
+
+  const afterCompletion = findArea();
+  afterCompletion.value = 'Discard after item removal';
+  afterCompletion.dispatch('input');
+  snapshot(null);
+  snapshot(review());
+  assert.equal(findArea().value, '');
 });
 
 test('Decisions tab answers only current projected decisions and shows answered history', async () => {

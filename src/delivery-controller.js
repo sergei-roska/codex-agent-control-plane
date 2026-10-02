@@ -18,6 +18,7 @@ const { normalizeEffectiveSettings } = require('./contracts');
 const { ProductError, canonicalJson } = require('./product-store');
 const { WriterAdmission } = require('./writer-admission');
 const { takeSnapshot } = require('./workspace-snapshot');
+const { redactDiagnosticMessage } = require('./event-journal');
 
 const LEAD_PROMPT_VERSION = 'pm-lead-v1';
 const DEFAULT_TICK_MS = 2000;
@@ -97,7 +98,7 @@ function firstMessageMetadata(task) {
 }
 
 function shorten(text, max = MAX_MESSAGE_CHARS) {
-  const value = String(text === undefined || text === null ? '' : text);
+  const value = redactDiagnosticMessage(String(text === undefined || text === null ? '' : text));
   return value.length > max ? value.slice(0, max) : value;
 }
 
@@ -199,6 +200,30 @@ function createDeliveryController({
       emit('run_settled', run, { status: patch.status, phase: 'settled', waitReason: patch.waitReason, code: patch.waitDetail && patch.waitDetail.code });
     }
     return settled;
+  }
+
+  // A terminal lead result does not prove its admitted workspace writer is quiescent.
+  // Keep the run and repository lease live until WriterAdmission releases that holder.
+  async function waitForTerminalWriter(run) {
+    let holder = writerHolder();
+    if (holder && holder.state === 'unresolved' && holder.executionId) {
+      try {
+        await admission.reconcile(holder.executionId);
+      } catch (error) {
+        reportError(`reconcile writer ${holder.executionId}`, error);
+      }
+      holder = writerHolder();
+    }
+    if (!holder) return true;
+    const unresolved = holder.state === 'unresolved';
+    store.setExecutionState(run.runId, {
+      status: 'interrupted', ticketStatus: 'blocked', waitReason: 'writer_unresolved',
+      waitDetail: {
+        code: 'writer_unresolved',
+        message: unresolved ? 'Lead task is terminal; writer outcome unresolved' : 'Lead task is terminal; writer is still active',
+      },
+    });
+    return false;
   }
 
   function planOf(run) {
@@ -508,6 +533,11 @@ function createDeliveryController({
     return new ProductError('settings_invalid', 'saved role settings are invalid', details);
   }
 
+  // The App Server reports its version only after its lazy initialize, so read it when a snapshot is built.
+  const currentAppServerVersion = () => (typeof appServerVersion === 'string' && appServerVersion
+    ? appServerVersion
+    : (typeof appServer?.appServerVersion === 'string' ? appServer.appServerVersion : null));
+
   function deliverySnapshotOf(pack, { roleSettings, coordinatorId }, catalogFetchedAt) {
     return {
       provider: 'openai',
@@ -520,7 +550,7 @@ function createDeliveryController({
       roles: roleSettings,
       promptVersions: { intake: PROMPT_VERSION, lead: LEAD_PROMPT_VERSION },
       projectPolicyRevision: projectConfig ? projectConfig.revision : null,
-      appServerVersion,
+      appServerVersion: currentAppServerVersion(),
       catalogFetchedAt,
     };
   }
@@ -674,6 +704,7 @@ function createDeliveryController({
     if (!run.leadTaskId) return startLead(run);
     const task = await taskReader.get(run.leadTaskId);
     if (!task) {
+      if (!(await waitForTerminalWriter(run))) return false;
       settle(run, {
         status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error',
         waitDetail: { code: 'lead_task_missing', message: 'The lead task could not be found' },
@@ -685,6 +716,7 @@ function createDeliveryController({
       return Boolean(store.moveToCandidate(run.runId));
     }
     if (state === TaskState.TASK_STATE_FAILED || state === TaskState.TASK_STATE_REJECTED) {
+      if (!(await waitForTerminalWriter(run))) return false;
       settle(run, {
         status: 'failed', ticketStatus: 'blocked', waitReason: 'execution_error',
         waitDetail: { code: 'lead_failed', message: shorten(messageText(task.status.message) || 'The lead run failed') },
@@ -692,6 +724,7 @@ function createDeliveryController({
       return true;
     }
     if (state === TaskState.TASK_STATE_CANCELED) {
+      if (!(await waitForTerminalWriter(run))) return false;
       settle(run, {
         status: 'cancelled', ticketStatus: 'blocked', waitReason: 'run_stopped',
         waitDetail: { code: 'lead_canceled', message: 'The lead run was canceled' },
@@ -789,15 +822,27 @@ function createDeliveryController({
       state = task && task.status && task.status.state;
       if (task && !TERMINAL_TASK_STATES.includes(state)) return false;
     }
-    const holder = writerHolder();
+    let holder = writerHolder();
     if (holder) {
       if (holder.state === 'unresolved') {
-        store.setExecutionState(run.runId, {
-          status: 'interrupted', ticketStatus: 'blocked', waitReason: 'writer_unresolved',
-          waitDetail: { code: 'writer_unresolved', message: 'Stop requested; writer outcome unresolved' },
-        });
+        // A terminal lead task will not reconcile its own writer on another graph tick.
+        // Retry here; WriterAdmission releases the holder only after proving quiescence.
+        try {
+          await admission.reconcile(holder.executionId);
+        } catch (error) {
+          reportError(`reconcile writer ${holder.executionId}`, error);
+        }
+        holder = writerHolder();
       }
-      return false;
+      if (holder) {
+        if (holder.state === 'unresolved') {
+          store.setExecutionState(run.runId, {
+            status: 'interrupted', ticketStatus: 'blocked', waitReason: 'writer_unresolved',
+            waitDetail: { code: 'writer_unresolved', message: 'Stop requested; writer outcome unresolved' },
+          });
+        }
+        return false;
+      }
     }
     return true;
   }
@@ -833,7 +878,11 @@ function createDeliveryController({
   async function handleLeadDecision(run, pause) {
     let decision = store.findLeadDecision(run.runId, pause.decisionId);
     if (!decision) {
-      decision = store.requestLeadDecision(run.runId, pause);
+      const decisionRequest = {
+        ...pause,
+        question: typeof pause.question === 'string' ? redactDiagnosticMessage(pause.question) : pause.question,
+      };
+      decision = store.requestLeadDecision(run.runId, decisionRequest);
       if (decision) emit('decision_requested', run, { kind: 'lead_decision', count: Array.isArray(pause.options) ? pause.options.length : 0 });
       return;
     }
@@ -895,6 +944,7 @@ function createDeliveryController({
       ? {
         disposition: String(raw.disposition),
         reasons: Array.isArray(raw.reasons) ? raw.reasons : [],
+        warnings: Array.isArray(raw.warnings) ? raw.warnings : [],
         checks: (Array.isArray(raw.checks) ? raw.checks : []).map(checkView),
         stages,
       }
@@ -971,7 +1021,7 @@ function createDeliveryController({
       if (!(error instanceof PinnedSettingsError)) throw error;
       settle(run, {
         status: 'failed', releaseLease: true, ticketStatus: 'blocked', waitReason: 'execution_error',
-        waitDetail: { code: 'pinned_settings_invalid', message: error.message },
+        waitDetail: { code: 'pinned_settings_invalid', message: shorten(error.message) },
       });
       return true;
     }
@@ -1146,29 +1196,47 @@ function createDeliveryController({
       const replay = store.lookupCommand('commit', ticketId, command);
       if (replay) return refreshed(replay);
       if (writerHolder()) throw new ProductError('invalid_state', 'A writer is active in the workspace; try again when it has finished');
-      const service = requireDelivery();
-      const begun = store.beginCommit(ticketId, command);
-      const delivery = begun.delivery;
-      deliveryEmit('delivery_commit_intended', delivery, {});
-      const candidate = deliveryCandidateOf(delivery.ticketId, delivery.candidateId);
-      let outcome;
+      const currentAdmission = admission || (admission = new WriterAdmission({ db: store.db, workspace }));
+      if (typeof currentAdmission.acquire !== 'function' || typeof currentAdmission.release !== 'function') {
+        throw new ProductError('invalid_state', 'Workspace writer admission is unavailable');
+      }
+      let admissionLease;
       try {
-        const done = await service.commit({ candidate, message: delivery.message, deliveryId: delivery.deliveryId });
-        outcome = { state: 'succeeded', commitSha: done.commitSha };
-      } catch (error) {
-        // Anything may have happened up to the call that failed: reconcile against the repository.
-        let reconciled = { state: 'unknown' };
-        try { reconciled = await service.reconcileCommit({ candidate, deliveryId: delivery.deliveryId }); } catch (_) { /* stays unknown */ }
-        outcome = outcomeOf(reconciled.state, errorOf(error), { commitSha: reconciled.commitSha });
-      }
-      const finished = finishDelivery(delivery, outcome);
-      if (finished.state === 'failed') {
-        throw new ProductError('git_failed', finished.error ? finished.error.message : 'The commit failed', {
-          deliveryId: finished.deliveryId, code: finished.error && finished.error.code,
+        admissionLease = await currentAdmission.acquire({
+          role: 'operator-commit', taskId: `delivery-${command.candidateId}`, contextId: `commit-${ticketId}-${command.candidateId}`,
         });
+      } catch (error) {
+        if (writerHolder()) throw new ProductError('invalid_state', 'A writer is active in the workspace; try again when it has finished');
+        throw error;
       }
-      wake();
-      return refreshed({ ...begun, delivery: finished });
+      try {
+        const service = requireDelivery();
+        const begun = store.beginCommit(ticketId, command);
+        const delivery = begun.delivery;
+        deliveryEmit('delivery_commit_intended', delivery, {});
+        const candidate = deliveryCandidateOf(delivery.ticketId, delivery.candidateId);
+        let outcome;
+        try {
+          const done = await service.commit({ candidate, message: delivery.message, deliveryId: delivery.deliveryId });
+          outcome = { state: 'succeeded', commitSha: done.commitSha };
+        } catch (error) {
+          // Anything may have happened up to the call that failed: reconcile against the repository.
+          let reconciled = { state: 'unknown' };
+          try { reconciled = await service.reconcileCommit({ candidate, deliveryId: delivery.deliveryId }); } catch (_) { /* stays unknown */ }
+          outcome = outcomeOf(reconciled.state, errorOf(error), { commitSha: reconciled.commitSha });
+        }
+        const finished = finishDelivery(delivery, outcome);
+        if (finished.state === 'failed') {
+          throw new ProductError('git_failed', finished.error ? finished.error.message : 'The commit failed', {
+            deliveryId: finished.deliveryId, code: finished.error && finished.error.code,
+          });
+        }
+        wake();
+        return refreshed({ ...begun, delivery: finished });
+      } finally {
+        try { currentAdmission.release(admissionLease.executionId); }
+        catch (error) { reportError('release commit writer admission', error); }
+      }
     });
   }
 
@@ -1276,12 +1344,12 @@ function createDeliveryController({
     reconcileDeliveries() { return lane(reconcileDeliveries); },
     settingsSnapshot() {
       if (snapshotPack) return buildDeliverySnapshot(snapshotPack);
-      return buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash, appServerVersion });
+      return buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash, appServerVersion: currentAppServerVersion() });
     },
     // Submit path: validates against the live catalog, refreshing it when the TTL has lapsed.
     async validatedSettingsSnapshot() {
       if (snapshotPack) return validatedDeliverySnapshot(snapshotPack);
-      return buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash, appServerVersion });
+      return buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash, appServerVersion: currentAppServerVersion() });
     },
   };
 }

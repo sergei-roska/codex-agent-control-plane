@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -25,7 +26,13 @@ let counter = 0;
 function fakeSnapshot() {
   // Every call sees a new state, so a delta between two snapshots is known and non-empty.
   counter += 1;
-  return { kind: 'git', head: 'h', entries: [{ path: `f${counter}`, status: ' M', sha256: String(counter) }], fingerprint: String(counter) };
+  const head = 'h';
+  const entries = [{ path: `f${counter}`, status: ' M', sha256: String(counter) }];
+  const protectedEntries = [];
+  const fingerprint = crypto.createHash('sha256')
+    .update(JSON.stringify({ head, entries, protectedEntries }))
+    .digest('hex');
+  return { kind: 'git', head, entries, protectedEntries, fingerprint };
 }
 
 function make(options = {}) {

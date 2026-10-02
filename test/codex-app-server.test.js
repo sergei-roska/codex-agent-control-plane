@@ -2,10 +2,22 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { CodexAppServer } = require('../src/codex-app-server');
 
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-server-test-'));
+const fixtureDirs = Object.fromEntries(['project', 'one', 'two', 'p', 'work'].map((name) => {
+  const dir = path.join(fixtureRoot, name);
+  fs.mkdirSync(dir);
+  return [name, dir];
+}));
+fs.mkdirSync(path.join(fixtureDirs.work, '.runtime'));
+test.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+
 class FakeProcess extends EventEmitter {
-  constructor(handler) {
+  constructor(handler, activeProfileSupport = true) {
     super();
     this.sent = [];
     this.stdout = new PassThrough();
@@ -16,7 +28,12 @@ class FakeProcess extends EventEmitter {
         for (const line of chunk.toString().split('\n').filter(Boolean)) {
           const message = JSON.parse(line);
           this.sent.push(message);
-          const send = (response) => this.stdout.write(`${JSON.stringify(response)}\n`);
+          const send = (response) => {
+            if (activeProfileSupport && response.id === message.id && response.result && ['thread/start', 'thread/resume'].includes(message.method)) {
+              response.result.activePermissionProfile ||= { id: message.params.permissions };
+            }
+            this.stdout.write(`${JSON.stringify(response)}\n`);
+          };
           // Tool-surface enumeration is answered here so unrelated handlers need not know it.
           if (message.method === 'config/read' && !handler.ownsConfigRead) {
             send({ id: message.id, result: { config: { mcp_servers: { alpha: {}, 'gamma': {}, beta: {} } } } });
@@ -37,14 +54,14 @@ class FakeProcess extends EventEmitter {
   }
 }
 
-function fakeSpawn(handler, { pidBase = 0 } = {}) {
+function fakeSpawn(handler, { pidBase = 0, activeProfileSupport = true } = {}) {
   const children = [];
   const spawnImpl = (command, args, options) => {
     assert.equal(command, 'codex');
     assert.deepEqual(args, ['app-server', '--listen', 'stdio://']);
     assert.deepEqual(options.stdio, ['pipe', 'pipe', 'inherit']);
     assert.equal(options.detached, true);
-    const child = new FakeProcess(handler);
+    const child = new FakeProcess(handler, activeProfileSupport);
     if (pidBase) child.pid = pidBase + children.length;
     children.push(child);
     return child;
@@ -59,7 +76,7 @@ function baseHandler() {
     if (request.method === 'initialize') return send({ id: request.id, result: { userAgent: 'fake' } });
     if (request.method === 'initialized') return;
     if (request.method === 'thread/start') {
-      return send({ id: request.id, result: { thread: { id: `thread-${++threadNumber}` } } });
+      return send({ id: request.id, result: { thread: { id: `thread-${++threadNumber}` }, activePermissionProfile: { id: request.params.permissions } } });
     }
     if (request.method === 'turn/start') {
       const turnId = `turn-${++turnNumber}`;
@@ -88,21 +105,25 @@ test('performs initialize handshake and completes a turn', async (t) => {
   t.after(() => client.close());
 
   const outputSchema = { type: 'object', properties: { ok: { type: 'boolean' } } };
-  const result = await client.run({ role, cwd: '/tmp/project', input: 'hello', outputSchema });
+  const result = await client.run({ role, cwd: fixtureDirs.project, input: 'hello', outputSchema });
   assert.equal(result.status, 'completed');
   assert.equal(result.text, 'reply:hello');
   assert.equal(result.threadId, 'thread-1');
   assert.equal(result.turnId, 'turn-1');
   const sent = fake.getChild().sent;
   assert.deepEqual(sent.slice(0, 2).map(({ method }) => method), ['initialize', 'initialized']);
+  assert.deepEqual(sent[0].params.capabilities, { experimentalApi: true });
   const threadStart = sent.find(({ method }) => method === 'thread/start');
   assert.equal(threadStart.params.developerInstructions, role.instructions);
   assert.equal(threadStart.params.approvalPolicy, 'on-request');
   assert.equal(threadStart.params.approvalsReviewer, 'user');
+  assert.equal(threadStart.params.permissions, 'codex-a2a-workspace-write');
+  assert.equal(Object.hasOwn(threadStart.params, 'sandbox'), false);
   const turnStart = sent.find(({ method }) => method === 'turn/start');
   assert.equal(turnStart.params.effort, role.effort);
   assert.deepEqual(turnStart.params.outputSchema, outputSchema);
-  assert.deepEqual(turnStart.params.sandboxPolicy, { type: 'workspaceWrite' });
+  assert.equal(turnStart.params.permissions, threadStart.params.permissions);
+  assert.equal(Object.hasOwn(turnStart.params, 'sandboxPolicy'), false);
   assert.equal(turnStart.params.approvalsReviewer, 'user');
 });
 
@@ -112,8 +133,8 @@ test('routes concurrent turns to their owning run', async (t) => {
   t.after(() => client.close());
 
   const [first, second] = await Promise.all([
-    client.run({ role, cwd: '/tmp/one', input: 'one' }),
-    client.run({ role, cwd: '/tmp/two', input: 'two' }),
+    client.run({ role, cwd: fixtureDirs.one, input: 'one' }),
+    client.run({ role, cwd: fixtureDirs.two, input: 'two' }),
   ]);
   assert.equal(first.text, 'reply:one');
   assert.equal(second.text, 'reply:two');
@@ -126,7 +147,7 @@ test('reuses a supplied thread without starting another thread', async (t) => {
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
 
-  const result = await client.run({ role, cwd: '/tmp/project', input: 'follow up', threadId: 'existing-thread' });
+  const result = await client.run({ role, cwd: fixtureDirs.project, input: 'follow up', threadId: 'existing-thread' });
   assert.equal(result.threadId, 'existing-thread');
   assert.equal(fake.getChild().sent.some(({ method }) => method === 'thread/start'), false);
   assert.equal(fake.getChild().sent.find(({ method }) => method === 'turn/start').params.threadId, 'existing-thread');
@@ -137,18 +158,18 @@ test('resumes an unknown thread once, then reuses it', async (t) => {
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
 
-  await client.run({ role, cwd: '/tmp/project', input: 'one', threadId: 'old-thread' });
-  await client.run({ role, cwd: '/tmp/project', input: 'two', threadId: 'old-thread' });
+  await client.run({ role, cwd: fixtureDirs.project, input: 'one', threadId: 'old-thread' });
+  await client.run({ role, cwd: fixtureDirs.project, input: 'two', threadId: 'old-thread' });
   const sent = fake.getChild().sent;
   const resumes = sent.filter(({ method }) => method === 'thread/resume');
   assert.equal(resumes.length, 1);
   assert.deepEqual(resumes[0].params, {
     config: resumes[0].params.config,
     threadId: 'old-thread',
-    cwd: '/tmp/project',
+    cwd: fixtureDirs.project,
     approvalPolicy: 'on-request',
     approvalsReviewer: 'user',
-    sandbox: 'workspace-write',
+    permissions: 'codex-a2a-workspace-write',
     model: 'gpt-6-sol',
     developerInstructions: role.instructions,
   });
@@ -161,9 +182,44 @@ test('does not resume a thread started in this process', async (t) => {
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
 
-  const first = await client.run({ role, cwd: '/tmp/project', input: 'one' });
-  await client.run({ role, cwd: '/tmp/project', input: 'two', threadId: first.threadId });
+  const first = await client.run({ role, cwd: fixtureDirs.project, input: 'one' });
+  await client.run({ role, cwd: fixtureDirs.project, input: 'two', threadId: first.threadId });
   assert.equal(fake.getChild().sent.some(({ method }) => method === 'thread/resume'), false);
+});
+
+test('does not reuse a loaded thread with a different permission profile configuration', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const first = await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: fixtureDirs.project, input: 'one' });
+  await assert.rejects(
+    client.run({ role, cwd: fixtureDirs.project, input: 'two', threadId: first.threadId }),
+    /bound to a different role or permission configuration/,
+  );
+  assert.equal(fake.getChild().sent.filter(({ method }) => method === 'turn/start').length, 1);
+});
+
+test('does not reuse a loaded thread after the role tool policy changes', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const first = await client.run({
+    role: toolRole({ mcpServers: ['alpha'], skills: false }),
+    cwd: fixtureDirs.project,
+    input: 'one',
+  });
+  await assert.rejects(
+    client.run({
+      role: toolRole({ mcpServers: ['beta'], skills: false }),
+      cwd: fixtureDirs.project,
+      input: 'two',
+      threadId: first.threadId,
+    }),
+    /bound to a different role or permission configuration/,
+  );
+  assert.equal(fake.getChild().sent.filter(({ method }) => method === 'turn/start').length, 1);
 });
 
 test('automatically starts a replacement child after an unexpected exit', async (t) => {
@@ -179,10 +235,10 @@ test('automatically starts a replacement child after an unexpected exit', async 
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
 
-  const first = await client.run({ role, cwd: '/tmp/project', input: 'one' });
+  const first = await client.run({ role, cwd: fixtureDirs.project, input: 'one' });
   const firstChild = fake.getChild();
   firstChild.emit('exit', 9, null);
-  await client.run({ role, cwd: '/tmp/project', input: 'two', threadId: first.threadId });
+  await client.run({ role, cwd: fixtureDirs.project, input: 'two', threadId: first.threadId });
   assert.notEqual(fake.getChild(), firstChild);
   const resumes = fake.getChild().sent.filter(({ method }) => method === 'thread/resume');
   assert.equal(resumes.length, 1);
@@ -203,9 +259,9 @@ test('starts a replacement child on the next run after a turn timeout', async (t
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 25, turnTimeoutMs: 25 });
   t.after(() => client.close());
 
-  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'hang' }), /Timed out waiting for Codex turn completion/);
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.project, input: 'hang' }), /Timed out waiting for Codex turn completion/);
   const firstChild = fake.getChild();
-  const result = await client.run({ role, cwd: '/tmp/project', input: 'retry' });
+  const result = await client.run({ role, cwd: fixtureDirs.project, input: 'retry' });
   assert.notEqual(fake.getChild(), firstChild);
   assert.equal(result.text, 'reply:retry');
 });
@@ -226,13 +282,25 @@ test('allows a turn to complete after the RPC timeout window', async (t) => {
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 20, turnTimeoutMs: 100 });
   t.after(() => client.close());
 
-  const result = await client.run({ role, cwd: '/tmp/project', input: 'slow' });
+  const result = await client.run({ role, cwd: fixtureDirs.project, input: 'slow' });
   assert.equal(result.text, 'slow reply');
 });
 
 test('rejects an invalid turn timeout', () => {
   assert.throws(() => new CodexAppServer({ turnTimeoutMs: 0 }), /positive safe integer/);
   assert.throws(() => new CodexAppServer({ turnTimeoutMs: Number.MAX_SAFE_INTEGER + 1 }), /positive safe integer/);
+});
+
+test('rejects unsupported role sandbox values before starting App Server', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  await assert.rejects(
+    client.run({ role: { ...role, sandbox: 'danger-full-access' }, cwd: fixtureDirs.project, input: 'x' }),
+    /Unsupported role sandbox/,
+  );
+  assert.equal(fake.getChildren().length, 0);
 });
 
 test('reads the turn timeout from CODEX_A2A_TURN_TIMEOUT_MS', () => {
@@ -271,7 +339,7 @@ test('propagates a thread/resume RPC error without starting a new thread', async
   t.after(() => client.close());
 
   await assert.rejects(
-    client.run({ role, cwd: '/tmp/project', input: 'x', threadId: 'gone' }),
+    client.run({ role, cwd: fixtureDirs.project, input: 'x', threadId: 'gone' }),
     (error) => error.name === 'CodexAppServerError'
       && error.rpcCode === -32600
       && error.rpcData.codexErrorInfo === 'other'
@@ -280,6 +348,18 @@ test('propagates a thread/resume RPC error without starting a new thread', async
   const methods = fake.getChild().sent.map(({ method }) => method);
   assert.equal(methods.includes('thread/start'), false);
   assert.equal(methods.includes('turn/start'), false);
+});
+
+test('fails closed when App Server does not report the requested active permission profile', async (t) => {
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') return send({ id: request.id, result: { thread: { id: 'thread-no-profile' } } });
+  }, { activeProfileSupport: false });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.project, input: 'x' }), /did not activate permission profile.*received none/);
+  assert.equal(fake.getChild().sent.some(({ method }) => method === 'turn/start'), false);
 });
 
 test('readRateLimits returns the result or null on error', async (t) => {
@@ -329,7 +409,7 @@ test('returns schema-shaped fail-closed responses to server requests', async (t)
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
 
-  await client.run({ role, cwd: '/tmp/project', input: 'request approvals' });
+  await client.run({ role, cwd: fixtureDirs.project, input: 'request approvals' });
   const replies = fake.getChild().sent.filter((message) => Object.hasOwn(message, 'id') && !message.method && String(message.id).startsWith('server-'));
   assert.deepEqual(replies, [
     { id: 'server-0', result: { decision: 'decline' } },
@@ -353,11 +433,11 @@ test('rejects overlapping runs on the same thread', async (t) => {
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
   const controller = new AbortController();
-  const active = client.run({ role, cwd: '/tmp/project', input: 'long run', threadId: 'shared-thread', signal: controller.signal });
+  const active = client.run({ role, cwd: fixtureDirs.project, input: 'long run', threadId: 'shared-thread', signal: controller.signal });
   await new Promise((resolve) => setImmediate(resolve));
 
   await assert.rejects(
-    client.run({ role, cwd: '/tmp/project', input: 'overlap', threadId: 'shared-thread' }),
+    client.run({ role, cwd: fixtureDirs.project, input: 'overlap', threadId: 'shared-thread' }),
     /already active for thread shared-thread/,
   );
   controller.abort();
@@ -391,7 +471,7 @@ test('interrupts a turn when cancellation arrives before turn/start responds', a
   t.after(() => client.close());
   const controller = new AbortController();
   let settled = false;
-  const active = client.run({ role, cwd: '/tmp/project', input: 'cancel me', threadId: 'delayed-thread', signal: controller.signal });
+  const active = client.run({ role, cwd: fixtureDirs.project, input: 'cancel me', threadId: 'delayed-thread', signal: controller.signal });
   active.finally(() => { settled = true; }).catch(() => {});
   await turnStartWritten;
   controller.abort();
@@ -407,7 +487,7 @@ test('surfaces failed turns with the server error', async (t) => {
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
 
-  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'fail' }), /planned failure/);
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.project, input: 'fail' }), /planned failure/);
 });
 
 test('keeps codexErrorInfo on a failed turn error', async (t) => {
@@ -426,7 +506,7 @@ test('keeps codexErrorInfo on a failed turn error', async (t) => {
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
 
-  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'x' }), (error) => {
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.project, input: 'x' }), (error) => {
     assert.equal(error.codexError.codexErrorInfo, 'usageLimitExceeded');
     assert.equal(error.threadId, 'thread-limit');
     return true;
@@ -442,7 +522,7 @@ test('fails pending requests after an unexpected subprocess exit', async (t) => 
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
 
-  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'exit' }), /exited unexpectedly/);
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.project, input: 'exit' }), /exited unexpectedly/);
 });
 
 test('marks an unexpected exit during a turn as an unknown outcome', async (t) => {
@@ -458,7 +538,7 @@ test('marks an unexpected exit during a turn as an unknown outcome', async (t) =
   t.after(() => client.close());
 
   await assert.rejects(
-    client.run({ role, cwd: '/tmp/project', input: 'may have changed files' }),
+    client.run({ role, cwd: fixtureDirs.project, input: 'may have changed files' }),
     (error) => error.outcomeUnknown === true && /exited unexpectedly/.test(error.message),
   );
 });
@@ -478,7 +558,7 @@ test('times out a turn that never completes and requests interruption', async (t
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 35, turnTimeoutMs: 35 });
   t.after(() => client.close());
 
-  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'hang' }), (error) => {
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.project, input: 'hang' }), (error) => {
     assert.equal(error.outcomeUnknown, true);
     return /Timed out waiting for Codex turn completion/.test(error.message);
   });
@@ -518,7 +598,7 @@ test('turn timeout signals the whole process group', async (t) => {
   const fake = fakeSpawn(hangingHandler(), { pidBase: 4000 });
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, turnTimeoutMs: 30, killImpl: kills.killImpl, readProcessIdentityImpl: identityOf });
   t.after(() => client.close());
-  const pending = client.run({ role, cwd: '/tmp/p', input: 'hang' });
+  const pending = client.run({ role, cwd: fixtureDirs.p, input: 'hang' });
   await new Promise((resolve) => setImmediate(resolve));
   const child = fake.getChild();
   await new Promise((resolve) => setTimeout(resolve, 40));
@@ -538,7 +618,7 @@ test('falls back to child.kill when the child has no pid', async (t) => {
   const fake = fakeSpawn(hangingHandler());
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, turnTimeoutMs: 20 });
   t.after(() => client.close());
-  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'hang' }), { outcomeUnknown: true });
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.p, input: 'hang' }), { outcomeUnknown: true });
   assert.equal(fake.getChild().killed, true);
 });
 
@@ -547,7 +627,7 @@ test('turn/start RPC timeout terminates the group and reports an unknown outcome
   const fake = fakeSpawn(hangingHandler({ turnStart: false }), { pidBase: 4000 });
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 30, killImpl: kills.killImpl, readProcessIdentityImpl: identityOf });
   t.after(() => client.close());
-  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'x' }), (error) => {
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.p, input: 'x' }), (error) => {
     assert.equal(error.outcomeUnknown, true);
     assert.match(error.message, /timed out: turn\/start/);
     assert.equal(error.execution.turnStartSent, true);
@@ -564,7 +644,7 @@ test('onTurnStart runs before turn/start is written and receives the identity', 
   let sentAtCall;
   let seen;
   const result = await client.run({
-    role, cwd: '/tmp/p', input: 'hi',
+    role, cwd: fixtureDirs.p, input: 'hi',
     onTurnStart: (info) => {
       seen = info;
       sentAtCall = fake.getChild().sent.map(({ method }) => method);
@@ -583,7 +663,7 @@ test('a throwing onTurnStart prevents turn/start and is rethrown with execution'
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
   await assert.rejects(
-    client.run({ role, cwd: '/tmp/p', input: 'hi', onTurnStart: () => { throw new Error('admission denied'); } }),
+    client.run({ role, cwd: fixtureDirs.p, input: 'hi', onTurnStart: () => { throw new Error('admission denied'); } }),
     (error) => {
       assert.match(error.message, /admission denied/);
       assert.equal(error.execution.turnStartSent, false);
@@ -598,7 +678,7 @@ test('failed turns carry execution with a confirmed terminal', async (t) => {
   const fake = fakeSpawn(baseHandler());
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'fail' }), (error) => {
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.p, input: 'fail' }), (error) => {
     assert.equal(error.execution.turnTerminal, true);
     assert.equal(error.execution.turnStartSent, true);
     assert.equal(error.execution.turnId, 'turn-1');
@@ -613,7 +693,7 @@ test('confirmed interrupt yields an AbortError with a terminal and no unknown ou
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, interruptTimeoutMs: 200, killImpl: kills.killImpl, readProcessIdentityImpl: identityOf });
   t.after(() => client.close());
   const controller = new AbortController();
-  const active = client.run({ role, cwd: '/tmp/p', input: 'x', signal: controller.signal });
+  const active = client.run({ role, cwd: fixtureDirs.p, input: 'x', signal: controller.signal });
   await new Promise((resolve) => setTimeout(resolve, 10));
   controller.abort();
   await assert.rejects(active, (error) => {
@@ -631,7 +711,7 @@ test('unconfirmed interrupt terminates the child and reports an unknown outcome'
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, interruptTimeoutMs: 20, turnTimeoutMs: 5000, killImpl: kills.killImpl, readProcessIdentityImpl: identityOf });
   t.after(() => client.close());
   const controller = new AbortController();
-  const active = client.run({ role, cwd: '/tmp/p', input: 'x', signal: controller.signal });
+  const active = client.run({ role, cwd: fixtureDirs.p, input: 'x', signal: controller.signal });
   active.catch(() => {});
   await new Promise((resolve) => setTimeout(resolve, 10));
   const child = fake.getChild();
@@ -680,7 +760,8 @@ test('derives per-turn tokens from total deltas on a new thread and a second tur
   ]));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const first = await client.run({ role: { name: 'r', sandbox: 'read-only' }, cwd: '/tmp/p', input: 'a' });
+  const tokenRole = { name: 'r', model: 'gpt-6-sol', sandbox: 'workspace-write', instructions: role.instructions };
+  const first = await client.run({ role: tokenRole, cwd: fixtureDirs.p, input: 'a' });
   assert.equal(first.usage.tokenSource, 'total_delta');
   assert.deepEqual(first.usage.tokens, { inputTokens: 30, cachedInputTokens: 4, outputTokens: 9, reasoningOutputTokens: 3, totalTokens: 39 });
   assert.equal(first.usage.model, 'm-server');
@@ -693,21 +774,21 @@ test('derives per-turn tokens from total deltas on a new thread and a second tur
   assert.ok(first.usage.elapsedMs >= 0);
   assert.ok(!Number.isNaN(Date.parse(first.usage.startedAt)));
 
-  const second = await client.run({ role, cwd: '/tmp/p', input: 'b', threadId: first.threadId });
+  const second = await client.run({ role: tokenRole, cwd: fixtureDirs.p, input: 'b', threadId: first.threadId });
   assert.deepEqual(second.usage.tokens, { inputTokens: 20, cachedInputTokens: 2, outputTokens: 11, reasoningOutputTokens: 2, totalTokens: 31 });
   assert.equal(second.usage.model, 'gpt-6-sol');
-  assert.equal(second.usage.effort, 'high');
+  assert.equal(second.usage.effort, null);
 });
 
 test('a resumed thread with unknown baseline reports null tokens but keeps the raw total', async (t) => {
   const fake = fakeSpawn(usageHandler([[bd(500, 0, 50, 0, 550)], [bd(520, 0, 60, 0, 580)]]));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const first = await client.run({ role, cwd: '/tmp/p', input: 'a', threadId: 'old-thread' });
+  const first = await client.run({ role, cwd: fixtureDirs.p, input: 'a', threadId: 'old-thread' });
   assert.equal(first.usage.tokens, null);
   assert.equal(first.usage.tokenSource, 'unavailable');
   assert.equal(first.usage.cumulativeTotal.totalTokens, 550);
-  const second = await client.run({ role, cwd: '/tmp/p', input: 'b', threadId: 'old-thread' });
+  const second = await client.run({ role, cwd: fixtureDirs.p, input: 'b', threadId: 'old-thread' });
   assert.equal(second.usage.tokenSource, 'total_delta');
   assert.equal(second.usage.tokens.totalTokens, 30);
 });
@@ -716,7 +797,7 @@ test('no token updates leaves tokens null, never zero', async (t) => {
   const fake = fakeSpawn(usageHandler([[]]));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const result = await client.run({ role, cwd: '/tmp/p', input: 'a' });
+  const result = await client.run({ role, cwd: fixtureDirs.p, input: 'a' });
   assert.equal(result.usage.tokens, null);
   assert.equal(result.usage.tokenSource, 'unavailable');
   assert.equal(result.usage.cumulativeTotal, null);
@@ -754,7 +835,7 @@ test('records a blocked hook run with provenance', async (t) => {
   ]));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const result = await client.run({ role, cwd: '/tmp/project', input: 'go' });
+  const result = await client.run({ role, cwd: fixtureDirs.project, input: 'go' });
   assert.equal(result.permissionEvents.length, 1);
   assert.deepEqual(result.permissionEvents[0], {
     type: 'hook', eventName: 'preToolUse', status: 'blocked', source: 'user', sourcePath: '/home/u/.codex/hooks.json',
@@ -773,7 +854,7 @@ test('records declined and hook-blocked tool items', async (t) => {
   ]));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const { permissionEvents: events } = await client.run({ role, cwd: '/w', input: 'go' });
+  const { permissionEvents: events } = await client.run({ role, cwd: fixtureDirs.work, input: 'go' });
   assert.equal(events.length, 3);
   assert.deepEqual(events[0], { type: 'tool', tool: 'commandExecution', status: 'declined', command: 'rm -rf x', cwd: '/w', blockedByHook: false, denial: true, reasonText: null });
   assert.equal(events[1].blockedByHook, true);
@@ -792,7 +873,7 @@ test('a failed command without a hook block or sandbox denial is not a permissio
   ]));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const { permissionEvents: events } = await client.run({ role, cwd: '/w', input: 'go' });
+  const { permissionEvents: events } = await client.run({ role, cwd: fixtureDirs.work, input: 'go' });
   assert.deepEqual(events.map((e) => e.command), ['touch x', 'cat y', 'kill 1']);
   assert.ok(events.every((e) => e.denial === true));
 });
@@ -807,7 +888,7 @@ test('legacy approval requests get the schema decline and are recorded', async (
   }));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const { permissionEvents: events } = await client.run({ role, cwd: '/w', input: 'go' });
+  const { permissionEvents: events } = await client.run({ role, cwd: fixtureDirs.work, input: 'go' });
   await new Promise((resolve) => setImmediate(resolve));
   const replies = fake.getChild().sent.filter((m) => String(m.id).startsWith('server-') && !m.method);
   assert.equal(replies.length, 3);
@@ -829,7 +910,7 @@ test('records declined approval requests and non-approved auto reviews', async (
   }));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const { permissionEvents: events } = await client.run({ role, cwd: '/w', input: 'go' });
+  const { permissionEvents: events } = await client.run({ role, cwd: fixtureDirs.work, input: 'go' });
   assert.deepEqual(events, [
     { type: 'approval_review', status: 'denied', riskLevel: 'high', rationale: 'risky', decisionSource: 'agent', targetItemId: 'i1' },
     { type: 'approval_request_declined', method: 'item/commandExecution/requestApproval', reason: 'client_declines_all' },
@@ -839,19 +920,24 @@ test('records declined approval requests and non-approved auto reviews', async (
 test('truncates, redacts and caps permission events', async (t) => {
   const long = 'x'.repeat(2000);
   const notes = [
-    { method: 'item/completed', params: { threadId: 'thread-perm', item: { type: 'commandExecution', command: `curl -H "Authorization: Bearer abc.def" ${long}`, cwd: '/w', status: 'failed', aggregatedOutput: `Permission denied key sk-abcdefghijkl1234 ${long}` } } },
+    { method: 'item/completed', params: { threadId: 'thread-perm', item: { type: 'commandExecution', command: `curl -H "Authorization: Bearer abc.def" GITHUB_TOKEN=ghp_123456789012345678901234567890123456 ${long}`, cwd: '/w', status: 'failed', aggregatedOutput: `Permission denied {"access_token":"json-secret"} Cookie: session=cookie-secret x-api-key: header-secret key sk-abcdefghijkl1234 ${long}` } } },
   ];
   for (let i = 0; i < 60; i += 1) notes.push({ method: 'hook/completed', params: { threadId: 'thread-perm', run: hookRun({ id: `c${i}` }) } });
   notes.push(completedTurn);
   const fake = fakeSpawn(permissionHandler(notes));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const { permissionEvents: events } = await client.run({ role, cwd: '/w', input: 'go' });
+  const { permissionEvents: events } = await client.run({ role, cwd: fixtureDirs.work, input: 'go' });
   assert.equal(events.length, 50);
   assert.ok(events[0].command.length <= 303);
   assert.ok(!events[0].command.includes('abc.def'));
+  assert.ok(!events[0].command.includes('ghp_123456789012345678901234567890123456'));
   assert.match(events[0].command, /\[REDACTED\]/);
   assert.ok(!events[0].reasonText.includes('sk-abcdefghijkl1234'));
+  assert.ok(!events[0].reasonText.includes('json-secret'));
+  assert.ok(!events[0].reasonText.includes('cookie-secret'));
+  assert.ok(!events[0].reasonText.includes('header-secret'));
+  assert.ok(events[0].reasonText.includes('Permission denied'));
   assert.ok(events[0].reasonText.length <= 503);
 });
 
@@ -859,15 +945,15 @@ test('reports permissionConfig for read-only and workspace-write roles', async (
   const fake = fakeSpawn(permissionHandler([completedTurn]));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const ro = await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/ro', input: 'go' });
+  const ro = await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: fixtureDirs.one, input: 'go' });
   const { toolPolicy: roPolicy, ...roConfig } = ro.permissionConfig;
-  assert.deepEqual(roConfig, { sandbox: 'read-only', sandboxPolicy: 'readOnly', approvalPolicy: 'on-request', approvalsReviewer: 'user', cwd: '/ro' });
+  assert.deepEqual(roConfig, { profileId: 'codex-a2a-read-only', approvalPolicy: 'on-request', approvalsReviewer: 'user', cwd: fixtureDirs.one });
   assert.equal(roPolicy.enforced, true);
   assert.deepEqual(ro.permissionEvents, []);
-  const rw = await client.run({ role, cwd: '/rw', input: 'go', threadId: 'thread-perm' });
+  const rw = await client.run({ role, cwd: fixtureDirs.two, input: 'go' });
   const { toolPolicy: rwPolicy, ...rwConfig } = rw.permissionConfig;
-  assert.equal(rwPolicy, undefined);
-  assert.deepEqual(rwConfig, { sandbox: 'workspace-write', sandboxPolicy: 'workspaceWrite', approvalPolicy: 'on-request', approvalsReviewer: 'user', cwd: '/rw' });
+  assert.equal(rwPolicy.enforced, true);
+  assert.deepEqual(rwConfig, { profileId: 'codex-a2a-workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'user', cwd: fixtureDirs.two });
 });
 
 test('attaches permission events to thrown errors', async (t) => {
@@ -877,10 +963,10 @@ test('attaches permission events to thrown errors', async (t) => {
   ]));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  await assert.rejects(client.run({ role, cwd: '/w', input: 'go' }), (error) => {
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.work, input: 'go' }), (error) => {
     assert.equal(error.permissionEvents.length, 1);
     assert.equal(error.permissionEvents[0].hookId, 'h1');
-    assert.equal(error.permissionConfig.cwd, '/w');
+    assert.equal(error.permissionConfig.cwd, fixtureDirs.work);
     return true;
   });
 });
@@ -918,7 +1004,7 @@ test('a JSON-RPC error answering turn/start marks execution.turnStartRejected an
   });
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'x' }), (error) => {
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.p, input: 'x' }), (error) => {
     assert.equal(error.execution.turnStartRejected, true);
     assert.equal(error.execution.turnStartSent, true);
     assert.notEqual(error.outcomeUnknown, true);
@@ -930,7 +1016,7 @@ test('a turn/start timeout does not set turnStartRejected', async (t) => {
   const fake = fakeSpawn(hangingHandler({ turnStart: false }), { pidBase: 4100 });
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 30, killImpl: groupKills().killImpl, readProcessIdentityImpl: identityOf });
   t.after(() => client.close());
-  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'x' }), (error) => {
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.p, input: 'x' }), (error) => {
     assert.equal(error.execution.turnStartRejected, false);
     return true;
   });
@@ -943,13 +1029,13 @@ test('usage.turns is 0 when the run failed before turn/start and 1 once it was s
   });
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'x' }), (error) => {
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.p, input: 'x' }), (error) => {
     assert.equal(error.usage.turns, 0);
     return true;
   });
   const ok = new CodexAppServer({ spawnImpl: fakeSpawn(baseHandler()).spawnImpl });
   t.after(() => ok.close());
-  const result = await ok.run({ role, cwd: '/tmp/p', input: 'x' });
+  const result = await ok.run({ role, cwd: fixtureDirs.p, input: 'x' });
   assert.equal(result.usage.turns, 1);
 });
 
@@ -966,7 +1052,7 @@ for (const [name, trigger, pattern] of failurePaths) {
     const fake = fakeSpawn(hangingHandler(), { pidBase: 4200 });
     const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, killImpl: kills.killImpl, readProcessIdentityImpl: identityOf });
     t.after(() => client.close());
-    const running = client.run({ role, cwd: '/tmp/p', input: 'x' });
+    const running = client.run({ role, cwd: fixtureDirs.p, input: 'x' });
     await new Promise((resolve) => {
       const check = () => (fake.getChild()?.sent.some((m) => m.method === 'turn/start') ? setTimeout(resolve, 20) : setTimeout(check, 5));
       check();
@@ -1001,7 +1087,7 @@ async function delayedKillCase(t, identityNow) {
     readProcessIdentityImpl: readImpl, listGroupMembersImpl: () => survivors,
   });
   t.after(() => client.close());
-  const pending = client.run({ role, cwd: '/tmp/p', input: 'hang' });
+  const pending = client.run({ role, cwd: fixtureDirs.p, input: 'hang' });
   pending.catch(() => {});
   await new Promise((resolve) => setTimeout(resolve, 1200));
   return { kills, client, survivors };
@@ -1033,7 +1119,7 @@ test('a null start time identity never signals by number', async (t) => {
     readProcessIdentityImpl: (pid) => ({ pid, pgid: pid, startTime: null }), listGroupMembersImpl: () => [],
   });
   t.after(() => client.close());
-  client.run({ role, cwd: '/tmp/p', input: 'hang' }).catch(() => {});
+  client.run({ role, cwd: fixtureDirs.p, input: 'hang' }).catch(() => {});
   await new Promise((resolve) => setTimeout(resolve, 1200));
   assert.deepEqual(calls, []);
 });
@@ -1042,11 +1128,11 @@ test('pins approvalsReviewer to user on thread/start, thread/resume, and turn/st
   const fake = fakeSpawn(baseHandler());
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/ro', input: 'go' });
-  await client.run({ role, cwd: '/rw', input: 'go' });
+  await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: fixtureDirs.one, input: 'go' });
+  await client.run({ role, cwd: fixtureDirs.two, input: 'go' });
   client.loadedThreads.clear();
-  await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/ro', input: 'go', threadId: 'thread-old' });
-  await client.run({ role, cwd: '/rw', input: 'go', threadId: 'thread-old2' });
+  await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: fixtureDirs.one, input: 'go', threadId: 'thread-old' });
+  await client.run({ role, cwd: fixtureDirs.two, input: 'go', threadId: 'thread-old2' });
   const sent = fake.getChild().sent;
   for (const method of ['thread/start', 'thread/resume', 'turn/start']) {
     const calls = sent.filter((m) => m.method === method);
@@ -1124,7 +1210,7 @@ test('survivors of a termination are attached to the failed run error', async (t
     listGroupMembersImpl: () => survivors,
   });
   t.after(() => client.close());
-  const pending = client.run({ role, cwd: '/tmp/p', input: 'hang' });
+  const pending = client.run({ role, cwd: fixtureDirs.p, input: 'hang' });
   const outcome = pending.then(() => null, (error) => error);
   await new Promise((resolve) => setTimeout(resolve, 40));
   fake.getChild().exitCode = 0;
@@ -1152,17 +1238,37 @@ test('thread/start carries the fixed per-role tool config', async (t) => {
   const fake = fakeSpawn(baseHandler());
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const result = await client.run({ role: toolRole({ mcpServers: ['gamma', 'ghost'], skills: false }), cwd: '/tmp/work', input: 'hi' });
+  const priorSecret = process.env.M9_PROBE_SECRET;
+  process.env.M9_PROBE_SECRET = 'fixture-secret';
+  t.after(() => {
+    if (priorSecret === undefined) delete process.env.M9_PROBE_SECRET;
+    else process.env.M9_PROBE_SECRET = priorSecret;
+  });
+  const roleWithEnvironmentOverride = {
+    ...toolRole({ mcpServers: ['gamma', 'ghost'], skills: false }),
+    shell_environment_policy: { inherit: 'all', set: { M9_PROBE_SECRET: 'role-value' } },
+  };
+  const result = await client.run({ role: roleWithEnvironmentOverride, cwd: fixtureDirs.work, input: 'hi' });
   const start = fake.getChild().sent.find(({ method }) => method === 'thread/start');
-  assert.deepEqual(start.params.config, {
+  assert.deepEqual(Object.fromEntries(Object.entries(start.params.config).filter(([key]) => !key.startsWith('permissions.'))), {
     'features.apps': false,
     'features.plugins': false,
+    'shell_environment_policy.inherit': 'none',
+    'shell_environment_policy.set': { PATH: process.env.PATH, HOME: process.env.HOME },
     'skills.include_instructions': false,
     'skills.bundled.enabled': false,
     'mcp_servers.alpha.enabled': false,
     'mcp_servers.beta.enabled': false,
   });
-  assert.deepEqual(fake.getChild().sent.find(({ method }) => method === 'config/read').params.cwd, '/tmp/work');
+  const profile = start.params.config['permissions.codex-a2a-workspace-write.filesystem'];
+  assert.deepEqual(profile[':root'], 'deny');
+  assert.deepEqual(profile[':minimal'], 'read');
+  assert.deepEqual(profile[fixtureDirs.work], 'write');
+  assert.deepEqual(profile[`${fixtureDirs.work}/.runtime`], 'deny');
+  assert.equal(profile[`${fixtureDirs.work}/.git`], 'read');
+  assert.deepEqual(start.params.config['permissions.codex-a2a-workspace-write.network.enabled'], false);
+  assert.equal(Object.hasOwn(start.params.config['shell_environment_policy.set'], 'M9_PROBE_SECRET'), false);
+  assert.deepEqual(fake.getChild().sent.find(({ method }) => method === 'config/read').params.cwd, fixtureDirs.work);
   assert.deepEqual(result.permissionConfig.toolPolicy, {
     mcpAllowed: ['gamma'],
     mcpDisabled: ['alpha', 'beta'],
@@ -1179,8 +1285,8 @@ test('missing tools table means empty allowlist and skills off; skills true keep
   const fake = fakeSpawn(baseHandler());
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  await client.run({ role, cwd: '/tmp/work', input: 'one' });
-  await client.run({ role: toolRole({ mcpServers: [], skills: true }), cwd: '/tmp/work', input: 'two' });
+  await client.run({ role, cwd: fixtureDirs.work, input: 'one' });
+  await client.run({ role: toolRole({ mcpServers: [], skills: true }), cwd: fixtureDirs.work, input: 'two' });
   const starts = fake.getChild().sent.filter(({ method }) => method === 'thread/start');
   assert.equal(starts[0].params.config['mcp_servers.gamma.enabled'], false);
   assert.equal(starts[0].params.config['skills.include_instructions'], false);
@@ -1195,27 +1301,26 @@ test('thread/resume carries the tool config after a child replacement', async (t
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
   const tools = { mcpServers: ['alpha'], skills: false };
-  await client.run({ role: toolRole(tools), cwd: '/tmp/work', input: 'one', threadId: 'old-thread' });
+  await client.run({ role: toolRole(tools), cwd: fixtureDirs.work, input: 'one', threadId: 'old-thread' });
   const resume = fake.getChild().sent.find(({ method }) => method === 'thread/resume');
   assert.equal(resume.params.config['mcp_servers.alpha.enabled'], undefined);
   assert.equal(resume.params.config['mcp_servers.beta.enabled'], false);
   assert.equal(resume.params.config['features.plugins'], false);
+  assert.equal(resume.params.config['shell_environment_policy.inherit'], 'none');
+  assert.deepEqual(resume.params.config['shell_environment_policy.set'], { PATH: process.env.PATH, HOME: process.env.HOME });
 });
 
-test('enumeration failure still sends apps/plugins/skills overrides and marks enforced false', async (t) => {
+test('MCP enumeration failure fails closed before a thread or turn starts', async (t) => {
   const fake = fakeSpawn(toolHandler(baseHandler(), (request, send) => send({ id: request.id, error: { code: -32601, message: 'nope' } })));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const result = await client.run({ role: toolRole({ mcpServers: ['alpha'], skills: false }), cwd: '/tmp/work', input: 'hi' });
-  const start = fake.getChild().sent.find(({ method }) => method === 'thread/start');
-  assert.deepEqual(start.params.config, {
-    'features.apps': false,
-    'features.plugins': false,
-    'skills.include_instructions': false,
-    'skills.bundled.enabled': false,
-  });
-  assert.equal(result.permissionConfig.toolPolicy.enforced, false);
-  assert.match(result.permissionConfig.toolPolicy.reason, /enumeration failed/);
+  await assert.rejects(
+    client.run({ role: toolRole({ mcpServers: ['alpha'], skills: false }), cwd: fixtureDirs.work, input: 'hi' }),
+    /MCP server enumeration failed/,
+  );
+  const methods = fake.getChild().sent.map(({ method }) => method);
+  assert.equal(methods.includes('thread/start'), false);
+  assert.equal(methods.includes('turn/start'), false);
 });
 
 test('mcpServerStatus lists status for a thread', async (t) => {
@@ -1234,7 +1339,7 @@ function versionedHandler({ thread = {}, ready = {} } = {}) {
   const base = baseHandler();
   return (request, send) => {
     if (request.method === 'thread/start' || request.method === 'thread/resume') {
-      return send({ id: request.id, result: { thread: { id: request.params.threadId || 'thread-1' }, ...thread } });
+      return send({ id: request.id, result: { thread: { id: request.params.threadId || 'thread-1' }, activePermissionProfile: { id: request.params.permissions }, ...thread } });
     }
     if (request.method === 'model/list') return ready.modelList(request, send);
     return base(request, send);
@@ -1245,12 +1350,12 @@ test('serviceTier is sent on thread/start and turn/start only when the role sets
   const fake = fakeSpawn(baseHandler());
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  await client.run({ role, cwd: '/tmp/project', input: 'plain' });
+  await client.run({ role, cwd: fixtureDirs.project, input: 'plain' });
   let sent = fake.getChild().sent;
   assert.equal(Object.hasOwn(sent.find(({ method }) => method === 'thread/start').params, 'serviceTier'), false);
   assert.equal(Object.hasOwn(sent.find(({ method }) => method === 'turn/start').params, 'serviceTier'), false);
 
-  await client.run({ role: { ...role, serviceTier: 'fast' }, cwd: '/tmp/project', input: 'quick' });
+  await client.run({ role: { ...role, serviceTier: 'fast' }, cwd: fixtureDirs.project, input: 'quick' });
   sent = fake.getChild().sent;
   const starts = sent.filter(({ method }) => method === 'thread/start');
   const turns = sent.filter(({ method }) => method === 'turn/start');
@@ -1264,10 +1369,10 @@ test('serviceTier is sent on thread/resume when set', async (t) => {
   const fake = fakeSpawn(versionedHandler());
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  await client.run({ role: { ...role, serviceTier: 'fast' }, cwd: '/tmp/project', input: 'again', threadId: 'old-thread' });
+  await client.run({ role: { ...role, serviceTier: 'fast' }, cwd: fixtureDirs.project, input: 'again', threadId: 'old-thread' });
   const resume = fake.getChild().sent.find(({ method }) => method === 'thread/resume');
   assert.equal(resume.params.serviceTier, 'fast');
-  await client.run({ role, cwd: '/tmp/project', input: 'again', threadId: 'other-thread' });
+  await client.run({ role, cwd: fixtureDirs.project, input: 'again', threadId: 'other-thread' });
   const resumes = fake.getChild().sent.filter(({ method }) => method === 'thread/resume');
   assert.equal(Object.hasOwn(resumes[1].params, 'serviceTier'), false);
 });
@@ -1276,7 +1381,7 @@ test('usage carries requested and reported settings from the thread response', a
   const fake = fakeSpawn(versionedHandler({ thread: { model: 'gpt-6-luna', reasoningEffort: 'xhigh', serviceTier: 'fast' } }));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const result = await client.run({ role: { ...role, serviceTier: 'fast' }, cwd: '/tmp/project', input: 'hi' });
+  const result = await client.run({ role: { ...role, serviceTier: 'fast' }, cwd: fixtureDirs.project, input: 'hi' });
   assert.deepEqual(result.usage.requested, { model: 'gpt-6-sol', effort: 'high', serviceTier: 'fast' });
   assert.deepEqual(result.usage.reported, { model: 'gpt-6-luna', reasoningEffort: 'xhigh', serviceTier: 'fast' });
   assert.equal(result.usage.model, 'gpt-6-luna');
@@ -1287,7 +1392,7 @@ test('usage requested and reported are null-filled when nothing is set or report
   const fake = fakeSpawn(baseHandler());
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const result = await client.run({ role: { name: 'bare', sandbox: 'read-only' }, cwd: '/tmp/project', input: 'hi' });
+  const result = await client.run({ role: { name: 'bare', sandbox: 'read-only' }, cwd: fixtureDirs.project, input: 'hi' });
   assert.deepEqual(result.usage.requested, { model: null, effort: null, serviceTier: null });
   assert.deepEqual(result.usage.reported, { model: null, reasoningEffort: null, serviceTier: null });
 });
@@ -1296,9 +1401,9 @@ test('usage reported is null on a turn of an already loaded thread', async (t) =
   const fake = fakeSpawn(versionedHandler({ thread: { model: 'gpt-6-luna', reasoningEffort: 'xhigh', serviceTier: 'fast' } }));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const first = await client.run({ role, cwd: '/tmp/project', input: 'one' });
+  const first = await client.run({ role, cwd: fixtureDirs.project, input: 'one' });
   assert.equal(first.usage.reported.model, 'gpt-6-luna');
-  const second = await client.run({ role, cwd: '/tmp/project', input: 'two', threadId: first.threadId });
+  const second = await client.run({ role, cwd: fixtureDirs.project, input: 'two', threadId: first.threadId });
   assert.equal(second.usage.reported, null);
   assert.deepEqual(second.usage.requested, { model: 'gpt-6-sol', effort: 'high', serviceTier: null });
 });

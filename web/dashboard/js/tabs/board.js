@@ -3,6 +3,7 @@ const BOARD_COLUMNS = ['backlog', 'pending', 'in_progress', 'needs_attention', '
 const BOARD_MAX_CARDS = 500;
 const BOARD_PAGE_SIZE = 100;
 const BOARD_SEARCH_DEBOUNCE_MS = 300;
+const BOARD_INACTIVE_TICKET_STATUSES = ['backlog', 'cancelled'];
 
 const boardData = {
   loaded: false,
@@ -30,6 +31,10 @@ let boardLastSignature = null;
 function roleDisplayNameFor(roleId) {
   const r = boardData.roles.find(x => x.runtimeId === roleId) || boardData.roles.find(x => x.publicId === roleId);
   return r && r.displayName ? r.displayName : roleId;
+}
+
+function boardShowDisposition(card) {
+  return Boolean(card && card.disposition && !BOARD_INACTIVE_TICKET_STATUSES.includes(card.ticketStatus));
 }
 
 // Roles offered as board filters and lanes: the active pack's public roles, plus legacy roles that
@@ -133,7 +138,7 @@ function createDirectTicketCard(card) {
   if (card.phase && card.phase !== 'settled' && (status === 'pending' || status === 'in_progress')) {
     meta.appendChild(h('span', { class: 'badge', text: 'Phase: ' + runPhaseLabel(card.phase), title: card.phase }));
   }
-  if (card.disposition) {
+  if (boardShowDisposition(card)) {
     const di = dispositionInfo(card.disposition, card.classification);
     meta.appendChild(h('span', { class: 'badge badge-accept tone-' + di.tone, text: 'Checks: ' + di.label, title: 'Acceptance disposition: ' + card.disposition }));
   }
@@ -250,6 +255,14 @@ function fillCardList(container, cards, emptyText) {
   cards.forEach(c => container.appendChild(createTicketCard(c)));
 }
 
+// Marker for cards that are the last snapshot rather than fresh data.
+function boardStaleNote() {
+  if (typeof Conn === 'undefined') return '';
+  if (Conn.status === 'reconnecting') return 'Reconnecting - showing the last snapshot, data may be stale';
+  if (Conn.status === 'unpaired') return 'Not paired - data is stale';
+  return '';
+}
+
 function renderBoardStatusLine() {
   const el = document.getElementById('board-status');
   if (!el) return;
@@ -260,6 +273,9 @@ function renderBoardStatusLine() {
   } else {
     el.textContent = boardData.total + (boardData.total === 1 ? ' card' : ' cards');
   }
+  const stale = boardStaleNote();
+  if (stale) el.textContent += ' - ' + stale;
+  el.classList.toggle('board-status-stale', Boolean(stale));
 }
 
 function renderBoard() {
@@ -269,7 +285,7 @@ function renderBoard() {
   if (boardDrag) return;
 
   const signature = JSON.stringify([state.boardView, boardData.loaded, boardData.cards, boardData.counts,
-    boardData.roles, boardData.total, boardData.truncated, Math.floor(Date.now() / 60000)]);
+    boardData.roles, boardData.total, boardData.truncated, boardStaleNote(), Math.floor(Date.now() / 60000)]);
   if (signature === boardLastSignature) return;
   boardLastSignature = signature;
 

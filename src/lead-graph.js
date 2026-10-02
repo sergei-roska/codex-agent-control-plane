@@ -26,7 +26,8 @@ const PLAN_VIOLATION_LIMIT = 2;
 const CANCELED_TEXT = 'Canceled after all active A2A tasks were confirmed stopped.';
 const REPORT_CONTRACT_LINE = `Reply with a single JSON object matching the ${WORKER_REPORT_CONTRACT} report schema `
   + '(outcome, summary, filesChanged, filesInspected, checks, risks, scopeExpansion, decisionRequest). '
-  + 'Use outcome needs_decision with a decisionRequest only after checking the evidence yourself.';
+  + 'Use outcome needs_decision with a decisionRequest only after checking the evidence yourself; '
+  + 'its recommendation must be exactly the id of one of its options.';
 
 const TERMINAL_STATES = new Set([
   TaskState.TASK_STATE_COMPLETED,
@@ -239,7 +240,8 @@ function eligibleStages(state) {
 function isStageSuccess(outcome) {
   return outcome.status === 'TASK_STATE_COMPLETED'
     && outcome.report?.outcome === REPORT_SUCCESS_OUTCOME
-    && (outcome.scopeViolations || []).length === 0
+    // A self-reported list is advisory once the server has proven the writer's real delta.
+    && ((outcome.scopeViolations || []).length === 0 || outcome.attestedDeltaKnown === true)
     && (outcome.attestedScopeViolations || []).length === 0;
 }
 
@@ -360,14 +362,14 @@ function buildLeadGraph(deps) {
     : role);
   const reconcileWaitMs = Number.isFinite(deps.reconcileWaitMs) ? deps.reconcileWaitMs : DEFAULT_RECONCILE_WAIT_MS;
 
-  // Operator hold: sync, side-effect free; a throwing or unknown answer means no hold.
+  // Operator hold: sync and side-effect free; lookup failures fail closed.
   const holdOf = (state) => {
     if (typeof deps.operatorControl !== 'function') return null;
     try {
       const control = deps.operatorControl(state.runId);
       return control === 'pause' || control === 'stop' ? control : null;
     } catch (_) {
-      return null;
+      return 'pause';
     }
   };
   const toDecide = (state) => (holdOf(state) ? 'operator_hold' : 'decide');
@@ -440,7 +442,7 @@ function buildLeadGraph(deps) {
       'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and stageId'
         + (state.plan ? ' (the plan stage id).' : ' (use null; there is no plan).')
         + ' Writable roles require one or more explicit safe relative allowedFiles. Keep each brief bounded.',
-      'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, and humanInput. Use empty arrays, an empty string, or null for unused fields.',
+      'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, and humanInput. Use empty arrays, an empty string, or null for unused fields. Cross-field rules: dispatch needs 1 or more assignments, empty final, and null humanInput; finish needs no assignments, non-empty final, and null humanInput; request_human_input needs no assignments, empty final, and a humanInput object.',
       'Worker decision requests: resolve them yourself (resolutions: decisionId, choice, rationale) whenever the evidence supports a choice. Worker reports are self-reported; check scopeViolations and reportError.',
       'Use request_human_input only for missing_authority, irreversible_or_external, or product_choice, and only after investigating: give options, a recommendation, the evidence checked, and the independent work that can proceed.',
       'Writer reconciliation is mechanical: before you decide, the server reconciles every writable outcome whose effects were unknown and lists the result as an outcome of kind reconciliation, with the attested changedPaths. attestedScopeViolations are changes the server observed outside allowedFiles; a report filesChanged list is self-reported and advisory. A writable dispatch is refused while any writer outcome is unresolved. For a read-only role, dispatch_error means the submission could not be matched to a task at lookup time; such a role cannot have workspace write effects.',
@@ -1156,7 +1158,7 @@ function buildLeadGraph(deps) {
   }
 
   const afterDecide = (state) => {
-    if (state.status === 'completed') return 'accept';
+    if (state.status === 'completed') return holdOf(state) ? 'operator_hold' : 'accept';
     if (state.status) return 'finish';
     if (state.planRetry) return toDecide(state);
     if (state.budget) return 'budget_pause';
@@ -1188,6 +1190,9 @@ function buildLeadGraph(deps) {
   const afterOperatorHold = (state) => {
     // A stopped mid-batch run still verifies (and reconciles) the writers it already finished.
     if (state.status === 'canceled') return state.batch ? 'verify' : 'finish';
+    if (holdOf(state)) return 'operator_hold';
+    if (state.status === 'completed') return 'accept';
+    if (state.status) return 'finish';
     if (state.batch?.items?.some((item) => item.state === 'pending')) return 'dispatch';
     return 'decide';
   };
@@ -1214,7 +1219,7 @@ function buildLeadGraph(deps) {
     .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'decide', 'operator_hold'])
     .addConditionalEdges('human_input', afterHumanInput, ['decide', 'operator_hold'])
     .addConditionalEdges('budget_pause', afterBudgetPause, ['decide', 'operator_hold'])
-    .addConditionalEdges('operator_hold', afterOperatorHold, ['finish', 'verify', 'dispatch', 'decide'])
+    .addConditionalEdges('operator_hold', afterOperatorHold, ['finish', 'verify', 'dispatch', 'decide', 'operator_hold', 'accept'])
     .addEdge('finish', END);
 
   return deps.checkpointer ? graph.compile({ checkpointer: deps.checkpointer }) : graph;

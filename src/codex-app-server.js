@@ -1,6 +1,8 @@
 const { spawn } = require('node:child_process');
 const readline = require('node:readline');
 const { readProcessIdentity, listGroupMembers } = require('./process-quiescence');
+const { createPermissionProfile, assertActivePermissionProfile } = require('./permission-profile');
+const { redactDiagnosticMessage } = require('./event-journal');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_TURN_TIMEOUT_MS = 600_000;
@@ -75,6 +77,7 @@ class CodexAppServer {
     this.closed = false;
     this.exitError = null;
     this.loadedThreads = new Set();
+    this.loadedThreadProfiles = new Map();
     this.generation = 0;
     this.childExited = true;
     this.childExitPromise = null;
@@ -122,6 +125,7 @@ class CodexAppServer {
     this.closed = false;
     this.exitError = null;
     this.loadedThreads = new Set();
+    this.loadedThreadProfiles = new Map();
     this.threadTotals = new Map();
     this.hookInventories = new Map();
     this.mcpInventories = new Map();
@@ -168,6 +172,7 @@ class CodexAppServer {
 
     const initResult = await this._request('initialize', {
       clientInfo: { name: 'codex-a2a-runtime', title: 'Codex A2A Runtime', version: '0.1.0' },
+      capabilities: { experimentalApi: true },
     });
     this.appServerVersion = typeof initResult?.userAgent === 'string' ? initResult.userAgent : null;
     this._notify('initialized', {});
@@ -278,7 +283,16 @@ class CodexAppServer {
   async _toolPolicy(role, cwd) {
     const allowed = [...new Set(role.tools?.mcpServers || [])];
     const skills = role.tools?.skills === true;
-    const config = { 'features.apps': false, 'features.plugins': false };
+    const config = {
+      'features.apps': false,
+      'features.plugins': false,
+      'shell_environment_policy.inherit': 'none',
+      'shell_environment_policy.set': Object.fromEntries(
+        ['PATH', 'HOME']
+          .filter((name) => typeof process.env[name] === 'string')
+          .map((name) => [name, process.env[name]]),
+      ),
+    };
     if (!skills) {
       config['skills.include_instructions'] = false;
       config['skills.bundled.enabled'] = false;
@@ -294,17 +308,15 @@ class CodexAppServer {
       source: 'config/read',
     };
     const inventory = await this.mcpInventory(cwd);
-    if (inventory.names) {
-      const known = new Set(inventory.names);
-      policy.mcpAllowed = allowed.filter((name) => known.has(name));
-      policy.mcpMissing = allowed.filter((name) => !known.has(name));
-      policy.mcpDisabled = inventory.names.filter((name) => !allowed.includes(name));
-      for (const name of policy.mcpDisabled) config[`mcp_servers.${name}.enabled`] = false;
-      policy.enforced = true;
-    } else {
-      policy.mcpMissing = allowed;
-      policy.reason = `MCP server enumeration failed: ${inventory.error}`;
+    if (!inventory.names) {
+      throw new CodexAppServerError(`MCP server enumeration failed: ${inventory.error}`);
     }
+    const known = new Set(inventory.names);
+    policy.mcpAllowed = allowed.filter((name) => known.has(name));
+    policy.mcpMissing = allowed.filter((name) => !known.has(name));
+    policy.mcpDisabled = inventory.names.filter((name) => !allowed.includes(name));
+    for (const name of policy.mcpDisabled) config[`mcp_servers.${name}.enabled`] = false;
+    policy.enforced = true;
     return { config, policy };
   }
 
@@ -345,8 +357,7 @@ class CodexAppServer {
       permissionEvents: [],
       pendingHooks: new Map(),
       permissionConfig: {
-        sandbox: normalizeSandbox(role.sandbox),
-        sandboxPolicy: sandboxPolicy(role.sandbox).type,
+        profileId: null,
         approvalPolicy: 'on-request',
         approvalsReviewer: APPROVALS_REVIEWER,
         cwd,
@@ -366,13 +377,25 @@ class CodexAppServer {
   }
 
   async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart }) {
+    const permissionProfile = createPermissionProfile({ role, cwd, codexPath: this.codexPath });
+    ctx.permissionConfig.profileId = permissionProfile.id;
+    const threadPolicyBinding = JSON.stringify({
+      permissionProfile: permissionProfile.binding,
+      role: role.name,
+      model: role.model || null,
+      effort: role.effort || null,
+      serviceTier: role.serviceTier || null,
+      instructions: role.instructions || `You are the ${role.name} agent.`,
+      mcpServers: [...new Set(role.tools?.mcpServers || [])].sort(),
+      skills: role.tools?.skills === true,
+    });
     await this.start();
 
     const developerInstructions = role.instructions || `You are the ${role.name} agent.`;
     let toolConfig = null;
     if (!existingThreadId || !this.loadedThreads.has(existingThreadId)) {
       const { config, policy } = await this._toolPolicy(role, cwd);
-      toolConfig = config;
+      toolConfig = { ...config, ...permissionProfile.config };
       ctx.permissionConfig.toolPolicy = policy;
     }
     let threadResult = null;
@@ -383,13 +406,19 @@ class CodexAppServer {
         ...serviceTierParam(role),
         cwd,
         developerInstructions,
-        sandbox: normalizeSandbox(role.sandbox),
+        permissions: permissionProfile.id,
         approvalPolicy: 'on-request',
         approvalsReviewer: APPROVALS_REVIEWER,
         config: toolConfig,
       }, { signal });
+      try {
+        assertActivePermissionProfile(threadResult, permissionProfile.id, 'thread/start');
+      } catch (error) {
+        throw new CodexAppServerError(error.message, { cause: error });
+      }
       if (threadResult?.thread?.id) {
         this.loadedThreads.add(threadResult.thread.id);
+        this.loadedThreadProfiles.set(threadResult.thread.id, threadPolicyBinding);
         // A brand-new thread has consumed nothing yet.
         if (!this.threadTotals.has(threadResult.thread.id)) this.threadTotals.set(threadResult.thread.id, ZERO_TOTAL);
       }
@@ -404,13 +433,19 @@ class CodexAppServer {
         cwd,
         approvalPolicy: 'on-request',
         approvalsReviewer: APPROVALS_REVIEWER,
-        sandbox: normalizeSandbox(role.sandbox),
+        permissions: permissionProfile.id,
         model: role.model || null,
         ...serviceTierParam(role),
         developerInstructions,
         config: toolConfig,
       }, { signal });
+      try {
+        assertActivePermissionProfile(resumed, permissionProfile.id, 'thread/resume');
+      } catch (error) {
+        throw new CodexAppServerError(error.message, { cause: error });
+      }
       this.loadedThreads.add(existingThreadId);
+      this.loadedThreadProfiles.set(existingThreadId, threadPolicyBinding);
       ctx.reported = reportedSettings(resumed);
       ctx.model = resumed?.model || ctx.model;
       ctx.effort = ctx.effort || resumed?.reasoningEffort || null;
@@ -418,6 +453,9 @@ class CodexAppServer {
 
     const threadId = existingThreadId || threadResult?.thread?.id;
     if (!threadId) throw new CodexAppServerError('Codex App Server did not return a thread ID');
+    if (this.loadedThreadProfiles.get(threadId) !== threadPolicyBinding) {
+      throw new CodexAppServerError(`Thread ${threadId} is bound to a different role or permission configuration`);
+    }
     ctx.threadId = threadId;
     if (this.runs.has(threadId)) {
       throw new CodexAppServerError(`A Codex turn is already active for thread ${threadId}`, { threadId });
@@ -446,7 +484,7 @@ class CodexAppServer {
         ...(role.effort ? { effort: role.effort } : {}),
         ...serviceTierParam(role),
         cwd,
-        sandboxPolicy: sandboxPolicy(role.sandbox),
+        permissions: permissionProfile.id,
         approvalPolicy: 'on-request',
         approvalsReviewer: APPROVALS_REVIEWER,
         ...(outputSchema ? { outputSchema } : {}),
@@ -533,6 +571,7 @@ class CodexAppServer {
     if (this.closed) return;
     this.closed = true;
     this.loadedThreads.clear();
+    this.loadedThreadProfiles.clear();
     this.reader?.close();
     this._failAll(new CodexAppServerError('Codex App Server client closed'));
     this.childExited = true;
@@ -847,21 +886,9 @@ function executionOf(ctx) {
   };
 }
 
-const SECRET_PATTERNS = [
-  [/(authorization\s*:\s*)[^\r\n]*/gi, '$1[REDACTED]'],
-  [/\bbearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]'],
-  [/\bsk-[A-Za-z0-9_-]{8,}/g, '[REDACTED]'],
-];
-
-function redact(text) {
-  let out = text;
-  for (const [pattern, replacement] of SECRET_PATTERNS) out = out.replace(pattern, replacement);
-  return out;
-}
-
 function clean(value, max = MAX_TEXT_CHARS) {
   if (typeof value !== 'string') return value == null ? null : String(value).slice(0, max);
-  const text = redact(value);
+  const text = redactDiagnosticMessage(value);
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
@@ -955,18 +982,6 @@ function sanitizeHook(hook) {
 function cloneError(error) {
   if (!error || typeof error !== 'object') return error;
   return Object.create(Object.getPrototypeOf(error), Object.getOwnPropertyDescriptors(error));
-}
-
-function normalizeSandbox(sandbox) {
-  if (['read-only', 'workspace-write', 'danger-full-access'].includes(sandbox)) return sandbox;
-  return 'workspace-write';
-}
-
-function sandboxPolicy(sandbox) {
-  const normalized = normalizeSandbox(sandbox);
-  if (normalized === 'read-only') return { type: 'readOnly' };
-  if (normalized === 'danger-full-access') return { type: 'dangerFullAccess' };
-  return { type: 'workspaceWrite' };
 }
 
 // serviceTier is sent only when the role sets it, so unset roles keep the exact prior params.

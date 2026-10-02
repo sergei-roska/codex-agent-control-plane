@@ -81,6 +81,27 @@ test('dashboard api', async (suite) => {
     return exchange.headers.get('set-cookie').split(';')[0];
   }
 
+  await suite.test('unexpected API errors redact secrets from stderr diagnostics', async () => {
+    const originalHealth = runtime.events.health;
+    const originalWrite = process.stderr.write;
+    const stderr = [];
+    runtime.events.health = () => { throw new Error('api_key=secret-m9-regression'); };
+    process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
+    try {
+      const res = await get('/context', { Cookie: await pair() });
+      assert.equal(res.status, 500);
+      assert.equal((await res.json()).error.message, 'Internal error');
+    } finally {
+      runtime.events.health = originalHealth;
+      process.stderr.write = originalWrite;
+    }
+    const diagnostic = stderr.join('');
+    assert.match(diagnostic, /dashboard api error [a-f0-9]+:/);
+    assert.match(diagnostic, /api_key=\[REDACTED\]/);
+    assert.doesNotMatch(diagnostic, /secret-m9-regression/);
+    assert.match(diagnostic, /Error: api_key=/);
+  });
+
   await suite.test('malformed percent-encoding in the path is a 400', async () => {
     const headers = { Cookie: await pair() };
     for (const p of ['/cards/%E0%A4%A', '/cards/%ZZ/events']) {

@@ -55,6 +55,7 @@ async function initApp() {
     el.addEventListener('click', () => {
       const targetModal = document.getElementById(el.dataset.close);
       if (targetModal) targetModal.classList.remove('open');
+      if (typeof saveDashboardNavigation === 'function') saveDashboardNavigation();
     });
   });
 
@@ -89,6 +90,7 @@ async function initApp() {
   Conn.subscribe(renderConnectionState);
   await exchangePairingCode();
   if (pendingAtlassianOAuthHandle) await completePendingAtlassianOAuth();
+  await restoreDashboardNavigation();
   Poller.start(pollTick);
 }
 

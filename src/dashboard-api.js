@@ -221,9 +221,13 @@ function ticketActions(ticket, ctx) {
   if (status !== 'done') deny('push', statusReason);
   else if (!committed) deny('push', 'There is no succeeded commit to push');
   else if (deliveries.some((entry) => entry.kind === 'push' && entry.state === 'intended')) deny('push', 'A push is in progress');
+  else if (deliveries.some((entry) => entry.kind === 'push' && entry.state === 'succeeded'
+    && commits.some((c) => c.state === 'succeeded' && c.deliveryId === entry.parentDeliveryId))) {
+    deny('push', 'This commit was already pushed');
+  }
   else allow('push');
 
-  if (status !== 'done') deny('release_repository', statusReason);
+  if (!['done', 'backlog'].includes(status)) deny('release_repository', statusReason);
   else if (committed || committing) deny('release_repository', 'The candidate is committed or being committed; nothing to release');
   else if (!holdsLease) deny('release_repository', 'The ticket does not hold the repository');
   else allow('release_repository');
@@ -760,7 +764,7 @@ function createDashboardApi({
       const message = safe && typeof error.message === 'string' && status !== 404 ? error.message.slice(0, 200) : MESSAGE_BY_CODE[error.code] || 'Request failed';
       return sendError(res, status, error.code, message, requestId, error.details);
     }
-    process.stderr.write(`dashboard api error ${requestId}: ${error?.stack || error}\n`);
+    process.stderr.write(`dashboard api error ${requestId}: ${redactDiagnosticMessage(error?.stack || error)}\n`);
     return sendError(res, 500, 'unavailable', 'Internal error', requestId);
   });
 

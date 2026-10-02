@@ -70,6 +70,8 @@
   margin-bottom: 10px;
 }
 
+.board-status.board-status-stale { color: var(--accent-amber); }
+
 .badge-standalone { color: var(--accent-cyan); }
 .badge-accept { color: var(--text-secondary); }
 .badge-accept.accepted { color: var(--accent-green); }

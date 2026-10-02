@@ -97,3 +97,11 @@ test('concurrent gets share one read', async () => {
   await Promise.all([health.get(), health.get({ force: true })]);
   assert.equal(reads, 1);
 });
+
+test('an App Server call that never answers maps to unavailable within the timeout', async () => {
+  const app = makeFakeAppServer({ account: { account: { type: 'chatgpt' } } });
+  app.getAccount = () => new Promise(() => {});
+  const result = await createAccountHealth({ appServer: app, now: clock(), timeoutMs: 20 }).get();
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.account, null);
+});

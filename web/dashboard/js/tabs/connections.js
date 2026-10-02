@@ -4,6 +4,9 @@
 const cm = {
   loaded: false,
   loading: false,
+  accountLoaded: false,
+  catalogLoaded: false,
+  rolesLoaded: false,
   account: null,
   accountError: null,
   accountBusy: false,
@@ -70,21 +73,40 @@ function cmErrorText(err) {
   return parts.join(' - ');
 }
 
+const CM_REQUEST_TIMEOUT_MS = 15000;
+
+// Bounded GET: aborts and rejects after the timeout even if the transport never settles.
+function cmBoundedGet(path) {
+  let timer = null;
+  let controller = null;
+  try { controller = typeof AbortController === 'function' ? new AbortController() : null; } catch (_) { controller = null; }
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      if (controller) { try { controller.abort(); } catch (_) { /* already settled */ } }
+      reject(new Error('Request timed out after ' + (CM_REQUEST_TIMEOUT_MS / 1000) + ' s'));
+    }, CM_REQUEST_TIMEOUT_MS);
+  });
+  const request = controller ? apiGet(path, { signal: controller.signal }) : apiGet(path);
+  return Promise.race([request, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function loadConnections() {
   if (cm.loading) return;
   cm.loading = true;
-  const settle = (p) => p.then(v => ({ v }), e => ({ e }));
-  const [acc, cat, roles] = await Promise.all([
-    settle(apiGet('/account')),
-    settle(apiGet('/models')),
-    settle(apiGet('/settings/roles'))
+  // Each request fills its own section and re-renders when it settles; none waits for the others.
+  const section = (path, apply) => cmBoundedGet(path).then(
+    v => apply(v, null),
+    e => apply(null, cmErrorText(e))
+  ).then(() => { renderConnections(); });
+  const done = Promise.all([
+    section('/account', (v, e) => { cm.account = v; cm.accountError = e; cm.accountLoaded = true; }),
+    section('/models', (v, e) => { cm.catalog = v; cm.catalogError = e; cm.catalogLoaded = true; }),
+    section('/settings/roles', (v, e) => { cm.roles = v; cm.rolesError = e; cm.rolesLoaded = true; })
   ]);
-  cm.loading = false;
-  cm.loaded = true;
-  cm.account = acc.v || null; cm.accountError = acc.e ? cmErrorText(acc.e) : null;
-  cm.catalog = cat.v || null; cm.catalogError = cat.e ? cmErrorText(cat.e) : null;
-  cm.roles = roles.v || null; cm.rolesError = roles.e ? cmErrorText(roles.e) : null;
-  renderConnections();
+  try { await done; } finally {
+    cm.loading = false;
+    cm.loaded = true;
+  }
   loadAtlassian();
 }
 
@@ -476,14 +498,14 @@ function renderAccountCard(grid) {
   }
 
   if (cm.accountError) card.appendChild(h('div', { class: 'tf-field-error', text: 'Account check failed: ' + cm.accountError, attrs: { role: 'alert' } }));
-  else if (!acc && cm.loaded) card.appendChild(h('div', { class: 'detail-empty', text: 'Account status unavailable.' }));
+  else if (!acc && cm.accountLoaded) card.appendChild(h('div', { class: 'detail-empty', text: 'Account status unavailable.' }));
   if (acc && acc.status !== 'connected') {
     const text = CM_SETUP_TEXT[acc.status] || CM_SETUP_TEXT.unavailable;
     card.appendChild(h('p', { class: 'provider-setup', text }));
   }
 
   const refresh = h('button', { class: 'btn btn-secondary', text: cm.accountBusy ? 'Refreshing...' : 'Refresh', attrs: { type: 'button', id: 'btn-refresh-account' } });
-  refresh.disabled = cm.accountBusy || !cm.loaded;
+  refresh.disabled = cm.accountBusy || !cm.accountLoaded;
   refresh.addEventListener('click', refreshAccount);
   card.appendChild(h('div', { class: 'provider-actions' }, [refresh]));
   grid.appendChild(card);
@@ -723,14 +745,22 @@ function renderConnections() {
   cmClear(tbody);
   const span = (text, cls) => h('tr', {}, [h('td', { attrs: { colspan: '6' } }, [h('span', { class: cls || 'detail-empty', text })])]);
   if (cm.rolesError) { tbody.appendChild(span('Role defaults unavailable: ' + cm.rolesError, 'tf-field-error')); return; }
-  if (!cm.roles) { tbody.appendChild(span(cm.loaded ? 'Role defaults unavailable.' : 'Loading role defaults...')); return; }
+  if (!cm.roles) { tbody.appendChild(span(cm.rolesLoaded ? 'Role defaults unavailable.' : 'Loading role defaults...')); return; }
   const rows = Array.isArray(cm.roles.roles) ? cm.roles.roles : [];
   if (!rows.length) { tbody.appendChild(span('No roles in the active pack.')); return; }
   rows.forEach(row => cmRoleRow(row, cs.state === 'ok').forEach(tr => tbody.appendChild(tr)));
 }
 
-// The tab loads its data when opened; the prototype boot path renders the loading state only.
+// The tab loads its data whenever it becomes visible by any route: click, restored navigation or
+// programmatic activation. The pane's class change is the single signal; loadConnections() ignores
+// calls while a load is in flight.
 (function initConnectionsLoad() {
   const tabBtn = document.querySelector('.tab-btn[data-tab="tab-connections"]');
   if (tabBtn) tabBtn.addEventListener('click', () => { loadConnections(); });
+  const pane = document.getElementById('tab-connections');
+  if (pane && typeof MutationObserver === 'function') {
+    new MutationObserver(() => {
+      if (pane.classList.contains('active')) loadConnections();
+    }).observe(pane, { attributes: true, attributeFilter: ['class'] });
+  }
 })();

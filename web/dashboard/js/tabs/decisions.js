@@ -6,6 +6,7 @@ var decisionsView = {
   error: null,
   pending: [],
   responses: [],
+  findingsDrafts: Object.create(null),
   actionErrors: {},
   commandIds: {},
   confirmImpl: function (message) { return window.confirm(message); }
@@ -33,9 +34,52 @@ function applyDecisionsSnapshot(body) {
     decisionsView.error = null;
     decisionsView.pending = Array.isArray(body.pending) ? body.pending : [];
     decisionsView.responses = Array.isArray(body.responses) ? body.responses : [];
+    pruneFindingsDrafts(decisionsView.pending);
   }
   decisionsView.loaded = true;
   renderDecisionsAndEscalations();
+}
+
+function pruneFindingsDrafts(items) {
+  var pendingIds = Object.create(null);
+  (items || []).forEach(function (item) {
+    if (item && item.id !== undefined && item.id !== null) pendingIds[String(item.id)] = true;
+  });
+  Object.keys(decisionsView.findingsDrafts).forEach(function (id) {
+    if (!pendingIds[id]) delete decisionsView.findingsDrafts[id];
+  });
+}
+
+function findFindingsInput(container, itemId) {
+  if (!container || !container.querySelectorAll) return null;
+  var inputs = container.querySelectorAll('textarea.decisions-findings');
+  for (var i = 0; i < inputs.length; i += 1) {
+    if (inputs[i].getAttribute('data-id') === String(itemId)) return inputs[i];
+  }
+  return null;
+}
+
+function captureFindingsFocus() {
+  var active = document.activeElement;
+  if (!active || String(active.tagName || '').toLowerCase() !== 'textarea'
+    || !/(^|\s)decisions-findings(\s|$)/.test(active.className || '')) return null;
+  return {
+    id: active.getAttribute('data-id'),
+    selectionStart: active.selectionStart,
+    selectionEnd: active.selectionEnd,
+    selectionDirection: active.selectionDirection
+  };
+}
+
+function restoreFindingsFocus(container, focusState) {
+  if (!focusState || focusState.id === null) return;
+  var input = findFindingsInput(container, focusState.id);
+  if (!input) return;
+  input.focus();
+  if (typeof input.setSelectionRange === 'function'
+    && Number.isInteger(focusState.selectionStart) && Number.isInteger(focusState.selectionEnd)) {
+    input.setSelectionRange(focusState.selectionStart, focusState.selectionEnd, focusState.selectionDirection || 'none');
+  }
 }
 
 function renderDecisionsList(container, items, emptyText, buildCard) {
@@ -73,6 +117,11 @@ function pendingReviewCard(item) {
     actions.push(h('button', { class: 'btn btn-secondary btn-sm', text: 'Request corrections', attrs: { type: 'button', 'data-action': 'corrections', 'data-id': item.id } }));
   }
   var findingsInput = h('textarea', { class: 'decisions-findings', attrs: { rows: '3', placeholder: 'Findings (required for corrections)', 'data-id': item.id } });
+  findingsInput.value = Object.prototype.hasOwnProperty.call(decisionsView.findingsDrafts, String(item.id))
+    ? decisionsView.findingsDrafts[String(item.id)] : '';
+  findingsInput.addEventListener('input', function () {
+    decisionsView.findingsDrafts[String(item.id)] = findingsInput.value;
+  });
   var children = [
     h('div', { class: 'decisions-card-title', text: item.ticketTitle || 'unavailable' }),
     h('div', { class: 'decisions-card-meta', text: reviewMetaLines(item).join(' | ') })
@@ -232,6 +281,7 @@ async function submitRunDecision(item, payload) {
 }
 
 function renderDecisionsAndEscalations() {
+  var focusState = captureFindingsFocus();
   var adrList = document.getElementById('adr-list');
   var adrCount = document.getElementById('adr-count');
   var escList = document.getElementById('escalation-list');
@@ -240,6 +290,7 @@ function renderDecisionsAndEscalations() {
   renderDecisionsList(adrList, decisionsView.responses, 'No answered decisions or reviews.', responseCard);
   if (escCount) escCount.textContent = decisionsView.available ? (decisionsView.pending.length + ' pending') : 'unavailable';
   renderDecisionsList(escList, decisionsView.pending, 'No pending actions.', pendingReviewCard);
+  restoreFindingsFocus(escList, focusState);
 }
 
 function decisionsCommandIdKey(item, verdict) {
@@ -275,8 +326,9 @@ async function handleDecisionsAction(action, itemId) {
     if (action === 'accept') {
       if (!decisionsView.confirmImpl('Accept this candidate for ticket ' + item.ticketId + '?')) return;
       await submitReviewDecision(item, 'accept', null);
+      delete decisionsView.findingsDrafts[String(itemId)];
     } else if (action === 'corrections') {
-      var area = document.querySelector('.decisions-findings[data-id="' + itemId + '"]');
+      var area = findFindingsInput(document.getElementById('escalation-list'), itemId);
       var findings = area && area.value ? String(area.value).trim() : '';
       if (!findings) {
         decisionsView.actionErrors[itemId] = 'Findings are required for corrections.';
@@ -284,8 +336,10 @@ async function handleDecisionsAction(action, itemId) {
         return;
       }
       await submitReviewDecision(item, 'corrections', findings);
+      delete decisionsView.findingsDrafts[String(itemId)];
     }
     delete decisionsView.actionErrors[itemId];
+    renderDecisionsAndEscalations();
     if (typeof Poller !== 'undefined' && Poller && typeof Poller.trigger === 'function') await Poller.trigger();
   } catch (err) {
     decisionsView.actionErrors[itemId] = (err && err.message) || 'Review request failed';
