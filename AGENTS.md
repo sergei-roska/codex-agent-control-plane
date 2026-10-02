@@ -30,3 +30,12 @@ The lead owns planning, documentation, integration, and verification.
 
 Follow `docs/beta-master-plan.md` and its linked decision records. Keep the
 Battle Pass prototype unchanged and outside beta implementation scope.
+
+## Session continuity
+
+While a milestone is open, start every session by reading its handoff,
+currently `docs/m9/session-handoff.md`: owner decisions in force, evidence,
+pilot state, next steps, and deferred follow-ups. Verify the state it names
+before acting. Update the handoff at each checkpoint and commit verified work
+promptly on the feature branch; push, merge, tag, and publication need the
+owner's separate instruction.
