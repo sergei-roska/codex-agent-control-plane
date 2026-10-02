@@ -44,7 +44,9 @@ test('creates workspace-write and read-only profiles with explicit restrictive r
   assert.equal(writeFs[path.join(workspace, 'runtime')], 'deny');
   assert.equal(writeFs[path.join(workspace, 'data')], 'deny');
   assert.equal(writeFs[path.join(workspace, '.codex')], 'read');
-  assert.equal(readFs[path.join(workspace, '.codex')], 'deny');
+  assert.equal(readFs[path.join(workspace, '.codex')], 'read');
+  assert.equal(readFs[path.join(workspace, '.codex/auth.json*')], 'deny');
+  assert.equal(readFs[path.join(workspace, '.codex/sessions/**')], 'deny');
   assert.equal(writeFs[path.join(workspace, '.codex/AGENTS.md')], 'read');
   assert.equal(writeFs[path.join(workspace, '.codex/instructions.md')], 'read');
   assert.equal(writeFs[path.join(workspace, '.codex/TEAM.md')], 'read');
@@ -146,6 +148,18 @@ test('rejects unsupported role sandbox modes', () => {
       () => createPermissionProfile({ role: { name: 'worker', sandbox }, cwd: '/workspace/project', codexPath: process.execPath }),
       /Unsupported role sandbox/,
     );
+  }
+});
+
+test('both sandbox modes read .codex with auth and sessions glob denies', (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-profile-codex-dir-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  for (const sandbox of ['read-only', 'workspace-write']) {
+    const profile = createPermissionProfile({ role: { name: 'r', sandbox }, cwd: workspace, codexPath: process.execPath });
+    const entries = profile.config[`permissions.${profile.id}.filesystem`];
+    assert.equal(entries[path.join(workspace, '.codex')], 'read', sandbox);
+    assert.equal(entries[path.join(workspace, '.codex', 'auth.json*')], 'deny', sandbox);
+    assert.equal(entries[path.join(workspace, '.codex', 'sessions', '**')], 'deny', sandbox);
   }
 });
 
@@ -363,7 +377,7 @@ test('a bare repository workspace gets real empty protected directories and a cl
   assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' }), '');
 });
 
-test('writer profiles read-protect .codex, .agents and .claude; read-only profiles deny .codex', (t) => {
+test('writer profiles read-protect .codex, .agents and .claude; read-only profiles read .codex', (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-profile-perms-'));
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   const common = { cwd: workspace, codexPath: process.execPath };
@@ -371,7 +385,7 @@ test('writer profiles read-protect .codex, .agents and .claude; read-only profil
   const writeEntries = write.config[`permissions.${write.id}.filesystem`];
   for (const name of ['.codex', '.agents', '.claude']) assert.equal(writeEntries[path.join(workspace, name)], 'read', name);
   const read = createPermissionProfile({ ...common, role: { name: 'lead', sandbox: 'read-only' } });
-  assert.equal(read.config[`permissions.${read.id}.filesystem`][path.join(workspace, '.codex')], 'deny');
+  assert.equal(read.config[`permissions.${read.id}.filesystem`][path.join(workspace, '.codex')], 'read');
 });
 
 test('a non-directory protected path fails closed and nothing else is created', (t) => {

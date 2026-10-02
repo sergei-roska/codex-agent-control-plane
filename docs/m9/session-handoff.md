@@ -48,12 +48,30 @@ is in the working tree of `feature/dashboard-integration` on top of `7f1906f`.
 4. Schema hints for decision/report cross-field rules; App Server account timeout;
    Connections tab load/clip; stale actions while disconnected; Board stale label;
    mobile header (low). Fixed.
-5. In progress at handoff: acceptance gate rejects rework because a role's
-   self-reported `filesChanged` outside scope is blocking even when the attested
-   delta is empty. Decision: when the writer delta is known, reported-only items
-   become non-blocking `reported_scope_mismatch` warnings shown in review;
-   attested violations and unknown deltas stay blocking. Also checking why the
-   settings snapshot has `appServerVersion: null`.
+5. Acceptance gate rejected rework because a role's self-reported `filesChanged`
+   outside scope blocked even when the attested delta was empty. Fixed: with a
+   known writer delta, reported-only items are non-blocking
+   `reported_scope_mismatch` warnings shown in review, also in `isStageSuccess`;
+   attested violations and unknown deltas stay blocking. Settings snapshots now
+   read `appServer.appServerVersion` (still null before the App Server initializes;
+   `src/server.js` passes a nonexistent `appServer.version`, harmless cleanup item).
+
+Checkpoint commit: `77da677` (full suite 956/956, fake role cases 10/10,
+reference unchanged). The pilot resumed on that commit.
+
+6. On `77da677` the resubmit run `run_0n7ucWh9uMKGuiAqkECk5w` reached review in
+   about 8 minutes, accepted, confined diff, settings snapshot with gpt-6-luna for
+   all roles and the App Server version; usage 2.65M tokens, 75% cached share.
+   Its rework run `run_uXRuaXCgW4jyfR6CjQ2eMw` (JSDoc correction) is `interrupted`:
+   (a) the read-only reviewer was denied `.codex` and Git called it unreadable;
+   (b) after the operator answered, the lead resolved an already closed decision
+   and validateDecision threw "Resolution references a decision that is not open",
+   which interrupts the run and repeats on Resume. In progress at this point:
+   read-only roles get `.codex: read` with the auth/sessions glob denies; resolutions
+   for already closed decisions are ignored; other invalid lead decisions are
+   discarded with the error fed back, ending the run after two in a row.
+   Plan after the fix: commit, restart the server, and press Resume on the
+   interrupted rework run (cheaper than a new resubmit, about 2.6M tokens per run).
 
 ## Pilot state at handoff
 

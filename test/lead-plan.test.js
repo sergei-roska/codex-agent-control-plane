@@ -188,8 +188,10 @@ test('repair role is accepted for an attempted builder stage and rejected for a 
 });
 
 test('a repair role before any builder attempt is refused by the decision contract', async () => {
-  const h = harness({ leadScript: [dispatch(step('explore', 'orch-explorer')), dispatch(step('build', 'orch-repair-xhigh'))] });
-  await assert.rejects(() => h.orchestrator.run({ goal: 'Planned', plan: PLAN }), /only be dispatched after an orch-builder attempt/);
+  const h = harness({ leadScript: [dispatch(step('explore', 'orch-explorer')), dispatch(step('build', 'orch-repair-xhigh')), dispatch(step('build', 'orch-repair-xhigh'))] });
+  const result = await h.orchestrator.run({ goal: 'Planned', plan: PLAN });
+  assert.equal(result.status, 'plan_violation');
+  assert.match(result.text, /only be dispatched after an orch-builder attempt/);
 });
 
 test('a failed stage keeps its dependents ineligible', async () => {

@@ -154,20 +154,27 @@ test('dispatches an authenticated A2A assignment and finishes on the same read-o
 test('rejects unknown roles and traversal paths before contacting A2A', async (t) => {
   for (const assignment of [brief('orch-missing'), brief('orch-builder', ['../secret.txt']), brief('orch-builder', ['/etc/passwd'])]) {
     await t.test(assignment.role + ':' + assignment.allowedFiles[0], async () => {
-      const h = makeHarness({ decisions: [decision('dispatch', [assignment])] });
-      await assert.rejects(h.orchestrator.run({ goal: 'Implement feature' }), /Unknown role|Unsafe allowedFiles path/);
+      const h = makeHarness({ decisions: [decision('dispatch', [assignment]), decision('dispatch', [assignment])] });
+      const result = await h.orchestrator.run({ goal: 'Implement feature' });
+      assert.equal(result.status, 'plan_violation');
+      assert.match(result.text, /Unknown role|Unsafe allowedFiles path/);
       assert.equal(h.calls.some((call) => call.type === 'send'), false);
     });
   }
 });
 
 test('enforces repair escalation order', async () => {
-  const h = makeHarness({ decisions: [decision('dispatch', [brief('orch-repair-xhigh')])] });
-  await assert.rejects(h.orchestrator.run({ goal: 'Repair defect' }), /only be dispatched after an orch-builder attempt/);
+  const h = makeHarness({ decisions: [decision('dispatch', [brief('orch-repair-xhigh')]), decision('dispatch', [brief('orch-repair-xhigh')])] });
+  const early = await h.orchestrator.run({ goal: 'Repair defect' });
+  assert.equal(early.status, 'plan_violation');
+  assert.match(early.text, /only be dispatched after an orch-builder attempt/);
   assert.equal(h.calls.some((call) => call.type === 'send'), false);
 
-  const sameBatch = makeHarness({ decisions: [decision('dispatch', [brief('orch-builder'), brief('orch-repair-xhigh')])] });
-  await assert.rejects(sameBatch.orchestrator.run({ goal: 'Repair defect' }), /only be dispatched after an orch-builder attempt/);
+  const mixed = decision('dispatch', [brief('orch-builder'), brief('orch-repair-xhigh')]);
+  const sameBatch = makeHarness({ decisions: [mixed, mixed] });
+  const sameResult = await sameBatch.orchestrator.run({ goal: 'Repair defect' });
+  assert.equal(sameResult.status, 'plan_violation');
+  assert.match(sameResult.text, /only be dispatched after an orch-builder attempt/);
   assert.equal(sameBatch.calls.some((call) => call.type === 'send'), false);
 
   const sequential = makeHarness({ decisions: [
@@ -182,14 +189,19 @@ test('enforces repair escalation order', async () => {
 });
 
 test('requires prior evidence and one narrow decision for the architect', async (t) => {
-  const noEvidence = makeHarness({ decisions: [decision('dispatch', [brief('orch-architect')])] });
-  await assert.rejects(noEvidence.orchestrator.run({ goal: 'Review design' }), /requires inspected prior evidence/);
+  const noEvidence = makeHarness({ decisions: [decision('dispatch', [brief('orch-architect')]), decision('dispatch', [brief('orch-architect')])] });
+  const noEvidenceResult = await noEvidence.orchestrator.run({ goal: 'Review design' });
+  assert.equal(noEvidenceResult.status, 'plan_violation');
+  assert.match(noEvidenceResult.text, /requires inspected prior evidence/);
 
   const h = makeHarness({ decisions: [
     decision('dispatch', [brief('orch-explorer')]),
     decision('dispatch', [brief('orch-architect'), brief('orch-explorer')]),
+    decision('dispatch', [brief('orch-architect'), brief('orch-explorer')]),
   ] });
-  await assert.rejects(h.orchestrator.run({ goal: 'Review design' }), /one narrowly framed decision/);
+  const narrow = await h.orchestrator.run({ goal: 'Review design' });
+  assert.equal(narrow.status, 'plan_violation');
+  assert.match(narrow.text, /one narrowly framed decision/);
   assert.equal(h.calls.filter((call) => call.type === 'send').length, 1);
 });
 

@@ -285,15 +285,13 @@ function createPermissionProfile({ role, cwd, codexPath, env } = {}) {
     fsEntries[npmInstall.executable] = 'read';
   }
   addStablePath(fsEntries, workspace, path.join(workspace, '.git'), 'read', null);
-  fsEntries[path.join(workspace, '.codex')] = canWrite ? 'read' : 'deny';
+  fsEntries[path.join(workspace, '.codex')] = 'read';
   fsEntries[path.join(workspace, '.agents')] = 'read';
   fsEntries[path.join(workspace, '.claude')] = 'read';
-  if (canWrite) {
-    assertSafeOptionalPath(workspace, path.join(workspace, '.codex', 'auth.json'));
-    assertSafeOptionalPath(workspace, path.join(workspace, '.codex', 'sessions'));
-    fsEntries[path.join(workspace, '.codex', 'auth.json*')] = 'deny';
-    fsEntries[path.join(workspace, '.codex', 'sessions', '**')] = 'deny';
-  }
+  assertSafeOptionalPath(workspace, path.join(workspace, '.codex', 'auth.json'));
+  assertSafeOptionalPath(workspace, path.join(workspace, '.codex', 'sessions'));
+  fsEntries[path.join(workspace, '.codex', 'auth.json*')] = 'deny';
+  fsEntries[path.join(workspace, '.codex', 'sessions', '**')] = 'deny';
   const teamPath = trustedTeamRulesPath(role.instructions);
   if (teamPath) {
     const resolvedTeamPath = path.resolve(teamPath);

@@ -326,6 +326,7 @@ const LeadState = Annotation.Root({
   settings: last(() => null),
   stageStatuses: last(() => ({})),
   planViolations: last(() => 0),
+  decisionViolations: last(() => 0),
   planRetry: last(() => false),
   acceptanceAttempts: last(() => 0),
   acceptance: last(() => null),
@@ -535,15 +536,45 @@ function buildLeadGraph(deps) {
     recordLeadTurn(state, leadResult, leadResult.status || 'completed');
 
     const roundLimit = planRoundLimit(state.plan, maxRounds);
-    const decision = parseDecision(leadResult.text);
-    validateDecision(decision, {
-      roles,
-      attemptedRoles: new Set(state.attemptedRoles),
-      outcomeCount: state.outcomes.length,
-      unresolvedWriterCount: state.unresolvedWriters.length,
-      openDecisionIds: new Set(state.openDecisions.map((entry) => entry.id)),
-      repairChains,
-    });
+    let decision;
+    try {
+      decision = parseDecision(leadResult.text);
+      // A closed decision (answered by the human or resolved earlier) must not be resolved again; the earlier closure stays authoritative.
+      if (Array.isArray(decision.resolutions)) {
+        const closedIds = new Set(state.closedDecisions.map((entry) => entry.id));
+        const ignored = decision.resolutions.filter((entry) => closedIds.has(entry?.decisionId)).map((entry) => entry.decisionId);
+        if (ignored.length > 0) {
+          decision.resolutions = decision.resolutions.filter((entry) => !closedIds.has(entry?.decisionId));
+          deps.emit(runtime.onEvent, { type: 'resolution_ignored', round: state.round + 1, decisionIds: ignored });
+          runtime.pendingNotes = [...(runtime.pendingNotes || []), ...ignored.map((id) => `Ignored resolution for already closed decision ${id}.`)];
+        }
+      }
+      validateDecision(decision, {
+        roles,
+        attemptedRoles: new Set(state.attemptedRoles),
+        outcomeCount: state.outcomes.length,
+        unresolvedWriterCount: state.unresolvedWriters.length,
+        openDecisionIds: new Set(state.openDecisions.map((entry) => entry.id)),
+        repairChains,
+      });
+    } catch (error) {
+      // The decision is discarded; resolutions in it are not applied. The lead gets the exact error and tries again.
+      const count = state.decisionViolations + 1;
+      const round = state.round + 1;
+      deps.emit(runtime.onEvent, { type: 'decision_rejected', round, error: error.message });
+      const base = { round, decisionViolations: count };
+      if (count >= PLAN_VIOLATION_LIMIT) {
+        return {
+          ...update,
+          ...base,
+          status: 'plan_violation',
+          text: `The lead returned ${count} consecutive invalid decisions: ${error.message}`,
+        };
+      }
+      runtime.pendingNotes = [...(runtime.pendingNotes || []), `Your previous decision was rejected: ${error.message}. It was discarded and counts as a round. Resolve only the open decisions listed; resolutions for closed decisions are ignored. Return a decision that follows the schema rules.`];
+      return { ...update, ...base, planRetry: true };
+    }
+    update.decisionViolations = 0;
     deps.emit(runtime.onEvent, { type: 'decision', round: state.round + 1, action: decision.action });
 
     if (state.plan && (decision.action === 'finish' || decision.action === 'dispatch')) {

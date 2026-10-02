@@ -456,9 +456,11 @@ test('worker needs_decision must be resolved by the lead', async () => {
   });
   const attempt = attemptId(assignmentId(RUN_ID, 1, 0));
 
-  const unresolved = makeWorld({ script: [dispatch(brief('orch-explorer', [])), finish('Ignored it')], workerFinal });
+  const unresolved = makeWorld({ script: [dispatch(brief('orch-explorer', [])), finish('Ignored it'), finish('Ignored it')], workerFinal });
   await withSession(unresolved, async (session) => {
-    await assert.rejects(session.orchestrator.run({ goal: 'Explore', runId: RUN_ID }), /must be resolved/);
+    const rejected = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
+    assert.equal(rejected.status, 'plan_violation');
+    assert.match(rejected.text, /must be resolved/);
     assert.match(unresolved.prompts[1], new RegExp(attempt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(unresolved.prompts[1], /Keep the API\?/);
   });
@@ -491,6 +493,55 @@ test('a human answer closes the related worker decisions', async () => {
     assert.match(world.prompts[1], /Keep the API\?/);
     assert.match(world.prompts[2], /Keep it/);
     assert.match(world.prompts[2], /Open worker decisions[^\n]*\n\[\]/);
+  });
+});
+
+test('a resolution for a decision the human already closed is ignored', async () => {
+  const workerFinal = () => ({
+    state: TaskState.TASK_STATE_COMPLETED,
+    artifacts: [{ name: 'report', parts: textParts(needsDecisionReport()) }],
+  });
+  const attempt = attemptId(assignmentId(RUN_ID, 1, 0));
+  const stale = [{ decisionId: attempt, choice: 'keep', rationale: 'Already answered' }];
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), humanRequest([attempt]), finish('Done', stale)], workerFinal });
+  await withSession(world, async (session) => {
+    const events = [];
+    const paused = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID, onEvent: (event) => events.push(event) });
+    assert.equal(paused.status, 'input_required');
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Keep it', choice: 'a', decisionId: `${RUN_ID}:h1` }, onEvent: (event) => events.push(event) });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 3);
+    assert.deepEqual(events.filter((event) => event.type === 'resolution_ignored').map((event) => event.decisionIds), [[attempt]]);
+    assert.equal(events.some((event) => event.type === 'decision_rejected'), false);
+  });
+});
+
+test('an invalid lead decision is discarded with an error note and the run continues', async () => {
+  const bad = decision({ action: 'request_human_input', final: 'oops' });
+  const world = makeWorld({ script: [bad, finish('Fixed')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Work', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 2);
+    assert.match(world.prompts[1], /Your previous decision was rejected: .*must leave final empty/);
+  });
+});
+
+test('two consecutive invalid lead decisions end the run as plan_violation and a valid one resets the counter', async () => {
+  const bad = () => decision({ action: 'request_human_input', final: 'oops' });
+  const ended = makeWorld({ script: [bad(), bad(), finish('never')] });
+  await withSession(ended, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Work', runId: RUN_ID });
+    assert.equal(result.status, 'plan_violation');
+    assert.equal(ended.leadTurns, 2);
+    assert.match(result.text, /2 consecutive invalid decisions/);
+  });
+
+  const reset = makeWorld({ script: [bad(), dispatch(brief('orch-explorer', [])), bad(), finish('ok')] });
+  await withSession(reset, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Work', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(reset.leadTurns, 4);
   });
 });
 
