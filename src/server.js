@@ -143,11 +143,62 @@ function firstUserMetadata(task) {
   return {};
 }
 
+const TERMINAL_STATES = new Set([
+  TaskState.TASK_STATE_COMPLETED,
+  TaskState.TASK_STATE_FAILED,
+  TaskState.TASK_STATE_CANCELED,
+  TaskState.TASK_STATE_REJECTED,
+]);
+const MAX_EARLIER_CONTEXT_CHARS = 24000;
+const TRUNCATION_PREFIX = '[earlier context truncated]\n';
+
+function partsText(parts) {
+  return (parts || [])
+    .map((part) => (part?.content?.$case === 'text' ? part.content.value : typeof part?.text === 'string' ? part.text : ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function priorResultText(refTask) {
+  const artifacts = refTask?.artifacts || [];
+  const fromArtifact = partsText(artifacts[artifacts.length - 1]?.parts);
+  return fromArtifact || partsText(refTask?.status?.message?.parts) || '(no result text)';
+}
+
+/** Goal for a new run that continues a finished task; priorGoal falls back to the referenced task's first user message. */
+function composeFollowUpGoal({ refTask, priorGoal, newRequest }) {
+  const artifacts = refTask.artifacts || [];
+  const disposition = artifacts[artifacts.length - 1]?.metadata?.acceptance?.disposition || 'n/a';
+  let earlier = `Earlier goal:\n${priorGoal || firstUserGoal(refTask)}\nEarlier result:\n${priorResultText(refTask)}`;
+  if (earlier.length > MAX_EARLIER_CONTEXT_CHARS) {
+    earlier = TRUNCATION_PREFIX + earlier.slice(earlier.length - (MAX_EARLIER_CONTEXT_CHARS - TRUNCATION_PREFIX.length));
+  }
+  return [
+    'This is a follow-up to an earlier orchestrator task in the same conversation.',
+    `Earlier task ${refTask.id} ended as ${TaskState[refTask.status?.state] || 'UNKNOWN'} (acceptance: ${disposition}).`,
+    earlier,
+    'New request (authoritative; the earlier context is background only):',
+    newRequest,
+  ].join('\n');
+}
+
+/** Reference task ids of the first non-empty user message in a task history, or []. */
+function firstUserReferenceIds(task) {
+  for (const message of task?.history || []) {
+    if (message?.role !== 1) continue;
+    try {
+      if (extractGoal(message, { allowEmpty: true })) return Array.isArray(message.referenceTaskIds) ? message.referenceTaskIds : [];
+    } catch (_) { /* skip messages without usable text */ }
+  }
+  return [];
+}
+
 function isResumeInputError(error) {
   return error instanceof ResumeInputError;
 }
 
-function makeLeadExecutor({ orchestrator }) {
+function makeLeadExecutor({ orchestrator, loadTask }) {
   const controllers = new Map();
   const reservations = new Set();
   const inflight = new Set();
@@ -220,6 +271,28 @@ function makeLeadExecutor({ orchestrator }) {
         }
       }
 
+      const referenceIds = !resuming ? requestContext.userMessage?.referenceTaskIds || [] : [];
+      if (referenceIds.length > 0) {
+        const refId = referenceIds[0];
+        const refTask = referenceIds.length === 1 ? (requestContext.referenceTasks || []).find((candidate) => candidate?.id === refId) : undefined;
+        const problem = referenceIds.length > 1 ? 'Only one reference task is supported.'
+          : !refTask ? `Reference task ${refId} was not found.`
+          : !TERMINAL_STATES.has(refTask.status?.state) ? `Reference task ${refId} is still active; answer or cancel it instead of continuing it.`
+          : null;
+        if (problem) {
+          eventBus.publish(AgentEvent.statusUpdate({
+            taskId,
+            contextId,
+            status: status(TaskState.TASK_STATE_FAILED, agentMessage(taskId, contextId, 'reference-error', problem)),
+            metadata: {},
+          }));
+          return;
+        }
+        let priorGoal = null;
+        try { priorGoal = (await orchestrator.getRunGoal?.(refId)) || null; } catch (_) { priorGoal = null; }
+        goal = composeFollowUpGoal({ refTask, priorGoal, newRequest: goal });
+      }
+
       let resumeInput;
       if (resuming) {
         const messageMeta = requestContext.userMessage?.metadata || {};
@@ -251,7 +324,16 @@ function makeLeadExecutor({ orchestrator }) {
         } catch (error) {
           if (error?.name !== 'RunNotFoundError' || pauseKind !== 'restart') throw error;
           // Crash before the first checkpoint: start over from the original goal.
-          const original = firstUserGoal(task);
+          let original = firstUserGoal(task);
+          const originalRefIds = original ? firstUserReferenceIds(task) : [];
+          if (originalRefIds.length > 0) {
+            const refId = originalRefIds[0];
+            const refTask = originalRefIds.length === 1 ? await loadTask?.(refId) : undefined;
+            if (!refTask) throw new Error(`Reference task ${refId} could not be loaded to recover the original goal.`);
+            let priorGoal = null;
+            try { priorGoal = (await orchestrator.getRunGoal?.(refId)) || null; } catch (_) { priorGoal = null; }
+            original = composeFollowUpGoal({ refTask, priorGoal, newRequest: original });
+          }
           if (!original) throw new Error('The run has no checkpoint and the original goal could not be recovered from the task history.');
           let originalContract;
           try { originalContract = validateAcceptanceContract(firstUserMetadata(task).acceptance); } catch (_) { originalContract = undefined; }
@@ -407,7 +489,7 @@ function rejectOverlappingLeadTask(executor) {
 function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore() }) {
   const endpoint = new URL('/orchestrator', `${baseUrl}/`).toString();
   const card = makeLeadCard({ leadRole, endpoint });
-  const executor = makeLeadExecutor({ orchestrator });
+  const executor = makeLeadExecutor({ orchestrator, loadTask: (id) => taskStore.load(id, {}) });
   const requestHandler = new DefaultRequestHandler(card, taskStore, executor);
   app.use('/orchestrator/agent-card.json', agentCardHandler({ agentCardProvider: async () => AgentCard.toJSON(card) }));
   app.use('/orchestrator', authMiddleware, express.json(), rejectOverlappingLeadTask(executor), jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));

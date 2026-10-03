@@ -159,6 +159,13 @@ class LeadOrchestrator {
     return LeadOrchestrator._pendingInterrupt(await this._snapshot(runId));
   }
 
+  /** The goal pinned in the run's checkpointed state, or null when there is no checkpoint. */
+  async getRunGoal(runId) {
+    if (!isNonEmptyString(runId)) return null;
+    const goal = (await this._snapshot(runId)).values?.goal;
+    return isNonEmptyString(goal) ? goal : null;
+  }
+
   /** True when a checkpoint exists and the graph still has nodes to run (e.g. after a crashed step). */
   async isResumable(runId) {
     if (!isNonEmptyString(runId)) return false;

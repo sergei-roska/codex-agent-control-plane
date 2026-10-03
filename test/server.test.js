@@ -933,3 +933,98 @@ test('a restart fallback that starts over recovers the contract from the first u
   assert.equal(runs[0].goal, 'original goal');
   assert.equal(runs[0].contract.requiredChecks[0].id, 'unit');
 });
+
+function textMessage(text, extra = {}) {
+  return { messageId: 'm-new', role: 1, parts: [{ content: { $case: 'text', value: text } }], ...extra };
+}
+
+function refTask(overrides = {}) {
+  return {
+    id: 'old-1',
+    contextId: 'ctx',
+    status: { state: TaskState.TASK_STATE_COMPLETED },
+    artifacts: [{ artifactId: 'a', parts: [{ content: { $case: 'text', value: 'Old result' } }], metadata: { acceptance: { disposition: 'accepted' } } }],
+    history: [textMessage('History goal')],
+    ...overrides,
+  };
+}
+
+async function runFollowUp({ orchestrator, referenceTaskIds = ['old-1'], referenceTasks, message = 'Now do more' }) {
+  const seen = [];
+  await makeLeadExecutor({ orchestrator }).execute({
+    taskId: 'new-1',
+    contextId: 'ctx',
+    userMessage: textMessage(message, { referenceTaskIds }),
+    referenceTasks,
+  }, { publish: (event) => seen.push(event) });
+  return seen;
+}
+
+test('a follow-up run composes the goal from the referenced task and prefers the checkpoint goal', async () => {
+  const runs = [];
+  const orchestrator = {
+    async getRunGoal(id) { return id === 'old-1' ? 'Checkpoint goal' : null; },
+    async run(args) { runs.push(args); return { status: 'completed', text: 'ok' }; },
+  };
+  await runFollowUp({ orchestrator, referenceTasks: [refTask()] });
+  const goal = runs[0].goal;
+  assert.match(goal, /Earlier task old-1 ended as TASK_STATE_COMPLETED \(acceptance: accepted\)/);
+  assert.match(goal, /Earlier goal:\nCheckpoint goal\nEarlier result:\nOld result\n/);
+  assert.doesNotMatch(goal, /History goal/);
+  assert.match(goal, /New request \(authoritative; the earlier context is background only\):\nNow do more$/);
+
+  runs.length = 0;
+  await runFollowUp({ orchestrator: { async getRunGoal() { return null; }, async run(args) { runs.push(args); return { status: 'completed', text: 'ok' }; } }, referenceTasks: [refTask()] });
+  assert.match(runs[0].goal, /Earlier goal:\nHistory goal\n/);
+});
+
+test('a follow-up truncates the oldest earlier context and never the new request', async () => {
+  const runs = [];
+  const orchestrator = { async getRunGoal() { return `HEAD-${'g'.repeat(30000)}`; }, async run(args) { runs.push(args); return { status: 'completed', text: 'ok' }; } };
+  const task = refTask({ artifacts: [{ artifactId: 'a', parts: [{ content: { $case: 'text', value: 'TAIL-result' } }] }] });
+  await runFollowUp({ orchestrator, referenceTasks: [task], message: 'N'.repeat(100) });
+  const goal = runs[0].goal;
+  assert.match(goal, /\[earlier context truncated\]\n/);
+  assert.doesNotMatch(goal, /HEAD-/);
+  assert.match(goal, /TAIL-result\nNew request/);
+  assert.match(goal, /acceptance: n\/a/);
+  assert.ok(goal.endsWith('N'.repeat(100)));
+});
+
+test('a follow-up fails for several, missing, or still-active references', async () => {
+  const orchestrator = { async run() { throw new Error('must not run'); } };
+  const cases = [
+    [{ referenceTaskIds: ['a', 'b'], referenceTasks: [] }, /Only one reference task is supported\./],
+    [{ referenceTasks: [] }, /Reference task old-1 was not found\./],
+    [{ referenceTasks: [refTask({ status: { state: TaskState.TASK_STATE_WORKING } })] }, /Reference task old-1 is still active; answer or cancel it instead of continuing it\./],
+    [{ referenceTasks: [refTask({ status: { state: TaskState.TASK_STATE_INPUT_REQUIRED } })] }, /still active/],
+  ];
+  for (const [args, pattern] of cases) {
+    const seen = await runFollowUp({ orchestrator, ...args });
+    const failed = lastStatus(seen);
+    assert.equal(failed.status.state, TaskState.TASK_STATE_FAILED);
+    assert.match(statusText({ status: failed.status }), pattern);
+  }
+});
+
+test('a restart pause recomposes the follow-up goal through the task loader', async () => {
+  const runs = [];
+  const orchestrator = {
+    async getPause() { return null; },
+    async getRunGoal() { return 'Checkpoint goal'; },
+    async resume() { throw Object.assign(new Error('No checkpoint'), { name: 'RunNotFoundError' }); },
+    async run(args) { runs.push(args); return { status: 'completed', text: 'fresh' }; },
+  };
+  const history = [textMessage('Now do more', { referenceTaskIds: ['old-1'] })];
+  const loaded = [];
+  const loadTask = async (id) => { loaded.push(id); return refTask(); };
+  const seen = [];
+  await makeLeadExecutor({ orchestrator, loadTask }).execute(
+    pausedContext('t-crash', { kind: 'restart' }, { parts: [{ text: '' }] }, { history }),
+    { publish: (event) => seen.push(event) },
+  );
+  assert.deepEqual(loaded, ['old-1']);
+  assert.match(runs[0].goal, /Earlier goal:\nCheckpoint goal\nEarlier result:\nOld result\n/);
+  assert.match(runs[0].goal, /Now do more$/);
+  assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
+});

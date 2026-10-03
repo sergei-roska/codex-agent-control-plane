@@ -362,7 +362,7 @@ function buildLeadGraph(deps) {
     if (state.humanAnswers.length > 0) sections.push('Human answers (authoritative):\n' + JSON.stringify(state.humanAnswers));
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(state.outcomes));
     sections.push([
-      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, and stopConditions. Writable roles require one or more explicit safe relative allowedFiles. Keep each brief bounded.',
+      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, and stopConditions. Writable roles require one or more explicit safe relative allowedFiles. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
       'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, and humanInput. Use empty arrays, an empty string, or null for unused fields.',
       'Worker decision requests: resolve them yourself (resolutions: decisionId, choice, rationale) whenever the evidence supports a choice. Worker reports are self-reported; check scopeViolations and reportError.',
       'Use request_human_input only for missing_authority, irreversible_or_external, or product_choice, and only after investigating: give options, a recommendation, the evidence checked, and the independent work that can proceed.',
@@ -453,6 +453,18 @@ function buildLeadGraph(deps) {
     recordLeadTurn(state, leadResult, leadResult.status || 'completed');
 
     const decision = parseDecision(leadResult.text);
+    if (Array.isArray(decision.assignments)) {
+      for (const assignment of decision.assignments) {
+        for (const field of ['allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions']) {
+          if (Array.isArray(assignment[field]) && assignment[field].length > 20) {
+            assignment[field] = assignment[field].slice(0, 20);
+          }
+        }
+        if (Array.isArray(assignment.allowedFiles)) {
+          assignment.allowedFiles = assignment.allowedFiles.map((file) => (typeof file === 'string' && file.length > 1 ? file.replace(/\/+$/, '') : file));
+        }
+      }
+    }
     validateDecision(decision, {
       roles,
       attemptedRoles: new Set(state.attemptedRoles),
