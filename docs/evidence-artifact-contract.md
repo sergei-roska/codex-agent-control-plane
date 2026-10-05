@@ -130,7 +130,10 @@ store.put({ runId, attemptId?, taskId?, checkId?, kind, mediaType, content, summ
 `content` is a Buffer or string, or a precomputed capture
 `{ head: Buffer, tail: Buffer, originalBytes, originalSha256 }` from a streaming
 producer such as `runCheck`. `put` validates every field, writes in one
-transaction, and returns the ref.
+transaction, and returns the ref. `put` is idempotent: when a row in state
+`stored` or `not_stored` already has the same `runId`, `attemptId`, `taskId`,
+`checkId`, `kind`, and `originalSha256`, it returns that row's ref and writes
+nothing, so a graph replay never duplicates evidence or consumes quota twice.
 
 Consumer:
 
@@ -188,6 +191,12 @@ exits 1 with the error code on failure.
    are kept as full projections; older ones that do not fit become digests:
    `{ assignmentId, attemptId, role, status, outcome, summary (300 chars),
    diagnostics (rule 5), evidence ids }`. A digest says `"digest": true`.
+   When even digests do not fit, the oldest outcomes become elision entries
+   `{ elided: true, assignmentId, attemptId, role, status, violationCodes }`,
+   where `violationCodes` lists the non-advisory boundary codes of that outcome.
+   Only if those do not fit either does a single `{ digest: true, elided: <n> }`
+   count remain. The full outcomes stay in graph state; acceptance always reads
+   the full state, never the prompt projection.
 7. Acceptance checks attach `check_stdout` and `check_stderr` refs to each
    `acceptance.checks[]` entry. `stdoutTail` and `stderrTail` stay as today and
    gain `stdoutTruncated` / `stderrTruncated` booleans. A failed check's issue
