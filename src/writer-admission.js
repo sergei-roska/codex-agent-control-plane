@@ -108,11 +108,19 @@ class WriterAdmission {
     ).get(this.workspace, contextId));
   }
 
+  // Workspace-independent lookup: only for the never_executed proof, which must see rows stored under any workspace path.
+  findAnyByContextId(contextId) {
+    return toRecord(this.db.prepare(
+      'SELECT * FROM writer_executions WHERE context_id = ? ORDER BY created_at DESC LIMIT 1',
+    ).get(contextId));
+  }
+
+  // `inserted` is true only when this call created the fence.
   fence(contextId, reason) {
     return this.db.transaction(() => {
-      this.db.prepare('INSERT OR IGNORE INTO writer_fences (context_id, workspace, reason, created_at) VALUES (?, ?, ?, ?)')
+      const info = this.db.prepare('INSERT OR IGNORE INTO writer_fences (context_id, workspace, reason, created_at) VALUES (?, ?, ?, ?)')
         .run(contextId, this.workspace, reason ?? null, this.now());
-      return { execution: this.findByContextId(contextId) };
+      return { execution: this.findByContextId(contextId), inserted: info.changes > 0 };
     })();
   }
 

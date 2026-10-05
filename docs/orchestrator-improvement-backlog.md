@@ -112,6 +112,21 @@ Branch `feature/orchestrator-phase-a`, recorded 2026-10-05.
 | DBC-04 | done | `9bd2c23`; test/runtime-contracts.test.js |
 | M1 | done | 502 tests green; independent safety audit found F1 (blocker: reported scope advisory) and F2-F7, all fixed before merge; OPS-02 recorded |
 
+## Phase B progress
+
+Branch `feature/orchestrator-phase-b`. Owner scope for this pass: SUP, WAL-01,
+WAL-02, OPS-02. OPT (OPT-01..03) was not started; OPT-04 in Phase C depends on it.
+
+| Item | State | Evidence |
+| --- | --- | --- |
+| OPS-02 | done | `6112a3d`; contract persisted in lead task metadata, run gated on durable read |
+| WAL-01 | done | `docs/intent-recovery-contract.md`; decision D1 `synchronous = FULL`; gaps G1-G6 |
+| WAL-02 | done | `ef885cd`; FULL fsync (0.02 -> 0.57 ms per commit), guarded journal, G2-G6 |
+| SUP-01 | done | `docs/supervisor-recovery-contract.md` (`supervisor-policy/v1`) |
+| SUP-02 | done | `26f597d`; window, backoff, exhaustion with probe, per-run outcome rule |
+| SUP-03 | done | `7d9e734`; test/supervisor-integration.test.js; recovery 0/1000/4000 ms |
+| M2 (owner scope) | done | `docs/m2-audit-resolution.md`; F1-F5 fixed, 548 tests green, independent audit accepted; OPT-01..03 not started and outside owner scope |
+
 ## Phase A: baseline, compact evidence, executable contracts
 
 ### MEA: resource comparisons are reproducible

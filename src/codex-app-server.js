@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { readProcessIdentity, listGroupMembers } = require('./process-quiescence');
+const { classifyCodexError } = require('./contracts');
 const { DEFAULT_SKILLS_ROOT } = require('./skill-catalog');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
@@ -16,6 +17,24 @@ const TOKEN_FIELDS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reaso
 const APPROVALS_REVIEWER = 'user';
 const ZERO_TOTAL = Object.freeze(Object.fromEntries(TOKEN_FIELDS.map((key) => [key, 0])));
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const SUPERVISOR_POLICY = 'supervisor-policy/v1';
+const DEFAULT_MAX_RESTARTS = 3;
+const DEFAULT_WINDOW_MS = 60_000;
+const DEFAULT_BACKOFF_MS = Object.freeze([0, 1_000, 4_000]);
+const BACKOFF_GROWTH = 4;
+const MAX_BACKOFF_MS = 30_000;
+const DEFAULT_EXIT_WAIT_MS = 5_000;
+const DEFAULT_COOLDOWN_MS = 60_000;
+const MAX_COOLDOWN_MS = 600_000;
+const MAX_SUPERVISOR_EVENTS = 50;
+// Failure classes whose generation ending is charged to the restart budget.
+const CHARGED_CLASSES = new Set(['process_exit', 'spawn_failed', 'turn_start_unknown', 'turn_timeout', 'interrupt_unconfirmed']);
+const TRANSPORT_CLASSES = new Set([...CHARGED_CLASSES, 'rpc_timeout', 'supervisor_exhausted', 'closed']);
+const DEFAULT_CLOCK = Object.freeze({
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref?.(); return timer; },
+  clearTimeout: (timer) => clearTimeout(timer),
+});
 const MAX_PERMISSION_EVENTS = 50;
 const MAX_TEXT_CHARS = 500;
 const MAX_COMMAND_CHARS = 300;
@@ -75,6 +94,20 @@ class CodexAppServerError extends Error {
   }
 }
 
+/**
+ * Deterministic failure class (supervisor-policy/v1) for an error seen by the client.
+ * Returns null for a plain abort that carries no class.
+ */
+function classifyFailure(error) {
+  if (!error || typeof error !== 'object') return 'request_rejected';
+  if (TRANSPORT_CLASSES.has(error.failureClass)) return error.failureClass;
+  if (classifyCodexError(error) === 'usage_limit') return 'usage_limit';
+  if (error.failureClass) return error.failureClass;
+  if (error.name === 'AbortError') return null;
+  if (error.codexError || error.status === 'failed') return 'domain_failure';
+  return 'request_rejected';
+}
+
 // A group id still answering right after our leader exited is our own group (the kernel does not
 // reuse a pid while it is a live PGID); a pid wrap inside this window is not realistic.
 const OWN_GROUP_EXIT_WINDOW_MS = 5_000;
@@ -90,6 +123,12 @@ class CodexAppServer {
     killImpl = process.kill.bind(process),
     readProcessIdentityImpl = readProcessIdentity,
     listGroupMembersImpl = listGroupMembers,
+    clock = DEFAULT_CLOCK,
+    maxRestarts = DEFAULT_MAX_RESTARTS,
+    windowMs = DEFAULT_WINDOW_MS,
+    backoffMs = DEFAULT_BACKOFF_MS,
+    exitWaitMs = DEFAULT_EXIT_WAIT_MS,
+    cooldownMs = DEFAULT_COOLDOWN_MS,
   } = {}) {
     this.codexPath = codexPath;
     this.spawnImpl = spawnImpl;
@@ -111,54 +150,226 @@ class CodexAppServer {
     this.pending = new Map();
     this.runs = new Map();
     this.startPromise = null;
+    this.startPending = false;
     this.closed = false;
     this.exitError = null;
     this.loadedThreads = new Set();
     this.generation = 0;
+    this.failedGeneration = 0;
     this.childExited = true;
     this.childExitPromise = null;
     this.resolveChildExit = null;
+    this.childStates = new WeakMap();
+    this.currentChildState = null;
     this.hookInventories = new Map();
     this.mcpInventories = new Map();
+    this.clock = { ...DEFAULT_CLOCK, ...clock };
+    this.policy = { maxRestarts, windowMs, backoffMs: [...backoffMs], exitWaitMs, cooldownMs };
+    this.supState = 'stopped';
+    this.charged = [];
+    this.chargedGeneration = 0;
+    this.currentCooldownMs = cooldownMs;
+    this.nextStartAt = null;
+    this.nextProbeAt = null;
+    this.probing = false;
+    this.exhaustedClasses = [];
+    this.supEvents = [];
+    this.sleepCancel = null;
+    this.activeTermination = null;
   }
 
   async start() {
-    if (this.closed) throw new CodexAppServerError('Codex App Server client is closed');
-    if (this.startPromise) return this.startPromise;
+    if (this.closed) throw new CodexAppServerError('Codex App Server client is closed', { failureClass: 'closed' });
+    if (this.startPending) return this.startPromise;
+    if (this.child && !this.childExited && !this.exitError) return;
+    if (this.supState === 'exhausted' && this.clock.now() < this.nextProbeAt) throw this._exhaustedError();
 
-    const startPromise = this._startWhenReady();
-    this.startPromise = startPromise;
-    try {
-      await startPromise;
-    } catch (error) {
+    let startPromise;
+    startPromise = Promise.resolve().then(() => this._startWhenReady()).then((value) => {
+      if (this.startPromise === startPromise) {
+        this.startPending = false;
+        this.startPromise = null;
+      }
+      return value;
+    }, (error) => {
+      if (error && typeof error === 'object') {
+        if (!error.failureClass) error.failureClass = this.closed ? 'closed' : 'spawn_failed';
+        if (error.failureClass === 'spawn_failed' && error.outcomeUnknown === undefined) error.outcomeUnknown = false;
+        error.generation ??= this.generation;
+      }
+      if (this.supState === 'starting' && !this.closed) this._pushEvent('start_failed', error.failureClass, error.message);
       const ownsStart = this.startPromise === startPromise;
-      if (ownsStart) this.startPromise = null;
       if (ownsStart && !this.exitError) this._failAll(error);
-      if (ownsStart || (this.exitError && this.child && !this.childExited)) this._terminateProcess();
+      if (ownsStart && this.exitError && this.child && !this.childExited) this._terminateProcess(this.exitError.failureClass);
+      if (ownsStart) {
+        this.startPending = false;
+        this.startPromise = null;
+      }
       throw error;
-    }
+    });
+    this.startPromise = startPromise;
+    this.startPending = true;
+    return startPromise;
   }
 
   async _startWhenReady() {
-    if (this.closed) throw new CodexAppServerError('Codex App Server client is closed');
-    if (this.exitError && this.child && !this.childExited) {
-      this._terminateProcess();
-      await this.childExitPromise;
+    const closedError = () => new CodexAppServerError('Codex App Server client is closed', { failureClass: 'closed' });
+    if (this.closed) throw closedError();
+    if (this.supState === 'exhausted') {
+      if (this.clock.now() < this.nextProbeAt) throw this._exhaustedError();
+      this.probing = true;
+      this._pushEvent('probe', null, `cooldown ${this.currentCooldownMs}ms elapsed`);
     }
-    if (this.closed) throw new CodexAppServerError('Codex App Server client is closed');
+    this.supState = 'starting';
+    if (this.exitError && this.child && !this.childExited) {
+      await this._waitForOldExit();
+    }
+    if (this.closed) throw closedError();
     if (this.exitError) this._discardFailedChild();
+    if (!this.probing) {
+      const delay = this._backoffDelay();
+      if (delay > 0) {
+        this.supState = 'backoff';
+        this.nextStartAt = this.clock.now() + delay;
+        this._pushEvent('backoff', null, `waiting ${delay}ms before the next spawn`);
+        await this._sleep(delay);
+        this.nextStartAt = null;
+        if (this.closed) throw closedError();
+        this.supState = 'starting';
+      }
+    }
     return this._start();
+  }
+
+  _sleep(ms) {
+    return new Promise((resolve) => {
+      const timer = this.clock.setTimeout(() => { this.sleepCancel = null; resolve(); }, ms);
+      this.sleepCancel = () => { this.clock.clearTimeout(timer); this.sleepCancel = null; resolve(); };
+    });
+  }
+
+  // Wait for the terminated leader, bounded by exitWaitMs; an unreaped leader is recorded and bypassed.
+  async _waitForOldExit() {
+    const state = this.currentChildState;
+    if (!state || state.exited) return;
+    const exitWait = this._beginExitWait(state.child, state.generation, state.identity);
+    this._terminateProcess(state.failure?.failureClass || this.exitError?.failureClass, state.generation);
+    await Promise.race([state.exitPromise, exitWait]);
+  }
+
+  _beginExitWait(child, generation, identity = this.childIdentity) {
+    const state = this.childStates.get(child);
+    if (!state || state.generation !== generation) return Promise.resolve();
+    if (state.exitWait) return state.exitWait.promise;
+    let resolve;
+    const record = { promise: new Promise((done) => { resolve = done; }), resolve, timer: null, expired: false };
+    record.resolve = resolve;
+    state.exitWait = record;
+    record.timer = this.clock.setTimeout(() => {
+      record.timer = null;
+      if (!state.exited) {
+        record.expired = true;
+        let survivors = [];
+        try { if (identity && typeof identity.pgid === 'number') survivors = this.listGroupMembersImpl(identity.pgid); } catch (_) { /* diagnostics only */ }
+        this._pushEvent('unreaped', null, `old leader did not exit within ${this.policy.exitWaitMs}ms`, survivors, generation);
+      }
+      record.resolve();
+    }, this.policy.exitWaitMs);
+    record.timer.unref?.();
+    return record.promise;
+  }
+
+  _chargedInWindow() {
+    const floor = this.clock.now() - this.policy.windowMs;
+    this.charged = this.charged.filter((entry) => entry.at > floor);
+    return this.charged.length;
+  }
+
+  _backoffDelay() {
+    const count = this._chargedInWindow();
+    if (count === 0) return 0;
+    const table = this.policy.backoffMs;
+    const delay = count <= table.length
+      ? table[count - 1]
+      : Math.min(MAX_BACKOFF_MS, table[table.length - 1] * (BACKOFF_GROWTH ** (count - table.length)));
+    const remaining = this.charged[count - 1].at + delay - this.clock.now();
+    return Math.max(0, remaining);
+  }
+
+  _pushEvent(kind, failureClass = null, detail = null, survivors = null, generation = this.generation) {
+    this.supEvents.push({
+      at: new Date(this.clock.now()).toISOString(),
+      generation,
+      kind,
+      class: failureClass,
+      detail,
+      survivors,
+    });
+    if (this.supEvents.length > MAX_SUPERVISOR_EVENTS) this.supEvents.splice(0, this.supEvents.length - MAX_SUPERVISOR_EVENTS);
+  }
+
+  // Charge a failed generation to the restart budget (once per generation); never for close().
+  _charge(failureClass) {
+    if (this.closed || !CHARGED_CLASSES.has(failureClass) || this.chargedGeneration === this.generation) return;
+    this.chargedGeneration = this.generation;
+    const now = this.clock.now();
+    this._chargedInWindow();
+    this.charged.push({ at: now, failureClass, generation: this.generation });
+    if (this.probing || this.charged.length > this.policy.maxRestarts) {
+      if (this.probing) this.currentCooldownMs = Math.min(this.currentCooldownMs * 2, MAX_COOLDOWN_MS);
+      this.probing = false;
+      this.supState = 'exhausted';
+      this.nextProbeAt = now + this.currentCooldownMs;
+      this.exhaustedClasses = this.charged.map((entry) => entry.failureClass);
+      this._pushEvent('exhausted', failureClass, `${this.charged.length} charged endings in ${this.policy.windowMs}ms; next probe at ${new Date(this.nextProbeAt).toISOString()}`);
+    } else if (this.supState !== 'backoff') {
+      this.supState = 'stopped';
+    }
+  }
+
+  _exhaustedError() {
+    const nextProbeAt = new Date(this.nextProbeAt).toISOString();
+    return new CodexAppServerError(
+      `Codex App Server restart budget exhausted (last failures: ${this.exhaustedClasses.join(', ') || 'unknown'}); next probe at ${nextProbeAt}`,
+      { code: 'supervisor_exhausted', failureClass: 'supervisor_exhausted', outcomeUnknown: false, generation: this.generation, nextProbeAt },
+    );
+  }
+
+  supervisorState() {
+    return {
+      policy: SUPERVISOR_POLICY,
+      state: this.supState,
+      generation: this.generation,
+      chargedInWindow: this._chargedInWindow(),
+      nextStartAt: this.nextStartAt == null ? null : new Date(this.nextStartAt).toISOString(),
+      nextProbeAt: this.supState === 'exhausted' && this.nextProbeAt != null ? new Date(this.nextProbeAt).toISOString() : null,
+      events: this.supEvents.map((event) => ({ ...event, survivors: event.survivors ? [...event.survivors] : event.survivors })),
+    };
+  }
+
+  // Operator/test reset: clears the window, the cooldown, and exhaustion.
+  resetSupervisor() {
+    this.charged = [];
+    this.chargedGeneration = 0;
+    this.currentCooldownMs = this.policy.cooldownMs;
+    this.nextProbeAt = null;
+    this.probing = false;
+    this.exhaustedClasses = [];
+    if (this.supState === 'exhausted') this.supState = this.child && !this.childExited && !this.exitError ? 'running' : 'stopped';
+    this._pushEvent('reset');
   }
 
   async _start() {
     const spawnedMs = performance.now();
     this.startupInfo = null;
+    const generation = ++this.generation;
+    this.activeTermination = null;
+    this._pushEvent('started');
     const child = this.spawnImpl(this.codexPath, ['app-server', '--listen', 'stdio://'], {
       stdio: ['pipe', 'pipe', 'inherit'],
       // Own process group, so the whole tree can be signalled and proven gone.
       detached: true,
     });
-    const generation = ++this.generation;
     this.child = child;
     this.closed = false;
     this.exitError = null;
@@ -167,49 +378,97 @@ class CodexAppServer {
     this.hookInventories = new Map();
     this.mcpInventories = new Map();
     const identity = typeof child.pid === 'number' ? this.readProcessIdentityImpl(child.pid) : null;
+    const state = {
+      child,
+      generation,
+      identity,
+      exited: false,
+      failed: false,
+      failure: null,
+      termination: null,
+      exitWait: null,
+      forceKillTimer: null,
+      reader: null,
+    };
+    state.exitPromise = new Promise((resolve) => { state.resolveExit = resolve; });
+    this.childStates.set(child, state);
+    this.currentChildState = state;
     this.childIdentity = identity;
     this.childExitAt = null;
     this.childExited = false;
     this.childExitPromise = new Promise((resolve) => { this.resolveChildExit = resolve; });
 
     child.stdout.on('error', (error) => {
-      if (this._isCurrentChild(child, generation)) this._failAndTerminate(new CodexAppServerError('Codex App Server stdout failed', { cause: error }));
+      if (this._isCurrentChild(child, generation) && !state.failed) this._failAndTerminate(new CodexAppServerError('Codex App Server stdout failed', { cause: error, failureClass: 'process_exit', generation }));
     });
     child.stdin.on('error', (error) => {
-      if (this._isCurrentChild(child, generation)) this._failAndTerminate(new CodexAppServerError('Codex App Server stdin failed', { cause: error }));
+      if (this._isCurrentChild(child, generation) && !state.failed) this._failAndTerminate(new CodexAppServerError('Codex App Server stdin failed', { cause: error, failureClass: 'process_exit', generation }));
     });
     child.on('error', (error) => {
-      if (this._isCurrentChild(child, generation)) this._failAll(new CodexAppServerError('Could not start Codex App Server', { cause: error }));
+      if (this._isCurrentChild(child, generation) && !state.failed) {
+        this._failAll(new CodexAppServerError('Could not start Codex App Server', { cause: error, failureClass: this.supState === 'starting' ? 'spawn_failed' : 'process_exit', generation }));
+      }
     });
     child.on('exit', (code, signal) => {
-      const exitAt = Date.now();
+      const exitAt = this.clock.now();
       this.childExitTimes.set(child, exitAt);
       if (this._isCurrentChild(child, generation)) this.childExitAt = exitAt;
       this._markChildExited(child, generation);
       // The leader is gone; make sure no member of its group outlives it (also after close()).
-      this._signalOwnGroup(identity, 'SIGKILL', { child, exitAt });
-      if (this._isCurrentChild(child, generation) && !this.closed) {
-        const error = new CodexAppServerError(`Codex App Server exited unexpectedly (${signal || code})`, { code, signal });
-        this.exitError = error;
-        this._failAll(error);
+      const signalled = this._signalOwnGroup(identity, 'SIGKILL', { child, exitAt });
+      if (!this.closed) {
+        const failureClass = state.failure?.failureClass && CHARGED_CLASSES.has(state.failure.failureClass) ? state.failure.failureClass : 'process_exit';
+        let survivors = state.termination?.survivors || [];
+        if (!this.terminatedChildren.has(child)) {
+          // Same record _delayedKill keeps: the group was not ours to signal, so list who is left.
+          if (!signalled && identity && typeof identity.pid === 'number') {
+            try { survivors = this.listGroupMembersImpl(identity.pgid); } catch (_) { /* diagnostics only */ }
+          }
+          const termination = { identity, survivors, at: new Date(this.clock.now()).toISOString(), generation };
+          state.termination = termination;
+          if (this._isCurrentChild(child, generation)) {
+            this.lastTermination = termination;
+            this.activeTermination = termination;
+          }
+        } else if (this._isCurrentChild(child, generation)) {
+          this.lastTermination = state.termination;
+        }
+        this._pushEvent('exited', failureClass, `exited (${signal || code})`, survivors, generation);
+        if (this._isCurrentChild(child, generation) && !state.failed) {
+          const error = new CodexAppServerError(`Codex App Server exited unexpectedly (${signal || code})`, { code, signal, failureClass, generation });
+          this._failAll(error);
+        }
       }
     });
     child.on('close', () => this._markChildExited(child, generation));
 
     const reader = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
     this.reader = reader;
+    state.reader = reader;
     reader.on('line', (line) => {
       if (this._isCurrentChild(child, generation)) this._handleLine(line);
     });
     reader.on('close', () => {
-      if (this._isCurrentChild(child, generation) && !this.closed && !this.exitError) {
-        this._failAndTerminate(new CodexAppServerError('Codex App Server stdout closed unexpectedly'));
+      if (this._isCurrentChild(child, generation) && !this.closed && !state.failed) {
+        this._failAndTerminate(new CodexAppServerError('Codex App Server stdout closed unexpectedly', { failureClass: 'process_exit', generation }));
       }
     });
 
     const initResult = await this._request('initialize', {
       clientInfo: { name: 'codex-a2a-runtime', title: 'Codex A2A Runtime', version: '0.1.0' },
     });
+    if (state.failed || state.exited || this.exitError?.generation === generation) {
+      throw state.failure || this.exitError || new CodexAppServerError('Codex App Server exited during initialization', { failureClass: 'process_exit', generation });
+    }
+    this.supState = 'running';
+    if (this.probing) {
+      this.probing = false;
+      this.charged = [];
+      this.currentCooldownMs = this.policy.cooldownMs;
+      this.nextProbeAt = null;
+      this.exhaustedClasses = [];
+      this._pushEvent('recovered');
+    }
     this.appServerVersion = typeof initResult?.userAgent === 'string' ? initResult.userAgent : null;
     this._notify('initialized', {});
     const readyMs = performance.now();
@@ -227,21 +486,41 @@ class CodexAppServer {
   }
 
   _markChildExited(child, generation) {
-    if (!this._isCurrentChild(child, generation) || this.childExited) return;
+    const state = this.childStates.get(child);
+    if (!state || state.generation !== generation || state.exited) return;
+    state.exited = true;
+    if (state.exitWait?.timer) this.clock.clearTimeout(state.exitWait.timer);
+    if (state.exitWait) {
+      state.exitWait.timer = null;
+      state.exitWait.resolve();
+    }
+    state.resolveExit?.();
+    state.resolveExit = null;
+    if (!this._isCurrentChild(child, generation)) return;
     this.childExited = true;
     this.resolveChildExit?.();
     this.resolveChildExit = null;
   }
 
   _discardFailedChild() {
-    this.reader?.close();
+    const state = this.currentChildState;
+    if (!state || state.generation !== this.generation || !this.exitError) return;
+    for (const [threadId, run] of this.runs) {
+      if (run.ctx.generation !== state.generation) continue;
+      if (!run.failedWith) run.failedWith = this._runError(run, this.exitError);
+      run.rejectTerminal?.(run.failSafeError || run.failedWith);
+      this.clock.clearTimeout(run.interruptTimer);
+      this.runs.delete(threadId);
+    }
+    state.reader?.close();
+    if (this.reader === state.reader) this.reader = null;
     this.child = null;
     this.childIdentity = null;
-    this.reader = null;
     this.exitError = null;
     this.childExited = true;
     this.childExitPromise = null;
     this.resolveChildExit = null;
+    this.currentChildState = null;
   }
 
   async getAccount() {
@@ -270,6 +549,7 @@ class CodexAppServer {
   }
 
   async hookInventory(cwd) {
+    await this.start();
     const key = cwd || '';
     if (!this.hookInventories.has(key)) {
       const pending = this.listHooks(cwd);
@@ -291,7 +571,8 @@ class CodexAppServer {
   }
 
   // Cached per child generation (the map is reset on every child start) and per cwd.
-  mcpInventory(cwd) {
+  async mcpInventory(cwd) {
+    await this.start();
     const key = cwd || '';
     if (!this.mcpInventories.has(key)) {
       const pending = this.listMcpServerNames(cwd).then(
@@ -362,6 +643,7 @@ class CodexAppServer {
 
     const ctx = {
       processIdentity: null,
+      generation: null,
       threadId: existingThreadId || null,
       turnId: null,
       turnStartSent: false,
@@ -392,6 +674,11 @@ class CodexAppServer {
     } catch (error) {
       // Concurrent runs can share one error instance (child failure); give each its own copy.
       const own = cloneError(error);
+      if (own && typeof own === 'object') {
+        const failureClass = classifyFailure(own);
+        if (failureClass) own.failureClass = failureClass;
+        own.generation ??= ctx.generation ?? this.generation;
+      }
       own.execution = executionOf(ctx);
       own.usage = this._usageOf(ctx);
       Object.assign(own, permissionOf(ctx));
@@ -401,6 +688,7 @@ class CodexAppServer {
 
   async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills }) {
     await this.start();
+    ctx.generation = this.generation;
     const startup = this.startupInfo;
     if (startup && !startup.claimed && ctx.startedMs <= startup.readyMs) {
       startup.claimed = true;
@@ -491,7 +779,17 @@ class CodexAppServer {
         approvalPolicy: 'on-request',
         approvalsReviewer: APPROVALS_REVIEWER,
         ...(outputSchema ? { outputSchema } : {}),
-      }, { onWritten: () => { ctx.turnStartSent = true; } });
+      }, { onSending: (generation) => {
+        ctx.turnStartSent = true;
+        ctx.generation = generation;
+        ctx.childState = this.currentChildState;
+        ctx.processIdentity = this.processIdentity();
+      }, onWriteError: (error) => {
+        error.outcomeUnknown = false;
+        ctx.turnStartSent = false;
+        ctx.generation = null;
+        ctx.childState = null;
+      } });
       let turnResult;
       try {
         turnResult = await turnStartRequest;
@@ -499,6 +797,10 @@ class CodexAppServer {
         // A JSON-RPC error response means the server refused the request: no turn was created.
         if (error?.rpcResponse === true) ctx.turnStartRejected = true;
         throw error;
+      }
+
+      if (run.failedWith || this.exitError?.generation === run.ctx.generation) {
+        throw run.failSafeError || run.failedWith || this._runError(run, this.exitError);
       }
 
       run.turnId = turnResult.turn?.id || run.turnId;
@@ -510,6 +812,7 @@ class CodexAppServer {
       if (run.abortRequested) throw abortError({ threadId, turnId: run.turnId, status: run.status });
       if (run.status === 'failed') {
         throw new CodexAppServerError(run.terminal?.error?.message || 'Codex turn failed', {
+          failureClass: 'domain_failure',
           threadId,
           turnId: run.turnId,
           status: run.status,
@@ -521,6 +824,7 @@ class CodexAppServer {
       let cause = error;
       // A fail-safe error (child terminated) is the authoritative outcome.
       if (run.failSafeError && error.name !== 'AbortError') cause = run.failSafeError;
+      else if (run.failedWith?.failureClass === 'process_exit') cause = run.failedWith;
       const termination = cause.outcomeUnknown && !cause.termination && this.lastTermination?.survivors?.length ? this.lastTermination : null;
       if (termination) cause.termination = termination;
       if (run.abortRequested && cause.name !== 'AbortError') {
@@ -529,7 +833,7 @@ class CodexAppServer {
       throw cause;
     } finally {
       signal?.removeEventListener('abort', abortHandler);
-      clearTimeout(run.interruptTimer);
+      this.clock.clearTimeout(run.interruptTimer);
       this.runs.delete(threadId);
     }
   }
@@ -575,54 +879,81 @@ class CodexAppServer {
     this.closed = true;
     this.loadedThreads.clear();
     this.reader?.close();
-    this._failAll(new CodexAppServerError('Codex App Server client closed'));
+    this.sleepCancel?.();
+    this.supState = 'stopped';
+    this._failAll(new CodexAppServerError('Codex App Server client closed', { failureClass: 'closed' }));
     this.childExited = true;
     this.resolveChildExit?.();
     this.resolveChildExit = null;
+    const state = this.currentChildState;
+    if (state) {
+      if (state.exitWait?.timer) this.clock.clearTimeout(state.exitWait.timer);
+      if (state.exitWait) { state.exitWait.timer = null; state.exitWait.resolve(); }
+      state.resolveExit?.();
+      state.resolveExit = null;
+    }
     this._terminateProcess();
     this.child = null;
-    this.startPromise = null;
   }
 
-  _request(method, params, { signal, timeoutMs = this.requestTimeoutMs, onWritten } = {}) {
-    if (!this.child || this.closed || this.exitError) return Promise.reject(this.exitError || new CodexAppServerError('Codex App Server is not running'));
+  _request(method, params, { signal, timeoutMs = this.requestTimeoutMs, onSending, onWriteError } = {}) {
+    if (!this.child || this.closed || this.exitError) {
+      return Promise.reject(this.exitError || new CodexAppServerError('Codex App Server is not running', { failureClass: this.closed ? 'closed' : 'process_exit' }));
+    }
     if (signal?.aborted) return Promise.reject(abortError());
     const id = this.nextId++;
+    const generation = this.generation;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const error = new CodexAppServerError(`Codex App Server request timed out: ${method}`, { method, id });
+      let settled = false;
+      let timer;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        this.clock.clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        if (this.pending.get(id) === request) this.pending.delete(id);
+        callback(value);
+      };
+      const request = {
+        method,
+        generation,
+        threadId: typeof params?.threadId === 'string' ? params.threadId : null,
+        resolve: (value) => finish(resolve, value),
+        reject: (error) => finish(reject, error),
+      };
+      const onAbort = () => request.reject(abortError());
+      timer = this.clock.setTimeout(() => {
+        if (settled) return;
+        const error = new CodexAppServerError(`Codex App Server request timed out: ${method}`, {
+          method,
+          id,
+          failureClass: method === 'initialize' ? 'spawn_failed' : 'rpc_timeout',
+          generation,
+        });
         if (method === 'turn/start') {
           const run = this.runs.get(params.threadId);
-          if (run) {
+          if (run && run.ctx.generation === generation) {
             // The turn may have started: the child (and its group) must be gone before we report.
             error.outcomeUnknown = true;
+            error.failureClass = 'turn_start_unknown';
             run.failSafeError = error;
-            this.pending.delete(id);
-            this._terminateProcess();
-            reject(error);
+            request.reject(error);
+            this._failAll(error);
+            this._terminateProcess('turn_start_unknown', generation);
             return;
           }
         }
-        this.pending.delete(id);
-        reject(error);
+        request.reject(error);
       }, timeoutMs);
       timer.unref?.();
-      const onAbort = () => {
-        clearTimeout(timer);
-        this.pending.delete(id);
-        reject(abortError());
-      };
       signal?.addEventListener('abort', onAbort, { once: true });
-      this.pending.set(id, {
-        resolve: (value) => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); resolve(value); },
-        reject: (error) => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); reject(error); },
-      });
+      this.pending.set(id, request);
       try {
+        onSending?.(generation);
         this._write({ id, method, params });
-        onWritten?.();
       } catch (error) {
-        this.pending.get(id)?.reject(error);
-        this.pending.delete(id);
+        onWriteError?.(error);
+        request.reject(error);
       }
     });
   }
@@ -644,7 +975,7 @@ class CodexAppServer {
     try {
       message = JSON.parse(line);
     } catch (error) {
-      this._failAndTerminate(new CodexAppServerError('Codex App Server sent invalid JSONL', { cause: error }));
+      this._failAndTerminate(new CodexAppServerError('Codex App Server sent invalid JSONL', { cause: error, failureClass: 'process_exit' }));
       return;
     }
 
@@ -655,13 +986,19 @@ class CodexAppServer {
       }
       const pending = this.pending.get(message.id);
       if (!pending) return;
-      this.pending.delete(message.id);
-      if (message.error) pending.reject(new CodexAppServerError(message.error.message || 'Codex App Server RPC failed', {
-        rpcResponse: true,
-        rpcCode: message.error.code,
-        rpcData: message.error.data,
-      }));
-      else pending.resolve(message.result || {});
+      if (message.error) {
+        if (pending.method === 'turn/start') {
+          const run = this.runs.get(pending.threadId);
+          if (run && run.ctx.generation === pending.generation) run.ctx.turnStartRejected = true;
+        }
+        pending.reject(new CodexAppServerError(message.error.message || 'Codex App Server RPC failed', {
+          failureClass: pending.method === 'initialize' ? 'spawn_failed' : 'request_rejected',
+          generation: pending.generation,
+          rpcResponse: true,
+          rpcCode: message.error.code,
+          rpcData: message.error.data,
+        }));
+      } else pending.resolve(message.result || {});
       return;
     }
 
@@ -673,7 +1010,7 @@ class CodexAppServer {
         run.turnId ||= params.turn?.id || null;
         run.status = params.turn?.status || 'unknown';
         run.terminal = params.turn || {};
-        clearTimeout(run.interruptTimer);
+        this.clock.clearTimeout(run.interruptTimer);
         this._emit(run, message);
         run.resolveTerminal?.(run.terminal);
       }
@@ -740,10 +1077,12 @@ class CodexAppServer {
       run.resolveTerminal = resolve;
       let remainingMs = this.turnTimeoutMs;
       let timer;
+      const generation = run.ctx.generation;
       const onTimeout = () => {
+        if (generation !== this.generation || this.runs.get(run.threadId) !== run || run.terminal) return;
         remainingMs -= Math.min(remainingMs, MAX_TIMER_DELAY_MS);
         if (remainingMs > 0) {
-          timer = setTimeout(onTimeout, Math.min(remainingMs, MAX_TIMER_DELAY_MS));
+          timer = this.clock.setTimeout(onTimeout, Math.min(remainingMs, MAX_TIMER_DELAY_MS));
           timer.unref?.();
           return;
         }
@@ -751,21 +1090,25 @@ class CodexAppServer {
           threadId: run.threadId,
           turnId: run.turnId,
           outcomeUnknown: true,
+          failureClass: 'turn_timeout',
+          generation: this.generation,
         });
         run.failSafeError = error;
         this._interruptRun(run);
-        this._terminateProcess();
+        this._failAll(error);
+        this._terminateProcess('turn_timeout', generation);
       };
-      timer = setTimeout(onTimeout, Math.min(remainingMs, MAX_TIMER_DELAY_MS));
+      timer = this.clock.setTimeout(onTimeout, Math.min(remainingMs, MAX_TIMER_DELAY_MS));
       timer.unref?.();
       const finish = run.resolveTerminal;
-      run.resolveTerminal = (value) => { clearTimeout(timer); finish(value); };
-      const cleanup = () => clearTimeout(timer);
+      run.resolveTerminal = (value) => { this.clock.clearTimeout(timer); finish(value); };
+      const cleanup = () => this.clock.clearTimeout(timer);
       run.rejectTerminal = (error) => { cleanup(); reject(error); };
     });
   }
 
   _interruptRun(run) {
+    if (run.ctx.generation !== this.generation) return;
     if (!run.turnId || run.terminal || run.interruptSent) return;
     run.interruptSent = true;
     this._request('turn/interrupt', { threadId: run.threadId, turnId: run.turnId }).catch(() => {});
@@ -773,10 +1116,13 @@ class CodexAppServer {
       // Wait a bounded time for the interrupt to be confirmed by turn/completed. If it is not,
       // terminate the shared child: this also interrupts every other concurrent turn on it (they
       // surface as outcomeUnknown; read-only ones are harmless) but proves this turn cannot mutate.
-      run.interruptTimer = setTimeout(() => {
+      const generation = run.ctx.generation;
+      run.interruptTimer = this.clock.setTimeout(() => {
+        if (generation !== this.generation || this.runs.get(run.threadId) !== run) return;
         if (run.terminal) return;
-        run.failSafeError = abortError({ threadId: run.threadId, turnId: run.turnId, outcomeUnknown: true });
-        this._terminateProcess();
+        run.failSafeError = abortError({ threadId: run.threadId, turnId: run.turnId, outcomeUnknown: true, failureClass: 'interrupt_unconfirmed', generation: this.generation });
+        this._failAll(run.failSafeError);
+        this._terminateProcess('interrupt_unconfirmed', generation);
       }, this.interruptTimeoutMs);
       run.interruptTimer.unref?.();
     }
@@ -805,7 +1151,7 @@ class CodexAppServer {
     if (now && now.startTime != null) {
       own = now.startTime === identity.startTime && now.pgid === identity.pid;
     } else {
-      own = exitAt != null && Date.now() - exitAt < OWN_GROUP_EXIT_WINDOW_MS;
+      own = exitAt != null && this.clock.now() - exitAt < OWN_GROUP_EXIT_WINDOW_MS;
     }
     if (!own) return viaHandle();
     try {
@@ -817,56 +1163,102 @@ class CodexAppServer {
     }
   }
 
-  _delayedKill(child, identity, termination = null) {
+  _delayedKill(child, identity, termination = null, generation = termination?.generation ?? this.childStates.get(child)?.generation) {
+    const state = this.childStates.get(child);
     const exitAt = this.childExitTimes.get(child) ?? null;
     if (this._signalOwnGroup(identity, 'SIGKILL', { child, exitAt })) return;
     if (!identity || typeof identity.pid !== 'number') return;
     let survivors = [];
     try { survivors = this.listGroupMembersImpl(identity.pgid); } catch (_) { /* diagnostics only */ }
-    const at = new Date().toISOString();
+    const at = new Date(this.clock.now()).toISOString();
     // The record is shared with the errors of the runs this termination failed (their copies
     // hold the same object), so they learn what outlived it.
-    const record = termination || { identity, survivors: [], at };
+    const record = termination || { identity, survivors: [], at, generation };
     record.survivors = survivors;
     record.at = at;
-    this.lastTermination = record;
+    if (state && generation === this.generation && state === this.currentChildState) this.lastTermination = record;
   }
 
-  _terminateProcess() {
+  _terminateProcess(failureClass = null, generation = this.generation) {
     const child = this.child;
-    if (!child || this.terminatedChildren.has(child)) return;
+    const state = child && this.childStates.get(child);
+    if (!child || !state || state.generation !== generation || !this._isCurrentChild(child, generation)) return;
+    if (!this.closed && failureClass && CHARGED_CLASSES.has(failureClass)) {
+      if (!state.failed) this._failAll(new CodexAppServerError(`Codex App Server generation failed: ${failureClass}`, { failureClass, generation }));
+      this._beginExitWait(child, generation, state.identity);
+    }
+    if (this.terminatedChildren.has(child)) return;
     if (typeof child.pid !== 'number' && (child.exitCode != null || child.killed)) return;
     this.terminatedChildren.add(child);
-    const identity = this.childIdentity;
-    const termination = { identity, survivors: [], at: new Date().toISOString() };
+    const identity = state.identity;
+    const termination = { identity, survivors: [], at: new Date(this.clock.now()).toISOString(), generation };
+    state.termination = termination;
+    this.activeTermination = termination;
+    this.lastTermination = null;
+    this._pushEvent('terminated', failureClass || this.exitError?.failureClass || null, null, null, generation);
     for (const run of this.runs.values()) {
-      const error = run.failSafeError || this.exitError;
+      if (run.ctx.generation !== generation) continue;
+      const error = run.failSafeError || run.failedWith;
       if (error && error.outcomeUnknown) error.termination = termination;
     }
-    this._signalOwnGroup(identity, 'SIGTERM', { child, exitAt: this.childExitTimes.get(child) ?? null });
-    clearTimeout(this.forceKillTimer);
+    if (!state.exited) this._signalOwnGroup(identity, 'SIGTERM', { child, exitAt: this.childExitTimes.get(child) ?? null });
+    this.clock.clearTimeout(state.forceKillTimer);
     // Not cleared on child exit: grandchildren in the group may outlive the leader.
-    this.forceKillTimer = setTimeout(() => this._delayedKill(child, identity, termination), 1_000);
-    this.forceKillTimer.unref?.();
+    state.forceKillTimer = this.clock.setTimeout(() => this._delayedKill(child, identity, termination, generation), 1_000);
+    state.forceKillTimer.unref?.();
   }
 
-  // A failure that leaves the child running must not leave an outcomeUnknown run with a live group.
+  // A process failure ends its generation and prevents reuse even when no turn is active.
   _failAndTerminate(error) {
-    const active = this.runs.size > 0;
+    error.generation ??= this.generation;
     this._failAll(error);
-    if (active) this._terminateProcess();
+    this._terminateProcess(error.failureClass, error.generation);
+  }
+
+  // Each run gets its own error: outcomeUnknown only when it sent turn/start and saw no terminal event.
+  _runError(run, base) {
+    if (!run.failedWith) {
+      const own = cloneError(base);
+      own.outcomeUnknown = run.ctx.turnStartSent === true && run.ctx.turnStartRejected !== true && !run.terminal;
+      if (own.outcomeUnknown && run.ctx.childState?.termination && !own.termination) own.termination = run.ctx.childState.termination;
+      run.failedWith = own;
+    }
+    return run.failedWith;
   }
 
   _failAll(error) {
-    if (this.runs.size > 0) error.outcomeUnknown = true;
+    error.generation ??= this.generation;
+    const generation = error.generation;
+    if (generation !== this.generation) return;
+    const state = this.currentChildState;
+    if (state && state.generation === generation && state.failed && error.failureClass !== 'closed') return;
+    if (error.failureClass !== 'closed' && this.failedGeneration === generation) return;
+    if (error.failureClass !== 'closed') {
+      this.failedGeneration = generation;
+      if (state && state.generation === generation) {
+        state.failed = true;
+        state.failure = error;
+      }
+    }
+    this._charge(error.failureClass);
     this.exitError = error;
-    this.startPromise = null;
     this.loadedThreads.clear();
     for (const [id, pending] of this.pending) {
-      pending.reject(error);
-      this.pending.delete(id);
+      if (pending.generation !== generation) continue;
+      const run = pending.threadId ? this.runs.get(pending.threadId) : null;
+      if (run && run.ctx.generation === generation) {
+        pending.reject(this._runError(run, error));
+      } else {
+        const own = cloneError(error);
+        own.outcomeUnknown = false;
+        pending.reject(own);
+      }
     }
-    for (const run of this.runs.values()) run.rejectTerminal?.(run.failSafeError || error);
+    for (const run of this.runs.values()) {
+      if (run.ctx.generation !== generation) continue;
+      run.failedWith ||= run.failSafeError || this._runError(run, error);
+      run.rejectTerminal?.(run.failSafeError || run.failedWith);
+    }
   }
 }
 
@@ -880,6 +1272,7 @@ function abortError(details = {}) {
 function executionOf(ctx) {
   return {
     processIdentity: ctx.processIdentity,
+    generation: ctx.generation,
     threadId: ctx.threadId,
     turnId: ctx.run?.turnId || ctx.turnId,
     turnStartSent: ctx.turnStartSent,
@@ -1019,4 +1412,4 @@ function sanitizeAccount(account) {
   return safe;
 }
 
-module.exports = { CodexAppServer, CodexAppServerError };
+module.exports = { CodexAppServer, CodexAppServerError, classifyFailure };

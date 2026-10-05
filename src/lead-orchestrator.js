@@ -14,7 +14,7 @@ const { loadSkillCatalog } = require('./skill-catalog');
 
 const DEFAULT_MAX_ROUNDS = 6;
 const DEFAULT_POLL_INTERVAL_MS = 500;
-const DEFAULT_CANCEL_TIMEOUT_MS = 10_000;
+const DEFAULT_CANCEL_TIMEOUT_MS = 30_000;
 const DEFAULT_CANCEL_RETRY_INTERVAL_MS = 250;
 // Effectively unbounded: rounds are limited by maxRounds, not by LangGraph steps.
 const RECURSION_LIMIT = 100_000;

@@ -424,6 +424,21 @@ test('failed status messages carry failureKind and codexErrorInfo metadata', asy
   assert.deepEqual(bad.status.message.metadata, { failureKind: 'other', codexErrorInfo: null });
 });
 
+test('maps supervisor_exhausted to its own failureKind with no workspace effects', async () => {
+  const cases = [
+    Object.assign(new Error('budget exhausted'), { failureClass: 'supervisor_exhausted', outcomeUnknown: false }),
+    Object.assign(new Error('budget exhausted'), { code: 'supervisor_exhausted' }),
+  ];
+  for (const error of cases) {
+    const { agents, context } = makeService({ async run() { throw error; } });
+    const failed = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('x')), context));
+    assert.equal(failed.status.state, 4);
+    const metadata = failed.status.message.metadata;
+    assert.equal(metadata.failureKind, 'supervisor_exhausted');
+    assert.equal(metadata.effects, 'none');
+  }
+});
+
 test('marks an active writable worker failure with unknown outcome as interrupted', async () => {
   const writerRoles = new Map([
     ['orch-writer', { name: 'Writer', description: 'Writes files.', instructions: 'Implement.', model: 'test', effort: 'low', sandbox: 'workspace-write' }],

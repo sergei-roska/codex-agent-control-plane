@@ -131,6 +131,8 @@ async function openStateDatabase({ filePath } = {}) {
 
   const db = new Database(target);
   db.pragma('journal_mode = WAL');
+  // FULL: every commit is fsynced, so intent rows are durable before the effect they guard (intent-recovery/v1 D1).
+  db.pragma('synchronous = FULL');
   db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
   const kysely = new Kysely({ dialect: new SqliteDialect({ database: db }) });
   try {
@@ -285,6 +287,17 @@ function requireFields(row) {
   }
 }
 
+class JournalTransitionError extends Error {
+  constructor(attempt, from, to, detail) {
+    super(`Journal transition refused for ${attempt}: ${from} -> ${to}${detail ? ` (${detail})` : ''}`);
+    this.name = 'JournalTransitionError';
+    this.code = 'journal_transition_refused';
+    this.attemptId = attempt;
+    this.from = from;
+    this.to = to;
+  }
+}
+
 class DispatchJournal {
   constructor(stateOrDb) {
     this.db = stateOrDb.db || stateOrDb;
@@ -295,9 +308,9 @@ class DispatchJournal {
         (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id, state, result_json, created_at, updated_at, objective_sha256)
       VALUES (?, ?, ?, ?, ?, ?, NULL, 'submitting', NULL, ?, ?, ?)`);
     this.markSubmitted = this.db.prepare(
-      "UPDATE dispatch_journal SET task_id = ?, state = 'submitted', updated_at = ? WHERE attempt_id = ?");
+      "UPDATE dispatch_journal SET task_id = ?, state = 'submitted', updated_at = ? WHERE attempt_id = ? AND (state = 'submitting' OR (state = 'submitted' AND task_id = ?))");
     this.markFinished = this.db.prepare(
-      "UPDATE dispatch_journal SET state = 'finished', result_json = ?, updated_at = ? WHERE attempt_id = ?");
+      "UPDATE dispatch_journal SET state = 'finished', result_json = ?, updated_at = ? WHERE attempt_id = ? AND state IN ('submitting', 'submitted')");
     this.selectRun = this.db.prepare('SELECT * FROM dispatch_journal WHERE run_id = ? ORDER BY created_at, rowid');
   }
 
@@ -309,14 +322,25 @@ class DispatchJournal {
   }
 
   recordSubmitted(attempt, taskId) {
-    const info = this.markSubmitted.run(taskId, nowIso(), attempt);
-    if (info.changes === 0) throw new Error(`Unknown dispatch attempt: ${attempt}`);
+    const info = this.markSubmitted.run(taskId, nowIso(), attempt, taskId);
+    if (info.changes === 0) {
+      const row = this.get(attempt);
+      if (!row) throw new Error(`Unknown dispatch attempt: ${attempt}`);
+      throw new JournalTransitionError(attempt, row.state, 'submitted');
+    }
     return this.get(attempt);
   }
 
   recordFinished(attempt, result) {
-    const info = this.markFinished.run(JSON.stringify(result ?? null), nowIso(), attempt);
-    if (info.changes === 0) throw new Error(`Unknown dispatch attempt: ${attempt}`);
+    const json = JSON.stringify(result ?? null);
+    const info = this.markFinished.run(json, nowIso(), attempt);
+    if (info.changes === 0) {
+      const raw = this.selectOne.get(attempt);
+      if (!raw) throw new Error(`Unknown dispatch attempt: ${attempt}`);
+      // An identical second result is a replay: no-op. Anything else on a finished row is refused.
+      if (raw.state === 'finished' && raw.result_json === json) return this.get(attempt);
+      throw new JournalTransitionError(attempt, raw.state, 'finished', 'different result');
+    }
     return this.get(attempt);
   }
 
@@ -364,11 +388,22 @@ class InMemoryDispatchJournal {
   }
 
   recordSubmitted(attempt, taskId) {
+    const row = this.rows.get(attempt);
+    if (!row) throw new Error(`Unknown dispatch attempt: ${attempt}`);
+    if (row.state === 'submitted' && row.taskId === taskId) return this.get(attempt);
+    if (row.state !== 'submitting') throw new JournalTransitionError(attempt, row.state, 'submitted');
     return this.update(attempt, { taskId, state: 'submitted' });
   }
 
   recordFinished(attempt, result) {
-    return this.update(attempt, { state: 'finished', result: JSON.parse(JSON.stringify(result ?? null)) });
+    const row = this.rows.get(attempt);
+    if (!row) throw new Error(`Unknown dispatch attempt: ${attempt}`);
+    const copy = JSON.parse(JSON.stringify(result ?? null));
+    if (row.state === 'finished') {
+      if (JSON.stringify(row.result) === JSON.stringify(copy)) return this.get(attempt);
+      throw new JournalTransitionError(attempt, row.state, 'finished', 'different result');
+    }
+    return this.update(attempt, { state: 'finished', result: copy });
   }
 
   get(attempt) {
@@ -439,6 +474,7 @@ module.exports = {
   DEFAULT_STATE_DB,
   DispatchJournal,
   InMemoryDispatchJournal,
+  JournalTransitionError,
   JOURNAL_STATES,
   assignmentId,
   attemptId,

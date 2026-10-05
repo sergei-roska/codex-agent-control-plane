@@ -910,8 +910,28 @@ function buildLeadGraph(deps) {
   }
 
   function finishItem(item, result) {
-    journal.recordFinished(item.attemptId, result);
+    try {
+      journal.recordFinished(item.attemptId, result);
+    } catch (error) {
+      if (error?.code !== 'journal_transition_refused') throw error;
+      // Replay of an attempt that is already finished with a different result: the journal is the truth.
+      const stored = journal.get(item.attemptId);
+      if (stored?.state !== 'finished') throw error;
+      return { ...item, state: 'finished', taskId: stored.taskId || item.taskId, result: stored.result };
+    }
     return { ...item, state: 'finished', taskId: result.taskId || item.taskId, result };
+  }
+
+  // A refused submitted-transition on an attempt that moved on (replay) is a no-op; a conflicting task id is surfaced.
+  function markSubmitted(attemptId, taskId) {
+    try {
+      journal.recordSubmitted(attemptId, taskId);
+    } catch (error) {
+      if (error?.code !== 'journal_transition_refused') throw error;
+      const stored = journal.get(attemptId);
+      if (stored?.state === 'finished' || (stored?.state === 'submitted' && stored.taskId === taskId)) return;
+      throw error;
+    }
   }
 
   async function submitItem(item, signal) {
@@ -941,7 +961,7 @@ function buildLeadGraph(deps) {
       // Journal says "submitting": the send may or may not have reached the server.
       const found = await findTask(client, item.contextId, signal);
       if (found) {
-        journal.recordSubmitted(item.attemptId, found.id);
+        markSubmitted(item.attemptId, found.id);
         return { ...item, state: 'submitted', taskId: found.id };
       }
       if (item.sandbox !== 'read-only') {
@@ -977,7 +997,7 @@ function buildLeadGraph(deps) {
       let reconcileFailed = false;
       try { found = await findTask(client, item.contextId, signal); } catch (_) { reconcileFailed = true; }
       if (found) {
-        journal.recordSubmitted(item.attemptId, found.id);
+        markSubmitted(item.attemptId, found.id);
         return { ...item, state: 'submitted', taskId: found.id };
       }
       if (item.sandbox !== 'read-only') {
@@ -1002,7 +1022,7 @@ function buildLeadGraph(deps) {
       }
       return finishItem(item, syntheticResult('dispatch_error', `A2A role ${roleDisplayName(item.role)} did not return a task ID`, { contextId: item.contextId }));
     }
-    journal.recordSubmitted(item.attemptId, task.id);
+    markSubmitted(item.attemptId, task.id);
     if (isTaskFinished(task)) return finishItem({ ...item, taskId: task.id }, receiveResult(task, item));
     return { ...item, state: 'submitted', taskId: task.id };
   }
@@ -1095,6 +1115,8 @@ function buildLeadGraph(deps) {
 
   async function pollItem(item, runtime) {
     const { signal } = runtime;
+    const stored = journal.get(item.attemptId);
+    if (stored?.state === 'finished') return { ...item, state: 'finished', taskId: stored.taskId || item.taskId, result: stored.result };
     const client = await deps.clientFor(item.role);
     let taskId = item.taskId;
     try {
@@ -1103,7 +1125,7 @@ function buildLeadGraph(deps) {
         const found = await findTask(client, item.contextId, signal);
         if (!found) return finishItem(item, syntheticResult('outcome_unknown', 'No A2A task exists for this assignment.', { contextId: item.contextId }));
         taskId = found.id;
-        journal.recordSubmitted(item.attemptId, taskId);
+        markSubmitted(item.attemptId, taskId);
       }
       let task;
       while (true) {
@@ -1196,10 +1218,16 @@ function buildLeadGraph(deps) {
       let row = entry.contextId ? admission.findByContextId(entry.contextId) : null;
       if (!row) {
         if (!entry.contextId) return unresolved('no_context_id');
-        row = admission.fence(entry.contextId, 'lead_reconcile')?.execution || null;
+        const fenced = admission.fence(entry.contextId, 'lead_reconcile');
+        row = fenced?.execution || null;
+        if (!row && admission.findAnyByContextId) {
+          // An execution row stored under another workspace path still means the writer may have run.
+          const other = admission.findAnyByContextId(entry.contextId);
+          if (other) return { ...base, state: 'legacy_unverified', changedPaths: [], deltaKnown: false, reason: 'execution_in_other_workspace' };
+        }
         if (!row) {
-          // A task existed but no execution row does (checkpoint predates writer admission): the writer may have run.
-          if (entry.taskId) return { ...base, state: 'legacy_unverified', changedPaths: [], deltaKnown: false, reason: 'no_execution_record' };
+          // This call's fence insert proves the context can never run; a pre-existing fence with a task proves nothing.
+          if (entry.taskId && fenced?.inserted !== true) return { ...base, state: 'legacy_unverified', changedPaths: [], deltaKnown: false, reason: 'no_execution_record' };
           return { ...base, state: 'never_executed', changedPaths: [], deltaKnown: true, reason: 'fenced_before_execution' };
         }
       }

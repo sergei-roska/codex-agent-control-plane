@@ -8,6 +8,7 @@ const test = require('node:test');
 const { TaskState } = require('@a2a-js/sdk');
 const { ServerCallContext } = require('@a2a-js/sdk/server');
 const { createTaskStore, openStateDatabase } = require('../src/durable-store');
+const { WriterAdmission } = require('../src/writer-admission');
 const {
   SessionError,
   formatLeadTask,
@@ -41,7 +42,7 @@ function lead(id, contextId, state, text, timestamp, refs = [], extra = {}) {
   };
 }
 
-async function fixture(t, tasks) {
+async function fixture(t, tasks, workerTasks = []) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'launcher-sessions-'));
   const state = await openStateDatabase({ filePath: path.join(dir, 'state.sqlite') });
   t.after(() => {
@@ -49,6 +50,8 @@ async function fixture(t, tasks) {
   });
   const store = createTaskStore(state, 'orchestrator');
   for (const task of tasks) await store.save(task, new ServerCallContext());
+  const workerStore = createTaskStore(state, 'orch-builder');
+  for (const task of workerTasks) await workerStore.save(task, new ServerCallContext());
   return state.db;
 }
 
@@ -118,13 +121,21 @@ test('formatLeadTask reports workers from the journal', async (t) => {
 });
 
 test('deleteSession removes all turns and their journal rows in one go', async (t) => {
-  const db = await fixture(t, CHAIN);
+  const db = await fixture(t, CHAIN, [
+    lead('w1', 'worker-context-1', DONE, 'worker result one', '2026-01-01T00:00:00.000Z'),
+    lead('w3', 'worker-context-3', DONE, 'worker result three', '2026-01-03T00:00:00.000Z'),
+  ]);
+  new WriterAdmission({ db, workspace: '/tmp' });
   journal(db, 't1', 'att-1', 'w1');
   journal(db, 't3', 'att-3', 'w3');
+  db.prepare(`INSERT INTO writer_executions
+    (execution_id, workspace, role, task_id, context_id, state, created_at, updated_at)
+    VALUES ('exec-released', '/workspace', 'builder', 'w1', 'worker-context-1', 'released', '2026-01-01', '2026-01-01')`).run();
   const deleted = deleteSession(db, 'ctx-a');
   assert.deepEqual(deleted, ['t1', 't2', 't3']);
   assert.equal(getSession(db, 'ctx-a'), null);
   assert.equal(db.prepare('SELECT count(*) AS c FROM dispatch_journal').get().c, 0);
+  assert.equal(db.prepare('SELECT count(*) AS c FROM writer_executions').get().c, 0);
   assert.deepEqual(listSessions(db).map((s) => s.contextId), ['ctx-b', 'old1']);
 });
 
@@ -138,6 +149,47 @@ test('deleteSession refuses when a turn is not terminal and leaves everything in
   assert.throws(() => deleteSession(db, 'ctx-w'), (err) => err instanceof SessionError && err.code === 'not_terminal');
   assert.equal(getSession(db, 'ctx-w').turns.length, 2);
   assert.equal(db.prepare('SELECT count(*) AS c FROM dispatch_journal').get().c, 1);
+});
+
+test('deleteSession refuses active or unresolved writer executions and preserves the entire session', async (t) => {
+  for (const state of ['active', 'unresolved']) {
+    await t.test(state, async (t) => {
+      const db = await fixture(t, CHAIN, [lead('w3', 'worker-context', DONE, 'worker result', '2026-01-03T00:00:00.000Z')]);
+      new WriterAdmission({ db, workspace: '/tmp' });
+      journal(db, 't3', 'att-3', 'w3');
+      db.prepare(`INSERT INTO writer_executions
+        (execution_id, workspace, role, task_id, context_id, state, created_at, updated_at)
+        VALUES ('exec-1', '/workspace', 'builder', 'w3', 'worker-context', ?, '2026-01-01', '2026-01-01')`)
+        .run(state);
+
+      assert.throws(
+        () => deleteSession(db, 'ctx-a'),
+        (err) => err instanceof SessionError && err.code === 'writer_execution_unresolved',
+      );
+      assert.deepEqual(getSession(db, 'ctx-a').turns.map((turn) => turn.leadTask.id), ['t1', 't2', 't3']);
+      assert.equal(db.prepare('SELECT count(*) AS c FROM dispatch_journal').get().c, 1);
+      assert.equal(db.prepare('SELECT state FROM writer_executions WHERE execution_id = ?').get('exec-1').state, state);
+      assert.equal(db.prepare("SELECT count(*) AS c FROM tasks WHERE id = 'w3'").get().c, 1);
+    });
+  }
+});
+
+test('deleteLeadTask refuses to delete a run with a held writer execution', async (t) => {
+  const db = await fixture(t, CHAIN, [lead('w1', 'worker-context', DONE, 'worker result', '2026-01-01T00:00:00.000Z')]);
+  new WriterAdmission({ db, workspace: '/tmp' });
+  journal(db, 't1', 'att-1', 'w1');
+  db.prepare(`INSERT INTO writer_executions
+    (execution_id, workspace, role, task_id, context_id, state, created_at, updated_at)
+    VALUES ('exec-1', '/workspace', 'builder', 'w1', 'worker-context', 'active', '2026-01-01', '2026-01-01')`).run();
+
+  assert.throws(
+    () => deleteLeadTask(db, 't1'),
+    (err) => err instanceof SessionError && err.code === 'writer_execution_unresolved',
+  );
+  assert.ok(db.prepare("SELECT id FROM tasks WHERE id = 't1'").get());
+  assert.ok(db.prepare("SELECT id FROM tasks WHERE id = 'w1'").get());
+  assert.equal(db.prepare('SELECT count(*) AS c FROM dispatch_journal').get().c, 1);
+  assert.equal(db.prepare('SELECT state FROM writer_executions WHERE execution_id = ?').get('exec-1').state, 'active');
 });
 
 test('deleteSession on an unknown session throws not_found', async (t) => {
