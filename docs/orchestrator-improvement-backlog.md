@@ -74,21 +74,20 @@ Recorded 2026-10-05. M0 is met.
   routing committed on top of `fd92eea`). Benchmark trials pin their own reviewed
   revision under MEA-01; this one is the implementation baseline.
 - Runtime: Node v24.21.0, codex-cli 0.160.0.
-- Profiles: `coordinator` gpt-6.1-sol/high (read-only, `src/role-catalog.js`);
+- Product profiles (the system under change, not the implementation team):
+  `coordinator` gpt-6.1-sol/high (read-only, `src/role-catalog.js`);
   `explorer`, `engineer`, `verifier` gpt-6-luna/high; `scout` gpt-6-luna/medium;
   `recovery-engineer` gpt-6-luna/xhigh; `auditor` gpt-6.1-sol/high;
   `senior-engineer` gpt-6.1-sol/medium; `architect` gpt-6.1-sol/xhigh
   (`profiles/agents/*.toml`).
 - Checks: `npm test` on the baseline passes 394 of 394 tests (13 suites, about
-  33 s); no known failures. Every implementation task is submitted with
-  `--check 'npm test'` as a pinned acceptance check, plus any focused checks its
-  brief names.
-- Execution path: the lead submits each task through `npm run ask` to the local
-  orchestrator serving this repository as its workspace; the coordinator
-  dispatches the roles above. Briefs use the TEAM.md work contract (objective,
-  allowed files, inputs, acceptance criteria, checks, stop conditions). The
-  running server keeps the code it started with; it is restarted only between
-  tasks, with no writer active, when a merged change must take effect.
+  33 s); no known failures. Every implementation task must pass `npm test`, plus
+  any focused checks its brief names.
+- Execution path: the Claude Code lead session implements this backlog with
+  Claude workers (worker-sonnet for code and tests, auditor-sonnet for read-only
+  fact maps and reviews). The orchestrator is not used to build itself. Briefs
+  state goal, established facts, the lead's decision, allowed files, and the
+  definition of done.
 - Git: workers never change git state. The lead reviews each accepted diff, runs
   the suite, and commits on the working branch; a feature branch is merged into
   `main` when its work is accepted.
@@ -141,7 +140,7 @@ failure. Consumers can implement against the frozen contract.
 
 #### PIP-02 - Evidence storage enforces bounded access [P0]
 
-Level 3; parent: PIP; depends on PIP-01; executor: engineer; estimate: one session.
+Level 3; parent: PIP; depends on PIP-01; executor: worker-sonnet; estimate: one session.
 Proposed write scope: `src/evidence-store.js`, `test/evidence-store.test.js`.
 
 - Store full evidence under run ownership; return compact reference metadata.
@@ -153,7 +152,7 @@ path/symlink escape attempts, missing evidence, and cleanup. No extra LLM calls.
 
 #### PIP-03 - Lead outcomes carry bounded evidence [P0]
 
-Level 3; parent: PIP; depends on PIP-01, PIP-02; executor: engineer;
+Level 3; parent: PIP; depends on PIP-01, PIP-02; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/a2a-role-service.js`,
 `src/lead-graph.js`, `test/a2a-role-service.test.js`, `test/lead-graph.test.js`.
 
@@ -167,7 +166,7 @@ small reports and old runs remain compatible; retrieval needs no planning turn.
 
 #### PIP-04 - Compact evidence passes end-to-end acceptance [P0]
 
-Level 3; parent: PIP; depends on PIP-02, PIP-03; executor: engineer;
+Level 3; parent: PIP; depends on PIP-02, PIP-03; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `test/evidence-pipeline.test.js`.
 
 - Exercise producer -> storage -> lead projection -> bounded retrieval using
@@ -204,7 +203,7 @@ examples cover unknown writer effects and unavailable snapshots.
 
 #### DBC-02 - Lead boundary checks prevent invalid acceptance [P0]
 
-Level 3; parent: DBC; depends on DBC-01; executor: engineer;
+Level 3; parent: DBC; depends on DBC-01; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/contracts.js`,
 `src/lead-graph.js`, `src/acceptance.js`, `test/contracts.test.js`,
 `test/lead-graph.test.js`, `test/acceptance.test.js`.
@@ -214,13 +213,18 @@ estimate: one session. Proposed write scope: `src/contracts.js`,
   execution. Keep changed workspace state visible for reconciliation/repair.
 - Reject invalid acceptance without deleting useful changes or altering approval
   behavior. Do not claim per-tool prevention from assignment-level checks.
+- Return a failed dispatch precondition to the lead as a structured rejected
+  dispatch with a violation code, so the lead can correct its brief in the next
+  turn. Observed 2026-10-05: a read-only explorer assignment with
+  `allowedFiles: ["."]` failed `safeRelativePath` (`src/contracts.js:297`) and
+  stopped the whole run with an error that needed a human retry.
 
 Done: focused tests cover rejected dispatch, failed/unknown postconditions,
 contract drift, and preserved writer barriers. No model call evaluates predicates.
 
 #### DBC-03 - Specialist entry points enforce their runtime contract [P0]
 
-Level 3; parent: DBC; depends on DBC-02; executor: engineer;
+Level 3; parent: DBC; depends on DBC-02; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/a2a-role-service.js`,
 `test/a2a-role-service.test.js`.
 
@@ -237,7 +241,7 @@ requests cannot bypass the guarantees claimed by their selected contract.
 
 #### DBC-04 - Boundary violations survive restart [P0]
 
-Level 3; parent: DBC; depends on DBC-02, DBC-03; executor: engineer;
+Level 3; parent: DBC; depends on DBC-02, DBC-03; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `test/runtime-contracts.test.js`.
 
 - Exercise fake end-to-end flows with invalid reports, out-of-scope deltas,
@@ -272,7 +276,7 @@ clock. No unsupported claim of per-worker process isolation or one-for-one exist
 
 #### SUP-02 - App Server recovery obeys a bounded policy [P1]
 
-Level 3; parent: SUP; depends on SUP-01; executor: engineer;
+Level 3; parent: SUP; depends on SUP-01; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/codex-app-server.js`,
 `test/codex-app-server.test.js`.
 
@@ -286,7 +290,7 @@ deadline exhaustion, and surviving descendants. No automatic writer replay.
 
 #### SUP-03 - Recovery cannot bypass writer reconciliation [P1]
 
-Level 3; parent: SUP; depends on SUP-02; executor: engineer;
+Level 3; parent: SUP; depends on SUP-02; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `test/supervisor-integration.test.js`.
 
 - Inject shared-process failure with concurrent read turns and an active writer;
@@ -318,7 +322,7 @@ guarantees that remain unavailable. Unknown outcomes never mean no effects.
 
 #### WAL-02 - Dispatch recovery meets the recorded durability contract [P1]
 
-Level 3; parent: WAL; depends on WAL-01; executor: engineer;
+Level 3; parent: WAL; depends on WAL-01; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/durable-store.js`,
 `src/lead-graph.js`, `test/durable-store.test.js`, `test/lead-graph.test.js`.
 
@@ -354,7 +358,7 @@ win by receiving zero cost; model estimates are labeled separately from history.
 
 #### OPT-02 - Historical estimates produce shadow rankings [P1]
 
-Level 3; parent: OPT; depends on OPT-01; executor: engineer;
+Level 3; parent: OPT; depends on OPT-01; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/routing-cost.js`,
 `src/usage-ledger.js`, `test/routing-cost.test.js`, `test/usage-ledger.test.js`.
 
@@ -367,7 +371,7 @@ execution decisions are unchanged and no extra model calls occur.
 
 #### OPT-03 - Shadow predictions are comparable to actual outcomes [P1]
 
-Level 3; parent: OPT; depends on OPT-02; executor: engineer;
+Level 3; parent: OPT; depends on OPT-02; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/lead-graph.js`,
 `src/usage-report.js`, `test/lead-graph.test.js`, `test/usage-report.test.js`.
 
@@ -402,13 +406,15 @@ the decision gates establish the allowed scope.
 ## Execution ownership and sequencing
 
 - Lead owns document contracts, prioritization, integration decisions, and review.
-- Product code, tests, scripts, and build configuration go to scoped engineer
-  briefs. Workers do not change git state. Each brief freezes allowed files and
-  requires a focused verification report plus scope-expansion reporting.
-- Use explorer for bounded factual audits and auditor for an independent
-  read-only safety audit at M1/M2 and before activating Phase C mutation features.
-  Escalate implementation only after inspecting a concrete Luna limitation,
-  in the TEAM.md order: engineer, then recovery-engineer, then senior-engineer.
+- Product code, tests, scripts, and build configuration go to scoped
+  worker-sonnet briefs. Workers do not change git state. Each brief freezes
+  allowed files and requires a focused verification report plus scope-expansion
+  reporting.
+- Use auditor-sonnet for bounded factual audits and reviews. An independent
+  read-only safety audit at M1/M2 and before activating Phase C mutation features
+  may use auditor-opus. Escalate implementation only after inspecting a concrete
+  worker limitation: after two failed worker-sonnet attempts the lead takes the
+  decision back and hands the repair to worker-opus with that decision in the brief.
 - All implementation estimates are provisional one-session briefs. Split a task
   before dispatch if it requires more than one reviewable change; update dependencies.
 - Test files belong to the feature task. Integration tasks own distinct new tests
@@ -433,6 +439,22 @@ Candidate phase paths:
 The likely longest dependency path is the evidence path through M1 followed by
 the routing path through M2. Exact critical-path duration remains provisional
 until tasks are sized; serialize shared scopes when computing the actual schedule.
+
+## Defects found during execution
+
+Bounded fix items outside the tracks above. Each needs its own brief.
+
+#### OPS-01 - The CLI survives tasks longer than five minutes [P0]
+
+Executor: worker-sonnet. Proposed write scope: `src/cli.js`, `test/cli.test.js`.
+Observed 2026-10-05: `npm run ask` sends one blocking `sendMessage`
+(`returnImmediately: false`); a lead task that ran longer than the HTTP client's
+default timeout ended the CLI with `fetch failed` and exit 1 while the task kept
+working on the server. Submit with immediate return and poll `getTask` (or
+stream) until a terminal or `INPUT_REQUIRED` state; keep the exit codes; on a
+transport error print the task id so the caller can resume or inspect it.
+Done: a fake slow server test shows the CLI waiting past the timeout and printing
+the final result; existing CLI tests pass.
 
 ## Verification and rollout policy
 
