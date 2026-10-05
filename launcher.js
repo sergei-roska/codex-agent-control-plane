@@ -1701,6 +1701,13 @@ app.get('/', (req, res) => {
       return parts.map(p => p.content?.$case === 'text' ? p.content.value : (p.text || '')).filter(Boolean).join('\\n');
     }
 
+    function formatResetCountdown(resetsAt) {
+      const remainingMinutes = Math.floor(Math.max(0, resetsAt * 1000 - Date.now()) / 60000);
+      const hours = Math.floor(remainingMinutes / 60);
+      const minutes = remainingMinutes % 60;
+      return '(' + hours + 'h ' + minutes + 'm)';
+    }
+
     async function fetchLimits(force = false) {
       try {
         const res = await fetch('/api/limits' + (force ? '?force=1' : ''));
@@ -1725,7 +1732,7 @@ app.get('/', (req, res) => {
 
           if (data.primary.resetsAt) {
             const date = new Date(data.primary.resetsAt * 1000);
-            document.getElementById('fiveHourReset').innerText = 'Resets at ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            document.getElementById('fiveHourReset').innerText = 'Resets at ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + formatResetCountdown(data.primary.resetsAt);
           }
         }
 
@@ -1738,7 +1745,7 @@ app.get('/', (req, res) => {
 
           if (data.secondary.resetsAt) {
             const date = new Date(data.secondary.resetsAt * 1000);
-            document.getElementById('weeklyReset').innerText = 'Resets: ' + date.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            document.getElementById('weeklyReset').innerText = 'Resets: ' + date.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + formatResetCountdown(data.secondary.resetsAt);
           }
         }
       } catch (_) {}
