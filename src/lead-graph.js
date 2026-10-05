@@ -8,7 +8,7 @@ const {
 } = require('@langchain/langgraph');
 const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
 const {
-  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, parseWorkerReport, classifyCodexError,
+  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, BoundaryViolation, parseWorkerReport, classifyCodexError,
 } = require('./contracts');
 const { runAcceptance, assessWithoutChecks } = require('./acceptance');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
@@ -279,6 +279,20 @@ function pauseMessage(value) {
 
 // ------------------------------------------------------------ the graph
 
+const MAX_AUTO_REJECTIONS = 2;
+const PATH_RULE = "allowedFiles entries are repository-relative paths or directory prefixes without '.', '..', globs, or a leading '/'; read-only roles may use [].";
+const RULE_REMINDERS = {
+  'assignment.paths': PATH_RULE,
+  'assignment.writer_scope': 'Writable roles require explicit allowedFiles; read-only roles may use [].',
+  'decision.parse': 'Return only one JSON object matching the supplied schema.',
+  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, and humanInput, with unused fields empty.',
+  'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds.',
+  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and skills; role must be an available role id.',
+  'assignment.skills': 'Select at most 5 unique skill IDs from the trusted listed skill IDs; use [] when none apply.',
+  'assignment.role_ladder': 'Respect the role ladder: recovery-engineer follows an engineer attempt, senior-engineer follows recovery-engineer, and architect needs prior evidence and one narrow decision.',
+  'dispatch.writer_unresolved': 'Do not dispatch writable roles while writer outcomes are unresolved; use read-only roles.',
+};
+
 const last = (initial) => Annotation({ reducer: (_, next) => next, default: initial });
 
 const LeadState = Annotation.Root({
@@ -304,6 +318,9 @@ const LeadState = Annotation.Root({
   status: last(() => null),
   text: last(() => ''),
   result: last(() => null),
+  rejections: last(() => []),
+  consecutiveRejections: last(() => 0),
+  retryDecide: last(() => false),
 });
 
 /**
@@ -377,9 +394,16 @@ function buildLeadGraph(deps) {
       sections.push(`Acceptance note: the deterministic acceptance run for your finish decision was rejected (disposition ${state.acceptance.disposition}). You may dispatch fixes within the round limits, then finish again; a second rejection ends the run as rejected. Your final text never changes the disposition.\nIssues:\n${issues.map((line) => `- ${line}`).join('\n')}`);
     }
     if (state.humanAnswers.length > 0) sections.push('Human answers (authoritative):\n' + JSON.stringify(state.humanAnswers));
+    if (state.retryDecide && state.rejections?.length > 0) {
+      const violations = state.rejections.at(-1).violations || [];
+      const reminders = [...new Set(violations.map((entry) => RULE_REMINDERS[entry.predicate]).filter(Boolean))];
+      sections.push(['Rejected decision: your previous decision failed validation and nothing was executed. Return a corrected decision.',
+        ...violations.map((entry) => `- ${entry.predicate} ${entry.code}: ${entry.detail}`),
+        ...reminders].join('\n'));
+    }
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(state.outcomes));
     sections.push([
-      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and skills. Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
+      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and skills. Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles; read-only roles may use allowedFiles []. allowedFiles entries are exact paths or directory prefixes; globs are not supported. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
       'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, and humanInput. Use empty arrays, an empty string, or null for unused fields.',
       'Worker decision requests: resolve them yourself (resolutions: decisionId, choice, rationale) whenever the evidence supports a choice. Worker reports are self-reported; check scopeViolations and reportError.',
       'Use request_human_input only for missing_authority, irreversible_or_external, or product_choice, and only after investigating: give options, a recommendation, the evidence checked, and the independent work that can proceed.',
@@ -476,28 +500,51 @@ function buildLeadGraph(deps) {
     update.threadId = leadResult.threadId || state.threadId;
     recordLeadTurn(state, leadResult, leadResult.status || 'completed');
 
-    const decision = parseDecision(leadResult.text);
-    if (Array.isArray(decision.assignments)) {
-      for (const assignment of decision.assignments) {
-        for (const field of ['allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions']) {
-          if (Array.isArray(assignment[field]) && assignment[field].length > 20) {
-            assignment[field] = assignment[field].slice(0, 20);
+    let decision;
+    try {
+      decision = parseDecision(leadResult.text);
+      if (Array.isArray(decision.assignments)) {
+        for (const assignment of decision.assignments) {
+          if (!assignment || typeof assignment !== 'object') continue;
+          for (const field of ['allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions']) {
+            if (Array.isArray(assignment[field]) && assignment[field].length > 20) {
+              assignment[field] = assignment[field].slice(0, 20);
+            }
+          }
+          if (Array.isArray(assignment.allowedFiles)) {
+            assignment.allowedFiles = assignment.allowedFiles.map((file) => (typeof file === 'string' && file.length > 1 ? file.replace(/\/+$/, '') : file));
+            // A read-only role needs no write scope: a bare dot means "no files", not the repository.
+            if (getRole(roles, assignment.role)?.sandbox === 'read-only') {
+              assignment.allowedFiles = assignment.allowedFiles.filter((file) => file !== '.' && file !== './');
+            }
           }
         }
-        if (Array.isArray(assignment.allowedFiles)) {
-          assignment.allowedFiles = assignment.allowedFiles.map((file) => (typeof file === 'string' && file.length > 1 ? file.replace(/\/+$/, '') : file));
-        }
       }
+      validateDecision(decision, {
+        roles,
+        attemptedRoles: new Set(state.attemptedRoles),
+        outcomeCount: state.outcomes.length,
+        unresolvedWriterCount: state.unresolvedWriters.length,
+        openDecisionIds: new Set(state.openDecisions.map((entry) => entry.id)),
+        skillCatalog,
+        skillCandidateIds: candidateIds,
+      });
+    } catch (error) {
+      if (!(error instanceof BoundaryViolation)) throw error;
+      const consecutive = (state.consecutiveRejections || 0) + 1;
+      if (consecutive > MAX_AUTO_REJECTIONS) {
+        const codes = [...new Set([...(state.retryDecide ? (state.rejections.at(-1)?.violations || []) : []), ...error.violations].map((entry) => entry.code))];
+        throw new Error(`Lead decision rejected ${consecutive} times in a row (${codes.join(', ')}): ${error.message}`, { cause: error });
+      }
+      return {
+        ...update,
+        rejections: [...(state.rejections || []), { round: state.round + 1, at: new Date().toISOString(), violations: error.violations }].slice(-5),
+        consecutiveRejections: consecutive,
+        retryDecide: true,
+      };
     }
-    validateDecision(decision, {
-      roles,
-      attemptedRoles: new Set(state.attemptedRoles),
-      outcomeCount: state.outcomes.length,
-      unresolvedWriterCount: state.unresolvedWriters.length,
-      openDecisionIds: new Set(state.openDecisions.map((entry) => entry.id)),
-      skillCatalog,
-      skillCandidateIds: candidateIds,
-    });
+    update.consecutiveRejections = 0;
+    update.retryDecide = false;
     deps.emit(runtime.onEvent, { type: 'decision', round: state.round + 1, action: decision.action });
 
     const resolved = new Map(decision.resolutions.map((entry) => [entry.decisionId, entry]));
@@ -524,14 +571,18 @@ function buildLeadGraph(deps) {
   }
 
   function parseDecision(text) {
-    if (typeof text !== 'string' || !text.trim()) throw new Error('Lead returned an empty decision');
+    if (typeof text !== 'string' || !text.trim()) throw new BoundaryViolation('decision.parse', 'decision_empty', 'Lead returned an empty decision');
     let decision;
     try {
       decision = JSON.parse(text);
     } catch (error) {
-      throw new Error('Lead decision was not valid JSON', { cause: error });
+      const failure = new BoundaryViolation('decision.parse', 'decision_not_json', 'Lead decision was not valid JSON');
+      failure.cause = error;
+      throw failure;
     }
-    if (!decision || typeof decision !== 'object' || Array.isArray(decision)) throw new Error('Lead decision must be a JSON object');
+    if (!decision || typeof decision !== 'object' || Array.isArray(decision)) {
+      throw new BoundaryViolation('decision.parse', 'decision_not_object', 'Lead decision must be a JSON object');
+    }
     return decision;
   }
 
@@ -1013,6 +1064,7 @@ function buildLeadGraph(deps) {
     if (state.status) return 'finish';
     if (state.budget) return 'budget_pause';
     if (state.humanRequest) return 'human_input';
+    if (state.retryDecide) return 'decide';
     return 'dispatch';
   };
   const afterAccept = (state) => (state.status ? 'finish' : 'decide');
@@ -1042,7 +1094,7 @@ function buildLeadGraph(deps) {
     .addNode('finish', finish)
     .addEdge(START, 'intake')
     .addEdge('intake', 'decide')
-    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'budget_pause', 'human_input', 'dispatch'])
+    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'budget_pause', 'human_input', 'dispatch', 'decide'])
     .addConditionalEdges('accept', afterAccept, ['finish', 'decide'])
     .addEdge('dispatch', 'collect')
     .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify'])

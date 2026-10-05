@@ -502,7 +502,7 @@ test('worker needs_decision must be resolved by the lead', async () => {
   });
   const attempt = attemptId(assignmentId(RUN_ID, 1, 0));
 
-  const unresolved = makeWorld({ script: [dispatch(brief('orch-explorer', [])), finish('Ignored it')], workerFinal });
+  const unresolved = makeWorld({ script: [dispatch(brief('orch-explorer', [])), finish('Ignored it'), finish('Ignored it'), finish('Ignored it')], workerFinal });
   await withSession(unresolved, async (session) => {
     await assert.rejects(session.orchestrator.run({ goal: 'Explore', runId: RUN_ID }), /must be resolved/);
     assert.match(unresolved.prompts[1], new RegExp(attempt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -1298,5 +1298,69 @@ test('a finished writer outcome without an execution row but with a task is lega
     assert.equal(reconciliation.deltaKnown, false);
     assert.deepEqual(reconciliation.changedPaths, []);
     assert.equal(reconciliation.reason, 'no_execution_record');
+  });
+});
+
+test('a bare dot in allowedFiles of a read-only role is normalized away and does not pause', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', ['.'])), finish('Explored')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 2);
+    assert.deepEqual(world.dispatchInputs[0].allowedFiles, []);
+  });
+});
+
+test('a rejected decision is fed back to the lead, keeps the thread, and is not an outcome', async () => {
+  const threads = [];
+  const lead = (text) => (args) => { threads.push(args.threadId); return text; };
+  const world = makeWorld({
+    script: [lead(dispatch(brief('orch-builder', ['src/*']))), lead(dispatch(brief('orch-builder'))), lead(finish('Fixed'))],
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.rounds, 1);
+    assert.equal(world.sends.length, 1);
+    assert.equal(world.dispatchInputs[0].allowedFiles[0], 'src/example.js');
+    assert.equal(world.leadTurns, 3);
+    assert.doesNotMatch(world.prompts[0], /Rejected decision:/);
+    assert.match(world.prompts[1], /Rejected decision:/);
+    assert.match(world.prompts[1], /assignment\.paths path_glob_unsupported/);
+    assert.match(world.prompts[1], /without '\.', '\.\.', globs/);
+    assert.doesNotMatch(world.prompts[2], /Rejected decision:/);
+    assert.deepEqual(threads, [undefined, 'lead-thread', 'lead-thread']);
+  });
+});
+
+test('three consecutive rejected decisions pause the run with the violation codes', async () => {
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  const world = makeWorld({ script: [bad, bad, bad, finish('Never reached')] });
+  await withSession(world, async (session) => {
+    await assert.rejects(session.orchestrator.run({ goal: 'Build', runId: RUN_ID }), /rejected 3 times.*path_glob_unsupported/);
+    assert.equal(world.leadTurns, 3);
+    assert.equal(world.sends.length, 0);
+  });
+});
+
+test('an accepted decision resets the consecutive rejection counter', async () => {
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  const world = makeWorld({ script: [bad, bad, dispatch(brief('orch-builder')), bad, bad, finish('Done')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 6);
+  });
+});
+
+test('a checkpoint written before the rejection state fields existed still resumes', async () => {
+  const world = makeWorld({ script: [usageLimitError(), 'not json', finish('Resumed')] });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Work', runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.match(world.prompts[2], /decision_not_json/);
   });
 });

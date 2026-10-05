@@ -5,7 +5,7 @@ const { test } = require('node:test');
 const {
   WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, validateWorkerReport, parseWorkerReport,
   DECISION_SCHEMA, validateDecision, classifyCodexError, findCodexErrorInfo, safeRelativePath,
-  ASSIGNMENT_FIELDS, MAX_ASSIGNMENTS,
+  ASSIGNMENT_FIELDS, MAX_ASSIGNMENTS, BoundaryViolation, BOUNDARY_PREDICATES,
 } = require('../src/contracts');
 
 function walk(schema, visit) {
@@ -321,4 +321,59 @@ test('validateDecision refuses a writable dispatch while writer outcomes are unr
   assert.throws(() => validateDecision(dispatch('orch-builder'), ctx(2)), /Writable dispatch refused: 2 writer outcome\(s\) are unresolved/);
   assert.doesNotThrow(() => validateDecision(dispatch('orch-builder'), ctx(0)));
   assert.doesNotThrow(() => validateDecision(dispatch('orch-explorer'), ctx(2)));
+});
+
+test('validateDecision throws BoundaryViolation with predicate ids and codes', () => {
+  const roles = new Map([
+    ['orch-builder', { name: 'orch-builder', sandbox: 'workspace-write' }],
+    ['orch-explorer', { name: 'orch-explorer', sandbox: 'read-only' }],
+    ['recovery-engineer', { name: 'recovery-engineer', sandbox: 'workspace-write' }],
+    ['orch-architect', { name: 'orch-architect', sandbox: 'read-only' }],
+  ]);
+  const base = (role = 'orch-builder', allowedFiles = ['src/a.js']) => ({
+    role, objective: 'Do it', allowedFiles, inputs: ['x'], evidence: ['y'], acceptanceCriteria: ['z'], checks: ['c'], stopConditions: ['s'], skills: [],
+  });
+  const dispatch = (...assignments) => ({ action: 'dispatch', assignments, final: '', resolutions: [], humanInput: null });
+  const ctx = (extra = {}) => ({
+    roles, attemptedRoles: new Set(), outcomeCount: 0, openDecisionIds: new Set(), unresolvedWriterCount: 0, ...extra,
+  });
+  const expectFail = (decision, context, predicate, code, message) => {
+    let caught;
+    try { validateDecision(decision, context); } catch (error) { caught = error; }
+    assert.ok(caught instanceof BoundaryViolation, `${code} should throw BoundaryViolation`);
+    assert.ok(caught instanceof Error);
+    assert.equal(caught.violations.length, 1);
+    const [violation] = caught.violations;
+    assert.equal(violation.predicate, predicate);
+    assert.equal(violation.code, code);
+    assert.equal(violation.result, 'FAIL');
+    assert.equal(violation.boundary, 'dispatch');
+    assert.ok(violation.detail.length <= 500);
+    assert.ok(BOUNDARY_PREDICATES[predicate].includes(code));
+    if (message) assert.match(caught.message, message);
+  };
+  const withField = (field, value) => ({ ...base(), [field]: value });
+
+  expectFail('nope', ctx(), 'decision.envelope', 'decision_envelope_invalid', /must be a JSON object/);
+  expectFail({ ...dispatch(base()), action: 'bogus' }, ctx(), 'decision.envelope', 'decision_envelope_invalid', /Unsupported lead action/);
+  expectFail(dispatch(), ctx(), 'decision.envelope', 'assignment_count_invalid', /between 1 and 4/);
+  expectFail({ ...dispatch(base()), resolutions: [{ decisionId: 'd1', choice: 'a', rationale: 'b' }] }, ctx(), 'decision.resolutions', 'decision_unresolved', /not open/);
+  expectFail(dispatch(base()), ctx({ openDecisionIds: new Set(['d1']) }), 'decision.resolutions', 'decision_unresolved', /Open decision d1/);
+  expectFail(dispatch('str'), ctx(), 'assignment.shape', 'assignment_shape_invalid', /must be an object/);
+  expectFail(dispatch(base('ghost')), ctx(), 'assignment.shape', 'role_unknown', /Unknown role: ghost/);
+  expectFail(dispatch(withField('objective', '')), ctx(), 'assignment.shape', 'field_invalid', /needs an objective/);
+  expectFail(dispatch(base('orch-builder', [])), ctx(), 'assignment.writer_scope', 'writer_scope_missing', /requires explicit allowedFiles/);
+  expectFail(dispatch(base('orch-builder', ['.'])), ctx(), 'assignment.paths', 'path_unsafe', /Unsafe allowedFiles path/);
+  expectFail(dispatch(base('orch-builder', ['../x'])), ctx(), 'assignment.paths', 'path_unsafe', /Unsafe allowedFiles path/);
+  for (const glob of ['src/*', 'src/a?.js', 'src/[ab].js']) {
+    expectFail(dispatch(base('orch-builder', [glob])), ctx(), 'assignment.paths', 'path_glob_unsupported', /Unsupported glob/);
+  }
+  expectFail(dispatch(withField('skills', ['x', 'x'])), ctx(), 'assignment.skills', 'skill_invalid', /skills must be unique/);
+  expectFail(dispatch(withField('skills', ['x'])), ctx({ skillCatalog: new Map() }), 'assignment.skills', 'skill_invalid', /Unknown skill: x/);
+  expectFail(dispatch(base('recovery-engineer')), ctx(), 'assignment.role_ladder', 'role_ladder_violation', /after an engineer attempt/);
+  expectFail(dispatch(base('orch-architect', [])), ctx(), 'assignment.role_ladder', 'architect_constraint', /requires inspected prior evidence/);
+  expectFail(dispatch(base()), ctx({ unresolvedWriterCount: 1 }), 'dispatch.writer_unresolved', 'writer_unresolved', /Writable dispatch refused/);
+
+  assert.doesNotThrow(() => validateDecision(dispatch(base('orch-explorer', [])), ctx()));
+  assert.throws(() => Object.assign(BOUNDARY_PREDICATES, { x: 1 }));
 });

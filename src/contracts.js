@@ -16,6 +16,31 @@ const HUMAN_REASONS = ['missing_authority', 'irreversible_or_external', 'product
 const USAGE_LIMIT_NAMES = new Set(['usageLimitExceeded', 'rateLimitExceeded']);
 const MAX_CAUSE_DEPTH = 5;
 
+const BOUNDARY_PREDICATES = Object.freeze({
+  'decision.parse': Object.freeze(['decision_empty', 'decision_not_json', 'decision_not_object']),
+  'decision.envelope': Object.freeze(['decision_envelope_invalid', 'assignment_count_invalid']),
+  'decision.resolutions': Object.freeze(['decision_unresolved']),
+  'assignment.shape': Object.freeze(['assignment_shape_invalid', 'role_unknown', 'field_invalid']),
+  'assignment.writer_scope': Object.freeze(['writer_scope_missing']),
+  'assignment.paths': Object.freeze(['path_unsafe', 'path_glob_unsupported']),
+  'assignment.skills': Object.freeze(['skill_invalid']),
+  'assignment.role_ladder': Object.freeze(['role_ladder_violation', 'architect_constraint']),
+  'dispatch.writer_unresolved': Object.freeze(['writer_unresolved']),
+});
+
+/** A lead-managed dispatch predicate FAIL. violations: [{ predicate, result, code, boundary, detail }] */
+class BoundaryViolation extends Error {
+  constructor(predicate, code, message) {
+    super(message);
+    this.name = 'BoundaryViolation';
+    this.violations = [{ predicate, result: 'FAIL', code, boundary: 'dispatch', detail: String(message).slice(0, 500) }];
+  }
+}
+
+function violation(predicate, code, message) {
+  return new BoundaryViolation(predicate, code, message);
+}
+
 const stringArray = { type: 'array', items: { type: 'string' } };
 const optionList = {
   type: 'array',
@@ -258,76 +283,79 @@ function parseWorkerReport(text) {
 }
 
 function checkAssignment(assignment, decision, ctx) {
-  if (!isPlainObject(assignment)) throw new Error('Each assignment must be an object');
+  if (!isPlainObject(assignment)) throw violation('assignment.shape', 'assignment_shape_invalid', 'Each assignment must be an object');
   const legacy = sameKeys(assignment, ASSIGNMENT_FIELDS);
   if (!legacy && !sameKeys(assignment, DECISION_ASSIGNMENT_FIELDS)) {
-    throw new Error('Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and optionally skills');
+    throw violation('assignment.shape', 'assignment_shape_invalid', 'Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and optionally skills');
   }
   // Older checkpoints and callers predate assignment skill routing.
   if (legacy) assignment.skills = [];
   const role = getRole(ctx.roles, assignment.role);
-  if (!role) throw new Error(`Unknown role: ${String(assignment.role)}`);
+  if (!role) throw violation('assignment.shape', 'role_unknown', `Unknown role: ${String(assignment.role)}`);
   assignment.role = role.name;
-  if (!isNonEmptyString(assignment.objective)) throw new Error(`Assignment for ${role.name} needs an objective`);
+  if (!isNonEmptyString(assignment.objective)) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} needs an objective`);
   for (const field of ASSIGNMENT_ARRAY_FIELDS) {
     if (!Array.isArray(assignment[field]) || assignment[field].some((value) => !isNonEmptyString(value))) {
-      throw new Error(`Assignment for ${role.name} needs a string array for ${field}`);
+      throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} needs a string array for ${field}`);
     }
     if (assignment[field].length > MAX_ITEMS || assignment[field].some((value) => value.length > MAX_CHARS)) {
-      throw new Error(`Assignment for ${role.name} exceeds the size limit for ${field}`);
+      throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} exceeds the size limit for ${field}`);
     }
   }
   if (!Array.isArray(assignment.skills) || assignment.skills.some((id) => !isNonEmptyString(id))) {
-    throw new Error(`Assignment for ${role.name} needs a string array for skills`);
+    throw violation('assignment.skills', 'skill_invalid', `Assignment for ${role.name} needs a string array for skills`);
   }
-  if (assignment.skills.length > 5) throw new Error(`Assignment for ${role.name} may select at most 5 skills`);
-  if (new Set(assignment.skills).size !== assignment.skills.length) throw new Error(`Assignment for ${role.name} skills must be unique`);
+  if (assignment.skills.length > 5) throw violation('assignment.skills', 'skill_invalid', `Assignment for ${role.name} may select at most 5 skills`);
+  if (new Set(assignment.skills).size !== assignment.skills.length) throw violation('assignment.skills', 'skill_invalid', `Assignment for ${role.name} skills must be unique`);
   const selectable = ctx.skillCandidateIds ? new Set(ctx.skillCandidateIds) : null;
   const catalog = ctx.skillCatalog;
   for (const id of assignment.skills) {
-    if (selectable && !selectable.has(id)) throw new Error(`Skill ${id} was not advertised as a candidate`);
-    if (catalog && !catalog.has(id)) throw new Error(`Unknown skill: ${id}`);
+    if (selectable && !selectable.has(id)) throw violation('assignment.skills', 'skill_invalid', `Skill ${id} was not advertised as a candidate`);
+    if (catalog && !catalog.has(id)) throw violation('assignment.skills', 'skill_invalid', `Unknown skill: ${id}`);
   }
-  if (assignment.inputs.length === 0) throw new Error(`Assignment for ${role.name} requires bounded inputs`);
-  if (assignment.evidence.length === 0) throw new Error(`Assignment for ${role.name} requires prior evidence`);
+  if (assignment.inputs.length === 0) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} requires bounded inputs`);
+  if (assignment.evidence.length === 0) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} requires prior evidence`);
   if (role.sandbox !== 'read-only' && assignment.allowedFiles.length === 0) {
-    throw new Error(`Writable role ${role.name} requires explicit allowedFiles`);
+    throw violation('assignment.writer_scope', 'writer_scope_missing', `Writable role ${role.name} requires explicit allowedFiles`);
   }
   for (const file of assignment.allowedFiles) {
-    if (!safeRelativePath(file)) throw new Error(`Unsafe allowedFiles path for ${role.name}: ${file}`);
+    if (/[*?[]/.test(file)) {
+      throw violation('assignment.paths', 'path_glob_unsupported', `Unsupported glob in allowedFiles path for ${role.name}: ${file}`);
+    }
+    if (!safeRelativePath(file)) throw violation('assignment.paths', 'path_unsafe', `Unsafe allowedFiles path for ${role.name}: ${file}`);
   }
   if (assignment.acceptanceCriteria.length === 0 || assignment.checks.length === 0 || assignment.stopConditions.length === 0) {
-    throw new Error(`Assignment for ${role.name} requires acceptanceCriteria, checks, and stopConditions`);
+    throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} requires acceptanceCriteria, checks, and stopConditions`);
   }
   const attemptedRoles = new Set([...ctx.attemptedRoles].map(canonicalRoleId));
   const canonicalRole = canonicalRoleId(role.name);
   if (canonicalRole === 'recovery-engineer' && !attemptedRoles.has('engineer')) {
-    throw new Error('recovery-engineer can only be dispatched after an engineer attempt');
+    throw violation('assignment.role_ladder', 'role_ladder_violation', 'recovery-engineer can only be dispatched after an engineer attempt');
   }
   if (canonicalRole === 'senior-engineer' && !attemptedRoles.has('recovery-engineer')) {
-    throw new Error('senior-engineer can only be dispatched after a recovery-engineer attempt');
+    throw violation('assignment.role_ladder', 'role_ladder_violation', 'senior-engineer can only be dispatched after a recovery-engineer attempt');
   }
   if (canonicalRole === 'architect') {
-    if (ctx.outcomeCount === 0) throw new Error('orch-architect requires inspected prior evidence');
+    if (ctx.outcomeCount === 0) throw violation('assignment.role_ladder', 'architect_constraint', 'orch-architect requires inspected prior evidence');
     if (assignment.objective.length > 240 || decision.assignments.length !== 1) {
-      throw new Error('orch-architect must receive one narrowly framed decision');
+      throw violation('assignment.role_ladder', 'architect_constraint', 'orch-architect must receive one narrowly framed decision');
     }
   }
 }
 
 function checkHumanInput(humanInput, openIds) {
-  if (!isPlainObject(humanInput)) throw new Error('request_human_input requires a humanInput object');
+  if (!isPlainObject(humanInput)) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input requires a humanInput object');
   const keys = ['reason', 'question', 'options', 'recommendation', 'evidenceChecked', 'independentWork', 'relatedDecisionIds'];
-  if (!sameKeys(humanInput, keys)) throw new Error(`humanInput must contain exactly ${keys.join(', ')}`);
-  if (!HUMAN_REASONS.includes(humanInput.reason)) throw new Error(`humanInput.reason must be one of ${HUMAN_REASONS.join(', ')}`);
+  if (!sameKeys(humanInput, keys)) throw violation('decision.envelope', 'decision_envelope_invalid', `humanInput must contain exactly ${keys.join(', ')}`);
+  if (!HUMAN_REASONS.includes(humanInput.reason)) throw violation('decision.envelope', 'decision_envelope_invalid', `humanInput.reason must be one of ${HUMAN_REASONS.join(', ')}`);
   const problem = boundedString(humanInput.question, 'humanInput.question')
     || boundedString(humanInput.independentWork, 'humanInput.independentWork', { allowEmpty: true })
     || checkOptions(humanInput.options, humanInput.recommendation, 'humanInput')
     || checkStringArray(humanInput.evidenceChecked, 'humanInput.evidenceChecked', { allowEmpty: false })
     || checkStringArray(humanInput.relatedDecisionIds, 'humanInput.relatedDecisionIds');
-  if (problem) throw new Error(problem);
+  if (problem) throw violation('decision.envelope', 'decision_envelope_invalid', problem);
   for (const id of humanInput.relatedDecisionIds) {
-    if (!openIds.has(id)) throw new Error(`humanInput.relatedDecisionIds references a decision that is not open: ${id}`);
+    if (!openIds.has(id)) throw violation('decision.resolutions', 'decision_unresolved', `humanInput.relatedDecisionIds references a decision that is not open: ${id}`);
   }
 }
 
@@ -336,51 +364,51 @@ function checkHumanInput(humanInput, openIds) {
  * ctx = { roles: Map, attemptedRoles: Set, outcomeCount: number, openDecisionIds: Set, unresolvedWriterCount?: number }
  */
 function validateDecision(decision, ctx) {
-  if (!isPlainObject(decision)) throw new Error('Lead decision must be a JSON object');
+  if (!isPlainObject(decision)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead decision must be a JSON object');
   const openIds = ctx.openDecisionIds || new Set();
   const keys = ['action', 'assignments', 'final', 'resolutions', 'humanInput'];
-  if (!sameKeys(decision, keys)) throw new Error('Lead decision must contain only action, assignments, final, resolutions, and humanInput');
-  if (!['dispatch', 'finish', 'request_human_input'].includes(decision.action)) throw new Error(`Unsupported lead action: ${String(decision.action)}`);
-  if (!Array.isArray(decision.assignments)) throw new Error('Lead assignments must be an array');
-  if (typeof decision.final !== 'string') throw new Error('Lead final must be a string');
-  if (!Array.isArray(decision.resolutions)) throw new Error('Lead resolutions must be an array');
-  if (decision.humanInput !== null && !isPlainObject(decision.humanInput)) throw new Error('Lead humanInput must be null or an object');
+  if (!sameKeys(decision, keys)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead decision must contain only action, assignments, final, resolutions, and humanInput');
+  if (!['dispatch', 'finish', 'request_human_input'].includes(decision.action)) throw violation('decision.envelope', 'decision_envelope_invalid', `Unsupported lead action: ${String(decision.action)}`);
+  if (!Array.isArray(decision.assignments)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead assignments must be an array');
+  if (typeof decision.final !== 'string') throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead final must be a string');
+  if (!Array.isArray(decision.resolutions)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead resolutions must be an array');
+  if (decision.humanInput !== null && !isPlainObject(decision.humanInput)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead humanInput must be null or an object');
 
   const resolved = new Set();
   for (const resolution of decision.resolutions) {
     if (!isPlainObject(resolution) || !sameKeys(resolution, ['decisionId', 'choice', 'rationale'])) {
-      throw new Error('Each resolution must contain exactly decisionId, choice, and rationale');
+      throw violation('decision.envelope', 'decision_envelope_invalid', 'Each resolution must contain exactly decisionId, choice, and rationale');
     }
-    if (!openIds.has(resolution.decisionId)) throw new Error(`Resolution references a decision that is not open: ${String(resolution.decisionId)}`);
-    if (resolved.has(resolution.decisionId)) throw new Error(`Duplicate resolution for decision ${resolution.decisionId}`);
+    if (!openIds.has(resolution.decisionId)) throw violation('decision.resolutions', 'decision_unresolved', `Resolution references a decision that is not open: ${String(resolution.decisionId)}`);
+    if (resolved.has(resolution.decisionId)) throw violation('decision.resolutions', 'decision_unresolved', `Duplicate resolution for decision ${resolution.decisionId}`);
     const problem = boundedString(resolution.choice, 'Resolution choice') || boundedString(resolution.rationale, 'Resolution rationale');
-    if (problem) throw new Error(problem);
+    if (problem) throw violation('decision.envelope', 'decision_envelope_invalid', problem);
     resolved.add(resolution.decisionId);
   }
 
   if (decision.action === 'finish') {
-    if (decision.assignments.length !== 0 || !decision.final.trim()) throw new Error('Finish decisions require no assignments and non-empty final text');
-    if (decision.humanInput !== null) throw new Error('Finish decisions must leave humanInput null');
+    if (decision.assignments.length !== 0 || !decision.final.trim()) throw violation('decision.envelope', 'decision_envelope_invalid', 'Finish decisions require no assignments and non-empty final text');
+    if (decision.humanInput !== null) throw violation('decision.envelope', 'decision_envelope_invalid', 'Finish decisions must leave humanInput null');
   } else if (decision.action === 'request_human_input') {
-    if (decision.assignments.length !== 0) throw new Error('request_human_input decisions require no assignments');
-    if (decision.final.trim()) throw new Error('request_human_input decisions must leave final empty');
+    if (decision.assignments.length !== 0) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input decisions require no assignments');
+    if (decision.final.trim()) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input decisions must leave final empty');
     checkHumanInput(decision.humanInput, openIds);
   } else {
     if (decision.assignments.length < 1 || decision.assignments.length > MAX_ASSIGNMENTS) {
-      throw new Error(`Dispatch must contain between 1 and ${MAX_ASSIGNMENTS} assignments`);
+      throw violation('decision.envelope', 'assignment_count_invalid', `Dispatch must contain between 1 and ${MAX_ASSIGNMENTS} assignments`);
     }
-    if (decision.final.trim()) throw new Error('Dispatch decisions must leave final empty');
-    if (decision.humanInput !== null) throw new Error('Dispatch decisions must leave humanInput null');
+    if (decision.final.trim()) throw violation('decision.envelope', 'decision_envelope_invalid', 'Dispatch decisions must leave final empty');
+    if (decision.humanInput !== null) throw violation('decision.envelope', 'decision_envelope_invalid', 'Dispatch decisions must leave humanInput null');
     for (const assignment of decision.assignments) checkAssignment(assignment, decision, ctx);
     const unresolved = ctx.unresolvedWriterCount || 0;
     if (unresolved > 0 && decision.assignments.some((assignment) => getRole(ctx.roles, assignment.role)?.sandbox !== 'read-only')) {
-      throw new Error(`Writable dispatch refused: ${unresolved} writer outcome(s) are unresolved`);
+      throw violation('dispatch.writer_unresolved', 'writer_unresolved', `Writable dispatch refused: ${unresolved} writer outcome(s) are unresolved`);
     }
   }
 
   const related = new Set(decision.action === 'request_human_input' ? decision.humanInput.relatedDecisionIds : []);
   for (const id of openIds) {
-    if (!resolved.has(id) && !related.has(id)) throw new Error(`Open decision ${id} must be resolved or listed in humanInput.relatedDecisionIds`);
+    if (!resolved.has(id) && !related.has(id)) throw violation('decision.resolutions', 'decision_unresolved', `Open decision ${id} must be resolved or listed in humanInput.relatedDecisionIds`);
   }
 }
 
@@ -416,6 +444,8 @@ module.exports = {
   parseWorkerReport,
   DECISION_SCHEMA,
   validateDecision,
+  BoundaryViolation,
+  BOUNDARY_PREDICATES,
   classifyCodexError,
   findCodexErrorInfo,
   safeRelativePath,
