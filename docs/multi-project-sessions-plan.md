@@ -35,6 +35,12 @@ Branch: `feature/multi-project-sessions`. Owner: dev lead. Workers: worker-sonne
   Rejected alternative: one long-lived lead run. A2A tasks are immutable once terminal and the acceptance contract is
   pinned per run, so that would rework the hardened state machine.
 - D8 The UI moves out of the template literal into `launcher-ui/` (index.html, styles.css, app.js) before any feature work.
+- D9 A new session gets its id from the UI (`crypto.randomUUID()`), sent as `contextId` on the first message. The SDK
+  honors a client-provided id (`incomingMessage.contextId || task?.contextId || randomUUID()`), so the transcript can
+  poll the session before the first run finishes. The launcher accepts `contextId` only when neither `taskId` nor
+  `continueFrom` is given.
+- D10 Any session can be reopened and continued from its last terminal turn; there is no read-only archive mode. The
+  server's existing one-active-lead-task rule (`rejectOverlappingLeadTask`) stays the guard against overlapping runs.
 
 ## Steps
 
@@ -46,6 +52,36 @@ Branch: `feature/multi-project-sessions`. Owner: dev lead. Workers: worker-sonne
 | S3 | Sessions: `/api/projects/:id/sessions...`, transcript view, Send = follow-up, New session button, history lists sessions | A follow-up message lands in the same session; history shows one row per session |
 
 Each step ends with: lead reads the diff, runs the checks, commits on the branch.
+
+## S3 spec (sessions)
+
+Backend (`src/launcher-app.js`):
+- `GET /api/projects/:id/sessions` -> `{ sessions: [{ contextId, goal, turns, state, updatedAt, lastTaskId, disposition }] }`,
+  newest first. Group lead tasks (`owner = 'orchestrator'`) by `context_id`; a row with an empty `context_id` is its own
+  session keyed by its task id. `goal` is the first user text of the earliest turn; `state`, `updatedAt`, `disposition`
+  and `lastTaskId` come from the last turn.
+- `GET /api/projects/:id/sessions/:contextId` -> `{ contextId, turns: [{ leadTask, workers }] }`, oldest first (order by
+  `status_last_updated`), 404 when empty. `leadTask` has the shape used today.
+- `DELETE /api/projects/:id/sessions/:contextId`: one transaction, shared `deleteLeadTask(db, taskId)` helper with the
+  single-task delete; 400 if any turn is not terminal; 404 if none.
+- `POST /api/projects/:id/task/send` accepts an optional `contextId` (UUID pattern), used only for a new session (D9).
+- `tasks/latest` and `tasks/history` are replaced by the session routes.
+
+UI:
+- The single result area becomes a transcript: per turn a user bubble (that turn's own request) and the lead's answer
+  (working: progress and round specialists; paused: decision card under the transcript; completed: result text and
+  acceptance badge; failed: error text). Stay scrolled to the bottom only when the user already was.
+- Composer: one textarea (placeholder says "Describe the goal" when no session is open, "Reply in this session" when
+  one is), checks field unchanged, primary button "Send" (Ctrl+Enter). Open session with a terminal last turn: send with
+  `continueFrom = last turn id` and the session's `contextId`. No session open: create a UUID, send as `contextId`. Last
+  turn working or paused: composer disabled with a hint (paused is answered through the decision card).
+- "New session" button: enabled when a session is open and its last turn is terminal; clears the open session and
+  focuses the composer; deletes nothing.
+- The old Continue and Close buttons, the archive banner and the dismissed/archived view state are removed.
+- History modal lists sessions (goal, turn count, state, time); Open opens the session; Delete removes the whole session
+  (confirm, terminal only).
+- Tab binding: `?project=<id>&session=<contextId>`. On load without `session`, open the project's latest session if any.
+  Switching project clears the session. Poll the open session every second; list sessions on load and after sends.
 
 ## Known limits
 
