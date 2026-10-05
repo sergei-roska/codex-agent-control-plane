@@ -11,6 +11,9 @@ const { LeadOrchestrator, RunNotFoundError } = require('../src/lead-orchestrator
 const { execFileSync } = require('node:child_process');
 const { UsageLedger } = require('../src/usage-ledger');
 const { loadSkillCatalog } = require('../src/skill-catalog');
+const { invalidAcceptanceContract } = require('../src/acceptance');
+const { createEvidenceStore } = require('../src/evidence-store');
+const { boundedOutcomes } = require('../src/lead-graph');
 const {
   DispatchJournal, openStateDatabase, assignmentId, attemptId, deterministicContextId,
 } = require('../src/durable-store');
@@ -212,6 +215,7 @@ class Session {
       journal: this.journal,
       admission: this.world.admission,
       reconcileWaitMs: 20,
+      ...(this.options.withEvidence ? { evidenceStore: this.evidenceStore = createEvidenceStore(this.state.db) } : {}),
       ...(this.options.withLedger ? { usageLedger: new UsageLedger({ db: this.state.db }) } : {}),
       ...(this.options.orchestrator || {}),
     });
@@ -502,7 +506,7 @@ test('worker needs_decision must be resolved by the lead', async () => {
   });
   const attempt = attemptId(assignmentId(RUN_ID, 1, 0));
 
-  const unresolved = makeWorld({ script: [dispatch(brief('orch-explorer', [])), finish('Ignored it')], workerFinal });
+  const unresolved = makeWorld({ script: [dispatch(brief('orch-explorer', [])), finish('Ignored it'), finish('Ignored it'), finish('Ignored it')], workerFinal });
   await withSession(unresolved, async (session) => {
     await assert.rejects(session.orchestrator.run({ goal: 'Explore', runId: RUN_ID }), /must be resolved/);
     assert.match(unresolved.prompts[1], new RegExp(attempt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -1299,4 +1303,433 @@ test('a finished writer outcome without an execution row but with a task is lega
     assert.deepEqual(reconciliation.changedPaths, []);
     assert.equal(reconciliation.reason, 'no_execution_record');
   });
+});
+
+test('a bare dot in allowedFiles of a read-only role is normalized away and does not pause', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', ['.'])), finish('Explored')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 2);
+    assert.deepEqual(world.dispatchInputs[0].allowedFiles, []);
+  });
+});
+
+test('a rejected decision is fed back to the lead, keeps the thread, and is not an outcome', async () => {
+  const threads = [];
+  const lead = (text) => (args) => { threads.push(args.threadId); return text; };
+  const world = makeWorld({
+    script: [lead(dispatch(brief('orch-builder', ['src/*']))), lead(dispatch(brief('orch-builder'))), lead(finish('Fixed'))],
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.rounds, 1);
+    assert.equal(world.sends.length, 1);
+    assert.equal(world.dispatchInputs[0].allowedFiles[0], 'src/example.js');
+    assert.equal(world.leadTurns, 3);
+    assert.doesNotMatch(world.prompts[0], /Rejected decision:/);
+    assert.match(world.prompts[1], /Rejected decision:/);
+    assert.match(world.prompts[1], /assignment\.paths path_glob_unsupported/);
+    assert.match(world.prompts[1], /without '\.', '\.\.', globs/);
+    assert.doesNotMatch(world.prompts[2], /Rejected decision:/);
+    assert.deepEqual(threads, [undefined, 'lead-thread', 'lead-thread']);
+  });
+});
+
+test('a reconciliation with thousands of changed paths stores capped lists and still fails acceptance', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('Done')],
+    workerFinal: (roleName, contextId) => {
+      world.admission.rows.set(contextId, admissionRow(contextId, 'unresolved'));
+      return unresolvedWriterTask(roleName);
+    },
+  });
+  const many = Array.from({ length: 5000 }, (_, index) => `other/file-${index}.js`);
+  world.admission.reconcile = async function reconcile(executionId) {
+    const row = this.get(executionId);
+    row.state = 'reconciled';
+    row.delta = { known: true, headChanged: false, changedPaths: many };
+    return { state: row.state, delta: row.delta };
+  };
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    const reconciliation = result.assignments.find((entry) => entry.kind === 'reconciliation');
+    assert.equal(reconciliation.changedPaths.length, 50);
+    assert.equal(reconciliation.changedPathCount, 5000);
+    assert.equal(reconciliation.attestedScopeViolations.length, 50);
+    assert.equal(reconciliation.attestedScopeViolationCount, 5000);
+    assert.ok(JSON.stringify(reconciliation).length < 20000);
+    assert.equal(reconciliation.boundary.results[0].code, 'attested_scope_violation');
+    assert.ok(result.acceptance.issues.some((issue) => issue.code === 'attested_scope_violation' && issue.result === 'FAIL' && issue.advisory === false));
+  });
+});
+
+test('three consecutive rejected decisions pause the run with the violation codes', async () => {
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  const world = makeWorld({ script: [bad, bad, bad, finish('Never reached')] });
+  await withSession(world, async (session) => {
+    await assert.rejects(session.orchestrator.run({ goal: 'Build', runId: RUN_ID }), /rejected 3 times.*path_glob_unsupported/);
+    assert.equal(world.leadTurns, 3);
+    assert.equal(world.sends.length, 0);
+  });
+});
+
+test('a resume after the rejection pause allows two automatic retries again', async () => {
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  const world = makeWorld({ script: [bad, bad, bad, bad, bad, finish('Done')] });
+  await withSession(world, async (session) => {
+    await assert.rejects(session.orchestrator.run({ goal: 'Build', runId: RUN_ID }), /rejected 3 times/);
+    assert.equal(world.leadTurns, 3);
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 6);
+  });
+});
+
+test('an accepted decision resets the consecutive rejection counter', async () => {
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  const world = makeWorld({ script: [bad, bad, dispatch(brief('orch-builder')), bad, bad, finish('Done')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 6);
+  });
+});
+
+test('a checkpoint written before the rejection state fields existed still resumes', async () => {
+  const world = makeWorld({ script: [usageLimitError(), 'not json', finish('Resumed')] });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Work', runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.match(world.prompts[2], /decision_not_json/);
+  });
+});
+
+// ------------------------------------------------- boundary records (DBC-02b)
+
+const recordCodes = (outcome) => outcome.boundary.results.map((entry) => `${entry.predicate}:${entry.result}:${entry.code}`);
+const noReportWriter = (metadata) => () => ({
+  state: TaskState.TASK_STATE_COMPLETED,
+  artifacts: [{ name: 'report', parts: textParts('not json'), metadata }],
+});
+
+test('each dispatched item pins a boundary contract that is copied to its outcome', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('Done')], workerFinal: okWriterFinal() });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    const outcome = result.assignments[0];
+    assert.equal(outcome.contract.id, 'boundary-contract/v1');
+    assert.equal(outcome.contract.reportContract, 'worker-report/v1');
+    assert.deepEqual(outcome.contract.allowedFiles, ['src/example.js']);
+    assert.equal(outcome.contract.sandbox, 'workspace-write');
+    assert.match(outcome.contract.roleProfileSha256, /^[0-9a-f]{64}$/);
+    assert.deepEqual(outcome.contract.skillPins, []);
+    assert.deepEqual(outcome.boundary, { contract: 'boundary-contract/v1', results: [] });
+  });
+});
+
+test('settlement records an out-of-scope writer, an unknown delta, an invalid report and a failed self-report', async () => {
+  const scope = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('a')], workerFinal: okWriterFinal(['lib/other.js']) });
+  await withSession(scope, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(recordCodes(outcome), ['settle.attested_scope:FAIL:attested_scope_violation']);
+    assert.equal(outcome.boundary.results[0].boundary, 'settlement');
+    assert.equal(outcome.boundary.results[0].advisory, false);
+  });
+
+  const unknown = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('a')],
+    workerFinal: () => ({
+      state: TaskState.TASK_STATE_COMPLETED,
+      artifacts: [{ name: 'report', parts: textParts(report('done')), metadata: { writerExecution: { executionId: 'exec-u', state: 'released', delta: { known: false }, reason: null } } }],
+    }),
+  });
+  await withSession(unknown, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(recordCodes(outcome), ['settle.attested_scope:UNKNOWN:delta_unknown']);
+  });
+
+  const invalid = makeWorld({ script: [dispatch(brief('orch-builder')), finish('a')], workerFinal: noReportWriter({ writerExecution: releasedWriter() }) });
+  await withSession(invalid, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(recordCodes(outcome), ['settle.report_valid:FAIL:report_invalid']);
+    assert.equal(outcome.boundary.results[0].advisory, false);
+  });
+
+  const failed = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('a')],
+    workerFinal: () => ({
+      state: TaskState.TASK_STATE_COMPLETED,
+      artifacts: [{ name: 'report', parts: textParts(report('nope', { outcome: 'failed', filesChanged: ['elsewhere.js'] })), metadata: { writerExecution: releasedWriter() } }],
+    }),
+  });
+  await withSession(failed, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(recordCodes(outcome), ['settle.reported_scope:FAIL:reported_scope_violation', 'settle.report_outcome:FAIL:writer_reported_failure']);
+    assert.deepEqual(outcome.boundary.results.map((entry) => entry.advisory), [false, true]);
+  });
+});
+
+test('an unsettled writer outcome records writer_unresolved with its execution evidence', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('a')],
+    workerFinal: () => ({
+      state: TaskState.TASK_STATE_COMPLETED,
+      artifacts: [{ name: 'report', parts: textParts(report('done')), metadata: { writerExecution: { executionId: 'exec-x', state: 'unresolved', delta: { known: true, changedPaths: [] }, reason: 'late' } } }],
+    }),
+  });
+  await withSession(world, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    const entry = outcome.boundary.results.find((record) => record.predicate === 'settle.writer_settled');
+    assert.equal(entry.result, 'UNKNOWN');
+    assert.equal(entry.code, 'writer_unresolved');
+    assert.deepEqual(entry.evidence, ['writer_executions:exec-x']);
+  });
+});
+
+test('an invalid read-only report is an advisory settlement record', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-explorer', [])), finish('a')],
+    workerFinal: () => ({ state: TaskState.TASK_STATE_COMPLETED, artifacts: [{ name: 'r', parts: textParts('plain text') }] }),
+  });
+  await withSession(world, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(recordCodes(outcome), ['settle.report_valid:FAIL:report_invalid']);
+    assert.equal(outcome.boundary.results[0].advisory, true);
+    assert.ok(outcome.boundary.results[0].detail.length <= 500);
+  });
+});
+
+test('a writer reporting failed with passing checks is accepted and the advisory record is present', async () => {
+  const workspace = gitRepo();
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('Done')],
+    workerFinal: () => ({
+      state: TaskState.TASK_STATE_COMPLETED,
+      artifacts: [{ name: 'report', parts: textParts(report('could not', { outcome: 'blocked' })), metadata: { writerExecution: releasedWriter() } }],
+    }),
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, contract: contractOf(nodeCheck('ok', 'process.exit(0)')) });
+    assert.equal(result.acceptance.disposition, 'accepted');
+    assert.deepEqual(issueCodes(result), ['writer_reported_failure']);
+    assert.equal(result.acceptance.issues[0].advisory, true);
+    assert.equal(result.acceptance.issues[0].boundary, 'acceptance');
+  }, { workspace });
+});
+
+test('a reconciled out-of-scope writer carries settlement records', async () => {
+  const workspace = gitRepo();
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder', ['docs/x.md'])), finish('a'), finish('b')],
+    workerFinal: (roleName, contextId) => {
+      world.admission.rows.set(contextId, admissionRow(contextId, 'unresolved'));
+      return unresolvedWriterTask(roleName);
+    },
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, contract: contractOf(nodeCheck('ok', 'process.exit(0)')) });
+    const reconciliation = result.assignments.find((entry) => entry.kind === 'reconciliation');
+    assert.equal(reconciliation.boundary.contract, 'boundary-contract/v1');
+    assert.deepEqual(recordCodes(reconciliation), ['settle.attested_scope:FAIL:attested_scope_violation']);
+  }, { workspace });
+});
+
+test('an outcome from an old checkpoint without a pinned contract is legacy and still processes', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('Done')], workerFinal: okWriterFinal(['lib/other.js']) });
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, interruptAfter: ['collect'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    const { values } = await session.orchestrator.graph.getState(config);
+    const items = values.batch.items.map(({ contract, ...rest }) => rest);
+    await session.orchestrator.graph.updateState(config, { batch: { ...values.batch, items } }, 'collect');
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const outcome = result.assignments[0];
+    assert.equal(Object.hasOwn(outcome, 'contract'), false);
+    assert.equal(outcome.boundary.contract, 'legacy');
+    assert.deepEqual(outcome.attestedScopeViolations, ['lib/other.js']);
+    assert.deepEqual(recordCodes(outcome), ['settle.attested_scope:FAIL:attested_scope_violation']);
+  });
+});
+
+test('an invalid acceptance contract marker yields unverifiable with contract_invalid', async () => {
+  const world = makeWorld({ script: [finish('Done')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID, contract: invalidAcceptanceContract('Stored acceptance contract is invalid: bad') });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.acceptance.disposition, 'unverifiable');
+    assert.deepEqual(issueCodes(result), ['contract_invalid']);
+    assert.equal(result.acceptance.issues[0].predicate, 'accept.contract_valid');
+    assert.equal(result.acceptance.issues[0].result, 'UNKNOWN');
+  }, { workspace: gitRepo() });
+});
+
+// ------------------------------------------------- lead projection (PIP-03)
+
+const sha256Of = (value) => crypto.createHash('sha256').update(value).digest('hex');
+function readAll(store, ref, runId) {
+  const parts = [];
+  for (let offset = 0; offset < ref.storedBytes; offset += 1024 * 1024) {
+    parts.push(store.read(ref.id, { runId, offset, length: 1024 * 1024 }).bytes);
+  }
+  return Buffer.concat(parts);
+}
+const writerFinalWith = (text) => () => ({
+  state: TaskState.TASK_STATE_COMPLETED,
+  artifacts: [{ name: 'report', parts: textParts(text), metadata: { writerExecution: releasedWriter() } }],
+});
+const promptOutcomes = (prompt) => prompt.split('Prior worker outcomes (including failures):\n')[1].split('\n\n')[0];
+
+test('a 300 KB valid report is parsed whole, projected with omissions, and retrievable as evidence', async () => {
+  const files = Array.from({ length: 500 }, (_, i) => `lib/gen/${'d'.repeat(16)}/f-${i}.js`);
+  const text = report('Big', {
+    filesChanged: files, filesInspected: files.slice(0, 300), risks: Array.from({ length: 40 }, () => 'r'.repeat(8000)),
+  });
+  assert.ok(text.length > 300_000, `fixture is ${text.length} chars`);
+  const world = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('Done')], workerFinal: writerFinalWith(text) });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    const outcome = result.assignments[0];
+    assert.equal(outcome.report.outcome, 'completed');
+    assert.equal(outcome.reportError, null);
+    assert.equal(outcome.report.filesChanged.length, 100);
+    assert.equal(outcome.scopeViolations.length, 50);
+    assert.equal(outcome.scopeViolationCount, 500);
+    const omitted = Object.fromEntries(outcome.projection.omitted.map((entry) => [entry.field, entry]));
+    assert.deepEqual(omitted.filesChanged, { field: 'filesChanged', kept: 100, total: 500 });
+    assert.deepEqual(omitted.filesInspected, { field: 'filesInspected', kept: 20, total: 300 });
+    assert.deepEqual(omitted.risks, { field: 'risks', kept: 20, total: 40 });
+    assert.deepEqual(omitted.scopeViolations, { field: 'scopeViolations', kept: 50, total: 500 });
+    assert.equal(outcome.evidence.length, 1);
+    const ref = outcome.evidence[0];
+    assert.equal(ref.kind, 'worker_result_text');
+    assert.equal(ref.attemptId, outcome.attemptId);
+    assert.equal(ref.originalSha256, sha256Of(text));
+    assert.equal(sha256Of(readAll(session.evidenceStore, ref, RUN_ID)), sha256Of(text));
+    assert.ok(outcome.report.decisionRequest === null);
+    assert.equal(outcome.boundary.results.some((entry) => entry.code === 'reported_scope_violation'), true);
+    const after = JSON.stringify(outcome).length;
+    assert.ok(after < 20_000, `projected outcome is ${after} chars (before: ${text.length}+ chars of report text)`);
+    assert.ok(promptOutcomes(world.prompts[1]).length < 20_000);
+    // The journal result keeps the cut text and only bounded analysis.
+    const stored = JSON.stringify(session.journal.get(outcome.attemptId).result);
+    assert.ok(stored.length < 260_000, `journal result is ${stored.length} chars`);
+  }, { workspace: gitRepo(), withEvidence: true });
+});
+
+test('a 300 KB invalid text yields reportError, a head/marker/tail projection and evidence', async () => {
+  const text = `${'H'.repeat(6000)}${'m'.repeat(288_000)}${'T'.repeat(6000)}`;
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer')), finish('Done')], workerFinal: writerFinalWith(text) });
+  await withSession(world, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Look', runId: RUN_ID })).assignments[0];
+    assert.equal(outcome.report, null);
+    assert.match(outcome.reportError, /not valid JSON/);
+    const ref = outcome.evidence[0];
+    assert.equal(ref.originalSha256, sha256Of(text));
+    assert.ok(outcome.text.startsWith('H'.repeat(6000)));
+    assert.ok(outcome.text.endsWith('T'.repeat(2000)));
+    assert.ok(outcome.text.includes(`[... ${text.length - 8000} chars omitted; evidence ${ref.id}]`));
+    assert.ok(outcome.text.length < 8200);
+    assert.deepEqual(outcome.projection.omitted, [{ field: 'text', kept: 8000, total: text.length }]);
+    assert.equal(sha256Of(readAll(session.evidenceStore, ref, RUN_ID)), sha256Of(text));
+  }, { workspace: gitRepo(), withEvidence: true });
+});
+
+test('a store failure sets evidenceError and the run still completes', async () => {
+  const text = `${'x'.repeat(20_000)}`;
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer')), finish('Done')], workerFinal: writerFinalWith(text) });
+  const failing = { put() { throw Object.assign(new Error('disk gone'), { code: 'evidence_boom' }); } };
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const outcome = result.assignments[0];
+    assert.equal(outcome.evidenceError, 'evidence_boom');
+    assert.equal(outcome.evidence, undefined);
+    assert.ok(outcome.text.includes('chars omitted]'));
+    assert.ok(!outcome.text.includes('evidence ev_'));
+  }, { workspace: gitRepo(), orchestrator: { evidenceStore: failing } });
+});
+
+test('small outcomes are unchanged: no evidence, no projection, no counts', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-builder')), finish('Done')], workerFinal: okWriterFinal(['lib/other.js']) });
+  await withSession(world, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    for (const key of ['evidence', 'projection', 'evidenceError', 'scopeViolationCount', 'attestedScopeViolationCount']) assert.equal(key in outcome, false, key);
+    assert.deepEqual(outcome.attestedScopeViolations, ['lib/other.js']);
+  }, { workspace: gitRepo(), withEvidence: true });
+});
+
+test('boundedOutcomes keeps newest outcomes whole, digests older ones with diagnostics, and stays under the bound', () => {
+  const outcome = (index, extra = {}) => ({
+    assignmentId: `a${index}`, attemptId: `run:r1:a${index}:t1`, role: 'engineer', status: 'TASK_STATE_COMPLETED',
+    report: { outcome: 'completed', summary: `summary ${index} ${'s'.repeat(2000)}`, risks: ['x'.repeat(400)] },
+    reportError: null, failureKind: null, scopeViolations: [`bad/${index}.js`], attestedScopeViolations: [], attestedDeltaKnown: true,
+    writerExecution: { state: 'released', delta: { known: true, changedPaths: Array.from({ length: 50 }, (_, n) => `p/${n}`) } },
+    effects: null, boundary: { contract: 'legacy', results: [{ predicate: 'settle.x', result: 'FAIL', code: 'c', detail: 'd'.repeat(500) }] },
+    evidence: [{ id: `ev_${String(index).padStart(32, '0')}` }], ...extra,
+  });
+  const many = Array.from({ length: 80 }, (_, i) => outcome(i, { filler: 'f'.repeat(3000) }));
+  many.splice(5, 0, { kind: 'reconciliation', attemptId: 'run:r1:a5:t1', assignmentId: 'rec', role: 'engineer', state: 'reconciled', changedPaths: [], deltaKnown: true });
+  const bounded = boundedOutcomes(many);
+  assert.ok(JSON.stringify(bounded).length <= 60_000, `${JSON.stringify(bounded).length}`);
+  assert.equal(bounded.at(-1).digest, undefined);
+  assert.equal(bounded.at(-1).assignmentId, 'a79');
+  const digest = bounded.find((entry) => entry.digest && entry.assignmentId === 'a70');
+  assert.ok(digest, 'older outcomes become digests');
+  assert.equal(digest.summary.length, 300);
+  assert.equal(digest.diagnostics.status, 'TASK_STATE_COMPLETED');
+  assert.deepEqual(digest.diagnostics.scopeViolations, ['bad/70.js']);
+  assert.equal(digest.diagnostics.changedPathCount, 50);
+  assert.deepEqual(digest.evidence, [`ev_${'70'.padStart(32, '0')}`]);
+  assert.deepEqual(digest.boundary, [{ predicate: 'settle.x', result: 'FAIL', code: 'c' }]);
+  assert.ok(bounded.some((entry) => entry.kind === 'reconciliation'), 'reconciliation stays whole');
+  // Under the bound (and for old outcomes without the new fields) nothing changes.
+  const few = [outcome(1), outcome(2)];
+  assert.equal(boundedOutcomes(few), few);
+});
+
+test('boundedOutcomes elides older outcomes into entries with identity and blocking violation codes', () => {
+  const outcome = (index) => ({
+    assignmentId: `a${index}`, attemptId: `run:r1:a${index}:t1`, role: 'engineer', status: 'TASK_STATE_FAILED',
+    report: { outcome: 'failed', summary: 's'.repeat(2000) }, reportError: null, failureKind: null, scopeViolations: [],
+    attestedScopeViolations: [], attestedDeltaKnown: true, writerExecution: null, effects: null, filler: 'f'.repeat(5000),
+    boundary: { contract: 'legacy', results: [
+      { predicate: 'p1', result: 'FAIL', code: `block_${index % 3}`, advisory: false },
+      { predicate: 'p2', result: 'FAIL', code: `block_${index % 3}` },
+      { predicate: 'p3', result: 'FAIL', code: 'only_advisory', advisory: true },
+    ] },
+    evidence: [{ id: `ev_${String(index).padStart(32, '0')}` }],
+  });
+  const many = Array.from({ length: 90 }, (_, i) => outcome(i));
+  const limit = 20_000;
+  const bounded = boundedOutcomes(many, limit);
+  assert.ok(JSON.stringify(bounded).length <= limit, `${JSON.stringify(bounded).length}`);
+  const elided = bounded.filter((entry) => entry.elided === true);
+  assert.ok(elided.length >= 3, `${elided.length} elision entries`);
+  for (const entry of elided) {
+    const index = Number(entry.assignmentId.slice(1));
+    assert.deepEqual(Object.keys(entry).sort(), ['assignmentId', 'attemptId', 'elided', 'role', 'status', 'violationCodes']);
+    assert.equal(entry.attemptId, `run:r1:a${index}:t1`);
+    assert.equal(entry.role, 'engineer');
+    assert.equal(entry.status, 'TASK_STATE_FAILED');
+    assert.deepEqual(entry.violationCodes, [`block_${index % 3}`]);
+  }
+  // Newest outcomes stay full or digested; the oldest are the ones elided.
+  assert.equal(bounded.at(-1).assignmentId, 'a89');
+  assert.equal(bounded.at(-1).elided, undefined);
+  const elidedIndexes = elided.map((entry) => Number(entry.assignmentId.slice(1)));
+  const detailed = bounded.filter((entry) => entry.elided !== true && entry.assignmentId).map((entry) => Number(entry.assignmentId.slice(1)));
+  assert.ok(Math.max(...elidedIndexes) < Math.min(...detailed));
+  // When even elision entries do not fit, a single count digest covers the remainder.
+  const tiny = boundedOutcomes(many, 1500);
+  assert.ok(JSON.stringify(tiny).length <= 1500, `${JSON.stringify(tiny).length}`);
+  const counter = tiny.filter((entry) => entry.digest && typeof entry.elided === 'number');
+  assert.equal(counter.length, 1);
+  assert.ok(counter[0].elided > 0 && typeof counter[0].note === 'string');
 });

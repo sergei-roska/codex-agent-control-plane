@@ -151,6 +151,8 @@ class CodexAppServer {
   }
 
   async _start() {
+    const spawnedMs = performance.now();
+    this.startupInfo = null;
     const child = this.spawnImpl(this.codexPath, ['app-server', '--listen', 'stdio://'], {
       stdio: ['pipe', 'pipe', 'inherit'],
       // Own process group, so the whole tree can be signalled and proven gone.
@@ -210,6 +212,9 @@ class CodexAppServer {
     });
     this.appServerVersion = typeof initResult?.userAgent === 'string' ? initResult.userAgent : null;
     this._notify('initialized', {});
+    const readyMs = performance.now();
+    // Spawn to initialize completion; the first run that started or waited on this process claims it.
+    this.startupInfo = { startupMs: Math.round(readyMs - spawnedMs), readyMs, claimed: false };
   }
 
   processIdentity() {
@@ -366,6 +371,8 @@ class CodexAppServer {
       effort: role.effort || null,
       startedAt: new Date().toISOString(),
       startedMs: performance.now(),
+      startupMs: null,
+      coldStart: null,
       permissionEvents: [],
       pendingHooks: new Map(),
       permissionConfig: {
@@ -394,6 +401,14 @@ class CodexAppServer {
 
   async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills }) {
     await this.start();
+    const startup = this.startupInfo;
+    if (startup && !startup.claimed && ctx.startedMs <= startup.readyMs) {
+      startup.claimed = true;
+      ctx.startupMs = startup.startupMs;
+      ctx.coldStart = true;
+    } else {
+      ctx.coldStart = false;
+    }
 
     const developerInstructions = [role.instructions || `You are the ${role.name} agent.`, SKILL_BOUNDARY].join('\n\n');
     let toolConfig = null;
@@ -550,6 +565,8 @@ class CodexAppServer {
       tokenSource,
       cumulativeTotal,
       appServerVersion: this.appServerVersion,
+      startupMs: ctx.startupMs,
+      coldStart: ctx.coldStart,
     };
   }
 

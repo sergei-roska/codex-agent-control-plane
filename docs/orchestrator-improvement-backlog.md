@@ -74,24 +74,43 @@ Recorded 2026-10-05. M0 is met.
   routing committed on top of `fd92eea`). Benchmark trials pin their own reviewed
   revision under MEA-01; this one is the implementation baseline.
 - Runtime: Node v24.21.0, codex-cli 0.160.0.
-- Profiles: `coordinator` gpt-6.1-sol/high (read-only, `src/role-catalog.js`);
+- Product profiles (the system under change, not the implementation team):
+  `coordinator` gpt-6.1-sol/high (read-only, `src/role-catalog.js`);
   `explorer`, `engineer`, `verifier` gpt-6-luna/high; `scout` gpt-6-luna/medium;
   `recovery-engineer` gpt-6-luna/xhigh; `auditor` gpt-6.1-sol/high;
   `senior-engineer` gpt-6.1-sol/medium; `architect` gpt-6.1-sol/xhigh
   (`profiles/agents/*.toml`).
 - Checks: `npm test` on the baseline passes 394 of 394 tests (13 suites, about
-  33 s); no known failures. Every implementation task is submitted with
-  `--check 'npm test'` as a pinned acceptance check, plus any focused checks its
-  brief names.
-- Execution path: the lead submits each task through `npm run ask` to the local
-  orchestrator serving this repository as its workspace; the coordinator
-  dispatches the roles above. Briefs use the TEAM.md work contract (objective,
-  allowed files, inputs, acceptance criteria, checks, stop conditions). The
-  running server keeps the code it started with; it is restarted only between
-  tasks, with no writer active, when a merged change must take effect.
+  33 s); no known failures. Every implementation task must pass `npm test`, plus
+  any focused checks its brief names.
+- Execution path: the Claude Code lead session implements this backlog with
+  Claude workers (worker-sonnet for code and tests, auditor-sonnet for read-only
+  fact maps and reviews). The orchestrator is not used to build itself. Briefs
+  state goal, established facts, the lead's decision, allowed files, and the
+  definition of done.
 - Git: workers never change git state. The lead reviews each accepted diff, runs
   the suite, and commits on the working branch; a feature branch is merged into
   `main` when its work is accepted.
+
+## Phase A progress
+
+Branch `feature/orchestrator-phase-a`, recorded 2026-10-05.
+
+| Item | State | Evidence |
+| --- | --- | --- |
+| OPS-01 | done | `c722d95`; CLI polls instead of one blocking request |
+| MEA-01 | done | `docs/orchestration-benchmark-plan.md`; fixtures F1-F3 under `bench/` (M1) |
+| MEA-02 | done | `b0bfeb7`; pre-turn rows, startup, queue wait |
+| PIP-01 | done | `docs/evidence-artifact-contract.md` (`evidence-ref/v1`) |
+| PIP-02 | done | `1fb29a9`; `src/evidence-store.js`, `npm run evidence` |
+| PIP-03 | done | `5dd5097`; bounded lead projection, check output evidence |
+| PIP-04 | done | test/evidence-pipeline.test.js; 1069117-char report projects to 18602 chars |
+| DBC-01 | done | `docs/execution-boundary-contract.md` (`boundary-contract/v1`) |
+| DBC-02a | done | `2a61643`; rejected decisions return to the lead |
+| DBC-02b | done | `9e01dce`; per-attempt pins, FAIL-over-UNKNOWN acceptance |
+| DBC-03 | done | `f4b7172`; executor-side specialist contract |
+| DBC-04 | done | `9bd2c23`; test/runtime-contracts.test.js |
+| M1 | done | 502 tests green; independent safety audit found F1 (blocker: reported scope advisory) and F2-F7, all fixed before merge; OPS-02 recorded |
 
 ## Phase A: baseline, compact evidence, executable contracts
 
@@ -119,6 +138,28 @@ Write scope: `docs/orchestration-benchmark-plan.md`.
 Done: a reviewer can reproduce the trials from the document; no live model runs
 are required to complete this task. Actual trials use disposable workspaces.
 
+Status 2026-10-05: done, `docs/orchestration-benchmark-plan.md`.
+
+#### MEA-02 - The ledger records every attempt and its waits [P1]
+
+Level 3; parent: MEA; depends on MEA-01; executor: worker-sonnet.
+Proposed write scope: `src/a2a-role-service.js`, `src/usage-ledger.js`,
+`src/usage-report.js`, `src/codex-app-server.js`, and their tests.
+
+- Write a ledger row (outcome `refused`, `input_error`, or `canceled`, tokens
+  null, turns 0) for worker attempts that end before a turn
+  (`src/a2a-role-service.js:294-302`, `:321-342`, `:352-360`).
+- Record `startupMs` (process spawn to `initialize` done) separately from turn
+  time, and a `coldStart` flag on the first turn of a process
+  (`src/codex-app-server.js:368`, `:544`).
+- Record admission queue wait per writer attempt
+  (`src/a2a-role-service.js:306-319`).
+- Report acceptance check `durationMs` (`src/acceptance.js:89`) in the usage
+  report; fill `attemptId`/`runId` for `--task` reports (`src/usage-ledger.js:149`).
+
+Done: the benchmark plan's "known gaps" can be removed; fixtures cover each new
+field; old rows without the fields report null, not zero.
+
 ### PIP: bulky evidence stays outside routine model context
 
 `PIP` (level 2, parent: PH-A), depends on M0.
@@ -141,8 +182,9 @@ failure. Consumers can implement against the frozen contract.
 
 #### PIP-02 - Evidence storage enforces bounded access [P0]
 
-Level 3; parent: PIP; depends on PIP-01; executor: engineer; estimate: one session.
-Proposed write scope: `src/evidence-store.js`, `test/evidence-store.test.js`.
+Level 3; parent: PIP; depends on PIP-01; executor: worker-sonnet; estimate: one session.
+Write scope (frozen by PIP-01): `src/evidence-store.js`, `test/evidence-store.test.js`,
+`src/launcher-sessions.js` (run deletion), `test/launcher-sessions.test.js`, `package.json` (`evidence` script).
 
 - Store full evidence under run ownership; return compact reference metadata.
 - Bound writes/reads, enforce retention and ownership, and reject traversal or
@@ -153,9 +195,9 @@ path/symlink escape attempts, missing evidence, and cleanup. No extra LLM calls.
 
 #### PIP-03 - Lead outcomes carry bounded evidence [P0]
 
-Level 3; parent: PIP; depends on PIP-01, PIP-02; executor: engineer;
-estimate: one session. Proposed write scope: `src/a2a-role-service.js`,
-`src/lead-graph.js`, `test/a2a-role-service.test.js`, `test/lead-graph.test.js`.
+Level 3; parent: PIP; depends on PIP-01, PIP-02; executor: worker-sonnet;
+estimate: one session. Write scope (frozen by PIP-01): `src/lead-graph.js`,
+`src/acceptance.js`, `test/lead-graph.test.js`, `test/acceptance.test.js`.
 
 - Persist oversized reports before summarizing them; preserve required structured
   report fields, failure classifications, and acceptance-relevant evidence.
@@ -167,7 +209,7 @@ small reports and old runs remain compatible; retrieval needs no planning turn.
 
 #### PIP-04 - Compact evidence passes end-to-end acceptance [P0]
 
-Level 3; parent: PIP; depends on PIP-02, PIP-03; executor: engineer;
+Level 3; parent: PIP; depends on PIP-02, PIP-03; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `test/evidence-pipeline.test.js`.
 
 - Exercise producer -> storage -> lead projection -> bounded retrieval using
@@ -204,23 +246,36 @@ examples cover unknown writer effects and unavailable snapshots.
 
 #### DBC-02 - Lead boundary checks prevent invalid acceptance [P0]
 
-Level 3; parent: DBC; depends on DBC-01; executor: engineer;
-estimate: one session. Proposed write scope: `src/contracts.js`,
-`src/lead-graph.js`, `src/acceptance.js`, `test/contracts.test.js`,
-`test/lead-graph.test.js`, `test/acceptance.test.js`.
+Level 3; parent: DBC; depends on DBC-01; executor: worker-sonnet. Split by
+DBC-01 into two serial briefs, each one reviewable change:
+
+- DBC-02a (dispatch rejection): `src/contracts.js`, `src/lead-graph.js`,
+  `test/contracts.test.js`, `test/lead-graph.test.js`. Stable predicate ids and
+  codes for lead-managed dispatch predicates, rejected decisions fed back to
+  `decide`, read-only `.` normalization, glob rejection, preserved `threadId`.
+- DBC-02b (pinning and acceptance): `src/lead-graph.js`, `src/acceptance.js`,
+  `src/server.js`, `test/lead-graph.test.js`, `test/acceptance.test.js`,
+  `test/server.test.js`. Per-attempt contract pin, settlement and acceptance
+  violation records, FAIL-over-UNKNOWN disposition, `contract_invalid` on
+  restart, advisory `writer_reported_failure`.
 
 - Add only missing predicates; preserve existing validators and acceptance logic.
 - Enforce preconditions before side effects and record postcondition failures after
   execution. Keep changed workspace state visible for reconciliation/repair.
 - Reject invalid acceptance without deleting useful changes or altering approval
   behavior. Do not claim per-tool prevention from assignment-level checks.
+- Return a failed dispatch precondition to the lead as a structured rejected
+  dispatch with a violation code, so the lead can correct its brief in the next
+  turn. Observed 2026-10-05: a read-only explorer assignment with
+  `allowedFiles: ["."]` failed `safeRelativePath` (`src/contracts.js:297`) and
+  stopped the whole run with an error that needed a human retry.
 
 Done: focused tests cover rejected dispatch, failed/unknown postconditions,
 contract drift, and preserved writer barriers. No model call evaluates predicates.
 
 #### DBC-03 - Specialist entry points enforce their runtime contract [P0]
 
-Level 3; parent: DBC; depends on DBC-02; executor: engineer;
+Level 3; parent: DBC; depends on DBC-02; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/a2a-role-service.js`,
 `test/a2a-role-service.test.js`.
 
@@ -237,7 +292,7 @@ requests cannot bypass the guarantees claimed by their selected contract.
 
 #### DBC-04 - Boundary violations survive restart [P0]
 
-Level 3; parent: DBC; depends on DBC-02, DBC-03; executor: engineer;
+Level 3; parent: DBC; depends on DBC-02, DBC-03; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `test/runtime-contracts.test.js`.
 
 - Exercise fake end-to-end flows with invalid reports, out-of-scope deltas,
@@ -272,7 +327,7 @@ clock. No unsupported claim of per-worker process isolation or one-for-one exist
 
 #### SUP-02 - App Server recovery obeys a bounded policy [P1]
 
-Level 3; parent: SUP; depends on SUP-01; executor: engineer;
+Level 3; parent: SUP; depends on SUP-01; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/codex-app-server.js`,
 `test/codex-app-server.test.js`.
 
@@ -286,7 +341,7 @@ deadline exhaustion, and surviving descendants. No automatic writer replay.
 
 #### SUP-03 - Recovery cannot bypass writer reconciliation [P1]
 
-Level 3; parent: SUP; depends on SUP-02; executor: engineer;
+Level 3; parent: SUP; depends on SUP-02; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `test/supervisor-integration.test.js`.
 
 - Inject shared-process failure with concurrent read turns and an active writer;
@@ -318,7 +373,7 @@ guarantees that remain unavailable. Unknown outcomes never mean no effects.
 
 #### WAL-02 - Dispatch recovery meets the recorded durability contract [P1]
 
-Level 3; parent: WAL; depends on WAL-01; executor: engineer;
+Level 3; parent: WAL; depends on WAL-01; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/durable-store.js`,
 `src/lead-graph.js`, `test/durable-store.test.js`, `test/lead-graph.test.js`.
 
@@ -354,7 +409,7 @@ win by receiving zero cost; model estimates are labeled separately from history.
 
 #### OPT-02 - Historical estimates produce shadow rankings [P1]
 
-Level 3; parent: OPT; depends on OPT-01; executor: engineer;
+Level 3; parent: OPT; depends on OPT-01; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/routing-cost.js`,
 `src/usage-ledger.js`, `test/routing-cost.test.js`, `test/usage-ledger.test.js`.
 
@@ -367,7 +422,7 @@ execution decisions are unchanged and no extra model calls occur.
 
 #### OPT-03 - Shadow predictions are comparable to actual outcomes [P1]
 
-Level 3; parent: OPT; depends on OPT-02; executor: engineer;
+Level 3; parent: OPT; depends on OPT-02; executor: worker-sonnet;
 estimate: one session. Proposed write scope: `src/lead-graph.js`,
 `src/usage-report.js`, `test/lead-graph.test.js`, `test/usage-report.test.js`.
 
@@ -402,21 +457,24 @@ the decision gates establish the allowed scope.
 ## Execution ownership and sequencing
 
 - Lead owns document contracts, prioritization, integration decisions, and review.
-- Product code, tests, scripts, and build configuration go to scoped engineer
-  briefs. Workers do not change git state. Each brief freezes allowed files and
-  requires a focused verification report plus scope-expansion reporting.
-- Use explorer for bounded factual audits and auditor for an independent
-  read-only safety audit at M1/M2 and before activating Phase C mutation features.
-  Escalate implementation only after inspecting a concrete Luna limitation,
-  in the TEAM.md order: engineer, then recovery-engineer, then senior-engineer.
+- Product code, tests, scripts, and build configuration go to scoped
+  worker-sonnet briefs. Workers do not change git state. Each brief freezes
+  allowed files and requires a focused verification report plus scope-expansion
+  reporting.
+- Use auditor-sonnet for bounded factual audits and reviews. An independent
+  read-only safety audit at M1/M2 and before activating Phase C mutation features
+  may use auditor-opus. Escalate implementation only after inspecting a concrete
+  worker limitation: after two failed worker-sonnet attempts the lead takes the
+  decision back and hands the repair to worker-opus with that decision in the brief.
 - All implementation estimates are provisional one-session briefs. Split a task
   before dispatch if it requires more than one reviewable change; update dependencies.
 - Test files belong to the feature task. Integration tasks own distinct new tests
   or explicitly listed existing tests; never overwrite another worker's edits.
 
 Parallel execution is allowed only with disjoint write scopes. In particular,
-PIP-03 and DBC-02 both touch `src/lead-graph.js` and must run serially. PIP-03 and
-DBC-03 both touch `src/a2a-role-service.js` and must also run serially. In Phase B,
+DBC-02a, DBC-02b, and PIP-03 all touch `src/lead-graph.js` and run serially in
+that order; DBC-02b and PIP-03 also share `src/acceptance.js`. PIP-02 and DBC-03
+have disjoint scopes and may run beside them. In Phase B,
 WAL-02 and OPT-03 also touch that file and must run serially. Their order is a
 resource constraint, not an invented functional dependency. Freeze any additional
 shared scope in the worker brief before starting concurrent work.
@@ -433,6 +491,33 @@ Candidate phase paths:
 The likely longest dependency path is the evidence path through M1 followed by
 the routing path through M2. Exact critical-path duration remains provisional
 until tasks are sized; serialize shared scopes when computing the actual schedule.
+
+## Defects found during execution
+
+Bounded fix items outside the tracks above. Each needs its own brief.
+
+#### OPS-01 - The CLI survives tasks longer than five minutes [P0]
+
+Executor: worker-sonnet. Proposed write scope: `src/cli.js`, `test/cli.test.js`.
+Observed 2026-10-05: `npm run ask` sends one blocking `sendMessage`
+(`returnImmediately: false`); a lead task that ran longer than the HTTP client's
+default timeout ended the CLI with `fetch failed` and exit 1 while the task kept
+working on the server. Submit with immediate return and poll `getTask` (or
+stream) until a terminal or `INPUT_REQUIRED` state; keep the exit codes; on a
+transport error print the task id so the caller can resume or inspect it.
+Done: a fake slow server test shows the CLI waiting past the timeout and printing
+the final result; existing CLI tests pass.
+
+#### OPS-02 - Pinned acceptance checks survive a pre-checkpoint restart [P1]
+
+Executor: worker-sonnet. Proposed write scope: `src/server.js`,
+`test/server.test.js`. Found by the M1 audit (pre-existing, outside Phase A):
+request-level `metadata.acceptance` (`src/server.js` ~:263) is not recoverable
+when the server restarts before the first checkpoint (~:344); the run then
+continues with no checks, ends `unverified`, and the CLI exits 0. Recover the
+contract from the stored first user message, or mark it invalid
+(`contract_invalid`, UNKNOWN) when it cannot be recovered. Belongs with WAL-01's
+crash-window matrix; fix it there at the latest.
 
 ## Verification and rollout policy
 

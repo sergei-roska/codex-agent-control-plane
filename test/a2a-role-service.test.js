@@ -368,19 +368,27 @@ test('real A2A SDK client exchanges a role card and task over local HTTP', async
   assert.equal(result.artifacts[0].parts[0].content.value, 'orch-planner: check protocol');
 });
 
+function validReport(overrides = {}) {
+  return {
+    outcome: 'completed', summary: 'done', filesChanged: [], filesInspected: [],
+    checks: [], risks: [], scopeExpansion: [], decisionRequest: null, ...overrides,
+  };
+}
+
 test('passes the worker report schema and tags the result artifact with contract metadata', async () => {
   const calls = [];
   const { agents, context } = makeService({
     async run(options) {
       calls.push(options);
-      return { threadId: 'thread-7', status: 'completed', text: '{"raw":true}' };
+      return { threadId: 'thread-7', status: 'completed', text: JSON.stringify(validReport()) };
     },
   });
   const result = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('go')), context));
   assert.equal(calls[0].outputSchema, WORKER_REPORT_SCHEMA);
   const artifact = result.artifacts[0];
-  assert.equal(artifact.parts[0].content.value, '{"raw":true}');
+  assert.equal(artifact.parts[0].content.value, JSON.stringify(validReport()));
   assert.equal(artifact.metadata.contract, WORKER_REPORT_CONTRACT);
+  assert.deepEqual(artifact.metadata.boundary, { contract: 'legacy' });
   assert.equal(artifact.metadata.threadId, 'thread-7');
 
   const { agents: other, context: otherContext } = makeService({ async run() { return { status: 'completed', text: 'x' }; } });
@@ -629,7 +637,7 @@ test('records one worker usage row and attaches usage, permissionEvents, provena
   const events = [{ type: 'tool', tool: 'commandExecution', status: 'declined' }];
   const { agents, context } = makeService({
     async run() {
-      return { ...okResult(), usage: sampleUsage(), permissionEvents: events, permissionConfig: sampleConfig };
+      return { ...okResult(JSON.stringify(validReport())), usage: sampleUsage(), permissionEvents: events, permissionConfig: sampleConfig };
     },
   }, { usageLedger });
   const params = sendParams(message('go'));
@@ -751,4 +759,235 @@ test('a second turn on the same A2A task is recorded under its own turn id', asy
   const { workerUsageEntry } = require('../src/a2a-role-service');
   assert.equal(workerUsageEntry({ roleId: 'r', taskId: 't', source: {} }).entryId, 'r:t');
   assert.equal(workerUsageEntry({ roleId: 'r', taskId: 't', source: { execution: { turnId: 'u' } } }).entryId, 'r:t:u');
+});
+
+// ---------------------------------------------------------------- MEA-02 pre-turn rows and queue wait
+
+test('an input error writes one pre-turn row with outcome input_error and turns 0', async () => {
+  const { usageLedger } = ledgerDb();
+  let runs = 0;
+  const { agents, context } = makeService({ async run() { runs += 1; return okResult(); } }, { usageLedger });
+  const failed = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('x', [])), context));
+  assert.equal(failed.status.state, 4);
+  assert.equal(runs, 0);
+  const rows = usageLedger.listByTask(failed.id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].entryId, `orch-planner:${failed.id}:pre`);
+  assert.equal(rows[0].outcome, 'input_error');
+  assert.equal(rows[0].turns, 0);
+  assert.equal(rows[0].tokens, null);
+  assert.equal(rows[0].tokenSource, 'unavailable');
+  assert.equal(typeof rows[0].elapsedMs, 'number');
+  assert.equal(rows[0].queueWaitMs, null);
+});
+
+test('a fenced writer writes a refused row that counts toward later retries of the context', async () => {
+  const { usageLedger } = ledgerDb();
+  const admission = makeAdmission({});
+  admission.fence('ctx-fenced', 'lead gave up');
+  const { agents, context } = makeService({ async run() { return okResult(); } }, { roles: writerRoles, admission, usageLedger });
+  const first = taskResult(await agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a', { contextId: 'ctx-fenced' })), context));
+  const second = taskResult(await agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a2', { contextId: 'ctx-fenced' })), context));
+  const [r1] = usageLedger.listByTask(first.id);
+  const [r2] = usageLedger.listByTask(second.id);
+  assert.equal(r1.outcome, 'refused');
+  assert.equal(r1.turns, 0);
+  assert.equal(r1.retries, 0);
+  assert.equal(typeof r1.queueWaitMs, 'number');
+  assert.equal(r2.outcome, 'refused');
+  assert.equal(r2.retries, 1);
+});
+
+test('a writer canceled while waiting for admission writes a canceled row; a queued writer records queue wait', async () => {
+  const { usageLedger } = ledgerDb();
+  const gate = deferred();
+  const { agents, context } = makeService({
+    async run(options) {
+      if (options.role.id === 'orch-writer-a') await gate.promise;
+      return okResult();
+    },
+  }, { roles: writerRoles, admission: makeAdmission({}), usageLedger });
+
+  const a = agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a')), context);
+  await tick();
+  const canceledTask = taskResult(await agents.get('orch-writer-b').handler.sendMessage(
+    sendParams(writerMessage('b'), { returnImmediately: true }), context));
+  await tick();
+  await agents.get('orch-writer-b').handler.cancelTask({ id: canceledTask.id }, context);
+  await tick();
+  const waiter = agents.get('orch-writer-b').handler.sendMessage(sendParams(writerMessage('c')), context);
+  await tick(80);
+  gate.resolve();
+  const doneA = taskResult(await a);
+  const doneC = taskResult(await waiter);
+
+  const [canceled] = usageLedger.listByTask(canceledTask.id);
+  assert.equal(canceled.outcome, 'canceled');
+  assert.equal(canceled.turns, 0);
+  assert.equal(typeof canceled.queueWaitMs, 'number');
+  const [queued] = usageLedger.listByTask(doneC.id);
+  assert.equal(queued.outcome, 'completed');
+  assert.ok(queued.queueWaitMs >= 50, `queueWaitMs ${queued.queueWaitMs}`);
+  const [first] = usageLedger.listByTask(doneA.id);
+  assert.ok(first.queueWaitMs < 50);
+});
+
+test('a read-only role records null queue wait and passes startup fields through', async () => {
+  const { usageLedger } = ledgerDb();
+  const { agents, context } = makeService({
+    async run() { return { ...okResult(), usage: { ...sampleUsage(), startupMs: 12, coldStart: true } }; },
+  }, { usageLedger });
+  const done = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('go')), context));
+  const [row] = usageLedger.listByTask(done.id);
+  assert.equal(row.queueWaitMs, null);
+  assert.equal(row.startupMs, 12);
+  assert.equal(row.coldStart, true);
+});
+
+// ---------------------------------------------------------------- direct specialist requests (DBC-03)
+
+function structured(overrides = {}) {
+  return JSON.stringify({
+    objective: 'Do it', allowedFiles: ['src'], inputs: ['a'], evidence: ['b'],
+    acceptanceCriteria: ['c'], checks: ['d'], stopConditions: ['e'], ...overrides,
+  });
+}
+
+test('a JSON request with requireAcceptance but no allowedFiles still fails with guarantee_unavailable', async () => {
+  for (const text of [JSON.stringify({ requireAcceptance: true }), JSON.stringify({ objective: 'Do it', requireAcceptance: true })]) {
+    const meta = await rejected('orch-writer-a', text);
+    assert.equal(meta.failureKind, 'guarantee_unavailable');
+    assert.equal(meta.boundary.results[0].code, 'guarantee_unavailable');
+    assert.equal(meta.boundary.results[0].predicate, 'dispatch.request_input');
+  }
+});
+
+test('skill pin mismatches are skill_pin_drift; skill shape errors stay skill_invalid', async () => {
+  const { loadSkillCatalog } = require('../src/skill-catalog');
+  const skillCatalog = loadSkillCatalog();
+  const id = [...skillCatalog.keys()][0];
+  const drift = await rejected('orch-planner', structured({ skills: [id], skillPins: [{ id, sha256: '0'.repeat(64) }] }), { skillCatalog });
+  assert.equal(drift.boundary.results[0].predicate, 'dispatch.skill_pins');
+  assert.equal(drift.boundary.results[0].code, 'skill_pin_drift');
+  const shape = await rejected('orch-planner', structured({ skills: [id, id] }), { skillCatalog });
+  assert.equal(shape.boundary.results[0].predicate, 'assignment.skills');
+  assert.equal(shape.boundary.results[0].code, 'skill_invalid');
+  const unknown = await rejected('orch-planner', structured({ skills: ['no-such-skill'] }), { skillCatalog });
+  assert.equal(unknown.boundary.results[0].code, 'skill_invalid');
+});
+
+// Admission whose snapshots report a known delta touching the given paths.
+function deltaAdmission(changed) {
+  let calls = 0;
+  return new WriterAdmission({
+    db: new Database(':memory:'),
+    workspace: process.cwd(),
+    snapshot: () => {
+      calls += 1;
+      return calls % 2 === 1
+        ? { kind: 'git', head: 'h', entries: [], fingerprint: 'a' }
+        : { kind: 'git', head: 'h', entries: changed.map((file) => ({ path: file, status: 'M', sha256: 'x' })), fingerprint: 'b' };
+    },
+    quiescence: {},
+    settleMs: 0,
+  });
+}
+
+async function rejected(roleId, text, extra = {}) {
+  const { usageLedger } = ledgerDb();
+  let runs = 0;
+  const { agents, context } = makeService({ async run() { runs += 1; return okResult(); } },
+    { roles: writerRoles, admission: makeAdmission({}), usageLedger, ...extra });
+  const result = taskResult(await agents.get(roleId).handler.sendMessage(sendParams(message(text)), context));
+  assert.equal(result.status.state, 4);
+  assert.equal(runs, 0);
+  const meta = result.status.message.metadata;
+  assert.equal(meta.effects, 'none');
+  assert.equal(meta.boundary.contract, 'boundary-contract/v1');
+  const rows = usageLedger.listByTask(result.id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].outcome, 'input_error');
+  return meta;
+}
+
+test('structured request failures stop before admission and the model with specific codes', async () => {
+  let meta = await rejected('orch-writer-a', structured({ allowedFiles: [] }));
+  assert.equal(meta.failureKind, 'request_invalid');
+  assert.equal(meta.boundary.results[0].code, 'writer_scope_missing');
+  assert.equal(meta.boundary.results[0].predicate, 'assignment.writer_scope');
+
+  meta = await rejected('orch-planner', structured({ requireAcceptance: true }));
+  assert.equal(meta.failureKind, 'guarantee_unavailable');
+  assert.equal(meta.boundary.results[0].code, 'guarantee_unavailable');
+
+  meta = await rejected('orch-planner', structured({ workspace: '/somewhere/else' }));
+  assert.equal(meta.failureKind, 'request_invalid');
+  assert.equal(meta.boundary.results[0].predicate, 'dispatch.request_input');
+
+  meta = await rejected('orch-planner', structured({ allowedFiles: ['../x'] }));
+  assert.equal(meta.boundary.results[0].code, 'path_unsafe');
+
+  meta = await rejected('orch-planner', structured({ objective: '' }));
+  assert.equal(meta.boundary.results[0].code, 'field_invalid');
+});
+
+test('a writer request refused before admission leaves the workspace unheld', async () => {
+  const admission = makeAdmission({});
+  const { agents, context } = makeService({ async run() { return okResult(); } }, { roles: writerRoles, admission });
+  const failed = taskResult(await agents.get('orch-writer-a').handler.sendMessage(sendParams(message(structured({ allowedFiles: [] }))), context));
+  assert.equal(failed.status.state, 4);
+  assert.equal(admission.holder(), null);
+});
+
+test('a valid structured writer request whose delta leaves allowedFiles completes with an attested_scope_violation', async () => {
+  const { agents, context } = makeService({
+    async run() { return okResult(JSON.stringify(validReport())); },
+  }, { roles: writerRoles, admission: deltaAdmission(['src/ok.js', 'other/bad.js']) });
+  const done = taskResult(await agents.get('orch-writer-a').handler.sendMessage(sendParams(message(structured({ workspace: process.cwd() }))), context));
+  assert.equal(done.status.state, 3);
+  const meta = done.artifacts[0].metadata;
+  assert.equal(meta.contract, WORKER_REPORT_CONTRACT);
+  assert.equal(meta.boundary.contract, 'boundary-contract/v1');
+  assert.equal(meta.boundary.results.length, 1);
+  const record = meta.boundary.results[0];
+  assert.equal(record.predicate, 'settle.attested_scope');
+  assert.equal(record.result, 'FAIL');
+  assert.equal(record.code, 'attested_scope_violation');
+  assert.equal(record.boundary, 'settlement');
+  assert.equal(record.advisory, false);
+  assert.match(record.detail, /other\/bad\.js/);
+});
+
+test('a structured writer request inside allowedFiles has no violations; an unknown delta is UNKNOWN', async () => {
+  const run = async () => okResult(JSON.stringify(validReport()));
+  let service = makeService({ run }, { roles: writerRoles, admission: deltaAdmission(['src/ok.js']) });
+  let done = taskResult(await service.agents.get('orch-writer-a').handler.sendMessage(sendParams(message(structured())), service.context));
+  assert.deepEqual(done.artifacts[0].metadata.boundary.results, []);
+
+  service = makeService({ run }, { roles: writerRoles, admission: makeAdmission({}) });
+  done = taskResult(await service.agents.get('orch-writer-a').handler.sendMessage(sendParams(message(structured())), service.context));
+  assert.equal(done.status.state, 3);
+  assert.equal(done.artifacts[0].metadata.boundary.results[0].result, 'UNKNOWN');
+  assert.equal(done.artifacts[0].metadata.boundary.results[0].code, 'delta_unknown');
+});
+
+test('an invalid report drops the contract label and records report_invalid', async () => {
+  const { agents, context } = makeService({ async run() { return okResult('not a report'); } });
+  const done = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message(structured({ allowedFiles: ['.'] }))), context));
+  assert.equal(done.status.state, 3);
+  const meta = done.artifacts[0].metadata;
+  assert.equal(meta.contract, null);
+  assert.match(meta.reportError, /Worker report/);
+  assert.equal(meta.boundary.results[0].code, 'report_invalid');
+  assert.equal(meta.boundary.results[0].advisory, true);
+});
+
+test('legacy plain text keeps running with boundary legacy and no predicate records', async () => {
+  const { agents, context } = makeService({ async run() { return okResult('plain answer'); } });
+  const done = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('just do it')), context));
+  assert.equal(done.status.state, 3);
+  const meta = done.artifacts[0].metadata;
+  assert.deepEqual(meta.boundary, { contract: 'legacy' });
+  assert.equal(meta.contract, null);
+  assert.ok(meta.reportError);
 });

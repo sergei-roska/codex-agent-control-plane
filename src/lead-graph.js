@@ -8,9 +8,9 @@ const {
 } = require('@langchain/langgraph');
 const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
 const {
-  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, parseWorkerReport, classifyCodexError,
+  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, BoundaryViolation, parseWorkerReport, classifyCodexError,
 } = require('./contracts');
-const { runAcceptance, assessWithoutChecks } = require('./acceptance');
+const { runAcceptance, assessWithoutChecks, unrunAcceptance } = require('./acceptance');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
 const { loadSkillCatalog, findSkillCandidates, resolveSkillSelection } = require('./skill-catalog');
 const { canonicalRoleId, getRole, roleDisplayName } = require('./role-names');
@@ -19,6 +19,15 @@ const DEFAULT_RECONCILE_WAIT_MS = 30_000;
 const MAX_OUTCOME_TEXT_CHARS = 12_000;
 const MAX_STATUS_TEXT_CHARS = 2_000;
 const MAX_REPORT_CHARS = 100_000;
+// Lead projection caps (docs/evidence-artifact-contract.md, "Lead projection").
+const MAX_VIOLATION_PATHS = 50;
+const MAX_PROMPT_OUTCOMES_CHARS = 60_000;
+const TEXT_PROJECTION_HEAD = 6000;
+const TEXT_PROJECTION_TAIL = 2000;
+const TEXT_EVIDENCE_THRESHOLD = TEXT_PROJECTION_HEAD + TEXT_PROJECTION_TAIL;
+const DIGEST_SUMMARY_CHARS = 300;
+const REPORT_CAPS = { filesChanged: 100, filesInspected: 20, risks: 20, checks: 20, scopeExpansion: 20 };
+const REPORT_ITEM_CHARS = 500;
 const PROJECT_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'];
 const CANCELED_TEXT = 'Canceled after all active A2A tasks were confirmed stopped.';
 const REPORT_CONTRACT_LINE = `Reply with a single JSON object matching the ${WORKER_REPORT_CONTRACT} report schema `
@@ -123,25 +132,34 @@ function errorText(error) {
 }
 
 // Plain-JSON snapshot of an A2A task. Artifact text keeps enough room for a full worker report.
-function assignmentResult(task) {
+// `onOversize({ artifactTexts, joined, parseText, completed })` is called with the uncut texts when
+// any exceeds MAX_REPORT_CHARS; the extras it returns are merged into the result.
+function assignmentResult(task, { onOversize } = {}) {
   const status = task?.status;
   const statusMessage = extractTextParts(status?.message?.parts).slice(0, MAX_STATUS_TEXT_CHARS);
-  const artifacts = (task?.artifacts || []).slice(0, 20).map((artifact) => ({
+  const sourceArtifacts = (task?.artifacts || []).slice(0, 20);
+  const artifactTexts = sourceArtifacts.map((artifact) => extractTextParts(artifact.parts));
+  const artifacts = sourceArtifacts.map((artifact, index) => ({
     name: artifact.name || '',
     description: artifact.description || '',
-    text: extractTextParts(artifact.parts).slice(0, MAX_REPORT_CHARS),
+    text: artifactTexts[index].slice(0, MAX_REPORT_CHARS),
     metadata: artifact.metadata && typeof artifact.metadata === 'object' ? artifact.metadata : null,
   }));
   const history = (task?.history || []).slice(-5).map((message) => extractTextParts(message.parts).slice(0, MAX_STATUS_TEXT_CHARS)).filter(Boolean);
-  const text = artifacts.map((artifact) => artifact.text).filter(Boolean).join('\n') || statusMessage || history.at(-1) || '';
+  const joined = artifactTexts.filter(Boolean).join('\n');
+  const text = joined || statusMessage || history.at(-1) || '';
   const failureKind = status?.message?.metadata?.failureKind;
   const writerExecution = artifacts.map((artifact) => artifact.metadata?.writerExecution).find((entry) => entry && typeof entry === 'object')
     || (status?.message?.metadata?.writerExecution && typeof status.message.metadata.writerExecution === 'object' ? status.message.metadata.writerExecution : null);
   const effects = status?.message?.metadata?.effects;
+  const stateName = taskStateName(status?.state);
+  const extras = typeof onOversize === 'function' && (artifactTexts.some((value) => value.length > MAX_REPORT_CHARS) || text.length > MAX_REPORT_CHARS)
+    ? onOversize({ artifactTexts, joined: text, parseText: artifactTexts[0] || text, completed: stateName === 'TASK_STATE_COMPLETED' })
+    : null;
   return {
     taskId: task?.id || null,
     contextId: task?.contextId || null,
-    status: taskStateName(status?.state),
+    status: stateName,
     statusMessage,
     artifacts,
     history,
@@ -149,6 +167,7 @@ function assignmentResult(task) {
     ...(typeof failureKind === 'string' ? { failureKind } : {}),
     ...(writerExecution ? { writerExecution } : {}),
     ...(typeof effects === 'string' ? { effects } : {}),
+    ...(extras || {}),
   };
 }
 
@@ -187,6 +206,17 @@ function readPinned({ roles, leadRole, workspace, skillCatalog }) {
     skills: [...(skillCatalog || new Map()).values()].map(({ id, sha256: hash }) => ({ id, sha256: hash }))
       .sort((a, b) => a.id.localeCompare(b.id)),
   };
+}
+
+// Per-role profile hash pinned into each attempt's boundary contract.
+function roleProfileSha256(role) {
+  return sha256(JSON.stringify([role.name, role.sandbox, role.model, role.effort, role.instructions || '']));
+}
+
+const BOUNDARY_CONTRACT_ID = 'boundary-contract/v1';
+
+function settlementRecord(predicate, result, code, detail, { advisory = false, evidence = [] } = {}) {
+  return { predicate, result, code, boundary: 'settlement', detail: String(detail).slice(0, 500), evidence, advisory };
 }
 
 function instructionChanges(previous, current) {
@@ -229,6 +259,173 @@ function outsideAllowed(files, allowedFiles, workspace) {
 function scopeViolations(report, allowedFiles, workspace) {
   if (!report) return [];
   return outsideAllowed(report.filesChanged, allowedFiles, workspace);
+}
+
+// Caps a path list; reports the cut through `omitted` and returns the total as `count`.
+function capPaths(list, field, omitted) {
+  const total = list.length;
+  if (total <= MAX_VIOLATION_PATHS) return { paths: list, count: total };
+  omitted.push({ field, kept: MAX_VIOLATION_PATHS, total });
+  return { paths: list.slice(0, MAX_VIOLATION_PATHS), count: total };
+}
+
+// Deterministic projection of a valid report with the rule-2 caps; the input is not modified.
+function projectReport(report, omitted) {
+  const out = { ...report };
+  for (const [field, cap] of Object.entries(REPORT_CAPS)) {
+    const list = Array.isArray(report[field]) ? report[field] : [];
+    if (list.length > cap) omitted.push({ field, kept: cap, total: list.length });
+    out[field] = list.slice(0, cap);
+  }
+  const trim = (items, field, key) => {
+    let longest = 0;
+    const next = items.map((item) => {
+      const value = key ? item[key] : item;
+      if (typeof value !== 'string' || value.length <= REPORT_ITEM_CHARS) return item;
+      longest = Math.max(longest, value.length);
+      return key ? { ...item, [key]: value.slice(0, REPORT_ITEM_CHARS) } : value.slice(0, REPORT_ITEM_CHARS);
+    });
+    // kept is the per-item char cap and total the longest original item.
+    if (longest > 0) omitted.push({ field, kept: REPORT_ITEM_CHARS, total: longest });
+    return next;
+  };
+  out.risks = trim(out.risks, 'risks[]', null);
+  out.checks = trim(out.checks, 'checks[].detail', 'detail');
+  out.scopeExpansion = trim(out.scopeExpansion, 'scopeExpansion[].reason', 'reason');
+  return out;
+}
+
+// First 6000 and last 2000 chars around a marker line; short text is returned unchanged.
+function projectText(text, evidenceId, omitted) {
+  if (text.length <= TEXT_EVIDENCE_THRESHOLD) return text;
+  omitted.push({ field: 'text', kept: TEXT_EVIDENCE_THRESHOLD, total: text.length });
+  const gone = text.length - TEXT_EVIDENCE_THRESHOLD;
+  const marker = `\n[... ${gone} chars omitted${evidenceId ? `; evidence ${evidenceId}` : ''}]\n`;
+  return text.slice(0, TEXT_PROJECTION_HEAD) + marker + text.slice(-TEXT_PROJECTION_TAIL);
+}
+
+/**
+ * Bounded view of one parsed worker result. Scope violations come from the full report; the report
+ * and the failure text are projected. ctx = { fullText, allowedFiles, workspace, textRef, store(kind,
+ * mediaType, content, summary) -> { ref, error } }. Returns the projected parts plus evidence refs.
+ */
+function analyzeWorker(parsed, ctx) {
+  const omitted = [];
+  const evidence = ctx.textRef ? [ctx.textRef] : [];
+  const errors = ctx.textRef?.error ? [ctx.textRef.error] : [];
+  const keep = ({ ref, error }) => { if (ref) evidence.push(ref); if (error) errors.push(error); };
+  let report = null;
+  let violations = { paths: [], count: 0 };
+  let text;
+  if (parsed.report) {
+    const full = scopeViolations(parsed.report, ctx.allowedFiles, ctx.workspace);
+    violations = capPaths(full, 'scopeViolations', omitted);
+    report = projectReport(parsed.report, omitted);
+    if (omitted.length > 0 && !ctx.textRef) {
+      const json = JSON.stringify(parsed.report);
+      keep(ctx.store('worker_result_text', 'application/json', json,
+        `Full worker report (${json.length} chars); the lead prompt carries a capped projection.`));
+    }
+  } else {
+    const full = ctx.fullText || '';
+    let id = ctx.textRef?.id || null;
+    if (full.length > TEXT_EVIDENCE_THRESHOLD && !ctx.textRef) {
+      const stored = ctx.store('worker_result_text', 'text/plain; charset=utf-8', full,
+        `Worker result text without a valid report (${full.length} chars); the lead prompt carries the first ${TEXT_PROJECTION_HEAD} and last ${TEXT_PROJECTION_TAIL} chars.`);
+      keep(stored);
+      id = stored.ref?.id || null;
+    }
+    text = projectText(full, id, omitted);
+  }
+  return {
+    report, reportError: parsed.error, ...(text !== undefined ? { text } : {}),
+    scopeViolations: violations.paths, scopeViolationCount: violations.count, omitted, evidence,
+    ...(errors.length > 0 ? { evidenceError: errors[0] } : {}),
+  };
+}
+
+// Diagnostics that no projection or digest may drop (contract rule 5).
+function outcomeDiagnostics(outcome) {
+  const changed = Array.isArray(outcome.writerExecution?.delta?.changedPaths) ? outcome.writerExecution.delta.changedPaths : [];
+  return {
+    status: outcome.status ?? null,
+    failureKind: outcome.failureKind ?? null,
+    reportError: outcome.reportError ?? null,
+    scopeViolations: outcome.scopeViolations || [],
+    scopeViolationCount: outcome.scopeViolationCount ?? (outcome.scopeViolations || []).length,
+    attestedScopeViolations: outcome.attestedScopeViolations || [],
+    attestedScopeViolationCount: outcome.attestedScopeViolationCount ?? (outcome.attestedScopeViolations || []).length,
+    attestedDeltaKnown: outcome.attestedDeltaKnown === true,
+    writerExecutionState: outcome.writerExecution?.state ?? null,
+    writerDeltaKnown: outcome.writerExecution?.delta?.known ?? null,
+    changedPathCount: outcome.writerExecution?.delta?.changedPathCount ?? changed.length,
+    changedPaths: changed.slice(0, MAX_VIOLATION_PATHS),
+    effects: outcome.effects ?? null,
+    failure: outcome.failure ?? null,
+  };
+}
+
+function outcomeDigest(outcome, { compact = false } = {}) {
+  const diagnostics = outcomeDiagnostics(outcome);
+  if (compact) {
+    // Last resort: paths shrink to a handful, every status field and count stays.
+    for (const field of ['scopeViolations', 'attestedScopeViolations', 'changedPaths']) diagnostics[field] = diagnostics[field].slice(0, 5);
+    if (typeof diagnostics.reportError === 'string') diagnostics.reportError = diagnostics.reportError.slice(0, 300);
+  }
+  return {
+    digest: true,
+    assignmentId: outcome.assignmentId ?? null,
+    attemptId: outcome.attemptId ?? null,
+    role: outcome.role ?? null,
+    status: outcome.status ?? outcome.state ?? null,
+    outcome: outcome.report?.outcome ?? null,
+    summary: String(outcome.report?.summary ?? outcome.text ?? '').slice(0, DIGEST_SUMMARY_CHARS),
+    diagnostics,
+    boundary: (outcome.boundary?.results || []).map(({ predicate, result, code }) => ({ predicate, result, code })),
+    evidence: (outcome.evidence || []).map((ref) => ref.id),
+  };
+}
+
+function elisionEntry(outcome) {
+  const codes = (outcome.boundary?.results || []).filter((entry) => entry.advisory !== true).map((entry) => entry.code);
+  return {
+    elided: true,
+    assignmentId: outcome.assignmentId ?? null,
+    attemptId: outcome.attemptId ?? null,
+    role: outcome.role ?? null,
+    status: outcome.status ?? outcome.state ?? null,
+    violationCodes: [...new Set(codes.filter((code) => typeof code === 'string'))],
+  };
+}
+
+// Outcome JSON for the lead prompt: newest outcomes in full while they fit, older ones as digests.
+function boundedOutcomes(outcomes, limit = MAX_PROMPT_OUTCOMES_CHARS) {
+  const size = (value) => JSON.stringify(value).length + 1;
+  if (size(outcomes) + 1 <= limit) return outcomes;
+  const picked = new Array(outcomes.length);
+  let used = 200; // headroom for the elision note
+  // Reconciliation outcomes are small and always kept in full.
+  outcomes.forEach((outcome, index) => { if (outcome.kind === 'reconciliation') { picked[index] = outcome; used += size(outcome); } });
+  const unfit = [];
+  for (let index = outcomes.length - 1; index >= 0; index -= 1) {
+    if (picked[index]) continue;
+    const full = outcomes[index];
+    const candidates = [() => full, () => outcomeDigest(full), () => outcomeDigest(full, { compact: true })];
+    // Only the newest outcome may stay full when it fits; once one is digested, older ones are digests.
+    const start = picked.slice(index + 1).some((entry) => entry?.digest) ? 1 : 0;
+    const fit = candidates.slice(start).map((make) => make()).find((candidate) => used + size(candidate) <= limit);
+    if (fit) { picked[index] = fit; used += size(fit); } else { unfit.push(index); }
+  }
+  // Outcomes that do not fit even as compact digests shrink to an elision entry (identity, status,
+  // blocking violation codes); only when those do not fit either does a bare count remain.
+  let elided = 0;
+  for (const index of unfit) {
+    const entry = elisionEntry(outcomes[index]);
+    if (used + size(entry) <= limit) { picked[index] = entry; used += size(entry); } else { elided += 1; }
+  }
+  const result = picked.filter(Boolean);
+  if (elided > 0) result.unshift({ digest: true, elided, note: 'Older outcomes were elided to fit the prompt bound.' });
+  return result;
 }
 
 // A writer outcome is settled when the server proved the execution ended or nothing ran.
@@ -279,6 +476,20 @@ function pauseMessage(value) {
 
 // ------------------------------------------------------------ the graph
 
+const MAX_AUTO_REJECTIONS = 2;
+const PATH_RULE = "allowedFiles entries are repository-relative paths or directory prefixes without '.', '..', globs, or a leading '/'; read-only roles may use [].";
+const RULE_REMINDERS = {
+  'assignment.paths': PATH_RULE,
+  'assignment.writer_scope': 'Writable roles require explicit allowedFiles; read-only roles may use [].',
+  'decision.parse': 'Return only one JSON object matching the supplied schema.',
+  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, and humanInput, with unused fields empty.',
+  'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds.',
+  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and skills; role must be an available role id.',
+  'assignment.skills': 'Select at most 5 unique skill IDs from the trusted listed skill IDs; use [] when none apply.',
+  'assignment.role_ladder': 'Respect the role ladder: recovery-engineer follows an engineer attempt, senior-engineer follows recovery-engineer, and architect needs prior evidence and one narrow decision.',
+  'dispatch.writer_unresolved': 'Do not dispatch writable roles while writer outcomes are unresolved; use read-only roles.',
+};
+
 const last = (initial) => Annotation({ reducer: (_, next) => next, default: initial });
 
 const LeadState = Annotation.Root({
@@ -300,10 +511,14 @@ const LeadState = Annotation.Root({
   unresolvedWriters: last(() => []),
   contract: last(() => ({ requiredChecks: [] })),
   acceptanceAttempts: last(() => 0),
+  acceptanceRuns: last(() => 0),
   acceptance: last(() => null),
   status: last(() => null),
   text: last(() => ''),
   result: last(() => null),
+  rejections: last(() => []),
+  consecutiveRejections: last(() => 0),
+  retryDecide: last(() => false),
 });
 
 /**
@@ -314,7 +529,7 @@ const LeadState = Annotation.Root({
  *   cancelUntilConfirmed(client, taskId, contextId) -> terminal task,
  *   emit(onEvent, event), checkpointer?,
  *   admission?: WriterAdmission, reconcileWaitMs?: number,
- *   usageLedger?: UsageLedger, runCheckImpl?, snapshot?,
+ *   usageLedger?: UsageLedger, evidenceStore?: EvidenceStore, runCheckImpl?, snapshot?,
  * }
  * Returns the compiled graph when deps.checkpointer is given, else the StateGraph.
  */
@@ -329,13 +544,115 @@ function buildLeadGraph(deps) {
   const runtimeOf = (config) => deps.runtimeFor(config?.configurable?.thread_id) || {};
   const requestOptions = (signal) => ({ ...(signal ? { signal } : {}), ...deps.authOptions() });
 
+  // Evidence writes never fail a run: a store error becomes { ref: null, error }.
+  function putEvidence(input) {
+    if (!deps.evidenceStore) return { ref: null, error: null };
+    try {
+      return { ref: deps.evidenceStore.put(input), error: null };
+    } catch (error) {
+      return { ref: null, error: error?.code || error?.message || 'evidence_error' };
+    }
+  }
+
+  const allowedFilesOf = (item) => item.contract?.allowedFiles || item.assignment.allowedFiles;
+
+  function workerStore(item) {
+    return (kind, mediaType, content, summary) => putEvidence({
+      runId: item.runId,
+      attemptId: item.attemptId,
+      taskId: item.taskId || null,
+      kind,
+      mediaType,
+      content,
+      summary: summary.slice(0, 2000),
+      source: { producer: 'lead_graph', role: canonicalRoleId(item.role) },
+    });
+  }
+
+  // Rule 1: an oversize artifact is stored uncut and parsed whole before the result is cut for the journal.
+  function oversizeHook(item) {
+    return ({ artifactTexts, joined, parseText, completed }) => {
+      const store = workerStore(item);
+      const refs = [];
+      const errors = [];
+      const stored = new Map();
+      for (const value of [...artifactTexts, joined]) {
+        if (value.length <= MAX_REPORT_CHARS || stored.has(value)) continue;
+        const outcome = store('worker_result_text', 'text/plain; charset=utf-8', value,
+          `Worker result text, ${value.length} chars; the journal keeps the first ${MAX_REPORT_CHARS}.`);
+        stored.set(value, outcome.ref);
+        if (outcome.ref) refs.push(outcome.ref);
+        if (outcome.error) errors.push(outcome.error);
+      }
+      const parsed = completed ? parseWorkerReport(parseText) : { report: null, error: null };
+      const reportAnalysis = analyzeWorker(parsed, {
+        fullText: joined, allowedFiles: allowedFilesOf(item), workspace, store, textRef: stored.get(parseText) || stored.get(joined) || null,
+      });
+      // The refs (including the parse source) already live on the analysis or the result; keep one list.
+      const evidence = [...refs, ...reportAnalysis.evidence.filter((ref) => !refs.some((known) => known.id === ref.id))];
+      const failure = errors[0] || reportAnalysis.evidenceError;
+      const { evidence: _refs, evidenceError: _error, ...analysis } = reportAnalysis;
+      return { reportAnalysis: analysis, ...(evidence.length > 0 ? { evidence } : {}), ...(failure ? { evidenceError: failure } : {}) };
+    };
+  }
+
+  const receiveResult = (task, item) => assignmentResult(task, { onOversize: oversizeHook({ ...item, taskId: task?.id || item.taskId }) });
+
+  // A direct message reply has no artifacts; its text is the parse source.
+  function oversizeMessage(item, text) {
+    return text.length > MAX_REPORT_CHARS ? oversizeHook(item)({ artifactTexts: [], joined: text, parseText: text, completed: true }) : {};
+  }
+
   function outcomeSummary(item) {
     const result = item.result;
-    const parsed = result.status === 'TASK_STATE_COMPLETED' ? parseWorkerReport(result.artifacts?.[0]?.text || result.text) : { report: null, error: null };
-    const violations = scopeViolations(parsed.report, item.assignment.allowedFiles, workspace);
-    const writerExecution = result.writerExecution || null;
+    const completed = result.status === 'TASK_STATE_COMPLETED';
+    // Settlement uses the attempt's own pinned allowedFiles; items from old checkpoints are legacy.
+    const allowedFiles = allowedFilesOf(item);
+    let analysis = result.reportAnalysis;
+    let evidence = [...(result.evidence || [])];
+    let evidenceError = result.evidenceError || null;
+    if (analysis) {
+      analysis = { ...analysis, omitted: [...(analysis.omitted || [])] };
+    } else {
+      const parsed = completed ? parseWorkerReport(result.artifacts?.[0]?.text || result.text) : { report: null, error: null };
+      analysis = analyzeWorker(parsed, { fullText: result.text || '', allowedFiles, workspace, textRef: null, store: workerStore(item) });
+      evidence = analysis.evidence;
+      evidenceError = analysis.evidenceError || evidenceError;
+    }
+    const omitted = analysis.omitted;
+    const violations = analysis.scopeViolations;
+    const violationCount = analysis.scopeViolationCount ?? violations.length;
+    let writerExecution = result.writerExecution || null;
     const attestedDelta = writerExecution?.delta || null;
     const attestedPaths = Array.isArray(attestedDelta?.changedPaths) ? attestedDelta.changedPaths : [];
+    const attested = capPaths(outsideAllowed(attestedPaths, allowedFiles, workspace), 'attestedScopeViolations', omitted);
+    const attestedViolations = attested.paths;
+    if (attestedPaths.length > MAX_VIOLATION_PATHS) {
+      omitted.push({ field: 'writerExecution.delta.changedPaths', kept: MAX_VIOLATION_PATHS, total: attestedPaths.length });
+      writerExecution = { ...writerExecution, delta: { ...attestedDelta, changedPaths: attestedPaths.slice(0, MAX_VIOLATION_PATHS), changedPathCount: attestedPaths.length } };
+    }
+    const writer = item.sandbox !== 'read-only';
+    const ran = writerExecution != null && result.effects !== 'none';
+    const results = [];
+    if (completed && !analysis.report) {
+      results.push(settlementRecord('settle.report_valid', 'FAIL', 'report_invalid', analysis.reportError || 'The worker did not return a valid report.', { advisory: !writer }));
+    }
+    if (violationCount > 0) {
+      results.push(settlementRecord('settle.reported_scope', 'FAIL', 'reported_scope_violation', `Reported files outside allowedFiles: ${violations.join(', ')}`, { advisory: !writer }));
+    }
+    if (attested.count > 0) {
+      results.push(settlementRecord('settle.attested_scope', 'FAIL', 'attested_scope_violation', `Changed files outside allowedFiles: ${attestedViolations.join(', ')}`));
+    } else if (writer && ran && attestedDelta?.known !== true) {
+      results.push(settlementRecord('settle.attested_scope', 'UNKNOWN', 'delta_unknown', 'The writer ran but its workspace delta is unknown.'));
+    }
+    if (writer && !isSettledWriter(result)) {
+      results.push(settlementRecord('settle.writer_settled', 'UNKNOWN', 'writer_unresolved', 'The writer execution is not proven ended.', {
+        evidence: writerExecution?.executionId ? [`writer_executions:${writerExecution.executionId}`] : [],
+      }));
+    }
+    if (writer && analysis.report && ['failed', 'blocked'].includes(analysis.report.outcome)) {
+      results.push(settlementRecord('settle.report_outcome', 'FAIL', 'writer_reported_failure', `The writer reported outcome ${analysis.report.outcome}.`, { advisory: true }));
+    }
     return {
       assignmentId: item.assignmentId,
       attemptId: item.attemptId,
@@ -345,16 +662,23 @@ function buildLeadGraph(deps) {
       sandbox: item.sandbox,
       taskId: result.taskId || item.taskId || null,
       status: result.status,
-      report: parsed.report,
-      reportError: parsed.error,
-      ...(parsed.report ? {} : { text: (result.text || '').slice(0, MAX_OUTCOME_TEXT_CHARS) }),
+      report: analysis.report,
+      reportError: analysis.reportError,
+      ...(analysis.report ? {} : { text: analysis.text ?? '' }),
       failureKind: result.failureKind || null,
       scopeViolations: violations,
+      ...(violationCount > violations.length ? { scopeViolationCount: violationCount } : {}),
       writerExecution,
       effects: result.effects || null,
-      attestedScopeViolations: outsideAllowed(attestedPaths, item.assignment.allowedFiles, workspace),
+      attestedScopeViolations: attestedViolations,
+      ...(attested.count > attestedViolations.length ? { attestedScopeViolationCount: attested.count } : {}),
       attestedDeltaKnown: attestedDelta?.known === true,
+      ...(item.contract ? { contract: item.contract } : {}),
+      boundary: { contract: item.contract ? BOUNDARY_CONTRACT_ID : 'legacy', results },
       ...(result.failure ? { failure: result.failure } : {}),
+      ...(evidence.length > 0 ? { evidence } : {}),
+      ...(omitted.length > 0 ? { projection: { omitted } } : {}),
+      ...(evidenceError ? { evidenceError } : {}),
     };
   }
 
@@ -377,9 +701,16 @@ function buildLeadGraph(deps) {
       sections.push(`Acceptance note: the deterministic acceptance run for your finish decision was rejected (disposition ${state.acceptance.disposition}). You may dispatch fixes within the round limits, then finish again; a second rejection ends the run as rejected. Your final text never changes the disposition.\nIssues:\n${issues.map((line) => `- ${line}`).join('\n')}`);
     }
     if (state.humanAnswers.length > 0) sections.push('Human answers (authoritative):\n' + JSON.stringify(state.humanAnswers));
-    sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(state.outcomes));
+    if (state.retryDecide && state.rejections?.length > 0) {
+      const violations = state.rejections.at(-1).violations || [];
+      const reminders = [...new Set(violations.map((entry) => RULE_REMINDERS[entry.predicate]).filter(Boolean))];
+      sections.push(['Rejected decision: your previous decision failed validation and nothing was executed. Return a corrected decision.',
+        ...violations.map((entry) => `- ${entry.predicate} ${entry.code}: ${entry.detail}`),
+        ...reminders].join('\n'));
+    }
+    sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(boundedOutcomes(state.outcomes)));
     sections.push([
-      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and skills. Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
+      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and skills. Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles; read-only roles may use allowedFiles []. allowedFiles entries are exact paths or directory prefixes; globs are not supported. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
       'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, and humanInput. Use empty arrays, an empty string, or null for unused fields.',
       'Worker decision requests: resolve them yourself (resolutions: decisionId, choice, rationale) whenever the evidence supports a choice. Worker reports are self-reported; check scopeViolations and reportError.',
       'Use request_human_input only for missing_authority, irreversible_or_external, or product_choice, and only after investigating: give options, a recommendation, the evidence checked, and the independent work that can proceed.',
@@ -447,7 +778,11 @@ function buildLeadGraph(deps) {
       const current = readPinned({ roles, leadRole, workspace, skillCatalog });
       notes.push(...instructionChanges(state.pinned, current));
       update.pinned = current;
+      // A resume is new human intent: the automatic-retry allowance starts over.
+      update.consecutiveRejections = 0;
+      update.retryDecide = false;
     }
+    const priorRejections = update.consecutiveRejections ?? (state.consecutiveRejections || 0);
 
     const priorSkillContext = state.outcomes.map((outcome) => ({
       role: outcome.role,
@@ -476,28 +811,51 @@ function buildLeadGraph(deps) {
     update.threadId = leadResult.threadId || state.threadId;
     recordLeadTurn(state, leadResult, leadResult.status || 'completed');
 
-    const decision = parseDecision(leadResult.text);
-    if (Array.isArray(decision.assignments)) {
-      for (const assignment of decision.assignments) {
-        for (const field of ['allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions']) {
-          if (Array.isArray(assignment[field]) && assignment[field].length > 20) {
-            assignment[field] = assignment[field].slice(0, 20);
+    let decision;
+    try {
+      decision = parseDecision(leadResult.text);
+      if (Array.isArray(decision.assignments)) {
+        for (const assignment of decision.assignments) {
+          if (!assignment || typeof assignment !== 'object') continue;
+          for (const field of ['allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions']) {
+            if (Array.isArray(assignment[field]) && assignment[field].length > 20) {
+              assignment[field] = assignment[field].slice(0, 20);
+            }
+          }
+          if (Array.isArray(assignment.allowedFiles)) {
+            assignment.allowedFiles = assignment.allowedFiles.map((file) => (typeof file === 'string' && file.length > 1 ? file.replace(/\/+$/, '') : file));
+            // A read-only role needs no write scope: a bare dot means "no files", not the repository.
+            if (getRole(roles, assignment.role)?.sandbox === 'read-only') {
+              assignment.allowedFiles = assignment.allowedFiles.filter((file) => file !== '.' && file !== './');
+            }
           }
         }
-        if (Array.isArray(assignment.allowedFiles)) {
-          assignment.allowedFiles = assignment.allowedFiles.map((file) => (typeof file === 'string' && file.length > 1 ? file.replace(/\/+$/, '') : file));
-        }
       }
+      validateDecision(decision, {
+        roles,
+        attemptedRoles: new Set(state.attemptedRoles),
+        outcomeCount: state.outcomes.length,
+        unresolvedWriterCount: state.unresolvedWriters.length,
+        openDecisionIds: new Set(state.openDecisions.map((entry) => entry.id)),
+        skillCatalog,
+        skillCandidateIds: candidateIds,
+      });
+    } catch (error) {
+      if (!(error instanceof BoundaryViolation)) throw error;
+      const consecutive = priorRejections + 1;
+      if (consecutive > MAX_AUTO_REJECTIONS) {
+        const codes = [...new Set([...(state.retryDecide ? (state.rejections.at(-1)?.violations || []) : []), ...error.violations].map((entry) => entry.code))];
+        throw new Error(`Lead decision rejected ${consecutive} times in a row (${codes.join(', ')}): ${error.message}`, { cause: error });
+      }
+      return {
+        ...update,
+        rejections: [...(state.rejections || []), { round: state.round + 1, at: new Date().toISOString(), violations: error.violations }].slice(-5),
+        consecutiveRejections: consecutive,
+        retryDecide: true,
+      };
     }
-    validateDecision(decision, {
-      roles,
-      attemptedRoles: new Set(state.attemptedRoles),
-      outcomeCount: state.outcomes.length,
-      unresolvedWriterCount: state.unresolvedWriters.length,
-      openDecisionIds: new Set(state.openDecisions.map((entry) => entry.id)),
-      skillCatalog,
-      skillCandidateIds: candidateIds,
-    });
+    update.consecutiveRejections = 0;
+    update.retryDecide = false;
     deps.emit(runtime.onEvent, { type: 'decision', round: state.round + 1, action: decision.action });
 
     const resolved = new Map(decision.resolutions.map((entry) => [entry.decisionId, entry]));
@@ -524,14 +882,18 @@ function buildLeadGraph(deps) {
   }
 
   function parseDecision(text) {
-    if (typeof text !== 'string' || !text.trim()) throw new Error('Lead returned an empty decision');
+    if (typeof text !== 'string' || !text.trim()) throw new BoundaryViolation('decision.parse', 'decision_empty', 'Lead returned an empty decision');
     let decision;
     try {
       decision = JSON.parse(text);
     } catch (error) {
-      throw new Error('Lead decision was not valid JSON', { cause: error });
+      const failure = new BoundaryViolation('decision.parse', 'decision_not_json', 'Lead decision was not valid JSON');
+      failure.cause = error;
+      throw failure;
     }
-    if (!decision || typeof decision !== 'object' || Array.isArray(decision)) throw new Error('Lead decision must be a JSON object');
+    if (!decision || typeof decision !== 'object' || Array.isArray(decision)) {
+      throw new BoundaryViolation('decision.parse', 'decision_not_object', 'Lead decision must be a JSON object');
+    }
     return decision;
   }
 
@@ -634,11 +996,14 @@ function buildLeadGraph(deps) {
       if (item.sandbox !== 'read-only') {
         return finishItem(item, syntheticResult('outcome_unknown', `A2A role ${roleDisplayName(item.role)} returned no task ID; it may have accepted the writable task, so workspace effects are unknown.`, { contextId: item.contextId }));
       }
-      if (submitted?.message) return finishItem(item, { ...syntheticResult('TASK_STATE_COMPLETED', ''), contextId: item.contextId, text: extractTextParts(submitted.message.parts).slice(0, MAX_REPORT_CHARS) });
+      if (submitted?.message) {
+        const messageText = extractTextParts(submitted.message.parts);
+        return finishItem(item, { ...syntheticResult('TASK_STATE_COMPLETED', ''), contextId: item.contextId, text: messageText.slice(0, MAX_REPORT_CHARS), ...oversizeMessage(item, messageText) });
+      }
       return finishItem(item, syntheticResult('dispatch_error', `A2A role ${roleDisplayName(item.role)} did not return a task ID`, { contextId: item.contextId }));
     }
     journal.recordSubmitted(item.attemptId, task.id);
-    if (isTaskFinished(task)) return finishItem({ ...item, taskId: task.id }, assignmentResult(task));
+    if (isTaskFinished(task)) return finishItem({ ...item, taskId: task.id }, receiveResult(task, item));
     return { ...item, state: 'submitted', taskId: task.id };
   }
 
@@ -657,14 +1022,23 @@ function buildLeadGraph(deps) {
           resolveSkillSelection(skillCatalog, assignment.skills || [], { pins: skillPins });
           const assignmentId = makeAssignmentId(state.runId, round, index);
           const attemptId = makeAttemptId(assignmentId);
+          const role = getRole(roles, assignment.role);
           return {
             runId: state.runId,
             assignmentId,
             attemptId,
             contextId: deterministicContextId(attemptId),
             role: assignment.role,
-            sandbox: getRole(roles, assignment.role).sandbox,
+            sandbox: role.sandbox,
             assignment,
+            contract: {
+              id: BOUNDARY_CONTRACT_ID,
+              reportContract: 'worker-report/v1',
+              allowedFiles: [...(assignment.allowedFiles || [])],
+              sandbox: role.sandbox,
+              roleProfileSha256: roleProfileSha256(role),
+              skillPins: skillPins.map(({ id, sha256: hash }) => ({ id, sha256: hash })),
+            },
             state: 'pending',
             taskId: null,
             result: null,
@@ -744,11 +1118,11 @@ function buildLeadGraph(deps) {
         if (isTaskFinished(task)) break;
         await wait(pollIntervalMs, signal);
       }
-      return finishItem({ ...item, taskId }, assignmentResult(task));
+      return finishItem({ ...item, taskId }, receiveResult(task, item));
     } catch (error) {
       if (signal?.aborted || error?.name === 'AbortError') {
         const stopped = await deps.cancelUntilConfirmed(client, taskId, item.contextId);
-        const result = assignmentResult(stopped);
+        const result = receiveResult(stopped, item);
         return finishItem({ ...item, taskId }, { ...result, status: taskStateName(stopped?.status?.state) });
       }
       // Transient poll failures must not finalize the outcome: crash so the run stays resumable.
@@ -789,7 +1163,9 @@ function buildLeadGraph(deps) {
         role: item.role,
         contextId: item.result.contextId || item.contextId || null,
         taskId: item.result.taskId || item.taskId || null,
-        allowedFiles: Array.isArray(item.assignment?.allowedFiles) ? item.assignment.allowedFiles : [],
+        allowedFiles: Array.isArray(item.contract?.allowedFiles) ? item.contract.allowedFiles
+          : (Array.isArray(item.assignment?.allowedFiles) ? item.assignment.allowedFiles : []),
+        ...(item.contract ? { contract: item.contract } : {}),
         cause: item.result.status === 'outcome_unknown' ? 'outcome_unknown'
           : (item.result.failureKind || (item.result.writerExecution?.state ? `writer_${item.result.writerExecution.state}` : 'no_writer_execution')),
       });
@@ -857,10 +1233,30 @@ function buildLeadGraph(deps) {
       const stuck = results.filter((result) => result.state === 'unresolved');
       if (stuck.length === 0) {
         const attested = results.map((result, index) => {
-          const allowed = state.unresolvedWriters[index].allowedFiles;
+          const entry = state.unresolvedWriters[index];
+          const allowed = entry.allowedFiles;
+          const violations = Array.isArray(allowed) ? outsideAllowed(result.changedPaths, allowed, workspace) : [];
+          const records = [];
+          if (violations.length > 0) {
+            records.push(settlementRecord('settle.attested_scope', 'FAIL', 'attested_scope_violation', `Changed files outside allowedFiles: ${violations.slice(0, MAX_VIOLATION_PATHS).join(', ')}`));
+          } else if (result.deltaKnown !== true) {
+            records.push(settlementRecord('settle.attested_scope', 'UNKNOWN', 'delta_unknown', 'The writer ran but its workspace delta is unknown.'));
+          }
+          if (result.state === 'legacy_unverified') {
+            records.push(settlementRecord('settle.writer_settled', 'UNKNOWN', 'writer_unresolved', `The writer execution cannot be proven ended: ${result.reason}.`));
+          }
+          // Violations are computed on the full list; only the stored lists are capped.
+          const changed = result.changedPaths || [];
+          const cut = changed.length > MAX_VIOLATION_PATHS;
+          const cutViolations = violations.length > MAX_VIOLATION_PATHS;
           return {
             ...result,
-            attestedScopeViolations: Array.isArray(allowed) ? outsideAllowed(result.changedPaths, allowed, workspace) : [],
+            changedPaths: cut ? changed.slice(0, MAX_VIOLATION_PATHS) : changed,
+            ...(cut ? { changedPathCount: changed.length } : {}),
+            attestedScopeViolations: cutViolations ? violations.slice(0, MAX_VIOLATION_PATHS) : violations,
+            ...(cutViolations ? { attestedScopeViolationCount: violations.length } : {}),
+            ...(entry.contract ? { contract: entry.contract } : {}),
+            boundary: { contract: entry.contract ? BOUNDARY_CONTRACT_ID : 'legacy', results: records },
           };
         });
         for (const result of attested) deps.emit(runtime.onEvent, { type: 'reconciliation', round: state.round, ...result });
@@ -911,6 +1307,7 @@ function buildLeadGraph(deps) {
         ran: (outcome.writerExecution != null && outcome.effects !== 'none') || later?.state === 'reconciled' || later?.state === 'legacy_unverified',
         completed: outcome.status === 'TASK_STATE_COMPLETED',
         reportValid: outcome.report != null,
+        reportOutcome: outcome.report?.outcome || null,
         reportedScopeViolations: outcome.scopeViolations || [],
         attestedScopeViolations: later ? (later.attestedScopeViolations || []) : (outcome.attestedScopeViolations || []),
         deltaKnown: later ? later.deltaKnown === true : outcome.attestedDeltaKnown === true,
@@ -923,18 +1320,22 @@ function buildLeadGraph(deps) {
     const unresolvedWriterCount = state.unresolvedWriters.length;
     const snapshot = deps.snapshot;
     const checks = state.contract?.requiredChecks || [];
+    if (state.contract?.invalid) {
+      return unrunAcceptance('contract_invalid', state.contract.invalid.detail || 'The stored acceptance contract is invalid.');
+    }
     if (checks.length === 0) {
       return assessWithoutChecks({ workspace, writers, unresolvedWriterCount, ...(snapshot ? { snapshot } : {}) });
     }
     return runAcceptance({
       workspace,
       runId: state.runId,
-      attempt: state.acceptanceAttempts + 1,
+      attempt: (state.acceptanceRuns || 0) + 1,
       contract: state.contract,
       writers,
       unresolvedWriterCount,
       admission: deps.admission,
       runCheckImpl: deps.runCheckImpl,
+      ...(deps.evidenceStore ? { evidenceStore: deps.evidenceStore } : {}),
       signal,
       ...(snapshot ? { snapshot } : {}),
     });
@@ -949,24 +1350,13 @@ function buildLeadGraph(deps) {
       acceptance = await assess(state, runtime.signal);
     } catch (error) {
       if (error?.name === 'AbortError') throw error;
-      const detail = errorText(error);
-      acceptance = {
-        disposition: 'unverifiable',
-        reasons: [{ code: 'acceptance_error', detail }],
-        issues: [{ code: 'acceptance_error', detail }],
-        candidate: { kind: null, head: null, fingerprint: null },
-        candidateAfter: { fingerprint: null },
-        checks: [],
-        requiredCheckIds: (state.contract?.requiredChecks || []).map((check) => check.id),
-        verifiedAt: new Date().toISOString(),
-        admissionHeld: false,
-      };
+      acceptance = unrunAcceptance('acceptance_error', errorText(error), (state.contract?.requiredChecks || []).map((check) => check.id));
     }
     deps.emit(runtime.onEvent, { type: 'acceptance', round: state.round, disposition: acceptance.disposition, reasons: acceptance.reasons });
     if (acceptance.disposition === 'rejected' && state.acceptanceAttempts < 1) {
-      return { acceptance, acceptanceAttempts: state.acceptanceAttempts + 1, status: null, text: '' };
+      return { acceptance, acceptanceRuns: (state.acceptanceRuns || 0) + 1, acceptanceAttempts: state.acceptanceAttempts + 1, status: null, text: '' };
     }
-    return { acceptance };
+    return { acceptance, acceptanceRuns: (state.acceptanceRuns || 0) + 1 };
   }
 
   async function finish(state) {
@@ -974,19 +1364,10 @@ function buildLeadGraph(deps) {
     if (!acceptance) {
       // Canceled, max_rounds or failed before any acceptance run: report what is known without running checks.
       const checks = state.contract?.requiredChecks || [];
-      if (checks.length > 0) {
-        const detail = 'The run ended before the required checks were run.';
-        acceptance = {
-          disposition: 'unverifiable',
-          reasons: [{ code: 'acceptance_not_run', detail }],
-          issues: [{ code: 'acceptance_not_run', detail }],
-          candidate: { kind: null, head: null, fingerprint: null },
-          candidateAfter: { fingerprint: null },
-          checks: [],
-          requiredCheckIds: checks.map((check) => check.id),
-          verifiedAt: new Date().toISOString(),
-          admissionHeld: false,
-        };
+      if (state.contract?.invalid) {
+        acceptance = unrunAcceptance('contract_invalid', state.contract.invalid.detail || 'The stored acceptance contract is invalid.');
+      } else if (checks.length > 0) {
+        acceptance = unrunAcceptance('acceptance_not_run', 'The run ended before the required checks were run.', checks.map((check) => check.id));
       } else {
         acceptance = assessWithoutChecks({
           workspace,
@@ -1013,6 +1394,7 @@ function buildLeadGraph(deps) {
     if (state.status) return 'finish';
     if (state.budget) return 'budget_pause';
     if (state.humanRequest) return 'human_input';
+    if (state.retryDecide) return 'decide';
     return 'dispatch';
   };
   const afterAccept = (state) => (state.status ? 'finish' : 'decide');
@@ -1042,7 +1424,7 @@ function buildLeadGraph(deps) {
     .addNode('finish', finish)
     .addEdge(START, 'intake')
     .addEdge('intake', 'decide')
-    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'budget_pause', 'human_input', 'dispatch'])
+    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'budget_pause', 'human_input', 'dispatch', 'decide'])
     .addConditionalEdges('accept', afterAccept, ['finish', 'decide'])
     .addEdge('dispatch', 'collect')
     .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify'])
@@ -1057,6 +1439,8 @@ function buildLeadGraph(deps) {
 
 module.exports = {
   buildLeadGraph,
+  boundedOutcomes,
+  analyzeWorker,
   LeadState,
   CANCELED_TEXT,
   abortError,

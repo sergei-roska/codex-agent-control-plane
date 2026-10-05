@@ -12,6 +12,7 @@ const path = require('node:path');
 const { ServerCallContext } = require('@a2a-js/sdk/server');
 const { openStateDatabase, createTaskStore } = require('../src/durable-store');
 const { WriterAdmission } = require('../src/writer-admission');
+const { validateAcceptanceContract } = require('../src/acceptance');
 
 // Test files run in parallel processes; keep workspace locks private to this process.
 process.env.CODEX_A2A_WORKSPACE_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-ws-lock-'));
@@ -872,7 +873,7 @@ test('acceptance metadata on a new run is validated and passed as the contract',
     taskId: 't-acc', contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }], metadata: { acceptance: validAcceptance } },
   }, { publish: (event) => seen.push(event) });
   assert.equal(runs.length, 1);
-  assert.deepEqual(runs[0].contract, { requiredChecks: [{ id: 'unit', argv: ['npm', 'test'], timeoutMs: 600000 }] });
+  assert.deepEqual(runs[0].contract, { id: 'acceptance-contract/v1', requiredChecks: [{ id: 'unit', argv: ['npm', 'test'], timeoutMs: 600000 }] });
   assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
 });
 
@@ -938,6 +939,35 @@ test('a restart fallback that starts over recovers the contract from the first u
   }), { publish() {} });
   assert.equal(runs[0].goal, 'original goal');
   assert.equal(runs[0].contract.requiredChecks[0].id, 'unit');
+});
+
+test('a restart fallback with an invalid stored contract carries an invalid marker, never no checks', async () => {
+  const runs = [];
+  const executor = makeLeadExecutor({
+    orchestrator: {
+      async getPause() { return null; },
+      async resume() { throw Object.assign(new Error('none'), { name: 'RunNotFoundError' }); },
+      async run(args) { runs.push(args); return { status: 'completed', text: 'again' }; },
+    },
+  });
+  await executor.execute(pausedContext('t-badc', { kind: 'restart' }, { parts: [{ text: '' }] }, {
+    history: [{ role: 1, parts: [{ text: 'original goal' }], metadata: { acceptance: { requiredChecks: [{ id: 'a', argv: [] }] } } }],
+  }), { publish() {} });
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].contract.invalid.code, 'contract_invalid');
+  assert.match(runs[0].contract.invalid.detail, /Stored acceptance contract is invalid/);
+  // The orchestrator validates the contract again; the marker must survive that.
+  assert.equal(validateAcceptanceContract(runs[0].contract).invalid.code, 'contract_invalid');
+});
+
+test('a user-supplied invalid marker in new-run metadata is rejected', async () => {
+  let started = false;
+  const executor = makeLeadExecutor({ orchestrator: { async run() { started = true; return { status: 'completed', text: 'x' }; } } });
+  await executor.execute({
+    taskId: 't-mark', contextId: 'ctx',
+    userMessage: { parts: [{ text: 'goal' }], metadata: { acceptance: { requiredChecks: [], invalid: { code: 'contract_invalid', detail: 'x' } } } },
+  }, { publish() {} });
+  assert.equal(started, false);
 });
 
 function textMessage(text, extra = {}) {

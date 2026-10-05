@@ -7,6 +7,7 @@ const express = require('express');
 const Database = require('better-sqlite3');
 const {
   WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, classifyCodexError, findCodexErrorInfo,
+  BoundaryViolation, checkSpecialistRequest, parseWorkerReport, pathsOutsideAllowed,
 } = require('./contracts');
 const { WriterAdmission } = require('./writer-admission');
 const { loadSkillCatalog, resolveSkillSelection } = require('./skill-catalog');
@@ -77,6 +78,22 @@ function assignmentSkillSelection(text, skillCatalog) {
   return resolveSkillSelection(skillCatalog, skills, pins === undefined ? {} : { pins });
 }
 
+const BOUNDARY_CONTRACT = 'boundary-contract/v1';
+
+// A structured request is a JSON object carrying both objective and allowedFiles, or requireAcceptance; returns it or null.
+function parseStructuredRequest(text) {
+  if (!text.trimStart().startsWith('{')) return null;
+  let value;
+  try { value = JSON.parse(text); } catch (_) { return null; }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (value.requireAcceptance) return value;
+  return Object.hasOwn(value, 'objective') && Object.hasOwn(value, 'allowedFiles') ? value : null;
+}
+
+function boundaryRecord(predicate, result, code, boundary, detail, advisory = false) {
+  return { predicate, result, code, boundary, detail: String(detail).slice(0, 500), evidence: [], advisory };
+}
+
 function failureMetadata(error) {
   const classified = error ? classifyCodexError(error) : 'other';
   return {
@@ -141,7 +158,7 @@ function makeRoleCard({ roleId, role, endpoint }) {
 let ledgerWarned = false;
 
 // Build the worker-turn ledger entry from a run result or thrown error. Absent usage -> nulls.
-function workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries }) {
+function workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries, queueWaitMs = null }) {
   const usage = source?.usage || null;
   const turnId = source?.execution?.turnId || source?.turnId || null;
   return {
@@ -165,6 +182,38 @@ function workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries 
     appServerVersion: usage?.appServerVersion ?? null,
     outcome,
     permissionEvents: Array.isArray(source?.permissionEvents) ? source.permissionEvents : [],
+    startupMs: usage?.startupMs ?? null,
+    coldStart: usage?.coldStart ?? null,
+    queueWaitMs,
+  };
+}
+
+// Attempt that ended before any App Server turn: no usage, no tokens, one explicit row.
+function preTurnUsageEntry({ roleId, taskId, contextId, outcome, retries, elapsedMs, startedAt, queueWaitMs }) {
+  return {
+    entryId: `${roleId}:${taskId}:pre`,
+    kind: 'worker_turn',
+    runId: null,
+    role: roleId,
+    taskId,
+    contextId,
+    attemptId: null,
+    model: null,
+    effort: null,
+    startedAt,
+    elapsedMs,
+    turns: 0,
+    modelRequests: null,
+    retries,
+    tokens: null,
+    tokenSource: 'unavailable',
+    cumulativeTotal: null,
+    appServerVersion: null,
+    outcome,
+    permissionEvents: [],
+    startupMs: null,
+    coldStart: null,
+    queueWaitMs,
   };
 }
 
@@ -258,6 +307,31 @@ function makeExecutor({
         ...(writer ? { writerExecution: writer } : {}),
         ...(telemetry ? telemetry : {}),
       });
+      const executeStartedAt = new Date().toISOString();
+      const executeStartMs = performance.now();
+      // Writer attempts only: ms from the admission request to admitted or refused. Null for read-only.
+      let queueWaitMs = null;
+      const recordPreTurn = (outcome) => {
+        if (!usageLedger) return;
+        try {
+          const retries = usageLedger.workerRowsForContext(contextId);
+          usageLedger.record(preTurnUsageEntry({
+            roleId,
+            taskId,
+            contextId,
+            outcome,
+            retries,
+            elapsedMs: Math.round(performance.now() - executeStartMs),
+            startedAt: executeStartedAt,
+            queueWaitMs,
+          }));
+        } catch (error) {
+          if (!ledgerWarned) {
+            ledgerWarned = true;
+            console.warn(`usage ledger write failed: ${error?.message || error}`);
+          }
+        }
+      };
       const recordUsage = (source, outcome) => {
         const usage = source?.usage ?? null;
         const permissionEvents = Array.isArray(source?.permissionEvents) ? source.permissionEvents : [];
@@ -277,7 +351,7 @@ function makeExecutor({
         if (!usageLedger) return;
         try {
           const retries = usageLedger.workerRowsForContext(contextId);
-          usageLedger.record(workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries }));
+          usageLedger.record(workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries, queueWaitMs }));
         } catch (error) {
           if (!ledgerWarned) {
             ledgerWarned = true;
@@ -287,10 +361,52 @@ function makeExecutor({
       };
       try {
         let input;
+        let structured = null;
+        let rejection = null;
         try {
           input = extractText(requestContext.userMessage);
-          selectedSkills = assignmentSkillSelection(input, skillCatalog);
+          const raw = parseStructuredRequest(input);
+          if (raw) {
+            try {
+              structured = checkSpecialistRequest(raw, { id: roleId, name: role.name, sandbox: role.sandbox }, { workspace });
+              try {
+                selectedSkills = assignmentSkillSelection(input, skillCatalog);
+              } catch (skillError) {
+                // Pin and hash mismatches are drift; count, duplicate, and unknown-id problems are shape errors.
+                const drift = /changed since catalog load|pin does not match|path changed/.test(skillError.message);
+                throw drift
+                  ? new BoundaryViolation('dispatch.skill_pins', 'skill_pin_drift', skillError.message)
+                  : new BoundaryViolation('assignment.skills', 'skill_invalid', skillError.message);
+              }
+            } catch (error) {
+              if (!(error instanceof BoundaryViolation)) throw error;
+              rejection = error;
+              throw error;
+            }
+          } else {
+            selectedSkills = assignmentSkillSelection(input, skillCatalog);
+          }
         } catch (error) {
+          if (rejection) {
+            recordPreTurn('input_error');
+            const results = rejection.violations.map((entry) => ({ ...entry, evidence: [], advisory: false }));
+            const unavailable = results.some((entry) => entry.code === 'guarantee_unavailable');
+            publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
+              messageId: `${taskId}-input-error`,
+              contextId,
+              taskId,
+              role: 2,
+              parts: [{ content: { $case: 'text', value: error.message } }],
+              metadata: {
+                failureKind: unavailable ? 'guarantee_unavailable' : 'request_invalid',
+                codexErrorInfo: null,
+                effects: 'none',
+                boundary: { contract: BOUNDARY_CONTRACT, results },
+              },
+            });
+            return;
+          }
+          recordPreTurn('input_error');
           publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
             messageId: `${taskId}-input-error`,
             contextId,
@@ -317,14 +433,19 @@ function makeExecutor({
               metadata: {},
             }));
           }
+          const admissionRequestedMs = performance.now();
           try {
             execution = await admission.acquire({ role: roleId, taskId, contextId, signal: controller.signal });
+            queueWaitMs = Math.round(performance.now() - admissionRequestedMs);
           } catch (error) {
+            queueWaitMs = Math.round(performance.now() - admissionRequestedMs);
             if (controller.signal.aborted) {
+              recordPreTurn('canceled');
               publishTerminalStatus(TaskState.TASK_STATE_CANCELED);
               return;
             }
             if (error?.code !== 'fenced' && error?.code !== 'admission_blocked') throw error;
+            recordPreTurn('refused');
             publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
               messageId: `${taskId}-error`,
               contextId,
@@ -355,6 +476,7 @@ function makeExecutor({
             await settleWriter(execution.executionId, true);
             settled = true;
           }
+          recordPreTurn('canceled');
           publishTerminalStatus(TaskState.TASK_STATE_CANCELED);
           return;
         }
@@ -390,6 +512,28 @@ function makeExecutor({
         const canceled = controller.signal.aborted;
         const completed = result?.status === 'completed';
         if (!canceled && completed) {
+          const parsedReport = parseWorkerReport(resultText);
+          let boundary = { contract: 'legacy' };
+          if (structured) {
+            const results = [];
+            if (parsedReport.error) {
+              results.push(boundaryRecord('settle.report_valid', 'FAIL', 'report_invalid', 'settlement', parsedReport.error, !writable));
+            }
+            if (writable && writer) {
+              const delta = writer.delta;
+              if (!delta || delta.known !== true) {
+                results.push(boundaryRecord('settle.attested_scope', 'UNKNOWN', 'delta_unknown', 'settlement',
+                  'The workspace delta of this writer is unknown'));
+              } else {
+                const outside = pathsOutsideAllowed(delta.changedPaths || [], structured.allowedFiles, workspace);
+                if (outside.length) {
+                  results.push(boundaryRecord('settle.attested_scope', 'FAIL', 'attested_scope_violation', 'settlement',
+                    `Changed paths outside allowedFiles: ${outside.join(', ')}`));
+                }
+              }
+            }
+            boundary = { contract: BOUNDARY_CONTRACT, results };
+          }
           eventBus.publish(AgentEvent.artifactUpdate({
             taskId,
             contextId,
@@ -399,7 +543,9 @@ function makeExecutor({
               description: role.description,
               parts: [{ content: { $case: 'text', value: resultText } }],
               metadata: {
-                contract: WORKER_REPORT_CONTRACT,
+                contract: parsedReport.error ? null : WORKER_REPORT_CONTRACT,
+                ...(parsedReport.error ? { reportError: parsedReport.error } : {}),
+                boundary,
                 threadId: result.threadId || null,
             ...(selectedSkills.length ? { selectedSkills: selectedSkills.map(({ id, sha256 }) => ({ id, sha256 })) } : {}),
                 ...(writer ? { writerExecution: writer } : {}),

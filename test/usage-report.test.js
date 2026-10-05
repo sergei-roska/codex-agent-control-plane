@@ -113,3 +113,38 @@ test('turns, elapsedMs and retries totals carry known/unknown counts and partial
   assert.equal(clean.retriesUnknownRows, 0);
   await state.close();
 });
+
+test('report shows startup, cold start, queue wait with unknowns as null, and the lead acceptance block', async () => {
+  const state = await fixture();
+  const ledger = new UsageLedger({ db: state.db });
+  state.db.prepare(`INSERT INTO dispatch_journal (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id,
+    state, created_at, updated_at) VALUES ('att-4', 'run-1', 'asg-4', 'orch-builder', 'workspace-write', 'c', 'task-4', 'finished', 'n', 'n')`).run();
+  ledger.record({ entryId: 'orch-builder:task-4', kind: 'worker_turn', role: 'orch-builder', taskId: 'task-4', turns: 1,
+    startupMs: 40, coldStart: true, queueWaitMs: 15, permissionEvents: [] });
+  const report = buildReport(state.db, { runId: 'run-1' });
+  const four = report.attempts.find((a) => a.taskId === 'task-4');
+  assert.deepEqual([four.startupMs, four.coldStart, four.queueWaitMs], [40, true, 15]);
+  const one = report.attempts.find((a) => a.taskId === 'task-1');
+  assert.deepEqual([one.startupMs, one.coldStart, one.queueWaitMs], [null, null, null]);
+  assert.equal(report.totals.startupMs, 40);
+  assert.equal(report.totals.startupMsKnownRows, 1);
+  assert.equal(report.totals.startupMsUnknownRows, 3);
+  assert.equal(report.totals.startupMsPartial, true);
+  assert.equal(report.totals.queueWaitMs, 15);
+  assert.equal(report.totals.coldStarts, 1);
+  assert.equal(report.totals.coldStartUnknownRows, 3);
+  assert.equal(report.byRole['orch-builder'].startupMs, 40);
+  assert.equal(report.acceptance, null);
+
+  state.db.prepare(`INSERT INTO tasks (tenant, owner, id, context_id, status_last_updated, status_state, artifacts)
+    VALUES ('t', 'orchestrator', 'run-1', 'c', 1, 'completed', ?)`).run(JSON.stringify([{
+    metadata: { acceptance: { disposition: 'accepted', checks: [
+      { id: 'unit', result: 'passed', durationMs: 123, stdoutTail: 'x' }, { id: 'lint', result: 'failed' }] } },
+  }]));
+  const withAcceptance = buildReport(state.db, { runId: 'run-1' });
+  assert.deepEqual(withAcceptance.acceptance, { disposition: 'accepted', checks: [
+    { id: 'unit', result: 'passed', durationMs: 123 }, { id: 'lint', result: 'failed', durationMs: null }] });
+  assert.equal(buildReport(state.db, { taskId: 'task-1' }).acceptance, undefined);
+
+  await state.close();
+});

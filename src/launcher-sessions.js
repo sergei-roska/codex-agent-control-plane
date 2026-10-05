@@ -129,6 +129,7 @@ function deleteLeadTask(db, taskId) {
     try { db.prepare("DELETE FROM checkpoints WHERE thread_id = ?").run(taskId); } catch (_) {}
     try { db.prepare("DELETE FROM writes WHERE thread_id = ?").run(taskId); } catch (_) {}
     try { db.prepare("DELETE FROM usage_ledger WHERE run_id = ?").run(taskId); } catch (_) {}
+    try { db.prepare("DELETE FROM evidence WHERE run_id = ?").run(taskId); } catch (_) {}
     try { db.prepare("DELETE FROM writer_executions WHERE task_id = ?").run(taskId); } catch (_) {}
   });
   deleteTx();

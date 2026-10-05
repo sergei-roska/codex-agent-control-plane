@@ -6,11 +6,14 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { test } = require('node:test');
+const crypto = require('node:crypto');
 const Database = require('better-sqlite3');
+const { createEvidenceStore } = require('../src/evidence-store');
 const { WriterAdmission } = require('../src/writer-admission');
 const { takeSnapshot } = require('../src/workspace-snapshot');
 const {
   validateAcceptanceContract, parseCheckCommand, runCheck, computeDisposition, runAcceptance, verifyCandidate, assessWithoutChecks, formatAcceptance,
+  acceptanceIssue, invalidAcceptanceContract, unrunAcceptance,
 } = require('../src/acceptance');
 
 const vcs = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' });
@@ -118,10 +121,10 @@ test('reported and attested scope violations are rejected', async () => {
   assert.deepEqual(codes(result).sort(), ['attested_scope_violation', 'reported_scope_violation']);
 });
 
-test('unknown delta is rejected', async () => {
+test('unknown delta is unverifiable', async () => {
   const dir = repo();
   const result = await runAcceptance({ workspace: dir, runId: 'r', attempt: 1, contract: { requiredChecks: [node('ok', 'void 0')] }, writers: [okWriter({ deltaKnown: false })] });
-  assert.equal(result.disposition, 'rejected');
+  assert.equal(result.disposition, 'unverifiable');
   assert.deepEqual(codes(result), ['delta_unknown']);
 });
 
@@ -363,4 +366,134 @@ test('a first commit of an out-of-scope file in an unborn repository is not acce
     assert.notEqual(result.disposition, 'accepted');
     assert.ok(codes(result).includes('attested_scope_violation'));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------- violation records (DBC-02b)
+
+const gitSnap = { kind: 'git', head: 'h', fingerprint: 'f', entries: [] };
+const oneCheck = [{ id: 'x', argv: ['x'] }];
+const dispose = (extra = {}) => computeDisposition({
+  requiredChecks: oneCheck, checkResults: [{ id: 'x', result: 'passed' }], snapshotBefore: gitSnap, snapshotAfter: gitSnap, ...extra,
+});
+
+test('a failed check plus an unavailable snapshot is rejected and lists both records', () => {
+  const result = dispose({ checkResults: [{ id: 'x', result: 'failed', exitCode: 1 }], snapshotBefore: { kind: 'none' }, snapshotAfter: { kind: 'none' } });
+  assert.equal(result.disposition, 'rejected');
+  assert.deepEqual(codes(result), ['check_failed', 'snapshot_unavailable']);
+  assert.deepEqual(result.issues.map((issue) => [issue.predicate, issue.result]), [['accept.checks', 'FAIL'], ['accept.snapshot', 'UNKNOWN']]);
+});
+
+test('unknown-only issues are unverifiable; a reported scope violation rejects while a reported failure is advisory', () => {
+  const unknown = dispose({ writers: [okWriter({ deltaKnown: false })] });
+  assert.equal(unknown.disposition, 'unverifiable');
+  assert.deepEqual(codes(unknown), ['delta_unknown']);
+  assert.equal(dispose({ unresolvedWriterCount: 1 }).disposition, 'unverifiable');
+  const reported = dispose({ writers: [okWriter({ reportedScopeViolations: ['z.js'], reportOutcome: 'failed' })] });
+  assert.equal(reported.disposition, 'rejected');
+  assert.deepEqual(codes(reported), ['reported_scope_violation', 'writer_reported_failure']);
+  assert.deepEqual(reported.issues.map((issue) => issue.advisory), [false, true]);
+  assert.ok(reported.issues.every((issue) => issue.result === 'FAIL' && issue.predicate === 'accept.writers'));
+  const failedOnly = dispose({ writers: [okWriter({ reportOutcome: 'failed' })] });
+  assert.equal(failedOnly.disposition, 'accepted');
+  assert.equal(failedOnly.issues[0].advisory, true);
+  // Blind spot: the attested delta is clean but the report lists an out-of-scope path.
+  const blind = dispose({ writers: [okWriter({ attestedScopeViolations: [], reportedScopeViolations: ['elsewhere.js'] })] });
+  assert.equal(blind.disposition, 'rejected');
+  const failWins = dispose({ writers: [okWriter({ deltaKnown: false, attestedScopeViolations: ['y.js'] })] });
+  assert.equal(failWins.disposition, 'rejected');
+});
+
+test('records carry predicate, result, boundary, advisory, evidence and keep code and detail', () => {
+  const result = dispose({ writers: [okWriter({ reportValid: false })] });
+  assert.deepEqual(result.issues[0], {
+    code: 'report_invalid', detail: 'Writer w1 completed without a valid report.', predicate: 'accept.writers', result: 'FAIL', boundary: 'acceptance', advisory: false, evidence: [],
+  });
+  assert.equal(acceptanceIssue('candidate_changed', 'x').predicate, 'accept.candidate_stable');
+  for (const code of ['acceptance_canceled', 'acceptance_error', 'acceptance_not_run']) {
+    assert.deepEqual([acceptanceIssue(code, 'd').predicate, acceptanceIssue(code, 'd').result], ['accept.run', 'UNKNOWN']);
+  }
+});
+
+test('contract_invalid is an accept.contract_valid UNKNOWN and the contract marker survives validation', () => {
+  const unrun = unrunAcceptance('contract_invalid', 'bad');
+  assert.equal(unrun.disposition, 'unverifiable');
+  assert.deepEqual([unrun.issues[0].predicate, unrun.issues[0].result], ['accept.contract_valid', 'UNKNOWN']);
+  const marker = invalidAcceptanceContract('bad');
+  assert.deepEqual(validateAcceptanceContract(marker), marker);
+  assert.equal(validateAcceptanceContract({ requiredChecks: [] }).id, 'acceptance-contract/v1');
+  assert.equal(validateAcceptanceContract({ id: 'acceptance-contract/v1', requiredChecks: [] }).requiredChecks.length, 0);
+  assert.throws(() => validateAcceptanceContract({ id: 'other', requiredChecks: [] }), TypeError);
+});
+
+test('a check printing 10 MiB stores both streams as evidence, keeps the tails, and names the ids on failure', async () => {
+  const dir = repo();
+  const db = new Database(':memory:');
+  const store = createEvidenceStore(db);
+  const code = "const b=Buffer.alloc(1024*1024,'a');for(let i=0;i<10;i++){process.stdout.write(b)}process.stdout.write('END-OF-OUT');process.stderr.write('boom-err');process.exitCode=2";
+  const result = await runAcceptance({
+    workspace: dir, runId: 'run-ev', attempt: 1, contract: { requiredChecks: [node('big', code)] }, evidenceStore: store,
+  });
+  const check = result.checks[0];
+  assert.equal(check.exitCode, 2);
+  assert.ok(check.stdoutTail.endsWith('END-OF-OUT'));
+  assert.equal(check.stdoutTail.length, 4096);
+  assert.equal(check.stdoutTruncated, true);
+  assert.equal(check.stderrTail, 'boom-err');
+  assert.equal(check.stderrTruncated, false);
+  const out = check.stdoutEvidence;
+  const err = check.stderrEvidence;
+  assert.equal(out.kind, 'check_stdout');
+  assert.equal(out.checkId, 'big');
+  assert.equal(out.originalBytes, 10 * 1024 * 1024 + 10);
+  assert.equal(out.truncated, true);
+  assert.equal(out.omitted.offset, 2 * 1024 * 1024);
+  assert.equal(out.originalSha256, crypto.createHash('sha256').update(Buffer.concat([Buffer.alloc(10 * 1024 * 1024, 'a'), Buffer.from('END-OF-OUT')])).digest('hex'));
+  assert.deepEqual(out.source, { producer: 'acceptance', argv: check.argv, exitCode: 2, signal: null, timedOut: false, canceled: false, stream: 'stdout' });
+  assert.equal(err.kind, 'check_stderr');
+  assert.equal(store.read(err.id, { runId: 'run-ev' }).bytes.toString(), 'boom-err');
+  assert.equal(err.source.stream, 'stderr');
+  const issue = result.issues.find((entry) => entry.code === 'check_failed');
+  assert.ok(issue.detail.includes(out.id) && issue.detail.includes(err.id), issue.detail);
+});
+
+test('without an evidence store the refs are null, and a failing store never fails the run', async () => {
+  const dir = repo();
+  const none = await runAcceptance({ workspace: dir, runId: 'r', attempt: 1, contract: { requiredChecks: [node('ok', 'console.log("hi")')] } });
+  assert.equal(none.checks[0].stdoutEvidence, null);
+  assert.equal(none.checks[0].stderrEvidence, null);
+  assert.equal(none.checks[0].stdoutTruncated, false);
+  const broken = { put() { throw Object.assign(new Error('no'), { code: 'evidence_boom' }); } };
+  const failed = await runAcceptance({ workspace: dir, runId: 'r', attempt: 1, contract: { requiredChecks: [node('ok', 'void 0')] }, evidenceStore: broken });
+  assert.equal(failed.checks[0].evidenceError, 'evidence_boom');
+  assert.equal(failed.checks[0].stdoutEvidence, null);
+  assert.equal(failed.disposition, 'accepted');
+});
+
+test('computeDisposition renders check results without evidence fields unchanged', () => {
+  const result = computeDisposition({
+    requiredChecks: [{ id: 'c' }], checkResults: [{ id: 'c', result: 'failed', exitCode: 1 }],
+    snapshotBefore: { kind: 'git', fingerprint: 'x' }, snapshotAfter: { kind: 'git', fingerprint: 'x' },
+  });
+  assert.equal(result.issues[0].detail, 'Required check "c" failed (exit 1).');
+});
+
+test('check evidence carries the acceptance attempt; identical output in two runs yields two rows', async () => {
+  const dir = repo();
+  const db = new Database(':memory:');
+  const store = createEvidenceStore(db);
+  const contract = { requiredChecks: [node('same', 'process.stdout.write("same");process.exitCode=Number(process.env.EXIT_CODE||0)')] };
+  const first = await runAcceptance({ workspace: dir, runId: 'run-att', attempt: 1, contract, evidenceStore: store });
+  process.env.EXIT_CODE = '3';
+  let second;
+  try { second = await runAcceptance({ workspace: dir, runId: 'run-att', attempt: 2, contract, evidenceStore: store }); } finally { delete process.env.EXIT_CODE; }
+  const a = first.checks[0].stdoutEvidence;
+  const b = second.checks[0].stdoutEvidence;
+  assert.notEqual(a.id, b.id);
+  assert.equal(a.attemptId, 'run-att:acceptance:1');
+  assert.equal(b.attemptId, 'run-att:acceptance:2');
+  assert.equal(a.source.exitCode, 0);
+  assert.equal(b.source.exitCode, 3);
+  // A replay of the same acceptance attempt reuses the row.
+  const replay = await runAcceptance({ workspace: dir, runId: 'run-att', attempt: 2, contract, evidenceStore: store });
+  assert.equal(replay.checks[0].stdoutEvidence.id, b.id);
 });
