@@ -1,6 +1,11 @@
 # Orchestrator improvement backlog
 
-Status: accepted backlog; M0 recorded (see "M0 record"); Phase A in progress.
+Status: M1 done; M2 owner scope done; the Phase C conditional-decision rollout
+is complete and its independent audit is accepted. All nine Phase C epic
+decisions have a go/defer outcome; no runtime implementation was selected for
+activation. The full M2 exit criterion remains incomplete because OPT-01..03
+routing shadow reports are absent and were outside the accepted M2 owner scope.
+Accepted documentation is integrated directly on main under explicit user authorization.
 Priorities express implementation order, not promised savings.
 
 ## Goal and constraints
@@ -53,14 +58,19 @@ Implementation references: `src/codex-app-server.js`, `src/a2a-role-service.js`,
 | M3 | Every selected Phase C epic passes its safety and resource gates, or has an evidence-backed defer decision; no unqualified savings claim remains | Completion of the selected rollout |
 
 `PH-A` (level 1, parent: ROOT): bounded evidence and runtime contracts are measurable.
-Depends on M0; acceptance: M1. Current phase.
+Depends on M0; acceptance: M1. Complete.
 
 `PH-B` (level 1, parent: ROOT): recovery and route estimates use recorded facts.
-Depends on M1; acceptance: M2. Next phase.
+Depends on M1; acceptance: M2. The M2 owner scope recorded in the Phase B
+progress table is complete; OPT-01..03 routing work remains incomplete and was
+outside that owner scope.
 
 `PH-C` (level 1, parent: ROOT): justified isolation, compensation, and active routing
-are introduced selectively. Depends on M2; acceptance: M3. Later phase; epics only,
-to be decomposed after decision outputs exist.
+are introduced selectively. Depends on M2; acceptance: M3. The conditional
+decision rollout has evidence-backed go/defer outcomes for all nine epics, no
+unqualified savings claims, and accepted independent audit. No runtime feature
+was selected for activation; deferred work retains its reopen criteria. This
+does not satisfy the still-incomplete full M2 routing-shadow criterion.
 
 Gate dependencies are the completed work listed in each phase. They do not imply
 calendar dates or automatic rollout. Each feature is disabled until its acceptance
@@ -114,7 +124,7 @@ Branch `feature/orchestrator-phase-a`, recorded 2026-10-05.
 
 ## Phase B progress
 
-Branch `feature/orchestrator-phase-b`. Owner scope for this pass: SUP, WAL-01,
+Owner scope for this pass: SUP, WAL-01,
 WAL-02, OPS-02. OPT (OPT-01..03) was not started; OPT-04 in Phase C depends on it.
 
 | Item | State | Evidence |
@@ -126,6 +136,29 @@ WAL-02, OPS-02. OPT (OPT-01..03) was not started; OPT-04 in Phase C depends on i
 | SUP-02 | done | `26f597d`; window, backoff, exhaustion with probe, per-run outcome rule |
 | SUP-03 | done | `7d9e734`; test/supervisor-integration.test.js; recovery 0/1000/4000 ms |
 | M2 (owner scope) | done | `docs/m2-audit-resolution.md`; F1-F5 fixed, 548 tests green, independent audit accepted; OPT-01..03 not started and outside owner scope |
+
+## Phase C progress
+
+The conditional decision rollout is complete: all nine epic decisions were
+independently audited and accepted. Selected runtime implementation remains
+deferred behind the evidence gates below. The nine decision records satisfy
+M3's evidence-backed go/defer gate, with no unqualified savings claim. This
+does not mark the separate full M2 routing-shadow criterion complete.
+
+| Item | State | Decision and evidence |
+| --- | --- | --- |
+| ACT-01 | decision done | [Actor topology ADR](adr/phase-c-actor-topology.md): keep the shared process; startup/memory and matched topology measurements are unknown, so defer isolation. |
+| ACT-02 | deferred | ACT-01 selected no new process boundary; reopen only with a named fault case and matched startup, memory, recovery, and acceptance evidence. |
+| ACT-03 | deferred | ACT-02 has no selected boundary and no measured queue demand exists; reopen after bounded ownership and queue demand are evidenced. |
+| DBC-05 | decision done | [Tool boundary ADR](adr/phase-c-tool-boundary.md): no supported mandatory interception point was demonstrated. |
+| DBC-06 | deferred | DBC-05 did not establish a mandatory mutation boundary; do not implement a proxy with bypassable paths. |
+| WAL-03 | decision done | [Compensation catalog ADR](adr/phase-c-compensation-catalog.md): no current operation has complete durable compensation semantics. |
+| WAL-04 | deferred | WAL-03 found no supported compensatable operation; select only after durable before-images, ownership/version checks, and DBC-06 passes with an enforced mutation route. |
+| PIP-05 | deferred | [Pipelines and routing ADR](adr/phase-c-pipelines-routing.md): no repeated real CLI workflow requiring multistage composition was demonstrated. A shared consumer is only needed to justify a broker. |
+| OPT-04 | deferred | [Pipelines and routing ADR](adr/phase-c-pipelines-routing.md): OPT-01..03 are unstarted; this records a prerequisite-based defer, not an owner rejection of routing. |
+| M3 independent audit | accepted | Auditor accepted all nine Phase C decision gates and evidence-backed deferrals; see the linked ACT, DBC, WAL, PIP, and OPT decision records above. |
+| Verification | done | `env -u NODE_TEST_CONTEXT npm test`: 548 passed, 13 suites, 0 failed/cancelled/skipped, 35,867.805797 ms; full log `/tmp/phase-c-full-test.log`. This verifies the current runtime, not unselected Phase C implementations or resource savings. |
+| Integration | direct main | Accepted decision records are included in this documentation change on main under explicit user authorization; no separate branch or runtime activation is required. |
 
 ## Phase A: baseline, compact evidence, executable contracts
 
