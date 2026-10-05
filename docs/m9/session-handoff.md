@@ -277,4 +277,6 @@ Verification: dashboard auth 15/15, dashboard API plus Atlassian API 13/13,
 independent guard audit two acceptance and 14 denial cases, diff/reference checks.
 Restarted the server; live portless pairing with both corroborating headers
 returned 204, authenticated context 200, and another-port request 403. Issued
-a fresh owner pairing link; verification in the owner's failing profile is pending.
+a fresh owner pairing link; the owner confirmed "works" in the previously
+failing Chrome profile. Startup/pairing issue is resolved. The dccourtscode server
+remains running on port 3000; no tickets or model runs were started.
