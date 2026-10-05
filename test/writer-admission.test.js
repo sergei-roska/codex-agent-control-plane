@@ -139,7 +139,8 @@ test('a restart reconciles leftover active rows and the holder survives while un
 
 test('a fenced context is refused with code fenced, and fence returns the existing execution', async () => {
   const { admission } = make();
-  assert.deepEqual(admission.fence('c-never', 'gave up'), { execution: null });
+  assert.deepEqual(admission.fence('c-never', 'gave up'), { execution: null, inserted: true });
+  assert.equal(admission.fence('c-never', 'again').inserted, false);
   await assert.rejects(admission.acquire(req(9, { contextId: 'c-never' })), (error) => error.code === 'fenced' && error.effects === 'none');
   assert.equal(admission.holder(), null);
 
@@ -177,4 +178,14 @@ test('unresolved reconcile lists surviving group members', async () => {
   assert.deepEqual(await admission.reconcile(a.executionId), {
     state: 'unresolved', reason: 'quiescence_unproven', survivors: [{ pid: 4300, comm: 'sleep' }],
   });
+});
+
+test('findAnyByContextId sees rows stored under another workspace; findByContextId does not', async () => {
+  const db = new Database(':memory:');
+  const other = make({ db, workspace: fs.mkdtempSync(path.join(os.tmpdir(), 'other-ws-')) }).admission;
+  const mine = make({ db, workspace: os.tmpdir() }).admission;
+  const held = await other.acquire(req(1));
+  assert.equal(mine.findByContextId('c1'), null);
+  assert.equal(mine.findAnyByContextId('c1').executionId, held.executionId);
+  assert.equal(mine.findAnyByContextId('missing'), null);
 });

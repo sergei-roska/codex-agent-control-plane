@@ -44,6 +44,15 @@ fsync cost is small next to model latency. WAL-02 records a commit-latency
 measurement before and after with the result in this document; if the measured
 cost were prohibitive, the decision reopens rather than silently weakening.
 
+Measured by WAL-02 (`node bench/journal-commit-latency.js 500`, 500
+single-row journal commits on a temporary file database, two runs): median
+0.022 / 0.021 ms with NORMAL, 0.568 / 0.588 ms with FULL. The added cost is well
+under a millisecond per commit, so D1 stands.
+
+WAL-02 note on G5: when a context's execution row exists only under another
+workspace path, settlement returns `legacy_unverified` with reason
+`execution_in_other_workspace` (UNKNOWN), never `never_executed`.
+
 Power-loss durability is claimed only for storage that honors fsync. Lost
 writes caused by a disk or filesystem that ignores fsync are out of scope.
 

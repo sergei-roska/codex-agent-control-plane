@@ -587,6 +587,13 @@ async function startServer({
     const roles = loadRoles(profilesDir ? { profilesDir } : undefined);
     const skillCatalog = loadSkillCatalog();
     const app = express();
+    // Until startup reconciliation and route registration finish, JSON-RPC calls get a retryable 503 (not 404).
+    let ready = false;
+    app.use((req, res, next) => {
+      if (ready || req.method === 'GET' || req.method === 'HEAD') return next();
+      res.set('Retry-After', '1');
+      return res.status(503).json({ error: 'starting', message: 'The server is starting; startup reconciliation is not complete. Retry shortly.' });
+    });
     if (listen) {
       httpServer = await new Promise((resolve, reject) => {
         // Express 5 passes a listen failure (e.g. EADDRINUSE) to the callback.
@@ -615,6 +622,7 @@ async function startServer({
     const leadAgent = registerLead(app, {
       leadRole, orchestrator, baseUrl, authMiddleware, taskStore: createTaskStore(state, 'orchestrator'),
     });
+    ready = true;
     return {
       app,
       httpServer,

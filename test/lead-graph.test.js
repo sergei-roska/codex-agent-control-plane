@@ -89,6 +89,8 @@ function makeFakeAdmission() {
     reconciles: [],
     canProve: true,
     fenceRace: null,
+    fenceExisted: false,
+    otherWorkspaceRows: new Map(),
     acquired: [],
     released: [],
     turnStarts: [],
@@ -96,11 +98,12 @@ function makeFakeAdmission() {
     release(executionId) { this.released.push(executionId); },
     recordTurnStart(executionId, details) { this.turnStarts.push({ executionId, ...details }); },
     findByContextId(contextId) { return this.rows.get(contextId) || null; },
-    get(executionId) { return [...this.rows.values()].find((row) => row.executionId === executionId) || null; },
+    findAnyByContextId(contextId) { return this.rows.get(contextId) || this.otherWorkspaceRows.get(contextId) || null; },
+    get(executionId) { return [...this.rows.values(), ...this.otherWorkspaceRows.values()].find((row) => row.executionId === executionId) || null; },
     fence(contextId, reason) {
       this.fences.push({ contextId, reason });
       if (this.fenceRace && !this.rows.has(contextId)) this.rows.set(contextId, this.fenceRace(contextId));
-      return { execution: this.rows.get(contextId) || null };
+      return { execution: this.rows.get(contextId) || null, inserted: !this.fenceExisted };
     },
     async reconcile(executionId) {
       this.reconciles.push(executionId);
@@ -416,6 +419,34 @@ test('usage limit on a worker turn pauses for budget and the lead sees it', asyn
     const result = await session.orchestrator.resume({ runId: RUN_ID });
     assert.equal(result.status, 'completed');
     assert.match(world.prompts[1], /usage_limit/);
+    assert.equal(world.sends.length, 1);
+  });
+});
+
+test('pollItem returns the stored result of a finished attempt without polling', async () => {
+  let crash = true;
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('Collected')],
+    pollsNeeded: 5,
+    getTaskFault: (id, count) => {
+      if (crash && count === 3) {
+        crash = false;
+        throw new Error('connection lost');
+      }
+    },
+  });
+  await withSession(world, async (session) => {
+    await assert.rejects(session.orchestrator.run({ goal: 'Build', runId: RUN_ID }), /connection lost/);
+    const id = attemptId(assignmentId(RUN_ID, 1, 0));
+    const pollsBefore = [...world.polls.values()][0];
+    session.journal.recordFinished(id, {
+      taskId: `task-${deterministicContextId(id)}`, contextId: deterministicContextId(id), status: 'outcome_unknown',
+      statusMessage: '', artifacts: [], history: [], text: 'stored',
+    });
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal([...world.polls.values()][0], pollsBefore);
     assert.equal(world.sends.length, 1);
   });
 });
@@ -1287,7 +1318,7 @@ test('reconciliation entries keep allowedFiles and the journal records the objec
   });
 });
 
-test('a finished writer outcome without an execution row but with a task is legacy_unverified, not never_executed', async () => {
+test('a finished writer outcome without an execution row but with a task is never_executed when this call inserted the fence', async () => {
   const world = makeWorld({
     script: [dispatch(brief('orch-builder')), finish('Done')],
     workerFinal: () => ({
@@ -1298,10 +1329,48 @@ test('a finished writer outcome without an execution row but with a task is lega
   await withSession(world, async (session) => {
     const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
     const reconciliation = result.assignments.find((entry) => entry.kind === 'reconciliation');
+    assert.equal(reconciliation.state, 'never_executed');
+    assert.equal(reconciliation.deltaKnown, true);
+    assert.deepEqual(reconciliation.changedPaths, []);
+    assert.equal(reconciliation.reason, 'fenced_before_execution');
+  });
+});
+
+test('a finished writer outcome without an execution row but with a task and a pre-existing fence is legacy_unverified', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('Done')],
+    workerFinal: () => ({
+      state: TaskState.TASK_STATE_FAILED,
+      message: { messageId: 'm', role: 2, parts: textParts('old checkpoint'), metadata: { failureKind: 'interrupted' } },
+    }),
+  });
+  world.admission.fenceExisted = true;
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    const reconciliation = result.assignments.find((entry) => entry.kind === 'reconciliation');
     assert.equal(reconciliation.state, 'legacy_unverified');
     assert.equal(reconciliation.deltaKnown, false);
     assert.deepEqual(reconciliation.changedPaths, []);
     assert.equal(reconciliation.reason, 'no_execution_record');
+  });
+});
+
+test('an execution row stored under another workspace is not proven never_executed', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('Done')],
+    workerFinal: () => ({
+      state: TaskState.TASK_STATE_FAILED,
+      message: { messageId: 'm', role: 2, parts: textParts('old checkpoint'), metadata: { failureKind: 'interrupted' } },
+    }),
+  });
+  const id = attemptId(assignmentId(RUN_ID, 1, 0));
+  world.admission.otherWorkspaceRows.set(deterministicContextId(id), admissionRow(deterministicContextId(id), 'active'));
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    const reconciliation = result.assignments.find((entry) => entry.kind === 'reconciliation');
+    assert.notEqual(reconciliation?.state, 'never_executed');
+    assert.equal(reconciliation.state, 'legacy_unverified');
+    assert.equal(reconciliation.reason, 'execution_in_other_workspace');
   });
 });
 

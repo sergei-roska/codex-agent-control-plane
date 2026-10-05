@@ -348,3 +348,37 @@ d.acquireWorkspaceLock(${JSON.stringify(repo)}, { lockDir: null }); process.stdo
   await exited;
   acquireWorkspaceLock(repo, { lockDir: null })();
 });
+
+test('state database uses synchronous = FULL', async (t) => {
+  const state = await openStateDatabase({ filePath: tempDb(t) });
+  t.after(() => state.close());
+  assert.equal(state.db.pragma('synchronous', { simple: true }), 2);
+});
+
+for (const [name, make] of [
+  ['sqlite', async (t) => { const state = await openStateDatabase({ filePath: tempDb(t) }); t.after(() => state.close()); return new DispatchJournal(state); }],
+  ['in-memory', async () => new InMemoryDispatchJournal()],
+]) {
+  test(`journal transitions are monotonic (${name})`, async (t) => {
+    const journal = await make(t);
+    const row = { attemptId: 'r:r1:a0:t1', runId: 'r', assignmentId: 'r:r1:a0', role: 'orch-x', sandbox: 'read-only', contextId: 'c' };
+    const refused = (fn, from, to) => assert.throws(fn, (error) => error.code === 'journal_transition_refused' && error.from === from && error.to === to);
+    journal.recordSubmitting(row);
+    journal.recordSubmitted(row.attemptId, 't1');
+    journal.recordSubmitted(row.attemptId, 't1'); // same task id: no-op
+    refused(() => journal.recordSubmitted(row.attemptId, 't2'), 'submitted', 'submitted');
+    assert.equal(journal.get(row.attemptId).taskId, 't1');
+    journal.recordFinished(row.attemptId, { a: 1 });
+    journal.recordFinished(row.attemptId, { a: 1 }); // identical: no-op
+    refused(() => journal.recordFinished(row.attemptId, { a: 2 }), 'finished', 'finished');
+    refused(() => journal.recordSubmitted(row.attemptId, 't1'), 'finished', 'submitted');
+    assert.deepEqual(journal.get(row.attemptId).result, { a: 1 });
+    assert.equal(journal.get(row.attemptId).state, 'finished');
+    assert.equal(journal.recordSubmitting(row).state, 'finished');
+
+    // submitting -> finished is allowed (outcome_unknown for a writer that was never sent).
+    journal.recordSubmitting({ ...row, attemptId: 'r:r1:a1:t1' });
+    journal.recordFinished('r:r1:a1:t1', { b: 1 });
+    assert.equal(journal.get('r:r1:a1:t1').state, 'finished');
+  });
+}

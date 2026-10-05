@@ -1188,3 +1188,45 @@ test('a restart pause recomposes the follow-up goal through the task loader', as
   assert.match(runs[0].goal, /Now do more$/);
   assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
 });
+
+test('JSON-RPC calls get 503 starting with Retry-After until startup completes', async () => {
+  const tokenDirectory = `/tmp/codex-a2a-starting-test-${process.pid}`;
+  let during;
+  const runtime = await startServer({
+    port: 0,
+    stateFile: ':memory:',
+    tokenFile: `${tokenDirectory}/a2a-token`,
+    appServer: {
+      async start() {},
+      async getAccount() { return { account: { type: 'chatgpt' } }; },
+      async run() {},
+      async close() {},
+    },
+    listenImpl(application, listenPort, host, callback) {
+      // Hold startup open (reconciliation has not started) while a request arrives.
+      const server = application.listen(listenPort, host, async (error) => {
+        if (!error) {
+          const response = await fetch(`http://${host}:${server.address().port}/agents/orch-builder`, {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+          });
+          during = { status: response.status, retryAfter: response.headers.get('retry-after'), body: await response.json() };
+        }
+        callback(error);
+      });
+      return server;
+    },
+    orchestratorFactory: () => ({ async run() { return { status: 'completed', text: 'ok' }; } }),
+  });
+  try {
+    assert.equal(during.status, 503);
+    assert.equal(during.retryAfter, '1');
+    assert.equal(during.body.error, 'starting');
+    const after = await fetch(`http://${runtime.host}:${runtime.port}/agents/orch-builder`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    assert.notEqual(after.status, 503);
+  } finally {
+    await runtime.close();
+    require('node:fs').rmSync(tokenDirectory, { recursive: true, force: true });
+  }
+});
