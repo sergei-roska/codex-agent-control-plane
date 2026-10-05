@@ -6,7 +6,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { test } = require('node:test');
+const crypto = require('node:crypto');
 const Database = require('better-sqlite3');
+const { createEvidenceStore } = require('../src/evidence-store');
 const { WriterAdmission } = require('../src/writer-admission');
 const { takeSnapshot } = require('../src/workspace-snapshot');
 const {
@@ -414,4 +416,56 @@ test('contract_invalid is an accept.contract_valid UNKNOWN and the contract mark
   assert.equal(validateAcceptanceContract({ requiredChecks: [] }).id, 'acceptance-contract/v1');
   assert.equal(validateAcceptanceContract({ id: 'acceptance-contract/v1', requiredChecks: [] }).requiredChecks.length, 0);
   assert.throws(() => validateAcceptanceContract({ id: 'other', requiredChecks: [] }), TypeError);
+});
+
+test('a check printing 10 MiB stores both streams as evidence, keeps the tails, and names the ids on failure', async () => {
+  const dir = repo();
+  const db = new Database(':memory:');
+  const store = createEvidenceStore(db);
+  const code = "const b=Buffer.alloc(1024*1024,'a');for(let i=0;i<10;i++){process.stdout.write(b)}process.stdout.write('END-OF-OUT');process.stderr.write('boom-err');process.exitCode=2";
+  const result = await runAcceptance({
+    workspace: dir, runId: 'run-ev', attempt: 1, contract: { requiredChecks: [node('big', code)] }, evidenceStore: store,
+  });
+  const check = result.checks[0];
+  assert.equal(check.exitCode, 2);
+  assert.ok(check.stdoutTail.endsWith('END-OF-OUT'));
+  assert.equal(check.stdoutTail.length, 4096);
+  assert.equal(check.stdoutTruncated, true);
+  assert.equal(check.stderrTail, 'boom-err');
+  assert.equal(check.stderrTruncated, false);
+  const out = check.stdoutEvidence;
+  const err = check.stderrEvidence;
+  assert.equal(out.kind, 'check_stdout');
+  assert.equal(out.checkId, 'big');
+  assert.equal(out.originalBytes, 10 * 1024 * 1024 + 10);
+  assert.equal(out.truncated, true);
+  assert.equal(out.omitted.offset, 2 * 1024 * 1024);
+  assert.equal(out.originalSha256, crypto.createHash('sha256').update(Buffer.concat([Buffer.alloc(10 * 1024 * 1024, 'a'), Buffer.from('END-OF-OUT')])).digest('hex'));
+  assert.deepEqual(out.source, { producer: 'acceptance', argv: check.argv, exitCode: 2, signal: null, timedOut: false, canceled: false, stream: 'stdout' });
+  assert.equal(err.kind, 'check_stderr');
+  assert.equal(store.read(err.id, { runId: 'run-ev' }).bytes.toString(), 'boom-err');
+  assert.equal(err.source.stream, 'stderr');
+  const issue = result.issues.find((entry) => entry.code === 'check_failed');
+  assert.ok(issue.detail.includes(out.id) && issue.detail.includes(err.id), issue.detail);
+});
+
+test('without an evidence store the refs are null, and a failing store never fails the run', async () => {
+  const dir = repo();
+  const none = await runAcceptance({ workspace: dir, runId: 'r', attempt: 1, contract: { requiredChecks: [node('ok', 'console.log("hi")')] } });
+  assert.equal(none.checks[0].stdoutEvidence, null);
+  assert.equal(none.checks[0].stderrEvidence, null);
+  assert.equal(none.checks[0].stdoutTruncated, false);
+  const broken = { put() { throw Object.assign(new Error('no'), { code: 'evidence_boom' }); } };
+  const failed = await runAcceptance({ workspace: dir, runId: 'r', attempt: 1, contract: { requiredChecks: [node('ok', 'void 0')] }, evidenceStore: broken });
+  assert.equal(failed.checks[0].evidenceError, 'evidence_boom');
+  assert.equal(failed.checks[0].stdoutEvidence, null);
+  assert.equal(failed.disposition, 'accepted');
+});
+
+test('computeDisposition renders check results without evidence fields unchanged', () => {
+  const result = computeDisposition({
+    requiredChecks: [{ id: 'c' }], checkResults: [{ id: 'c', result: 'failed', exitCode: 1 }],
+    snapshotBefore: { kind: 'git', fingerprint: 'x' }, snapshotAfter: { kind: 'git', fingerprint: 'x' },
+  });
+  assert.equal(result.issues[0].detail, 'Required check "c" failed (exit 1).');
 });

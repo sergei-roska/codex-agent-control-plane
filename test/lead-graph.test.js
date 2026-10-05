@@ -12,6 +12,8 @@ const { execFileSync } = require('node:child_process');
 const { UsageLedger } = require('../src/usage-ledger');
 const { loadSkillCatalog } = require('../src/skill-catalog');
 const { invalidAcceptanceContract } = require('../src/acceptance');
+const { createEvidenceStore } = require('../src/evidence-store');
+const { boundedOutcomes } = require('../src/lead-graph');
 const {
   DispatchJournal, openStateDatabase, assignmentId, attemptId, deterministicContextId,
 } = require('../src/durable-store');
@@ -213,6 +215,7 @@ class Session {
       journal: this.journal,
       admission: this.world.admission,
       reconcileWaitMs: 20,
+      ...(this.options.withEvidence ? { evidenceStore: this.evidenceStore = createEvidenceStore(this.state.db) } : {}),
       ...(this.options.withLedger ? { usageLedger: new UsageLedger({ db: this.state.db }) } : {}),
       ...(this.options.orchestrator || {}),
     });
@@ -1525,4 +1528,128 @@ test('an invalid acceptance contract marker yields unverifiable with contract_in
     assert.equal(result.acceptance.issues[0].predicate, 'accept.contract_valid');
     assert.equal(result.acceptance.issues[0].result, 'UNKNOWN');
   }, { workspace: gitRepo() });
+});
+
+// ------------------------------------------------- lead projection (PIP-03)
+
+const sha256Of = (value) => crypto.createHash('sha256').update(value).digest('hex');
+function readAll(store, ref, runId) {
+  const parts = [];
+  for (let offset = 0; offset < ref.storedBytes; offset += 1024 * 1024) {
+    parts.push(store.read(ref.id, { runId, offset, length: 1024 * 1024 }).bytes);
+  }
+  return Buffer.concat(parts);
+}
+const writerFinalWith = (text) => () => ({
+  state: TaskState.TASK_STATE_COMPLETED,
+  artifacts: [{ name: 'report', parts: textParts(text), metadata: { writerExecution: releasedWriter() } }],
+});
+const promptOutcomes = (prompt) => prompt.split('Prior worker outcomes (including failures):\n')[1].split('\n\n')[0];
+
+test('a 300 KB valid report is parsed whole, projected with omissions, and retrievable as evidence', async () => {
+  const files = Array.from({ length: 500 }, (_, i) => `lib/gen/${'d'.repeat(16)}/f-${i}.js`);
+  const text = report('Big', {
+    filesChanged: files, filesInspected: files.slice(0, 300), risks: Array.from({ length: 40 }, () => 'r'.repeat(8000)),
+  });
+  assert.ok(text.length > 300_000, `fixture is ${text.length} chars`);
+  const world = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('Done')], workerFinal: writerFinalWith(text) });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    const outcome = result.assignments[0];
+    assert.equal(outcome.report.outcome, 'completed');
+    assert.equal(outcome.reportError, null);
+    assert.equal(outcome.report.filesChanged.length, 100);
+    assert.equal(outcome.scopeViolations.length, 50);
+    assert.equal(outcome.scopeViolationCount, 500);
+    const omitted = Object.fromEntries(outcome.projection.omitted.map((entry) => [entry.field, entry]));
+    assert.deepEqual(omitted.filesChanged, { field: 'filesChanged', kept: 100, total: 500 });
+    assert.deepEqual(omitted.filesInspected, { field: 'filesInspected', kept: 20, total: 300 });
+    assert.deepEqual(omitted.risks, { field: 'risks', kept: 20, total: 40 });
+    assert.deepEqual(omitted.scopeViolations, { field: 'scopeViolations', kept: 50, total: 500 });
+    assert.equal(outcome.evidence.length, 1);
+    const ref = outcome.evidence[0];
+    assert.equal(ref.kind, 'worker_result_text');
+    assert.equal(ref.attemptId, outcome.attemptId);
+    assert.equal(ref.originalSha256, sha256Of(text));
+    assert.equal(sha256Of(readAll(session.evidenceStore, ref, RUN_ID)), sha256Of(text));
+    assert.ok(outcome.report.decisionRequest === null);
+    assert.equal(outcome.boundary.results.some((entry) => entry.code === 'reported_scope_violation'), true);
+    const after = JSON.stringify(outcome).length;
+    assert.ok(after < 20_000, `projected outcome is ${after} chars (before: ${text.length}+ chars of report text)`);
+    assert.ok(promptOutcomes(world.prompts[1]).length < 20_000);
+    // The journal result keeps the cut text and only bounded analysis.
+    const stored = JSON.stringify(session.journal.get(outcome.attemptId).result);
+    assert.ok(stored.length < 260_000, `journal result is ${stored.length} chars`);
+  }, { workspace: gitRepo(), withEvidence: true });
+});
+
+test('a 300 KB invalid text yields reportError, a head/marker/tail projection and evidence', async () => {
+  const text = `${'H'.repeat(6000)}${'m'.repeat(288_000)}${'T'.repeat(6000)}`;
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer')), finish('Done')], workerFinal: writerFinalWith(text) });
+  await withSession(world, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Look', runId: RUN_ID })).assignments[0];
+    assert.equal(outcome.report, null);
+    assert.match(outcome.reportError, /not valid JSON/);
+    const ref = outcome.evidence[0];
+    assert.equal(ref.originalSha256, sha256Of(text));
+    assert.ok(outcome.text.startsWith('H'.repeat(6000)));
+    assert.ok(outcome.text.endsWith('T'.repeat(2000)));
+    assert.ok(outcome.text.includes(`[... ${text.length - 8000} chars omitted; evidence ${ref.id}]`));
+    assert.ok(outcome.text.length < 8200);
+    assert.deepEqual(outcome.projection.omitted, [{ field: 'text', kept: 8000, total: text.length }]);
+    assert.equal(sha256Of(readAll(session.evidenceStore, ref, RUN_ID)), sha256Of(text));
+  }, { workspace: gitRepo(), withEvidence: true });
+});
+
+test('a store failure sets evidenceError and the run still completes', async () => {
+  const text = `${'x'.repeat(20_000)}`;
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer')), finish('Done')], workerFinal: writerFinalWith(text) });
+  const failing = { put() { throw Object.assign(new Error('disk gone'), { code: 'evidence_boom' }); } };
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const outcome = result.assignments[0];
+    assert.equal(outcome.evidenceError, 'evidence_boom');
+    assert.equal(outcome.evidence, undefined);
+    assert.ok(outcome.text.includes('chars omitted]'));
+    assert.ok(!outcome.text.includes('evidence ev_'));
+  }, { workspace: gitRepo(), orchestrator: { evidenceStore: failing } });
+});
+
+test('small outcomes are unchanged: no evidence, no projection, no counts', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-builder')), finish('Done')], workerFinal: okWriterFinal(['lib/other.js']) });
+  await withSession(world, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    for (const key of ['evidence', 'projection', 'evidenceError', 'scopeViolationCount', 'attestedScopeViolationCount']) assert.equal(key in outcome, false, key);
+    assert.deepEqual(outcome.attestedScopeViolations, ['lib/other.js']);
+  }, { workspace: gitRepo(), withEvidence: true });
+});
+
+test('boundedOutcomes keeps newest outcomes whole, digests older ones with diagnostics, and stays under the bound', () => {
+  const outcome = (index, extra = {}) => ({
+    assignmentId: `a${index}`, attemptId: `run:r1:a${index}:t1`, role: 'engineer', status: 'TASK_STATE_COMPLETED',
+    report: { outcome: 'completed', summary: `summary ${index} ${'s'.repeat(2000)}`, risks: ['x'.repeat(400)] },
+    reportError: null, failureKind: null, scopeViolations: [`bad/${index}.js`], attestedScopeViolations: [], attestedDeltaKnown: true,
+    writerExecution: { state: 'released', delta: { known: true, changedPaths: Array.from({ length: 50 }, (_, n) => `p/${n}`) } },
+    effects: null, boundary: { contract: 'legacy', results: [{ predicate: 'settle.x', result: 'FAIL', code: 'c', detail: 'd'.repeat(500) }] },
+    evidence: [{ id: `ev_${String(index).padStart(32, '0')}` }], ...extra,
+  });
+  const many = Array.from({ length: 80 }, (_, i) => outcome(i, { filler: 'f'.repeat(3000) }));
+  many.splice(5, 0, { kind: 'reconciliation', attemptId: 'run:r1:a5:t1', assignmentId: 'rec', role: 'engineer', state: 'reconciled', changedPaths: [], deltaKnown: true });
+  const bounded = boundedOutcomes(many);
+  assert.ok(JSON.stringify(bounded).length <= 60_000, `${JSON.stringify(bounded).length}`);
+  assert.equal(bounded.at(-1).digest, undefined);
+  assert.equal(bounded.at(-1).assignmentId, 'a79');
+  const digest = bounded.find((entry) => entry.digest && entry.assignmentId === 'a70');
+  assert.ok(digest, 'older outcomes become digests');
+  assert.equal(digest.summary.length, 300);
+  assert.equal(digest.diagnostics.status, 'TASK_STATE_COMPLETED');
+  assert.deepEqual(digest.diagnostics.scopeViolations, ['bad/70.js']);
+  assert.equal(digest.diagnostics.changedPathCount, 50);
+  assert.deepEqual(digest.evidence, [`ev_${'70'.padStart(32, '0')}`]);
+  assert.deepEqual(digest.boundary, [{ predicate: 'settle.x', result: 'FAIL', code: 'c' }]);
+  assert.ok(bounded.some((entry) => entry.kind === 'reconciliation'), 'reconciliation stays whole');
+  // Under the bound (and for old outcomes without the new fields) nothing changes.
+  const few = [outcome(1), outcome(2)];
+  assert.equal(boundedOutcomes(few), few);
 });

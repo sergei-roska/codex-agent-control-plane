@@ -240,6 +240,16 @@ test('expiry leaves a tombstone', () => {
   assert.equal(store.sweepExpired(), 0);
 });
 
+test('a past-due row is expired before any sweep has run', () => {
+  const { db, store, tick } = setup({ retentionDays: 1 });
+  const stored = store.put(input('data'));
+  tick(86400000);
+  assert.equal(db.prepare('SELECT state FROM evidence WHERE id = ?').get(stored.id).state, 'stored');
+  assert.equal(code(() => store.read(stored.id, { runId: 'run-1' })), 'evidence_expired');
+  assert.equal(code(() => store.getRef(stored.id, { runId: 'run-1' })), 'evidence_expired');
+  assert.equal(code(() => store.read(stored.id, { runId: 'other' })), 'evidence_forbidden');
+});
+
 test('sweep expires not_stored rows too and runs when the store is created', () => {
   const db = new Database(':memory:');
   let clock = 5_000;

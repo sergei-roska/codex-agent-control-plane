@@ -187,6 +187,8 @@ function createEvidenceStore(db, { now = Date.now, retentionDays, randomId = def
     const row = hasTable() ? db.prepare('SELECT * FROM evidence WHERE id = ?').get(id) : undefined;
     if (!row) throw new EvidenceError('evidence_not_found', 'Evidence not found');
     if (row.run_id !== runId) throw new EvidenceError('evidence_forbidden', 'Evidence belongs to a different run');
+    // A past-due row is expired even before the hourly sweep has tombstoned it.
+    if (row.state !== 'expired' && row.expires_at <= now()) return { ...row, state: 'expired', payload: null };
     return row;
   }
 

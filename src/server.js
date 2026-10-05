@@ -12,6 +12,7 @@ const { LeadOrchestrator, ResumeInputError } = require('./lead-orchestrator');
 const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
 const { WriterAdmission } = require('./writer-admission');
 const { UsageLedger } = require('./usage-ledger');
+const { createEvidenceStore } = require('./evidence-store');
 const { validateAcceptanceContract, formatAcceptance, invalidAcceptanceContract } = require('./acceptance');
 const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
 const { loadSkillCatalog } = require('./skill-catalog');
@@ -571,9 +572,10 @@ async function startServer({
     const baseUrl = `http://${HOST}:${actualPort}`;
     const leadRole = createLeadRole(profilesDir ? { profilesDir } : undefined);
     const usageLedger = new UsageLedger({ db: state.db });
+    const evidenceStore = createEvidenceStore(state.db);
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog,
-      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger,
+      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, evidenceStore,
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
