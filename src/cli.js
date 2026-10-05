@@ -8,6 +8,9 @@ const { parseCheckCommand } = require('./acceptance');
 const USAGE = "Usage: node src/cli.js [--check '<command>']... '<goal>'\n       node src/cli.js --task <id> [--decision <id>] [--choice <optionId>] '<answer>'\n";
 const EXIT_INPUT_REQUIRED = 3;
 const EXIT_NOT_ACCEPTED = 4;
+const DEFAULT_POLL_INTERVAL_MS = 2000;
+const MAX_POLL_FAILURES = 5;
+const ACTIVE_STATES = new Set([TaskState.TASK_STATE_UNSPECIFIED, TaskState.TASK_STATE_SUBMITTED, TaskState.TASK_STATE_WORKING]);
 const VALUE_FLAGS = new Map([['--task', 'task'], ['--choice', 'choice'], ['--decision', 'decision']]);
 
 // Leading --task/--choice/--decision flags and repeatable --check (also --flag=value), then the free text.
@@ -42,7 +45,7 @@ function printPause(result) {
   }
 }
 
-async function main(argv = process.argv.slice(2), env = process.env, { clientFactory } = {}) {
+async function main(argv = process.argv.slice(2), env = process.env, { clientFactory, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   let parsed;
   try {
     parsed = parseArgs(argv);
@@ -87,7 +90,7 @@ async function main(argv = process.argv.slice(2), env = process.env, { clientFac
     if (parsed.checks) {
       messageMetadata.acceptance = { requiredChecks: parsed.checks.map((command, index) => parseCheckCommand(command, index)) };
     }
-    const result = await client.sendMessage({
+    let result = await client.sendMessage({
       tenant: '',
       message: {
         messageId: `cli-${Date.now()}`,
@@ -99,9 +102,25 @@ async function main(argv = process.argv.slice(2), env = process.env, { clientFac
         extensions: [],
         referenceTaskIds: [],
       },
-      configuration: { acceptedOutputModes: ['text/plain'], returnImmediately: false },
+      configuration: { acceptedOutputModes: ['text/plain'], returnImmediately: true },
       metadata: undefined,
     }, requestOptions);
+    // A Message result carries no status and falls through to the non-completed path below.
+    const taskId = result?.status ? result.id : undefined;
+    if (taskId) process.stderr.write(`Task: ${taskId}\n`);
+    let failures = 0;
+    while (taskId && ACTIVE_STATES.has(result.status.state)) {
+      await sleep(pollIntervalMs);
+      try {
+        result = await client.getTask({ tenant: '', id: taskId }, requestOptions);
+        failures = 0;
+      } catch (error) {
+        failures += 1;
+        if (failures < MAX_POLL_FAILURES) continue;
+        process.stderr.write(`${error?.message || String(error)}\nTask: ${taskId}\nResume or inspect with: npm run ask -- --task ${taskId} "<message>"\n`);
+        return 1;
+      }
+    }
     if (result?.status?.state === TaskState.TASK_STATE_INPUT_REQUIRED) {
       printPause(result);
       return EXIT_INPUT_REQUIRED;

@@ -29,11 +29,11 @@ function textMessage(text) {
   return { messageId: 'm', contextId: '', taskId: '', role: 2, parts: [{ content: { $case: 'text', value: text } }] };
 }
 
-async function run(argv, client, env) {
+async function run(argv, client, env, options = {}) {
   const cap = capture();
   let code;
   try {
-    code = await main(argv, env, { clientFactory: async () => client });
+    code = await main(argv, env, { clientFactory: async () => client, ...options });
   } finally {
     cap.restore();
   }
@@ -183,4 +183,121 @@ test('the acceptance disposition is printed and rejected or unverifiable exit 4'
   }
   fs.rmSync(dir, { recursive: true, force: true });
   assert.deepEqual(codes, { accepted: 0, rejected: 4, unverifiable: 4, unverified: 0, not_required: 0 });
+});
+
+const fast = { pollIntervalMs: 0, sleep: async () => {} };
+
+test('polls a working task until completed, printing the task id once', async () => {
+  const { dir, env } = setup();
+  let polls = 0;
+  const sent = [];
+  const client = {
+    async sendMessage(request) { sent.push(request); return { id: 'tw', status: { state: TaskState.TASK_STATE_WORKING } }; },
+    async getTask({ id }) {
+      polls += 1;
+      if (polls < 4) return { id, status: { state: TaskState.TASK_STATE_WORKING } };
+      return { id, status: { state: TaskState.TASK_STATE_COMPLETED }, artifacts: [{ parts: [{ content: { $case: 'text', value: 'Long result' } }] }] };
+    },
+  };
+  const result = await run(['goal'], client, env, fast);
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(result.code, 0);
+  assert.equal(polls, 4);
+  assert.equal(sent[0].configuration.returnImmediately, true);
+  assert.match(result.out, /Long result/);
+  assert.match(result.out, /Task completed\./);
+  assert.equal(result.err.match(/Task: tw/g).length, 1);
+});
+
+test('polling ends on input required with the pause printed and exit 3', async () => {
+  const { dir, env } = setup();
+  const client = {
+    async sendMessage() { return { id: 'tp', status: { state: TaskState.TASK_STATE_SUBMITTED } }; },
+    async getTask({ id }) {
+      return { id, status: { state: TaskState.TASK_STATE_INPUT_REQUIRED, message: textMessage('Decision required: pick one') } };
+    },
+  };
+  const result = await run(['goal'], client, env, fast);
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(result.code, 3);
+  assert.match(result.err, /Decision required: pick one/);
+});
+
+test('acceptance rejected after polling exits 4', async () => {
+  const { dir, env } = setup();
+  let polls = 0;
+  const client = {
+    async sendMessage() { return { id: 'ta', status: { state: TaskState.TASK_STATE_WORKING } }; },
+    async getTask({ id }) {
+      polls += 1;
+      if (polls < 2) return { id, status: { state: TaskState.TASK_STATE_WORKING } };
+      return {
+        id, status: { state: TaskState.TASK_STATE_COMPLETED },
+        artifacts: [{ parts: [{ content: { $case: 'text', value: 'Text' } }], metadata: { acceptance: { disposition: 'rejected' } } }],
+      };
+    },
+  };
+  const result = await run(['goal'], client, env, fast);
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(result.code, 4);
+  assert.match(result.out, /Acceptance: rejected/);
+});
+
+test('a transient poll error is retried and the failure counter resets on success', async () => {
+  const { dir, env } = setup();
+  let polls = 0;
+  const client = {
+    async sendMessage() { return { id: 'tr', status: { state: TaskState.TASK_STATE_WORKING } }; },
+    async getTask({ id }) {
+      polls += 1;
+      if (polls === 1 || polls === 3) throw new Error('fetch failed');
+      if (polls < 5) return { id, status: { state: TaskState.TASK_STATE_WORKING } };
+      return { id, status: { state: TaskState.TASK_STATE_COMPLETED } };
+    },
+  };
+  const result = await run(['goal'], client, env, fast);
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(result.code, 0);
+  assert.equal(polls, 5);
+});
+
+test('persistent poll errors print the task id and a resume hint and exit 1', async () => {
+  const { dir, env } = setup();
+  let polls = 0;
+  const client = {
+    async sendMessage() { return { id: 'tx', status: { state: TaskState.TASK_STATE_WORKING } }; },
+    async getTask() { polls += 1; throw new Error('fetch failed'); },
+  };
+  const result = await run(['goal'], client, env, fast);
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(result.code, 1);
+  assert.equal(polls, 5);
+  assert.match(result.err, /fetch failed/);
+  assert.match(result.err, /Task: tx/);
+  assert.match(result.err, /Resume or inspect with: npm run ask -- --task tx "<message>"/);
+});
+
+test('a terminal submit response is handled without polling', async () => {
+  const { dir, env } = setup();
+  let polls = 0;
+  const client = {
+    async sendMessage() { return { id: 'td', status: { state: TaskState.TASK_STATE_FAILED } }; },
+    async getTask() { polls += 1; return {}; },
+  };
+  const result = await run(['goal'], client, env, fast);
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(result.code, 1);
+  assert.equal(polls, 0);
+  assert.match(result.err, /A2A task failed/);
+});
+
+test('a Message response is not polled and takes the non-completed path', async () => {
+  const { dir, env } = setup();
+  const client = {
+    async sendMessage() { return textMessage('hello'); },
+    async getTask() { throw new Error('unexpected getTask'); },
+  };
+  const result = await run(['goal'], client, env, fast);
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(result.code, 1);
 });
