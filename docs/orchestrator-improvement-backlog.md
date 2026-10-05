@@ -204,10 +204,18 @@ examples cover unknown writer effects and unavailable snapshots.
 
 #### DBC-02 - Lead boundary checks prevent invalid acceptance [P0]
 
-Level 3; parent: DBC; depends on DBC-01; executor: worker-sonnet;
-estimate: one session. Proposed write scope: `src/contracts.js`,
-`src/lead-graph.js`, `src/acceptance.js`, `test/contracts.test.js`,
-`test/lead-graph.test.js`, `test/acceptance.test.js`.
+Level 3; parent: DBC; depends on DBC-01; executor: worker-sonnet. Split by
+DBC-01 into two serial briefs, each one reviewable change:
+
+- DBC-02a (dispatch rejection): `src/contracts.js`, `src/lead-graph.js`,
+  `test/contracts.test.js`, `test/lead-graph.test.js`. Stable predicate ids and
+  codes for lead-managed dispatch predicates, rejected decisions fed back to
+  `decide`, read-only `.` normalization, glob rejection, preserved `threadId`.
+- DBC-02b (pinning and acceptance): `src/lead-graph.js`, `src/acceptance.js`,
+  `src/server.js`, `test/lead-graph.test.js`, `test/acceptance.test.js`,
+  `test/server.test.js`. Per-attempt contract pin, settlement and acceptance
+  violation records, FAIL-over-UNKNOWN disposition, `contract_invalid` on
+  restart, advisory `writer_reported_failure`.
 
 - Add only missing predicates; preserve existing validators and acceptance logic.
 - Enforce preconditions before side effects and record postcondition failures after
@@ -422,8 +430,9 @@ the decision gates establish the allowed scope.
   or explicitly listed existing tests; never overwrite another worker's edits.
 
 Parallel execution is allowed only with disjoint write scopes. In particular,
-PIP-03 and DBC-02 both touch `src/lead-graph.js` and must run serially. PIP-03 and
-DBC-03 both touch `src/a2a-role-service.js` and must also run serially. In Phase B,
+DBC-02a, DBC-02b, and PIP-03 all touch `src/lead-graph.js` and run serially in
+that order; DBC-02b and PIP-03 also share `src/acceptance.js`. PIP-02 and DBC-03
+have disjoint scopes and may run beside them. In Phase B,
 WAL-02 and OPT-03 also touch that file and must run serially. Their order is a
 resource constraint, not an invented functional dependency. Freeze any additional
 shared scope in the worker brief before starting concurrent work.
