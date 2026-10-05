@@ -118,6 +118,28 @@ Write scope: `docs/orchestration-benchmark-plan.md`.
 Done: a reviewer can reproduce the trials from the document; no live model runs
 are required to complete this task. Actual trials use disposable workspaces.
 
+Status 2026-10-05: done, `docs/orchestration-benchmark-plan.md`.
+
+#### MEA-02 - The ledger records every attempt and its waits [P1]
+
+Level 3; parent: MEA; depends on MEA-01; executor: worker-sonnet.
+Proposed write scope: `src/a2a-role-service.js`, `src/usage-ledger.js`,
+`src/usage-report.js`, `src/codex-app-server.js`, and their tests.
+
+- Write a ledger row (outcome `refused`, `input_error`, or `canceled`, tokens
+  null, turns 0) for worker attempts that end before a turn
+  (`src/a2a-role-service.js:294-302`, `:321-342`, `:352-360`).
+- Record `startupMs` (process spawn to `initialize` done) separately from turn
+  time, and a `coldStart` flag on the first turn of a process
+  (`src/codex-app-server.js:368`, `:544`).
+- Record admission queue wait per writer attempt
+  (`src/a2a-role-service.js:306-319`).
+- Report acceptance check `durationMs` (`src/acceptance.js:89`) in the usage
+  report; fill `attemptId`/`runId` for `--task` reports (`src/usage-ledger.js:149`).
+
+Done: the benchmark plan's "known gaps" can be removed; fixtures cover each new
+field; old rows without the fields report null, not zero.
+
 ### PIP: bulky evidence stays outside routine model context
 
 `PIP` (level 2, parent: PH-A), depends on M0.
