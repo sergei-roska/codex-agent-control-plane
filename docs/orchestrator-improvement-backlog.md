@@ -92,6 +92,26 @@ Recorded 2026-10-05. M0 is met.
   the suite, and commits on the working branch; a feature branch is merged into
   `main` when its work is accepted.
 
+## Phase A progress
+
+Branch `feature/orchestrator-phase-a`, recorded 2026-10-05.
+
+| Item | State | Evidence |
+| --- | --- | --- |
+| OPS-01 | done | `c722d95`; CLI polls instead of one blocking request |
+| MEA-01 | done | `docs/orchestration-benchmark-plan.md`; fixtures F1-F3 under `bench/` (M1) |
+| MEA-02 | done | `b0bfeb7`; pre-turn rows, startup, queue wait |
+| PIP-01 | done | `docs/evidence-artifact-contract.md` (`evidence-ref/v1`) |
+| PIP-02 | done | `1fb29a9`; `src/evidence-store.js`, `npm run evidence` |
+| PIP-03 | done | `5dd5097`; bounded lead projection, check output evidence |
+| PIP-04 | done | test/evidence-pipeline.test.js; 1069117-char report projects to 18602 chars |
+| DBC-01 | done | `docs/execution-boundary-contract.md` (`boundary-contract/v1`) |
+| DBC-02a | done | `2a61643`; rejected decisions return to the lead |
+| DBC-02b | done | `9e01dce`; per-attempt pins, FAIL-over-UNKNOWN acceptance |
+| DBC-03 | done | `f4b7172`; executor-side specialist contract |
+| DBC-04 | done | `9bd2c23`; test/runtime-contracts.test.js |
+| M1 | in review | full suite green; independent safety audit pending |
+
 ## Phase A: baseline, compact evidence, executable contracts
 
 ### MEA: resource comparisons are reproducible
