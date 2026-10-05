@@ -112,7 +112,7 @@ cannot gate acceptance. The authoritative signals are the checks and the delta.
 
 | Id | Codes | Source | Safety |
 | --- | --- | --- | --- |
-| `accept.contract_valid` | `contract_invalid` | pinned acceptance contract (`src/acceptance.js:16-56`) | safety-critical |
+| `accept.contract_valid` | `contract_invalid` | pinned acceptance contract (`src/acceptance.js:16-56`) | safety-critical (UNKNOWN: the required checks cannot be known) |
 | `accept.checks` | `check_missing`, `check_failed` | host check runs (`src/acceptance.js:63-133`) | safety-critical |
 | `accept.snapshot` | `snapshot_unavailable` | `takeSnapshot` (`src/workspace-snapshot.js:345-363`) | safety-critical (UNKNOWN) |
 | `accept.candidate_stable` | `candidate_changed` | fingerprints around checks (`src/acceptance.js:165-170`) | safety-critical |
