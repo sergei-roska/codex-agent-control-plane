@@ -31,6 +31,22 @@ Tested combination (not a support range): Node.js 24.21.0, npm 12.1.0, Codex CLI
 
 ## Install and start
 
+For the browser launcher:
+
+```bash
+npm ci
+node launcher.js
+```
+
+The launcher opens at `http://127.0.0.1:3100/`. Enter your Git project folder and
+click **Start server**; it opens the dashboard with a fresh browser session.
+Use **Open dashboard** or **Stop server** from the same page. Keep the launcher
+terminal open; `Ctrl+C` stops the launcher and its project server. Recent
+projects and their isolated state persist across launches.
+See the [launcher guide](docs/operations/launcher.md) for requirements and errors.
+
+For a manually configured server:
+
 ```bash
 npm ci
 CODEX_WORKSPACE=/absolute/path/to/task-repo PORT=3000 npm start

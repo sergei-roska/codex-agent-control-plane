@@ -280,3 +280,43 @@ returned 204, authenticated context 200, and another-port request 403. Issued
 a fresh owner pairing link; the owner confirmed "works" in the previously
 failing Chrome profile. Startup/pairing issue is resolved. The dccourtscode server
 remains running on port 3000; no tickets or model runs were started.
+
+## Simple launcher checkpoint - 2026-10-06
+
+The owner requested a single `node launcher.js` command and a local browser form
+for choosing a project and starting its server. Implemented an independent
+launcher at `http://127.0.0.1:3100/` with Start server, Open dashboard, Stop server,
+recent repositories, and optional dashboard port selection. Start/Open obtain a
+fresh pairing URL and open the dashboard; no terminal pairing step is required.
+The launcher starts only one owned child, never stops an existing port owner,
+and closes its child on Ctrl+C. Failed cleanup retains ownership and permits
+Stop retry instead of allowing a replacement process.
+
+Each canonical repository has private state under
+`.runtime/launcher/projects/<sha256>/`. Existing manual state and project policy
+are preserved. Initial baseRef is selected from a local default/main/master or
+current branch; dccourtscode resolves to `dccr-master`. The child uses the normal
+Git common-directory workspace lock, including across worktrees; an inherited
+custom lock-directory override is removed. Manual instances with custom lock
+directories must be stopped before using the launcher for the same repository.
+
+Implementation workers owned runtime/API and independent UI files; a read-only
+audit found and verified correction of the lock-domain issue. Root reviewed the
+implementation and tests. Final focused launcher/dashboard API/auth checks:
+36/36 pass with local sockets allowed. The initial sandbox run could not execute
+socket-based dashboard auth checks. Launcher API tests exercise the Express
+middleware stack; actual network behavior was verified separately in Chrome.
+
+Browser evidence: missing-folder error, temporary Git project startup on port
+3001, automatic session pairing, Stop, occupied-port rejection without touching
+the existing server, real dccourtscode startup on port 3000, Open dashboard,
+SIGINT cleanup of both owned processes, offline status without a false stopped
+claim, and restart with the remembered project. After restart dccourtscode is
+running again; the temporary smoke entry was removed from recents. Target Git
+status before/after is unchanged. Protected `artifacts/dashboard/**` diff and
+whitespace checks pass. No tickets or model runs were started.
+
+Current local state: launcher on port 3100 and its dccourtscode child on port
+3000. The earlier manual dccourtscode process was stopped to free port 3000;
+its `.runtime/dccourtscode/` data remains intact. Operator instructions are in
+`docs/operations/launcher.md` and the README. No push or publication is authorized.

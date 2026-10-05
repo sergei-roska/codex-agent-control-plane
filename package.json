@@ -5,6 +5,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
+    "launcher": "node launcher.js",
     "ask": "node src/cli.js",
     "usage": "node src/usage-report.js",
     "dashboard:pair": "node src/dashboard-pair.js",

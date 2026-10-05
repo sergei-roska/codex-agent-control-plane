@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="launcher-token" content="__LAUNCHER_TOKEN__">
+  <meta name="color-scheme" content="dark">
+  <title>Orchestrator Launcher</title>
+  <link rel="stylesheet" href="/launcher/styles.css">
+  <script src="/launcher/app.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div class="brand-mark" aria-hidden="true">OC</div>
+      <div>
+        <p class="eyebrow">LOCAL CONTROL PLANE</p>
+        <h1>Orchestrator</h1>
+      </div>
+      <div class="connection" id="connection" role="status" aria-live="polite">
+        <span class="status-light" aria-hidden="true"></span>
+        <span id="connection-label">Connecting</span>
+      </div>
+    </header>
+
+    <section class="panel setup-panel" aria-labelledby="setup-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">GET STARTED</p>
+          <h2 id="setup-heading">Choose a project</h2>
+        </div>
+        <span class="step-badge">01</span>
+      </div>
+
+      <form id="start-form" novalidate>
+        <label for="project-path">Project folder</label>
+        <input id="project-path" name="projectPath" type="text" inputmode="text"
+          autocomplete="off" spellcheck="false" placeholder="/home/you/Projects/my-project"
+          aria-describedby="project-help">
+        <p class="field-help" id="project-help">Enter the full path to a local project folder.</p>
+
+        <div class="recent-row" id="recent-row" hidden>
+          <label for="recent-projects">Recent projects</label>
+          <select id="recent-projects" name="recentProject">
+            <option value="">Choose a recent project</option>
+          </select>
+        </div>
+
+        <details class="advanced">
+          <summary>Advanced settings</summary>
+          <div class="advanced-content">
+            <label for="port">Port</label>
+            <input id="port" name="port" type="number" min="1" max="65535" step="1" value="3000">
+            <p class="field-help">Dashboard address for this local server.</p>
+          </div>
+        </details>
+
+        <button class="button button-primary start-button" id="start-button" type="submit" disabled>
+          <span class="button-icon" aria-hidden="true">&gt;</span> Start server
+        </button>
+      </form>
+    </section>
+
+    <section class="panel server-panel" aria-labelledby="server-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">SERVER</p>
+          <h2 id="server-heading">Current session</h2>
+        </div>
+        <span class="state-pill state-unknown" id="state-pill">Checking</span>
+      </div>
+
+      <div class="empty-state" id="empty-state">
+        <div class="empty-icon" aria-hidden="true">~</div>
+        <p id="empty-title">Checking server status</p>
+        <span id="empty-description">Connecting to the local launcher.</span>
+      </div>
+
+      <dl class="server-details" id="server-details" hidden>
+        <div class="detail-row"><dt>Project</dt><dd id="detail-project">-</dd></div>
+        <div class="detail-row"><dt>Folder</dt><dd id="detail-path">-</dd></div>
+        <div class="detail-row"><dt>Base ref</dt><dd id="detail-ref">-</dd></div>
+        <div class="detail-row"><dt>Port</dt><dd id="detail-port">-</dd></div>
+      </dl>
+
+      <div class="server-actions" id="server-actions" hidden>
+        <button class="button button-primary" id="open-button" type="button" disabled>
+          Open dashboard <span aria-hidden="true">&gt;</span>
+        </button>
+        <button class="button button-quiet" id="stop-button" type="button" disabled>Stop server</button>
+      </div>
+      <p class="stop-help" id="stop-help" hidden>Stopping ends any runs that are still executing.</p>
+    </section>
+
+    <p class="feedback" id="feedback" role="status" aria-live="polite"></p>
+    <footer><span>Runs locally on this computer</span><span id="refresh-note">Status refreshes automatically</span></footer>
+  </main>
+</body>
+</html>
