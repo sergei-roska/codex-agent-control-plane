@@ -283,8 +283,8 @@ test('discovers and cancels a task created after sendMessage is aborted', async 
   assert.equal(h.calls.filter((call) => call.type === 'list').every((call) => call.options.serviceParameters.authorization === 'Bearer test-token'), true);
 });
 
-test('defaults the cancel-confirmation deadline to 20 seconds and keeps it overridable', () => {
-  assert.equal(makeHarness({ decisions: [], cancelTimeoutMs: 'default' }).orchestrator.cancelTimeoutMs, 20_000);
+test('defaults the cancel-confirmation deadline to 30 seconds and keeps it overridable', () => {
+  assert.equal(makeHarness({ decisions: [], cancelTimeoutMs: 'default' }).orchestrator.cancelTimeoutMs, 30_000);
   assert.equal(makeHarness({ decisions: [], cancelTimeoutMs: 1234 }).orchestrator.cancelTimeoutMs, 1234);
 });
 

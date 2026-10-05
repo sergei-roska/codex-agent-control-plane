@@ -119,10 +119,28 @@ function getSession(db, contextId) {
 function deleteLeadTask(db, taskId) {
   const deleteTx = db.transaction(() => {
     const workers = db.prepare("SELECT task_id FROM dispatch_journal WHERE run_id = ?").all(taskId).map(r => r.task_id);
+    const relatedTaskIds = [...new Set([taskId, ...workers].filter(Boolean))];
+    const hasWriterExecutions = db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'writer_executions'"
+    ).get();
+    if (hasWriterExecutions && relatedTaskIds.length > 0) {
+      const placeholders = relatedTaskIds.map(() => '?').join(',');
+      const executions = db.prepare(
+        `SELECT state FROM writer_executions WHERE task_id IN (${placeholders})`
+      ).all(...relatedTaskIds);
+      if (executions.some(row => row.state !== 'released' && row.state !== 'reconciled')) {
+        throw new SessionError(
+          'writer_execution_unresolved',
+          'Cannot delete a session with an active or unresolved writer execution!',
+        );
+      }
+      db.prepare(
+        `DELETE FROM writer_executions WHERE task_id IN (${placeholders}) AND state IN ('released', 'reconciled')`
+      ).run(...relatedTaskIds);
+    }
     if (workers.length > 0) {
       const placeholders = workers.map(() => '?').join(',');
       db.prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...workers);
-      try { db.prepare(`DELETE FROM writer_executions WHERE task_id IN (${placeholders})`).run(...workers); } catch (_) {}
     }
     db.prepare("DELETE FROM tasks WHERE id = ?").run(taskId);
     db.prepare("DELETE FROM dispatch_journal WHERE run_id = ?").run(taskId);
@@ -130,7 +148,6 @@ function deleteLeadTask(db, taskId) {
     try { db.prepare("DELETE FROM writes WHERE thread_id = ?").run(taskId); } catch (_) {}
     try { db.prepare("DELETE FROM usage_ledger WHERE run_id = ?").run(taskId); } catch (_) {}
     try { db.prepare("DELETE FROM evidence WHERE run_id = ?").run(taskId); } catch (_) {}
-    try { db.prepare("DELETE FROM writer_executions WHERE task_id = ?").run(taskId); } catch (_) {}
   });
   deleteTx();
 }

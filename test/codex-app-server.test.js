@@ -467,6 +467,7 @@ test('marks an unexpected exit during a turn as an unknown outcome', async (t) =
 
 test('times out a turn that never completes and requests interruption', async (t) => {
   const methods = [];
+  const clock = fakeClock();
   const fake = fakeSpawn((request, send) => {
     methods.push(request.method);
     if (request.method === 'initialize') send({ id: request.id, result: {} });
@@ -477,14 +478,17 @@ test('times out a turn that never completes and requests interruption', async (t
     }
     if (request.method === 'turn/interrupt') send({ id: request.id, result: {} });
   });
-  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 35, turnTimeoutMs: 35 });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 35, turnTimeoutMs: 35, clock });
   t.after(() => client.close());
 
-  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'hang' }), (error) => {
+  const pending = client.run({ role, cwd: '/tmp/project', input: 'hang' });
+  const rejected = assert.rejects(pending, (error) => {
     assert.equal(error.outcomeUnknown, true);
     return /Timed out waiting for Codex turn completion/.test(error.message);
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await clock.flush();
+  await clock.advance(35);
+  await rejected;
   assert.ok(methods.includes('turn/interrupt'));
 });
 
@@ -517,16 +521,14 @@ function hangingHandler({ turnStart = true, interruptConfirms = false } = {}) {
 
 test('turn timeout signals the whole process group', async (t) => {
   const kills = groupKills();
+  const clock = fakeClock();
   const fake = fakeSpawn(hangingHandler(), { pidBase: 4000 });
-  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, turnTimeoutMs: 30, killImpl: kills.killImpl, readProcessIdentityImpl: identityOf });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, clock, turnTimeoutMs: 30, killImpl: kills.killImpl, readProcessIdentityImpl: identityOf });
   t.after(() => client.close());
   const pending = client.run({ role, cwd: '/tmp/p', input: 'hang' });
-  await new Promise((resolve) => setImmediate(resolve));
+  await clock.flush();
   const child = fake.getChild();
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  assert.deepEqual(kills.calls[0], { pid: -4000, signal: 'SIGTERM' });
-  child.emit('exit', null, 'SIGTERM');
-  await assert.rejects(pending, (error) => {
+  const rejected = assert.rejects(pending, (error) => {
     assert.equal(error.outcomeUnknown, true);
     assert.deepEqual(error.execution.processIdentity, identityOf(4000));
     assert.equal(error.execution.turnStartSent, true);
@@ -534,6 +536,10 @@ test('turn timeout signals the whole process group', async (t) => {
     assert.equal(error.execution.turnId, 'turn-h');
     return true;
   });
+  await clock.advance(30);
+  assert.deepEqual(kills.calls[0], { pid: -4000, signal: 'SIGTERM' });
+  child.emit('exit', null, 'SIGTERM');
+  await rejected;
 });
 
 test('falls back to child.kill when the child has no pid', async (t) => {
@@ -1106,12 +1112,13 @@ test('_signalOwnGroup decisions: stale exit, reused pid, mismatched identity, un
 test('SIGTERM with a mismatching childIdentity sends no numeric signal', async (t) => {
   const kills = groupKills();
   const fake = fakeSpawn(baseHandler(), { pidBase: 7000 });
+  let startTime = '123';
   const client = new CodexAppServer({
     spawnImpl: fake.spawnImpl, killImpl: kills.killImpl,
-    readProcessIdentityImpl: (pid) => ({ pid, pgid: pid, startTime: '555' }),
+    readProcessIdentityImpl: (pid) => ({ pid, pgid: pid, startTime }),
   });
   await client.start();
-  client.childIdentity = { pid: 7000, pgid: 7000, startTime: '123' };
+  startTime = '555';
   await client.close();
   assert.deepEqual(kills.calls, []);
 });
@@ -1383,6 +1390,253 @@ function supervised(t, { mode = {}, ...options } = {}) {
 
 const kindsOf = (client) => client.supervisorState().events.map((event) => event.kind);
 
+test('supervisor F1: late old-generation exit cannot release a pending replacement start', async (t) => {
+  const clock = fakeClock();
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({
+    spawnImpl: fake.spawnImpl,
+    clock,
+    killImpl: () => {},
+    exitWaitMs: 100,
+    backoffMs: [0],
+  });
+  t.after(() => client.close());
+  await client.start();
+  const oldChild = fake.getChild();
+  oldChild.kill = () => true;
+  oldChild.stdout.write('not json\n');
+  await clock.flush();
+
+  const first = client.start();
+  await clock.flush();
+  oldChild.emit('exit', 1, null);
+  const second = client.start();
+  await clock.advance(100);
+  await Promise.all([first, second]);
+  assert.equal(fake.getChildren().length, 2, 'late event from generation 1 must not cause a second replacement spawn');
+  assert.equal(client.supervisorState().generation, 2);
+});
+
+test('supervisor F1: callers during backoff and probe share one owner and one spawn', async (t) => {
+  const { clock, fake, client, crash } = supervised(t);
+  await client.start();
+  await crash();
+  await client.start(); // first charged ending has no delay
+  await crash(); // second ending opens the 1000ms backoff
+  const duringBackoff = [client.start(), client.start(), client.start()];
+  await clock.flush();
+  assert.equal(client.supervisorState().state, 'backoff');
+  await clock.advance(1_000);
+  await Promise.all(duringBackoff);
+  assert.equal(fake.getChildren().length, 3, 'three callers in one backoff must produce one replacement spawn');
+});
+
+test('supervisor F1: concurrent callers during a held probe initialize only one generation', async (t) => {
+  const clock = fakeClock();
+  let holdInitialize = false;
+  const base = supervisedHandler();
+  const fake = fakeSpawn((request, send) => {
+    if (holdInitialize && request.method === 'initialize') return;
+    return base(request, send);
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, clock, maxRestarts: 0, cooldownMs: 10, backoffMs: [0] });
+  t.after(() => client.close());
+  await client.start();
+  const failedChild = fake.getChild();
+  failedChild.emit('exit', 1, null);
+  await clock.flush();
+  holdInitialize = true;
+  await clock.advance(10);
+
+  const callers = [client.start(), client.start(), client.start()];
+  await clock.flush();
+  assert.equal(fake.getChildren().length, 2);
+  assert.equal(client.supervisorState().state, 'starting');
+  failedChild.emit('exit', 2, null); // a duplicate old-generation event cannot release this start owner
+  await clock.flush();
+  assert.equal(fake.getChildren().length, 2);
+  assert.equal(client.supervisorState().state, 'starting');
+
+  const probeChild = fake.getChild();
+  const initialize = probeChild.sent.find((message) => message.method === 'initialize');
+  probeChild.stdout.write(`${JSON.stringify({ id: initialize.id, result: {} })}\n`);
+  await clock.flush();
+  await Promise.all(callers);
+  assert.equal(fake.getChildren().length, 2);
+  assert.equal(client.supervisorState().generation, 2);
+  assert.equal(client.supervisorState().state, 'running');
+});
+
+test('supervisor F1: a synchronous old exit cannot release a hung replacement exit deadline', async (t) => {
+  const clock = fakeClock();
+  const fake = fakeSpawn(baseHandler());
+  const spawnImpl = (...args) => {
+    const child = fake.spawnImpl(...args);
+    if (fake.getChildren().length === 1) {
+      child.kill = (signal) => { child.exitCode = 0; child.emit('exit', 0, signal); return true; };
+    } else child.kill = () => true;
+    return child;
+  };
+  const client = new CodexAppServer({ spawnImpl, clock, exitWaitMs: 500, backoffMs: [0] });
+  t.after(() => client.close());
+  await client.start();
+  const first = fake.getChild();
+  first.stdout.write('not json\n');
+  await clock.flush(); // generation 1 exits synchronously while its waiter already owns the deadline
+  const secondStart = client.start();
+  await clock.flush();
+  await secondStart;
+  const second = fake.getChild();
+  await clock.advance(100);
+  second.stdout.write('not json\n');
+  await clock.flush();
+
+  const thirdStart = client.start();
+  await clock.flush();
+  assert.equal(fake.getChildren().length, 2);
+  await clock.advance(400);
+  assert.equal(fake.getChildren().length, 2, 'generation 1 deadline must not release generation 2 early');
+  await clock.advance(99);
+  assert.equal(fake.getChildren().length, 2);
+  await clock.advance(1);
+  await thirdStart;
+  assert.equal(fake.getChildren().length, 3);
+  assert.equal(client.supervisorState().generation, 3);
+});
+
+test('supervisor F2: fail-safe settles runs and records unreaped at the injected exit deadline', async (t) => {
+  const clock = fakeClock();
+  const fake = fakeSpawn(hangingHandler(), { pidBase: 9000 });
+  const spawnImpl = noHandleKill(fake.spawnImpl);
+  const client = new CodexAppServer({
+    spawnImpl,
+    clock,
+    turnTimeoutMs: 100,
+    exitWaitMs: 500,
+    killImpl: () => {},
+    readProcessIdentityImpl: identityOf,
+    listGroupMembersImpl: () => [{ pid: 9001 }],
+  });
+  t.after(() => client.close());
+  await clock.flush();
+  let settled = false;
+  const running = client.run({ role, cwd: '/tmp/p', input: 'hang' }).then((value) => { settled = true; return { value }; }, (error) => { settled = true; return { error }; });
+  await clock.flush();
+  await clock.advance(100);
+  assert.equal(settled, true, 'run should settle when turn_timeout chooses to terminate the generation');
+  const { error } = await running;
+  assert.equal(error.failureClass, 'turn_timeout');
+  assert.equal(error.outcomeUnknown, true);
+  assert.equal(client.runs.size, 0);
+  assert.equal(client.supervisorState().chargedInWindow, 1);
+  assert.equal(client.supervisorState().state, 'stopped');
+  await clock.advance(499);
+  assert.equal(kindsOf(client).includes('unreaped'), false);
+  await clock.advance(1);
+  const unreaped = client.supervisorState().events.find((event) => event.kind === 'unreaped');
+  assert.ok(unreaped);
+  assert.deepEqual(unreaped.survivors, [{ pid: 9001 }]);
+});
+
+test('supervisor F3: invalid JSONL in turn/start response chunk rejects and removes the run', async (t) => {
+  let fake;
+  const handler = (request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') return send({ id: request.id, result: { thread: { id: 'thread-same-chunk' } } });
+    if (request.method === 'turn/start') {
+      fake.getChild().stdout.write(`${JSON.stringify({ id: request.id, result: { turn: { id: 'turn-same-chunk', status: 'inProgress' } } })}\ninvalid-json-after-turn-start\n`);
+      return;
+    }
+    return send({ id: request.id, result: {} });
+  };
+  fake = fakeSpawn(handler);
+  const clock = fakeClock();
+  const spawnImpl = (...args) => {
+    const child = fake.spawnImpl(...args);
+    child.kill = () => true;
+    return child;
+  };
+  const client = new CodexAppServer({ spawnImpl, clock, turnTimeoutMs: 10 });
+  t.after(() => client.close());
+  let settled = false;
+  const running = client.run({ role, cwd: '/tmp/p', input: 'x' }).then(() => { settled = true; return null; }, (error) => { settled = true; return error; });
+  await clock.flush();
+  assert.equal(settled, true, 'run should observe the process failure before waiting for turn/completed');
+  const error = await running;
+  assert.equal(error.failureClass, 'process_exit');
+  assert.equal(error.outcomeUnknown, true);
+  assert.equal(error.execution.turnStartSent, true);
+  assert.equal(client.runs.size, 0);
+  assert.equal(client.supervisorState().chargedInWindow, 1);
+});
+
+test('supervisor F3: initialize response followed by invalid JSONL cannot mark start running', async (t) => {
+  let fake;
+  const handler = (request) => {
+    if (request.method === 'initialize') {
+      fake.getChild().stdout.write(`${JSON.stringify({ id: request.id, result: {} })}\ninvalid-json-after-initialize\n`);
+    }
+  };
+  fake = fakeSpawn(handler);
+  const clock = fakeClock();
+  const spawnImpl = noHandleKill(fake.spawnImpl);
+  const client = new CodexAppServer({ spawnImpl, clock });
+  t.after(() => client.close());
+  const rejected = assert.rejects(client.start(), (error) => error.failureClass === 'process_exit');
+  await clock.flush();
+  await rejected;
+  assert.notEqual(client.supervisorState().state, 'running');
+  assert.equal(client.supervisorState().generation, 1);
+  assert.equal(client.supervisorState().chargedInWindow, 1);
+});
+
+test('supervisor F3: rejected turn/start is marked before same-chunk process failure', async (t) => {
+  let fake;
+  const handler = (request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') return send({ id: request.id, result: { thread: { id: 'thread-rej-chunk' } } });
+    if (request.method === 'turn/start') {
+      fake.getChild().stdout.write(`${JSON.stringify({ id: request.id, error: { code: -32600, message: 'rejected' } })}\ninvalid-json-after-rejection\n`);
+    }
+  };
+  fake = fakeSpawn(handler);
+  const clock = fakeClock();
+  const client = new CodexAppServer({ spawnImpl: noHandleKill(fake.spawnImpl), clock });
+  t.after(() => client.close());
+  const running = client.run({ role, cwd: '/tmp/p', input: 'x' }).then(() => null, (error) => error);
+  await clock.flush();
+  const error = await running;
+  assert.equal(error.execution.turnStartSent, true);
+  assert.equal(error.execution.turnStartRejected, true);
+  assert.equal(error.outcomeUnknown, false);
+  assert.equal(client.runs.size, 0);
+  assert.equal(client.supervisorState().chargedInWindow, 1);
+});
+
+test('supervisor F3: a synchronous turn/start write failure stays known and unsent', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const spawnImpl = (...args) => {
+    const child = fake.spawnImpl(...args);
+    const write = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (chunk, ...rest) => {
+      const message = JSON.parse(chunk.toString());
+      if (message.method === 'turn/start') throw new Error('write failed');
+      return write(chunk, ...rest);
+    };
+    return child;
+  };
+  const client = new CodexAppServer({ spawnImpl, clock: fakeClock() });
+  t.after(() => client.close());
+  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'x' }), (error) => {
+    assert.equal(error.outcomeUnknown, false);
+    assert.equal(error.execution.turnStartSent, false);
+    assert.equal(error.execution.generation, null);
+    return true;
+  });
+  assert.equal(client.supervisorState().chargedInWindow, 0);
+  assert.equal(fake.getChildren().length, 1);
+});
+
 test('supervisor: repeated crashes inside the window back off, then exhaust the budget', async (t) => {
   const { clock, fake, client, crash } = supervised(t);
   await client.start();
@@ -1611,15 +1865,19 @@ test('supervisor: a turn/start timeout is charged as turn_start_unknown and carr
     if (request.method === 'thread/start') return send({ id: request.id, result: { thread: { id: 'thread-t' } } });
     return undefined; // turn/start never answered
   });
-  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 30, clock: fakeClock() });
+  const clock = fakeClock();
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 30, clock });
   t.after(() => client.close());
-  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'x' }), (error) => {
+  const rejected = assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'x' }), (error) => {
     assert.equal(error.failureClass, 'turn_start_unknown');
     assert.equal(error.outcomeUnknown, true);
     assert.equal(error.generation, 1);
     assert.equal(error.execution.generation, 1);
     return true;
   });
+  await clock.flush();
+  await clock.advance(30);
+  await rejected;
   assert.equal(client.supervisorState().chargedInWindow, 1);
 });
 
