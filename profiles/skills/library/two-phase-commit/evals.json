@@ -1,0 +1,100 @@
+{
+  "test_suite": "two-phase-commit-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_unanimous_consensus_commit",
+      "description": "Full lifecycle execution where all registered validators vote VOTE_COMMIT, leading to successful atomic commit, post-write checksum verification, and shadow buffer cleanup.",
+      "input": "Initialize 2PC transaction TXN-2026-001 for proposed refactor targeting auth_service.py and token_helper.py with validators linter-1, syntax-check, and unit-tests.",
+      "expected_output_patterns": [
+        "=== 2PC TRANSACTION INITIALIZED: TXN-2026-001 ===",
+        "[STAGING_VERIFIED] ShadowBuffer:",
+        "[PHASE_1_PREPARE_DISPATCH] Validator: linter-1",
+        "[PHASE_1_PREPARE_DISPATCH] Validator: syntax-check",
+        "[PHASE_1_PREPARE_DISPATCH] Validator: unit-tests",
+        "[VOTE_RECEIVED] Validator: linter-1 Vote: VOTE_COMMIT",
+        "[VOTE_RECEIVED] Validator: syntax-check Vote: VOTE_COMMIT",
+        "[VOTE_RECEIVED] Validator: unit-tests Vote: VOTE_COMMIT",
+        "[CONSENSUS_ACHIEVED] 100% Unanimous Commit Approval",
+        "[ATOMIC_WRITE_FLUSH]",
+        "=== 2PC TRANSACTION COMMITTED: TXN-2026-001 ==="
+      ],
+      "prohibited_output_patterns": [
+        "=== 2PC TRANSACTION ABORTED:",
+        "[CONSENSUS_FAILED]",
+        "\"violation_code\": \"COMMIT_CONSENSUS_FAILED\""
+      ]
+    },
+    {
+      "name": "single_validator_rejection_triggers_abort",
+      "description": "When any validator emits VOTE_ABORT due to syntax or test failures, unanimous consensus fails, immediately aborting the transaction and purging staging buffers with zero dirty writes.",
+      "input": "Execute 2PC transaction TXN-2026-002 where validator security-scanner returns VOTE_ABORT with SQL_INJECTION_DETECTED.",
+      "expected_output_patterns": [
+        "=== 2PC TRANSACTION INITIALIZED: TXN-2026-002 ===",
+        "[VOTE_RECEIVED] Validator: security-scanner Vote: VOTE_ABORT",
+        "[CONSENSUS_FAILED] Transaction rejected by 1 validator(s)",
+        "\"violation_code\": \"COMMIT_CONSENSUS_FAILED\"",
+        "=== 2PC TRANSACTION ABORTED: TXN-2026-002 ==="
+      ],
+      "prohibited_output_patterns": [
+        "[ATOMIC_WRITE_FLUSH]",
+        "=== 2PC TRANSACTION COMMITTED:"
+      ]
+    },
+    {
+      "name": "validator_timeout_triggers_abort",
+      "description": "If any validator exceeds the configured timeout threshold during Phase 1, the transaction halts immediately with VALIDATOR_TIMEOUT and aborts.",
+      "input": "Execute 2PC transaction TXN-2026-003 where validator integration-tests hangs and exceeds 30000ms timeout.",
+      "expected_output_patterns": [
+        "=== 2PC TRANSACTION INITIALIZED: TXN-2026-003 ===",
+        "[VALIDATOR_TIMEOUT] Validator did not respond within 30000 ms",
+        "\"violation_code\": \"VALIDATOR_TIMEOUT\"",
+        "=== 2PC TRANSACTION ABORTED: TXN-2026-003 ==="
+      ],
+      "prohibited_output_patterns": [
+        "[CONSENSUS_ACHIEVED]",
+        "=== 2PC TRANSACTION COMMITTED:"
+      ]
+    },
+    {
+      "name": "staging_isolation_verification_before_commit",
+      "description": "Verifies that production disk files remain completely pristine and unaltered while proposed mutations are evaluated inside the shadow staging buffer.",
+      "input": "Execute Phase 1 prepare for transaction TXN-2026-004 and verify target files on disk match baseline checksums before any commit.",
+      "expected_output_patterns": [
+        "=== 2PC TRANSACTION INITIALIZED: TXN-2026-004 ===",
+        "[STAGING_VERIFIED] ShadowBuffer: .agents/staging/2pc/TXN-2026-004/ BaselineVerified: TRUE",
+        "ASSERT(current_checksum(target_file) == baseline_checksum)"
+      ],
+      "prohibited_output_patterns": [
+        "[STAGING_ISOLATION_BREACH]",
+        "Premature disk write detected"
+      ]
+    },
+    {
+      "name": "atomic_write_failure_recovery_and_cleanup",
+      "description": "If a filesystem write error or checksum mismatch occurs during Phase 2 flush, all written files are rolled back to pristine baseline backups and transaction aborts.",
+      "input": "Simulate disk write error during Phase 2 flush for transaction TXN-2026-005.",
+      "expected_output_patterns": [
+        "[ATOMIC_WRITE_FAILED] Disk mutation failed on",
+        "\"violation_code\": \"ATOMIC_WRITE_FAILED\"",
+        "=== 2PC TRANSACTION ABORTED: TXN-2026-005 ==="
+      ],
+      "prohibited_output_patterns": [
+        "=== 2PC TRANSACTION COMMITTED: TXN-2026-005 ==="
+      ]
+    },
+    {
+      "name": "empty_validator_registry_precondition_rejection",
+      "description": "Attempting to initialize a 2PC transaction without registered validators fails pre-flight validation immediately with PRECONDITION_FAILED.",
+      "input": "Attempt to register 2PC transaction with empty validator list.",
+      "expected_output_patterns": [
+        "[PRECONDITION_FAILED] Transaction registration rejected",
+        "\"violation_code\": \"PRECONDITION_FAILED\"",
+        "=== 2PC TRANSACTION ABORTED:"
+      ],
+      "prohibited_output_patterns": [
+        "[PHASE_1_PREPARE_DISPATCH]",
+        "=== 2PC TRANSACTION COMMITTED:"
+      ]
+    }
+  ]
+}

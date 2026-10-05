@@ -1,0 +1,100 @@
+{
+  "test_suite": "rate-limiter-throttler-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_immediate_grant",
+      "description": "Request arrives with ample bucket tokens and RPM quota available, granting immediate permit with zero wait duration.",
+      "input": "Execute request for 10 tokens on rate-llm-primary with capacity 60, refill rate 5.0 tokens/sec, and max_rpm 60.",
+      "expected_output_patterns": [
+        "=== RATE LIMITER INITIALIZED: rate-llm-primary",
+        "[PERMIT_GRANTED] Limiter: rate-llm-primary Tokens: 10 Status: GRANTED_IMMEDIATELY",
+        "\"status\": \"GRANTED_IMMEDIATELY\"",
+        "\"wait_duration_ms\": 0"
+      ],
+      "prohibited_output_patterns": [
+        "[THROTTLE_ENGAGED]",
+        "=== TRAJECTORY BUDGET EXHAUSTED:",
+        "\"violation_code\":"
+      ]
+    },
+    {
+      "name": "burst_deficit_throttled_wait",
+      "description": "Bucket tokens temporarily depleted, triggering deficit wait calculation, non-blocking sleep with jitter, and grant after throttle.",
+      "input": "Execute request for 4 tokens on rate-llm-primary when bucket has only 2 tokens, with refill rate 2.0 tokens/sec.",
+      "expected_output_patterns": [
+        "[THROTTLE_ENGAGED] Limiter: rate-llm-primary WaitMs:",
+        "Reason: TOKENS",
+        "[PERMIT_GRANTED] Limiter: rate-llm-primary Tokens: 4 Status: GRANTED_AFTER_THROTTLE",
+        "\"status\": \"GRANTED_AFTER_THROTTLE\""
+      ],
+      "prohibited_output_patterns": [
+        "\"violation_code\": \"BACKOFF_TIMEOUT_EXCEEDED\"",
+        "=== TRAJECTORY BUDGET EXHAUSTED:"
+      ]
+    },
+    {
+      "name": "trajectory_budget_exhaustion_halt",
+      "description": "Cumulative tokens exceed max_trajectory_tokens ceiling, triggering TRAJECTORY_BUDGET_EXHAUSTED defect report and permanent trajectory halt.",
+      "input": "Execute request for 1200 tokens on rate-search-agent when cumulative tokens are 49500 and ceiling is 50000.",
+      "expected_output_patterns": [
+        "=== TRAJECTORY BUDGET EXHAUSTED: Limiter: rate-search-agent Ceiling: 50000 ===",
+        "\"violation_code\": \"TRAJECTORY_BUDGET_EXHAUSTED\""
+      ],
+      "prohibited_output_patterns": [
+        "Status: GRANTED_IMMEDIATELY",
+        "Status: GRANTED_AFTER_THROTTLE",
+        "[USAGE_RECONCILED]"
+      ]
+    },
+    {
+      "name": "rpm_quota_throttled_wait",
+      "description": "Request count reaches max_rpm ceiling within rolling 60-second window, enforcing backoff pause until oldest request timestamp expires.",
+      "input": "Execute 11th request on rate-github-api with max_rpm 10 within 60-second window.",
+      "expected_output_patterns": [
+        "[THROTTLE_ENGAGED] Limiter: rate-github-api WaitMs:",
+        "Reason: RPM",
+        "[PERMIT_GRANTED] Limiter: rate-github-api Tokens: 1 Status: GRANTED_AFTER_THROTTLE"
+      ],
+      "prohibited_output_patterns": [
+        "\"violation_code\": \"RPM_QUOTA_BREACHED\"",
+        "=== TRAJECTORY BUDGET EXHAUSTED:"
+      ]
+    },
+    {
+      "name": "backoff_timeout_exceeded_rejection",
+      "description": "Calculated wait time for depleted tokens exceeds max_allowed_wait_ms, resulting in immediate rejection with BACKOFF_TIMEOUT_EXCEEDED.",
+      "input": "Execute request for 2000 tokens on rate-batch-worker with refill rate 0.1 tokens/sec and max_allowed_wait_ms 10000.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"BACKOFF_TIMEOUT_EXCEEDED\"",
+        "\"status\": \"REJECTED\""
+      ],
+      "prohibited_output_patterns": [
+        "Status: GRANTED_IMMEDIATELY",
+        "Status: GRANTED_AFTER_THROTTLE"
+      ]
+    },
+    {
+      "name": "negative_token_request_error",
+      "description": "Permit request with non-positive token count immediately halts with NEGATIVE_TOKEN_REQUEST_ERROR defect report.",
+      "input": "Execute request for -5 tokens on rate-llm-primary.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"NEGATIVE_TOKEN_REQUEST_ERROR\""
+      ],
+      "prohibited_output_patterns": [
+        "Status: GRANTED_IMMEDIATELY",
+        "[PERMIT_GRANTED]"
+      ]
+    },
+    {
+      "name": "post_execution_usage_reconciliation",
+      "description": "Observed actual token consumption differs from reserved estimate, adjusting cumulative trajectory total and bucket balance.",
+      "input": "Reconcile actual usage of 1500 tokens after initial reservation of 1200 tokens on rate-llm-primary.",
+      "expected_output_patterns": [
+        "[USAGE_RECONCILED] Limiter: rate-llm-primary Delta: 300 Cumulative:"
+      ],
+      "prohibited_output_patterns": [
+        "\"violation_code\":"
+      ]
+    }
+  ]
+}

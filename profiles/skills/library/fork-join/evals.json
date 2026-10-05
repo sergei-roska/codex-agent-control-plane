@@ -1,0 +1,140 @@
+{
+  "test_suite": "fork-join-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_parallel_fork_join",
+      "description": "Concurrent execution of three independent branches with ordered concatenation join.",
+      "input": "Execute fork-join for batch-lint-001 with 3 tasks, barrier_timeout_ms 30000, error_policy FAIL_ALL_ON_ANY_ERROR, and ORDERED_LIST_CONCAT.",
+      "expected_output_patterns": [
+        "=== FORK-JOIN DISPATCH INITIALIZED: Batch: batch-lint-001 Branches: 3 ===",
+        "[BRANCH_DISPATCHED] BranchIndex: 1",
+        "[BRANCH_DISPATCHED] BranchIndex: 2",
+        "[BRANCH_DISPATCHED] BranchIndex: 3",
+        "[BRANCH_RESOLVED]",
+        "[JOIN_AGGREGATION_START] Strategy: ORDERED_LIST_CONCAT OutputCount: 3",
+        "=== FORK-JOIN BATCH COMPLETED: Batch: batch-lint-001",
+        "| 1 | branch-1 | SUCCESS |",
+        "| 2 | branch-2 | SUCCESS |",
+        "| 3 | branch-3 | SUCCESS |"
+      ],
+      "prohibited_output_patterns": [
+        "BARRIER_PREMATURE_RELEASE",
+        "BARRIER_TIMEOUT_EXPIRED",
+        "BRANCH_EXECUTION_FAILURE"
+      ]
+    },
+    {
+      "name": "barrier_timeout_straggler_cancellation",
+      "description": "Barrier timeout expires with active in-flight worker cancellation and partial join.",
+      "input": "Execute fork-join for batch-fetch-002 with 4 branches and barrier_timeout_ms 5000. Branch 3 hangs past 5000ms.",
+      "expected_output_patterns": [
+        "=== FORK-JOIN DISPATCH INITIALIZED: Batch: batch-fetch-002 Branches: 4 ===",
+        "[BARRIER_TIMEOUT] Batch: batch-fetch-002 StragglersCancelled: 1",
+        "[JOIN_AGGREGATION_START] Strategy: ORDERED_LIST_CONCAT",
+        "| 3 | branch-3 | TIMED_OUT | 5000 |"
+      ],
+      "prohibited_output_patterns": [
+        "BARRIER_PREMATURE_RELEASE",
+        "WORKER_CANCEL_FAILED"
+      ]
+    },
+    {
+      "name": "single_branch_boundary_condition",
+      "description": "Single task fork-join execution boundary condition.",
+      "input": "Execute fork-join for batch-single-001 with 1 task and barrier_timeout_ms 10000.",
+      "expected_output_patterns": [
+        "=== FORK-JOIN DISPATCH INITIALIZED: Batch: batch-single-001 Branches: 1 ===",
+        "[BRANCH_DISPATCHED] BranchIndex: 1",
+        "[BRANCH_RESOLVED] BranchIndex: 1 Status: SUCCESS",
+        "[JOIN_AGGREGATION_START] Strategy: ORDERED_LIST_CONCAT OutputCount: 1",
+        "=== FORK-JOIN BATCH COMPLETED: Batch: batch-single-001"
+      ]
+    },
+    {
+      "name": "error_policy_fail_all_on_any_error",
+      "description": "One worker fails under FAIL_ALL_ON_ANY_ERROR policy, triggering halt with BRANCH_EXECUTION_FAILURE.",
+      "input": "Execute fork-join for batch-strict-001 with error_policy FAIL_ALL_ON_ANY_ERROR where branch 2 encounters error.",
+      "expected_output_patterns": [
+        "=== FORK-JOIN DISPATCH INITIALIZED:",
+        "BRANCH_EXECUTION_FAILURE",
+        "FAILED"
+      ],
+      "prohibited_output_patterns": [
+        "=== FORK-JOIN BATCH COMPLETED:",
+        "[JOIN_AGGREGATION_START]"
+      ]
+    },
+    {
+      "name": "error_policy_quorum_threshold_success",
+      "description": "Branch failure occurs but remaining successful branches satisfy quorum_percentage (0.8), allowing progression to join.",
+      "input": "Execute fork-join for batch-audit-003 with 5 branches, quorum_percentage 0.8, and 1 failure.",
+      "expected_output_patterns": [
+        "=== FORK-JOIN DISPATCH INITIALIZED: Batch: batch-audit-003 Branches: 5 ===",
+        "[JOIN_AGGREGATION_START] Strategy: KEY_MERGE OutputCount: 4",
+        "=== FORK-JOIN BATCH COMPLETED: Batch: batch-audit-003",
+        "| 5 | branch-5 | FAILED |"
+      ],
+      "prohibited_output_patterns": [
+        "BRANCH_EXECUTION_FAILURE"
+      ]
+    },
+    {
+      "name": "error_policy_quorum_threshold_breach",
+      "description": "Success rate drops below quorum_percentage, triggering BRANCH_EXECUTION_FAILURE and execution halt.",
+      "input": "Execute fork-join for batch-quorum-fail with 4 branches, quorum_percentage 0.75, where 2 branches fail.",
+      "expected_output_patterns": [
+        "BRANCH_EXECUTION_FAILURE",
+        "FAILED"
+      ],
+      "prohibited_output_patterns": [
+        "=== FORK-JOIN BATCH COMPLETED:",
+        "[JOIN_AGGREGATION_START]"
+      ]
+    },
+    {
+      "name": "violation_barrier_premature_release",
+      "description": "Prohibits advancing to join phase while worker branches remain active before timeout.",
+      "input": "Attempt to trigger join reduction while latch > 0 before barrier_timeout_ms elapses.",
+      "expected_output_patterns": [
+        "BARRIER_PREMATURE_RELEASE"
+      ],
+      "prohibited_output_patterns": [
+        "=== FORK-JOIN BATCH COMPLETED: Batch:"
+      ]
+    },
+    {
+      "name": "violation_non_orthogonal_tasks_detected",
+      "description": "Rejects task collection containing colliding target paths or shared mutable references.",
+      "input": "Ingest task collection where task 1 and task 2 both write to the same mutable file reference.",
+      "expected_output_patterns": [
+        "NON_ORTHOGONAL_TASKS_DETECTED"
+      ],
+      "prohibited_output_patterns": [
+        "=== FORK-JOIN DISPATCH INITIALIZED:"
+      ]
+    },
+    {
+      "name": "violation_join_reduction_error",
+      "description": "Handles failure during payload aggregation and emits JOIN_REDUCTION_ERROR.",
+      "input": "Execute MONOIDAL_REDUCE on incompatible payload types triggering reduction exception.",
+      "expected_output_patterns": [
+        "JOIN_REDUCTION_ERROR",
+        "FAILED"
+      ],
+      "prohibited_output_patterns": [
+        "=== FORK-JOIN BATCH COMPLETED:"
+      ]
+    },
+    {
+      "name": "invalid_config_validation_error",
+      "description": "Initialization with invalid barrier_timeout_ms (< 500) or malformed batch_id pattern fails schema validation.",
+      "input": "Configure fork-join with barrier_timeout_ms 100 and batch_id invalid_id.",
+      "expected_output_patterns": [
+        "SCHEMA_VALIDATION_ERROR"
+      ],
+      "prohibited_output_patterns": [
+        "=== FORK-JOIN DISPATCH INITIALIZED:"
+      ]
+    }
+  ]
+}

@@ -189,7 +189,7 @@ test('e2e real stack', async (suite) => {
       assert.equal(task.status.state, TaskState.TASK_STATE_COMPLETED);
       assert.equal(artifactText(task), 'Acceptance: not_required\n\nFeature explored and done.');
       assert.equal(appServer.workerCalls.length, 1);
-      assert.equal(appServer.workerCalls[0].role, 'orch-explorer');
+      assert.equal(appServer.workerCalls[0].role, 'explorer');
       assert.equal(appServer.leadCalls.length, 2);
       assert.match(appServer.leadCalls[1].input, /All good/);
     });
@@ -328,7 +328,7 @@ test('e2e real stack', async (suite) => {
       assert.equal(serverB.leadCalls.length, 1);
       assert.match(serverB.leadCalls[0].input, /resumed after an interruption/);
       assert.match(serverB.leadCalls[0].input, /"failureKind":"interrupted"/);
-      assert.match(serverB.leadCalls[0].input, /orch-builder/);
+      assert.match(serverB.leadCalls[0].input, /engineer/);
       assert.equal(serverA.workerCalls.length + serverB.workerCalls.length, 1);
       assert.equal(serverB.workerCalls.length, 0);
 

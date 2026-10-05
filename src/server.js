@@ -14,6 +14,8 @@ const { WriterAdmission } = require('./writer-admission');
 const { UsageLedger } = require('./usage-ledger');
 const { validateAcceptanceContract, formatAcceptance } = require('./acceptance');
 const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
+const { loadSkillCatalog } = require('./skill-catalog');
+const { canonicalRoleId, roleDisplayName } = require('./role-names');
 
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 3000;
@@ -90,9 +92,9 @@ function describePause(taskId, pause) {
 }
 
 function makeLeadCard({ leadRole, endpoint }) {
-  const roleId = 'orch-lead';
+  const roleId = canonicalRoleId('orch-lead');
   return {
-    name: leadRole.name,
+    name: leadRole.displayName || roleDisplayName(roleId),
     description: leadRole.description,
     supportedInterfaces: [{ url: endpoint, protocolBinding: 'JSONRPC', protocolVersion: '1.0', tenant: '' }],
     provider: { url: endpoint, organization: 'Codex Universal' },
@@ -106,7 +108,7 @@ function makeLeadCard({ leadRole, endpoint }) {
     defaultOutputModes: ['text/plain'],
     skills: [{
       id: roleId,
-      name: leadRole.name,
+      name: leadRole.displayName || roleDisplayName(roleId),
       description: leadRole.description,
       tags: [roleId],
       examples: [],
@@ -499,7 +501,7 @@ function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, ta
 function protectRoleRpcMounts(app, authMiddleware) {
   const protectedApp = {
     use(route, ...handlers) {
-      if (typeof route === 'string' && /^\/agents\/orch-[a-z0-9-]+$/.test(route)) {
+      if (typeof route === 'string' && /^\/agents\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(route)) {
         app.use(route, authMiddleware, ...handlers);
       } else {
         app.use(route, ...handlers);
@@ -546,6 +548,7 @@ async function startServer({
     const authToken = loadOrCreateAuthToken(tokenFile ? { filePath: tokenFile } : undefined);
     const authMiddleware = createAuthMiddleware(authToken);
     const roles = loadRoles(profilesDir ? { profilesDir } : undefined);
+    const skillCatalog = loadSkillCatalog();
     const app = express();
     if (listen) {
       httpServer = await new Promise((resolve, reject) => {
@@ -563,11 +566,13 @@ async function startServer({
     const leadRole = createLeadRole(profilesDir ? { profilesDir } : undefined);
     const usageLedger = new UsageLedger({ db: state.db });
     const orchestrator = orchestratorFactory({
-      appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger,
+      appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog,
+      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger,
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
-      roles, appServer, workspace, baseUrl, admission, usageLedger, taskStoreFactory: (roleId) => createTaskStore(state, roleId),
+      roles, appServer, workspace, baseUrl, admission, usageLedger, skillCatalog,
+      taskStoreFactory: (roleId) => createTaskStore(state, roleId),
     });
     const leadAgent = registerLead(app, {
       leadRole, orchestrator, baseUrl, authMiddleware, taskStore: createTaskStore(state, 'orchestrator'),

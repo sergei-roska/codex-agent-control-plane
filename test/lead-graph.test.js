@@ -5,10 +5,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { TaskState } = require('@a2a-js/sdk');
 const { LeadOrchestrator, RunNotFoundError } = require('../src/lead-orchestrator');
 const { execFileSync } = require('node:child_process');
 const { UsageLedger } = require('../src/usage-ledger');
+const { loadSkillCatalog } = require('../src/skill-catalog');
 const {
   DispatchJournal, openStateDatabase, assignmentId, attemptId, deterministicContextId,
 } = require('../src/durable-store');
@@ -120,6 +122,7 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
     script,
     leadTurns: 0,
     prompts: [],
+    dispatchInputs: [],
     sends: [],
     polls: new Map(),
     tasks: new Map(),
@@ -160,6 +163,7 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
         async sendMessage(params) {
           const contextId = params.message.contextId;
           world.sends.push(contextId);
+          world.dispatchInputs.push(JSON.parse(params.message.parts[0].content.value));
           const task = { id: `task-${contextId}`, contextId, role: roleName };
           world.tasks.set(contextId, task);
           return { task: view(task, false) };
@@ -275,6 +279,48 @@ test('restart after each dispatch-path node boundary yields the same result with
       });
     });
   }
+});
+
+test('lead advertises bounded skill metadata and pins selected skill hashes on dispatch', async (t) => {
+  const root = fs.mkdtempSync(path.join(tmpRoot, 'catalog-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const skillDir = path.join(root, 'api-design');
+  fs.mkdirSync(skillDir);
+  const contents = '---\nname: api-design\ndescription: Design stable APIs.\nkeywords: ["api", "interface"]\n---\nUse stable interfaces.\n';
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), contents);
+  const skillCatalog = loadSkillCatalog({ root });
+  const world = makeWorld({ script: [dispatch({ ...brief('orch-builder'), skills: ['api-design'] }), finish('Built API')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build an API', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const prompt = world.prompts[0];
+    assert.match(prompt, /Available skill candidates/);
+    assert.match(prompt, /api-design/);
+    assert.match(prompt, /0-5 relevant IDs/);
+    assert.equal(world.dispatchInputs.length, 1);
+    assert.deepEqual(world.dispatchInputs[0].skillPins, [{
+      id: 'api-design', sha256: crypto.createHash('sha256').update(contents).digest('hex'),
+    }]);
+    assert.deepEqual(result.assignments[0].skills, world.dispatchInputs[0].skillPins);
+  }, { orchestrator: { skillCatalog } });
+});
+
+test('resuming a checkpoint rejects a changed pinned skill before A2A dispatch', async (t) => {
+  const root = fs.mkdtempSync(path.join(tmpRoot, 'catalog-drift-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const skillDir = path.join(root, 'api-design');
+  fs.mkdirSync(skillDir);
+  const skillFile = path.join(skillDir, 'SKILL.md');
+  fs.writeFileSync(skillFile, '---\nname: api-design\ndescription: Design stable APIs.\n---\nVersion one.\n');
+  const skillCatalog = loadSkillCatalog({ root });
+  const world = makeWorld({ script: [dispatch({ ...brief('orch-builder'), skills: ['api-design'] }), finish('Built API')] });
+  await withSession(world, async (session) => {
+    const interrupted = await session.orchestrator.run({ goal: 'Build an API', runId: RUN_ID, interruptAfter: ['decide'] });
+    assert.equal(interrupted.status, 'interrupted_for_test');
+    fs.writeFileSync(skillFile, '---\nname: api-design\ndescription: Design stable APIs.\n---\nVersion two.\n');
+    await assert.rejects(session.orchestrator.resume({ runId: RUN_ID }), /Skill file changed since catalog load/);
+    assert.equal(world.sends.length, 0);
+  }, { orchestrator: { skillCatalog } });
 });
 
 test('restart across the human_input boundary', async () => {
@@ -1151,7 +1197,7 @@ test('one lead_turn ledger row per lead turn, not duplicated across a resume', a
     assert.equal(world.leadTurns, 2);
     assert.deepEqual(rows.map((row) => row.entryId), ['lead:lead-thread:turn-1', 'lead:lead-thread:turn-2']);
     assert.equal(rows[0].runId, RUN_ID);
-    assert.equal(rows[0].role, 'orch-lead');
+    assert.equal(rows[0].role, 'coordinator');
     assert.equal(rows[0].model, 'gpt-lead');
     assert.equal(rows[0].tokens.totalTokens, 3);
     assert.equal(rows[0].outcome, 'completed');

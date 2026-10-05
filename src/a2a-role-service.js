@@ -9,12 +9,18 @@ const {
   WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, classifyCodexError, findCodexErrorInfo,
 } = require('./contracts');
 const { WriterAdmission } = require('./writer-admission');
+const { loadSkillCatalog, resolveSkillSelection } = require('./skill-catalog');
+const { canonicalRoleId, legacyRoleId, roleDisplayName } = require('./role-names');
+
+function displayRoleName(roleId, role) {
+  return role.displayName || (canonicalRoleId(roleId) === roleId && role.name !== roleId ? role.name : roleDisplayName(roleId));
+}
 
 const DEFAULT_RECONCILE_RETRY = { intervalMs: 250, totalMs: 5000 };
 
 function roleSlug(roleId) {
-  if (!/^orch-[a-z0-9-]+$/.test(roleId)) {
-    throw new TypeError(`Invalid role id "${roleId}"; expected an orch-* slug`);
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(roleId)) {
+    throw new TypeError(`Invalid role id "${roleId}"; expected a lowercase slug`);
   }
   return roleId;
 }
@@ -39,6 +45,38 @@ function extractText(message) {
   return texts.join('\n');
 }
 
+function assignmentSkillSelection(text, skillCatalog) {
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith('{')) return [];
+  let value;
+  try { value = JSON.parse(text); } catch (_) {
+    if (/(?:^|[,\s{])(?:"skills"|'skills'|skills|"skillPins"|'skillPins'|skillPins)\s*:/.test(text)) {
+      throw new Error('Structured assignment skill fields must be valid JSON.');
+    }
+    return [];
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const hasSkills = Object.hasOwn(value, 'skills');
+  const hasPins = Object.hasOwn(value, 'skillPins');
+  if (!hasSkills && !hasPins) return [];
+  const skills = hasSkills ? value.skills : [];
+  if (!Array.isArray(skills) || skills.length > 5
+    || skills.some((id) => typeof id !== 'string' || !id.trim())
+    || new Set(skills).size !== skills.length) {
+    throw new Error('skills must contain at most 5 unique non-empty skill IDs.');
+  }
+  let pins;
+  if (hasPins) {
+    pins = value.skillPins;
+    if (!Array.isArray(pins) || pins.length !== skills.length || pins.some((pin) => !pin || typeof pin !== 'object'
+      || Array.isArray(pin) || Object.keys(pin).sort().join(',') !== 'id,sha256'
+      || typeof pin.id !== 'string' || typeof pin.sha256 !== 'string')) {
+      throw new Error('skillPins must exactly match skills with id and sha256 fields.');
+    }
+  }
+  return resolveSkillSelection(skillCatalog, skills, pins === undefined ? {} : { pins });
+}
+
 function failureMetadata(error) {
   const classified = error ? classifyCodexError(error) : 'other';
   return {
@@ -60,7 +98,7 @@ function makeStatus(state, message) {
 function makeRoleCard({ roleId, role, endpoint }) {
   const skillId = roleId;
   return {
-    name: role.name,
+    name: displayRoleName(roleId, role),
     description: role.description,
     supportedInterfaces: [{
       url: endpoint,
@@ -88,7 +126,7 @@ function makeRoleCard({ roleId, role, endpoint }) {
     defaultOutputModes: ['text/plain'],
     skills: [{
       id: skillId,
-      name: role.name,
+      name: displayRoleName(roleId, role),
       description: role.description,
       tags: [roleId],
       examples: [],
@@ -133,7 +171,7 @@ function workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function makeExecutor({
-  roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null,
+  roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, skillCatalog,
 }) {
   const writable = role.sandbox !== 'read-only';
   const reservations = new Map();
@@ -214,6 +252,7 @@ function makeExecutor({
       let settled = false;
       // Set once appServer.run was reached: { usage, permissionEvents, provenance }.
       let telemetry = null;
+      let selectedSkills = [];
       const failedMetadata = (error) => ({
         ...failureMetadata(error),
         ...(writer ? { writerExecution: writer } : {}),
@@ -232,6 +271,7 @@ function makeExecutor({
             contextId,
             workspace,
             permissionConfig: source?.permissionConfig ?? null,
+            ...(selectedSkills.length ? { selectedSkills: selectedSkills.map(({ id, sha256 }) => ({ id, sha256 })) } : {}),
           },
         };
         if (!usageLedger) return;
@@ -249,6 +289,7 @@ function makeExecutor({
         let input;
         try {
           input = extractText(requestContext.userMessage);
+          selectedSkills = assignmentSkillSelection(input, skillCatalog);
         } catch (error) {
           publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
             messageId: `${taskId}-input-error`,
@@ -324,6 +365,7 @@ function makeExecutor({
             role: { id: roleId, ...role },
             cwd: workspace,
             input,
+            selectedSkills,
             outputSchema: WORKER_REPORT_SCHEMA,
             signal: controller.signal,
             ...(execution ? { onTurnStart: (info) => admission.recordTurnStart(execution.executionId, info) } : {}),
@@ -353,12 +395,13 @@ function makeExecutor({
             contextId,
             artifact: {
               artifactId: `${taskId}-result`,
-              name: `${role.name} result`,
+              name: `${displayRoleName(roleId, role)} result`,
               description: role.description,
               parts: [{ content: { $case: 'text', value: resultText } }],
               metadata: {
                 contract: WORKER_REPORT_CONTRACT,
                 threadId: result.threadId || null,
+            ...(selectedSkills.length ? { selectedSkills: selectedSkills.map(({ id, sha256 }) => ({ id, sha256 })) } : {}),
                 ...(writer ? { writerExecution: writer } : {}),
                 ...(telemetry ? telemetry : {}),
               },
@@ -458,6 +501,7 @@ function rejectOverlappingTask(executor) {
 /** Mount one independently stored A2A JSON-RPC agent per role. */
 function registerRoleAgents(app, {
   roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger,
+  skillCatalog = loadSkillCatalog(),
 }) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
     throw new TypeError('app must be an Express application');
@@ -475,25 +519,31 @@ function registerRoleAgents(app, {
 
   const registered = new Map();
   for (const [rawRoleId, role] of roles) {
-    const roleId = roleSlug(rawRoleId);
+    const roleId = canonicalRoleId(roleSlug(rawRoleId));
     if (!role?.name || !role?.description) throw new TypeError(`Role ${roleId} needs name and description`);
     const route = `/agents/${roleId}`;
     const endpoint = new URL(route, `${origin.origin}/`).toString();
     const card = makeRoleCard({ roleId, role, endpoint });
-    const executor = makeExecutor({ roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger });
+    const executor = makeExecutor({ roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, skillCatalog });
     const handler = new DefaultRequestHandler(
       card,
-      taskStoreFactory(roleId),
+      taskStoreFactory(legacyRoleId(roleId)),
       executor,
     );
-    app.use(`${route}/agent-card.json`, agentCardHandler({
+    const cardHandler = agentCardHandler({
       agentCardProvider: async () => AgentCard.toJSON(card),
-    }));
-    app.use(route, express.json(), rejectOverlappingTask(executor), jsonRpcHandler({
+    });
+    const rpcHandlers = [express.json(), rejectOverlappingTask(executor), jsonRpcHandler({
       requestHandler: handler,
       userBuilder: UserBuilder.noAuthentication,
-    }));
-    registered.set(roleId, { card, handler });
+    })];
+    const aliases = new Set([roleId, legacyRoleId(roleId)]);
+    for (const routeId of aliases) {
+      const routePath = `/agents/${routeId}`;
+      app.use(`${routePath}/agent-card.json`, cardHandler);
+      app.use(routePath, ...rpcHandlers);
+    }
+    registered.set(rawRoleId, { card, handler });
   }
   return registered;
 }

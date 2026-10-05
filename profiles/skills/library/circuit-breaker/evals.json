@@ -1,0 +1,111 @@
+{
+  "test_suite": "circuit-breaker-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_closed_state_success",
+      "description": "Normal operation execution when circuit is CLOSED with zero consecutive errors, resulting in immediate execution and error counter reset.",
+      "input": "Execute tool invoke on cb-search-api with target search_web, failure_threshold 3, and cooldown_period_ms 30000.",
+      "expected_output_patterns": [
+        "=== CIRCUIT BREAKER REGISTERED: cb-search-api Target: search_web ===",
+        "[CIRCUIT_INVOKE] Circuit: cb-search-api State: CLOSED",
+        "consecutive_failures = 0"
+      ],
+      "prohibited_output_patterns": [
+        "=== CIRCUIT TRIPPED TO OPEN:",
+        "[CIRCUIT_BLOCKED]",
+        "CIRCUIT_TRIPPED"
+      ]
+    },
+    {
+      "name": "consecutive_failures_trips_to_open",
+      "description": "Repeated failures reach failure_threshold (3), tripping circuit from CLOSED to OPEN and immediately routing to fallback.",
+      "input": "Execute query_orders via cb-database-query when consecutive_failures is at 2 and operation fails.",
+      "expected_output_patterns": [
+        "[CIRCUIT_INVOKE] Circuit: cb-database-query State: CLOSED",
+        "=== CIRCUIT TRIPPED TO OPEN: cb-database-query ConsecutiveFailures: 3 ===",
+        "CIRCUIT_TRIPPED",
+        "[FALLBACK_EXECUTED] Circuit: cb-database-query"
+      ],
+      "prohibited_output_patterns": [
+        "[CIRCUIT_RECOVERED]"
+      ]
+    },
+    {
+      "name": "open_state_diverts_to_fallback",
+      "description": "Invocation arrives while circuit is OPEN and cooldown period is still active, fast-failing and bypassing the target operation completely.",
+      "input": "Execute query_orders via cb-database-query when circuit is OPEN with 18400ms cooldown remaining.",
+      "expected_output_patterns": [
+        "[CIRCUIT_BLOCKED] Circuit: cb-database-query Reason: Circuit is OPEN",
+        "[FALLBACK_EXECUTED] Circuit: cb-database-query",
+        "X-Circuit-Fallback: TRUE"
+      ],
+      "prohibited_output_patterns": [
+        "=== CIRCUIT TRIPPED TO OPEN:",
+        "[CIRCUIT_CANARY_INIT]"
+      ]
+    },
+    {
+      "name": "cooldown_half_open_canary_recovery",
+      "description": "Cooldown timer expires, circuit enters HALF_OPEN, permits single canary probe which succeeds, restoring circuit to CLOSED.",
+      "input": "Execute charge_authorization_canary on cb-payment-gateway after cooldown elapsed.",
+      "expected_output_patterns": [
+        "[CIRCUIT_CANARY_INIT] Circuit: cb-payment-gateway State: HALF_OPEN",
+        "[CIRCUIT_RECOVERED] Circuit: cb-payment-gateway Target: payment-gateway resumed normal operation",
+        "state = CLOSED"
+      ],
+      "prohibited_output_patterns": [
+        "[CANARY_PROBE_FAILED]",
+        "=== CIRCUIT TRIPPED TO OPEN:"
+      ]
+    },
+    {
+      "name": "cooldown_half_open_canary_failure",
+      "description": "Cooldown expires, single canary probe is attempted in HALF_OPEN but fails, re-tripping circuit to OPEN and triggering fallback.",
+      "input": "Execute charge_authorization_canary on cb-payment-gateway after cooldown elapsed, but probe encounters server error.",
+      "expected_output_patterns": [
+        "[CIRCUIT_CANARY_INIT] Circuit: cb-payment-gateway State: HALF_OPEN",
+        "[CANARY_PROBE_FAILED] Circuit: cb-payment-gateway",
+        "CANARY_PROBE_FAILED",
+        "[FALLBACK_EXECUTED] Circuit: cb-payment-gateway"
+      ],
+      "prohibited_output_patterns": [
+        "[CIRCUIT_RECOVERED]"
+      ]
+    },
+    {
+      "name": "concurrent_probe_rejection_in_half_open",
+      "description": "When a canary probe is already in-flight in HALF_OPEN, subsequent concurrent requests are rejected and routed directly to fallback.",
+      "input": "Execute dispatch on cb-payment-gateway while another canary probe is in-flight.",
+      "expected_output_patterns": [
+        "[FALLBACK_EXECUTED] Circuit: cb-payment-gateway",
+        "X-Circuit-Fallback: TRUE"
+      ],
+      "prohibited_output_patterns": [
+        "[CIRCUIT_CANARY_INIT]"
+      ]
+    },
+    {
+      "name": "call_timeout_exceeded",
+      "description": "Operation takes longer than call_timeout_ms, raising CALL_TIMEOUT_EXCEEDED and triggering failure accounting.",
+      "input": "Execute long_query on cb-database-query with call_timeout_ms 5000 where call hangs for 6000ms.",
+      "expected_output_patterns": [
+        "CALL_TIMEOUT_EXCEEDED",
+        "[FALLBACK_EXECUTED] Circuit: cb-database-query"
+      ],
+      "prohibited_output_patterns": [
+        "[CIRCUIT_RECOVERED]"
+      ]
+    },
+    {
+      "name": "invalid_configuration_halt",
+      "description": "Initialization with invalid failure_threshold (zero or negative) or invalid circuit_id pattern halts with CONFIG_VALIDATION_ERROR.",
+      "input": "Initialize circuit breaker with circuit_id invalid-id and failure_threshold 0.",
+      "expected_output_patterns": [
+        "CONFIG_VALIDATION_ERROR"
+      ],
+      "prohibited_output_patterns": [
+        "=== CIRCUIT BREAKER REGISTERED:"
+      ]
+    }
+  ]
+}

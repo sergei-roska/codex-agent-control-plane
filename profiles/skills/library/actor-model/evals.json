@@ -1,0 +1,96 @@
+{
+  "test_suite": "actor-model-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_task_dispatch_and_execution",
+      "description": "Full lifecycle execution where gateway enqueues a message to worker, which dequeues, validates, executes handler, and updates state.",
+      "input": "Initialize actor://ingest/gateway and actor://transform/normalizer. Enqueue NORMALIZE_PAYLOAD envelope to normalizer mailbox.",
+      "expected_output_patterns": [
+        "=== ACTOR SYSTEM INITIALIZED:",
+        "[ACTOR_SPAWNED] Address: actor://ingest/gateway",
+        "[ACTOR_SPAWNED] Address: actor://transform/normalizer",
+        "[MESSAGE_ENQUEUED] MsgId:",
+        "[MESSAGE_DEQUEUED] MsgId:",
+        "[MESSAGE_PROCESSED] MsgId:"
+      ],
+      "prohibited_output_patterns": [
+        "[QUARANTINE_DLQ]",
+        "\"violation_code\": \"SHARED_STATE_VIOLATION\"",
+        "\"violation_code\": \"MALFORMED_MESSAGE_PAYLOAD\""
+      ]
+    },
+    {
+      "name": "shared_state_violation_rejection",
+      "description": "Attempt to directly access or mutate an external actor private state is intercepted by invariant check, emitting SHARED_STATE_VIOLATION.",
+      "input": "Actor rogue attempts direct memory write mutation into target actor private state container.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"SHARED_STATE_VIOLATION\"",
+        "SHARED_STATE_VIOLATION"
+      ],
+      "prohibited_output_patterns": [
+        "[MESSAGE_PROCESSED]"
+      ]
+    },
+    {
+      "name": "malformed_message_payload_quarantine",
+      "description": "Message arriving with payload violating declared schema fails Step 3d validation and is diverted to DLQ with MALFORMED_MESSAGE_PAYLOAD.",
+      "input": "Dispatch CALCULATE_METRIC to actor://metrics/calculator with payload violating schema constraints.",
+      "expected_output_patterns": [
+        "[MESSAGE_DEQUEUED]",
+        "[QUARANTINE_DLQ]",
+        "Code: MALFORMED_MESSAGE_PAYLOAD"
+      ],
+      "prohibited_output_patterns": [
+        "[MESSAGE_PROCESSED]"
+      ]
+    },
+    {
+      "name": "message_ttl_expiration_drop",
+      "description": "Message whose elapsed queue time exceeds configured ttl_ms is dropped at Step 3c with MESSAGE_TTL_EXPIRED.",
+      "input": "Enqueue message with ttl_ms 1000 to mailbox, dequeue after 2500ms elapsed.",
+      "expected_output_patterns": [
+        "[MESSAGE_EXPIRED]",
+        "TTL: 1000ms"
+      ],
+      "prohibited_output_patterns": [
+        "[MESSAGE_PROCESSED]"
+      ]
+    },
+    {
+      "name": "mailbox_overflow_backpressure_rejection",
+      "description": "Enqueuing message into a mailbox that has reached max_queue_depth triggers backpressure and emits MAILBOX_OVERFLOW.",
+      "input": "Attempt to enqueue message into mailbox whose current depth equals max_queue_depth 1000.",
+      "expected_output_patterns": [
+        "MAILBOX_OVERFLOW",
+        "[QUARANTINE_DLQ]"
+      ],
+      "prohibited_output_patterns": [
+        "[MESSAGE_PROCESSED]"
+      ]
+    },
+    {
+      "name": "poison_pill_runtime_fault_isolation",
+      "description": "Message triggering an uncaught exception during handler execution is quarantined to DLQ as a poison pill without crashing the actor loop.",
+      "input": "Process message whose handler encounters an unhandled runtime zero-division exception.",
+      "expected_output_patterns": [
+        "[QUARANTINE_DLQ]",
+        "Code: POISON_PILL_QUARANTINED"
+      ],
+      "prohibited_output_patterns": [
+        "[MESSAGE_PROCESSED]"
+      ]
+    },
+    {
+      "name": "unknown_message_type_quarantine",
+      "description": "Message with an unrecognized message_type is rejected during schema validation and diverted to DLQ with UNKNOWN_MESSAGE_TYPE.",
+      "input": "Dispatch message with message_type UNREGISTERED_CUSTOM_TYPE to worker actor.",
+      "expected_output_patterns": [
+        "[QUARANTINE_DLQ]",
+        "Code: UNKNOWN_MESSAGE_TYPE"
+      ],
+      "prohibited_output_patterns": [
+        "[MESSAGE_PROCESSED]"
+      ]
+    }
+  ]
+}

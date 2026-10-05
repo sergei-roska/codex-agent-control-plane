@@ -1,0 +1,90 @@
+{
+  "test_suite": "dead-letter-queue-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_primary_queue_success",
+      "description": "Normal operation execution when primary queue item succeeds on initial attempt without DLQ routing.",
+      "input": "Process message msg-order-101 on queue orders with max_retries 3.",
+      "expected_output_patterns": [
+        "=== DLQ INITIALIZED: Queue: orders Storage: .agents/storage/dlq/",
+        "[TASK_DEQUEUED] MsgId: msg-order-101 Queue: orders",
+        "[TASK_COMMITTED] MsgId: msg-order-101 DurationMs:",
+        "COMMITTED"
+      ],
+      "prohibited_output_patterns": [
+        "[RETRY_SCHEDULED]",
+        "=== TASK QUARANTINED TO DLQ:",
+        "INCOMPLETE_DLQ_ENVELOPE"
+      ]
+    },
+    {
+      "name": "retry_exhaustion_quarantine",
+      "description": "Message fails repeatedly until exceeding max_retries (3), triggering DLQ packaging, quarantine persistence, and primary pipeline unblocking.",
+      "input": "Execute msg-order-202 on attempt 3 when previous attempts failed and operation raises timeout exception.",
+      "expected_output_patterns": [
+        "[TASK_DEQUEUED] MsgId: msg-order-202 Queue: orders",
+        "[RETRY_BUDGET_EXHAUSTED] MsgId: msg-order-202",
+        "=== TASK QUARANTINED TO DLQ:",
+        "Code: MAX_RETRIES_EXCEEDED"
+      ],
+      "prohibited_output_patterns": [
+        "[TASK_COMMITTED]",
+        "FATAL_SCHEMA_VIOLATION"
+      ]
+    },
+    {
+      "name": "fatal_schema_violation_fast_track",
+      "description": "Malformed message encounters non-retryable fatal validation error, immediately bypassing retry attempts and routing to DLQ on attempt 1.",
+      "input": "Process corrupted message msg-order-303 failing invariant precondition or schema validation.",
+      "expected_output_patterns": [
+        "[TASK_DEQUEUED] MsgId: msg-order-303 Queue: orders",
+        "[FATAL_FAILURE_DETECTED] MsgId: msg-order-303",
+        "Fast-tracking to DLQ",
+        "=== TASK QUARANTINED TO DLQ:",
+        "Code: FATAL_SCHEMA_VIOLATION"
+      ],
+      "prohibited_output_patterns": [
+        "[RETRY_SCHEDULED]",
+        "[RETRY_BUDGET_EXHAUSTED]"
+      ]
+    },
+    {
+      "name": "incomplete_dlq_envelope_defect",
+      "description": "DLQ packaging missing required diagnostic dump fields triggers INCOMPLETE_DLQ_ENVELOPE defect.",
+      "input": "Construct DLQ envelope for msg-order-404 without required diagnostic metadata.",
+      "expected_output_patterns": [
+        "INCOMPLETE_DLQ_ENVELOPE"
+      ],
+      "prohibited_output_patterns": [
+        "ENVELOPE_VALIDATED",
+        "[TASK_COMMITTED]"
+      ]
+    },
+    {
+      "name": "supervisory_triage_redrive",
+      "description": "Operator triggers redrive of quarantined envelope, moving payload back to primary queue.",
+      "input": "Execute supervisory triage redrive on quarantined envelope 22222222-3333-4444-5555-666666666666.",
+      "expected_output_patterns": [
+        "[DLQ_REDISPATCHED] DlqId: 22222222-3333-4444-5555-666666666666 TargetQueue: orders",
+        "REDISPATCHED"
+      ],
+      "prohibited_output_patterns": [
+        "[DLQ_PURGED]",
+        "INCOMPLETE_DLQ_ENVELOPE"
+      ]
+    },
+    {
+      "name": "supervisory_triage_purge",
+      "description": "Operator triggers permanent discard and purge of quarantined envelope.",
+      "input": "Execute supervisory triage purge on quarantined envelope 33333333-4444-5555-6666-777777777777.",
+      "expected_output_patterns": [
+        "[DLQ_PURGED] DlqId: 33333333-4444-5555-6666-777777777777",
+        "PURGED"
+      ],
+      "prohibited_output_patterns": [
+        "[DLQ_REDISPATCHED]",
+        "REDRIVE_FAILED"
+      ]
+    }
+  ]
+}

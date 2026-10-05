@@ -318,6 +318,32 @@
       return el;
     }
 
+    const ROLE_DISPLAY_NAMES = {
+      'orch-lead': 'Team Coordinator', coordinator: 'Team Coordinator',
+      'orch-explorer': 'Code Explorer', explorer: 'Code Explorer',
+      'orch-builder': 'Software Engineer', engineer: 'Software Engineer',
+      'orch-verifier': 'Quality Engineer', verifier: 'Quality Engineer',
+      'orch-auditor': 'Code Auditor', auditor: 'Code Auditor',
+      'orch-repair-xhigh': 'Recovery Engineer', 'recovery-engineer': 'Recovery Engineer',
+      'orch-repair-sol': 'Senior Engineer', 'senior-engineer': 'Senior Engineer',
+      'orch-architect': 'Systems Architect', architect: 'Systems Architect',
+      'orch-scout': 'Quick Scout', scout: 'Quick Scout'
+    };
+    const LEGACY_ROLE_IDS = {
+      'orch-lead': 'coordinator', 'orch-explorer': 'explorer', 'orch-builder': 'engineer',
+      'orch-verifier': 'verifier', 'orch-auditor': 'auditor',
+      'orch-repair-xhigh': 'recovery-engineer', 'orch-repair-sol': 'senior-engineer',
+      'orch-architect': 'architect', 'orch-scout': 'scout'
+    };
+
+    function roleDisplayName(id) {
+      return ROLE_DISPLAY_NAMES[id] || (id.startsWith('orch-') ? id.slice(5) : id);
+    }
+
+    function canonicalRoleId(id) {
+      return LEGACY_ROLE_IDS[id] || (id.startsWith('orch-') ? id.slice(5) : id);
+    }
+
     function userBubbles(transcript, goal, lastInstruction) {
       if (goal) transcript.appendChild(textEl('div', 'bubble bubble-user', goal));
       if (lastInstruction && lastInstruction !== goal) {
@@ -346,7 +372,7 @@
         head.appendChild(textEl('span', '', 'working'));
         body = 'Lead analyzes the goal, creates assignments, and coordinates specialists...';
         if (workers.length) {
-          body += '\n\nRound specialists:\n' + workers.map(w => '  [' + w.state + '] ' + w.role).join('\n');
+          body += '\n\nRound specialists:\n' + workers.map(w => '  [' + w.state + '] ' + roleDisplayName(w.role)).join('\n');
         }
       } else if (isPausedState(state)) {
         head.appendChild(textEl('span', '', 'paused'));
@@ -795,8 +821,12 @@
       head.className = 'about-role-head';
       const name = document.createElement('span');
       name.className = 'about-role-name';
-      name.textContent = agent.name;
+      name.textContent = agent.displayName || roleDisplayName(agent.name);
       head.appendChild(name);
+      const id = document.createElement('span');
+      id.className = 'about-role-id';
+      id.textContent = canonicalRoleId(agent.name);
+      head.appendChild(id);
       if (isLead) {
         const lead = document.createElement('span');
         lead.className = 'about-badge';

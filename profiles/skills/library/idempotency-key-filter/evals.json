@@ -1,0 +1,88 @@
+{
+  "test_suite": "idempotency-key-filter-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_fresh_execution_mutation_commit",
+      "description": "First-time execution of mutating operation with unseen key acquires lock, executes tool, persists receipt, and commits output.",
+      "input": "Execute mutating operation create_invoice on resource /invoices with idempotency key idem-inv-001.",
+      "expected_output_patterns": [
+        "=== IDEMPOTENCY FILTER INGEST: Key: idem-inv-001 Op: create_invoice ===",
+        "[IDEMPOTENCY_LOCK_ACQUIRED] Key: idem-inv-001",
+        "=== IDEMPOTENT MUTATION COMMITTED: Key: idem-inv-001 ==="
+      ],
+      "prohibited_output_patterns": [
+        "[IDEMPOTENCY_CACHE_HIT]",
+        "[IDEMPOTENCY_CONFLICT]",
+        "\"violation_code\": \"OPERATION_IN_FLIGHT\""
+      ]
+    },
+    {
+      "name": "duplicate_call_returns_cached_replay",
+      "description": "Duplicate invocation with matching idempotency key and payload returns cached response receipt without re-executing operation.",
+      "input": "Execute duplicate mutating operation create_invoice on resource /invoices with idempotency key idem-inv-001 and identical payload.",
+      "expected_output_patterns": [
+        "=== IDEMPOTENCY FILTER INGEST: Key: idem-inv-001 Op: create_invoice ===",
+        "[IDEMPOTENCY_CACHE_HIT] Key: idem-inv-001 SavedExecutions: 1",
+        "\"execution_type\": \"CACHED_REPLAY\""
+      ],
+      "prohibited_output_patterns": [
+        "[IDEMPOTENCY_LOCK_ACQUIRED]",
+        "=== IDEMPOTENT MUTATION COMMITTED:"
+      ]
+    },
+    {
+      "name": "concurrent_operation_in_flight_rejection",
+      "description": "Concurrent request arrives while operation for key is actively IN_PROGRESS, rejecting with OPERATION_IN_FLIGHT.",
+      "input": "Execute mutating operation process_payment with key idem-pay-888 while key status is IN_PROGRESS.",
+      "expected_output_patterns": [
+        "[IDEMPOTENCY_CONFLICT] Key: idem-pay-888 Reason: IN_FLIGHT",
+        "\"violation_code\": \"OPERATION_IN_FLIGHT\""
+      ],
+      "prohibited_output_patterns": [
+        "[IDEMPOTENCY_LOCK_ACQUIRED]",
+        "[IDEMPOTENCY_CACHE_HIT]",
+        "=== IDEMPOTENT MUTATION COMMITTED:"
+      ]
+    },
+    {
+      "name": "payload_mismatch_detection",
+      "description": "Key reuse with differing payload parameters violates payload integrity, triggering IDEMPOTENCY_PAYLOAD_MISMATCH defect.",
+      "input": "Execute operation set_permission with key idem-perm-101 but with altered role payload from initial commit.",
+      "expected_output_patterns": [
+        "[IDEMPOTENCY_CONFLICT] Key: idem-perm-101 Reason: MISMATCH",
+        "\"violation_code\": \"IDEMPOTENCY_PAYLOAD_MISMATCH\""
+      ],
+      "prohibited_output_patterns": [
+        "[IDEMPOTENCY_CACHE_HIT]",
+        "=== IDEMPOTENT MUTATION COMMITTED:"
+      ]
+    },
+    {
+      "name": "stale_lock_force_released_and_recovered",
+      "description": "Invocation finds in-progress lock exceeding timeout, force-releasing stale lock and proceeding with lock acquisition.",
+      "input": "Execute operation provision_server with key idem-srv-909 where existing IN_PROGRESS lock timestamp is older than lock_timeout_ms.",
+      "expected_output_patterns": [
+        "[STALE_LOCK_RELEASED] Key: idem-srv-909 Force releasing orphaned lock",
+        "[IDEMPOTENCY_LOCK_ACQUIRED] Key: idem-srv-909",
+        "=== IDEMPOTENT MUTATION COMMITTED: Key: idem-srv-909 ==="
+      ],
+      "prohibited_output_patterns": [
+        "[IDEMPOTENCY_CACHE_HIT]",
+        "\"violation_code\": \"OPERATION_IN_FLIGHT\""
+      ]
+    },
+    {
+      "name": "mutation_failure_marking",
+      "description": "When underlying operation throws an exception, journal records status FAILED with error details and propagates error.",
+      "input": "Execute mutating operation charge_card with key idem-chg-303 where gateway returns card declined exception.",
+      "expected_output_patterns": [
+        "[IDEMPOTENCY_LOCK_ACQUIRED] Key: idem-chg-303",
+        "[IDEMPOTENT_MUTATION_FAILED] Key: idem-chg-303 Error:"
+      ],
+      "prohibited_output_patterns": [
+        "=== IDEMPOTENT MUTATION COMMITTED:",
+        "[IDEMPOTENCY_CACHE_HIT]"
+      ]
+    }
+  ]
+}

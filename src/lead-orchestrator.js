@@ -10,6 +10,7 @@ const { DECISION_SCHEMA, safeRelativePath } = require('./contracts');
 const { InMemoryDispatchJournal } = require('./durable-store');
 const { validateAcceptanceContract } = require('./acceptance');
 const { buildLeadGraph, isTerminalTask, pauseMessage } = require('./lead-graph');
+const { loadSkillCatalog } = require('./skill-catalog');
 
 const DEFAULT_MAX_ROUNDS = 6;
 const DEFAULT_POLL_INTERVAL_MS = 500;
@@ -79,6 +80,7 @@ class LeadOrchestrator {
     usageLedger = null,
     runCheckImpl,
     snapshot,
+    skillCatalog = loadSkillCatalog(),
   } = {}) {
     if (!appServer || typeof appServer.run !== 'function') throw new TypeError('appServer.run is required');
     if (!(roles instanceof Map)) throw new TypeError('roles must be a Map');
@@ -121,6 +123,7 @@ class LeadOrchestrator {
       usageLedger,
       runCheckImpl,
       snapshot,
+      skillCatalog,
       runtimeFor: (runId) => this.runtimes.get(runId),
       clientFor: (roleName) => this._clientFor(roleName),
       authOptions: () => this._authRequestOptions(),

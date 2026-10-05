@@ -1,0 +1,95 @@
+{
+  "test_suite": "saga-transaction-manager-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_full_saga_commit",
+      "description": "All forward steps execute successfully, checkpoints are persisted sequentially in journal, and saga commits cleanly.",
+      "input": "Execute saga saga-commit-001 with 3 steps: step 1 init config, step 2 generate models, step 3 run migrations.",
+      "expected_output_patterns": [
+        "=== SAGA REGISTERED: saga-commit-001 Steps: 3 ===",
+        "[FORWARD_STEP_START] Saga: saga-commit-001 Step: 1/3 Name: init_config",
+        "[FORWARD_STEP_SUCCESS] Saga: saga-commit-001 Step: 1",
+        "[FORWARD_STEP_START] Saga: saga-commit-001 Step: 2/3 Name: generate_models",
+        "[FORWARD_STEP_SUCCESS] Saga: saga-commit-001 Step: 2",
+        "[FORWARD_STEP_START] Saga: saga-commit-001 Step: 3/3 Name: run_migrations",
+        "[FORWARD_STEP_SUCCESS] Saga: saga-commit-001 Step: 3",
+        "=== SAGA COMMITTED: saga-commit-001 TotalSteps: 3 ==="
+      ],
+      "prohibited_output_patterns": [
+        "[FORWARD_STEP_FAILED]",
+        "[COMPENSATION_START]",
+        "=== SAGA ABORTED & RESTORED:",
+        "\"violation_code\":"
+      ]
+    },
+    {
+      "name": "mid_saga_failure_lifo_rollback",
+      "description": "Step 3 fails forward execution, triggering coordinator to execute compensating actions for step 2 then step 1 in reverse LIFO order.",
+      "input": "Execute saga saga-rollback-002 where step 1 and step 2 succeed, but step 3 fails on linting check.",
+      "expected_output_patterns": [
+        "=== SAGA REGISTERED: saga-rollback-002 Steps: 3 ===",
+        "[FORWARD_STEP_START] Saga: saga-rollback-002 Step: 1/3 Name: create_dir",
+        "[FORWARD_STEP_SUCCESS] Saga: saga-rollback-002 Step: 1",
+        "[FORWARD_STEP_START] Saga: saga-rollback-002 Step: 2/3 Name: write_client",
+        "[FORWARD_STEP_SUCCESS] Saga: saga-rollback-002 Step: 2",
+        "[FORWARD_STEP_START] Saga: saga-rollback-002 Step: 3/3 Name: lint_client",
+        "[FORWARD_STEP_FAILED] Saga: saga-rollback-002 Step: 3",
+        "[COMPENSATION_START] Saga: saga-rollback-002 Step: 2 Rolling back write_client",
+        "[COMPENSATION_SUCCESS] Saga: saga-rollback-002 Step: 2",
+        "[COMPENSATION_START] Saga: saga-rollback-002 Step: 1 Rolling back create_dir",
+        "[COMPENSATION_SUCCESS] Saga: saga-rollback-002 Step: 1",
+        "=== SAGA ABORTED & RESTORED: saga-rollback-002 CompensatedSteps: [2 down to 1] ==="
+      ],
+      "prohibited_output_patterns": [
+        "=== SAGA COMMITTED:"
+      ]
+    },
+    {
+      "name": "step_one_immediate_failure_zero_rollback",
+      "description": "Step 1 fails immediately; saga aborts with zero compensations since no previous steps succeeded.",
+      "input": "Execute saga saga-step1-003 where step 1 fails due to filesystem permission error.",
+      "expected_output_patterns": [
+        "=== SAGA REGISTERED: saga-step1-003 Steps: 3 ===",
+        "[FORWARD_STEP_START] Saga: saga-step1-003 Step: 1/3 Name: create_namespace",
+        "[FORWARD_STEP_FAILED] Saga: saga-step1-003 Step: 1",
+        "=== SAGA ABORTED & RESTORED: saga-step1-003 CompensatedSteps: [] ==="
+      ],
+      "prohibited_output_patterns": [
+        "[COMPENSATION_START]",
+        "=== SAGA COMMITTED:"
+      ]
+    },
+    {
+      "name": "preflight_missing_compensating_action",
+      "description": "Pre-flight validation rejects saga definition where a mutating forward step lacks a declared compensating action.",
+      "input": "Submit saga definition saga-invalid-004 where step 2 has no compensating action declared.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"MISSING_COMPENSATING_ACTION\"",
+        "Step 2 missing paired compensating_action"
+      ],
+      "prohibited_output_patterns": [
+        "=== SAGA REGISTERED:",
+        "[FORWARD_STEP_START]",
+        "=== SAGA COMMITTED:"
+      ]
+    },
+    {
+      "name": "compensation_action_failed_emergency_halt",
+      "description": "Compensating action encounters unrecoverable failure across retries during rollback, triggering fatal alert and emergency halt.",
+      "input": "Execute saga saga-fatal-005 where step 2 fails and compensating action for step 1 permanently fails.",
+      "expected_output_patterns": [
+        "=== SAGA REGISTERED: saga-fatal-005 Steps: 2 ===",
+        "[FORWARD_STEP_START] Saga: saga-fatal-005 Step: 1/2 Name: lock_resource",
+        "[FORWARD_STEP_SUCCESS] Saga: saga-fatal-005 Step: 1",
+        "[FORWARD_STEP_START] Saga: saga-fatal-005 Step: 2/2 Name: update_remote_state",
+        "[FORWARD_STEP_FAILED] Saga: saga-fatal-005 Step: 2",
+        "[COMPENSATION_START] Saga: saga-cleanup-005 Step: 1 Rolling back lock_resource",
+        "[COMPENSATION_FATAL] Saga: saga-cleanup-005 Step: 1 Failed to undo changes"
+      ],
+      "prohibited_output_patterns": [
+        "=== SAGA COMMITTED:",
+        "=== SAGA ABORTED & RESTORED: saga-fatal-005 CompensatedSteps: [1 down to 1] ==="
+      ]
+    }
+  ]
+}

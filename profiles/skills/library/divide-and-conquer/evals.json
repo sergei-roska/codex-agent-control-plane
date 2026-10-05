@@ -1,0 +1,106 @@
+{
+  "test_suite": "divide-and-conquer-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_hierarchical_decomposition",
+      "description": "Full hierarchical decomposition across multiple depths with atomic leaf resolution and bottom-up merge.",
+      "input": "Execute recursive divide and conquer on monolithic task TASK-001 with 4 decoupled modules auth, billing, api, storage.",
+      "expected_output_patterns": [
+        "=== DIVIDE-AND-CONQUER INITIALIZED: Root: TASK-001 ===",
+        "\\[NODE_EVALUATION\\] Node: .* Depth: 0 IsAtomic: FALSE",
+        "\\[NODE_PARTITIONED\\] Node: .* Subproblems: 4 Depth: 0",
+        "\\[LEAF_CONQUERED\\] Node: .* Depth: 1",
+        "=== NODE MERGED: .* Depth: 0 Children: 4 ===",
+        "\\[COMPOSITE_VERIFIED\\] Root: TASK-001 Checksum:"
+      ],
+      "prohibited_output_patterns": [
+        "MAX_DEPTH_EXCEEDED",
+        "PARTITION_OVERLAP_DETECTED",
+        "BASE_CASE_EXECUTION_FAILURE"
+      ]
+    },
+    {
+      "name": "atomic_base_case_immediate_resolution",
+      "description": "Immediate resolution when problem payload satisfies base-case threshold with zero decomposition.",
+      "input": "Execute divide and conquer on task TASK-002 where input payload is already atomic with 80 LOC and 1 endpoint.",
+      "expected_output_patterns": [
+        "=== DIVIDE-AND-CONQUER INITIALIZED: Root: TASK-002 ===",
+        "\\[NODE_EVALUATION\\] Node: .* Depth: 0 IsAtomic: TRUE",
+        "\\[LEAF_CONQUERED\\] Node: .* Depth: 0",
+        "\\[COMPOSITE_VERIFIED\\] Root: TASK-002 Checksum:"
+      ],
+      "prohibited_output_patterns": [
+        "\\[NODE_PARTITIONED\\]",
+        "PARTITION_OVERLAP_DETECTED",
+        "MAX_DEPTH_EXCEEDED"
+      ]
+    },
+    {
+      "name": "max_depth_exceeded_forced_conquer_or_halt",
+      "description": "Fail-fast or forced base case when recursive decomposition reaches depth ceiling 3.",
+      "input": "Execute divide and conquer on TASK-003 where subtasks continuously attempt decomposition beyond depth 3.",
+      "expected_output_patterns": [
+        "=== DIVIDE-AND-CONQUER INITIALIZED: Root: TASK-003 ===",
+        "\\[NODE_EVALUATION\\] Node: .* Depth: 3",
+        "\"violation_code\": \"MAX_DEPTH_EXCEEDED\""
+      ],
+      "prohibited_output_patterns": [
+        "Depth: 4",
+        "\\[COMPOSITE_VERIFIED\\]"
+      ]
+    },
+    {
+      "name": "partition_overlap_detected_defect",
+      "description": "Fail-fast when subproblem partitions share mutable scope or colliding identifiers.",
+      "input": "Execute divide and conquer on TASK-004 where partition-1 and partition-2 share mutable database state shared_credentials.",
+      "expected_output_patterns": [
+        "\\[NODE_PARTITIONED\\]",
+        "\"violation_code\": \"PARTITION_OVERLAP_DETECTED\"",
+        "PARTITION_OVERLAP_DETECTED"
+      ],
+      "prohibited_output_patterns": [
+        "\\[LEAF_CONQUERED\\]",
+        "\\[COMPOSITE_VERIFIED\\]"
+      ]
+    },
+    {
+      "name": "base_case_execution_failure_defect",
+      "description": "Fail-fast when atomic leaf solver throws an unhandled error during CONQUER_LEAF.",
+      "input": "Execute divide and conquer on TASK-005 where leaf node solver throws unexpected runtime exception.",
+      "expected_output_patterns": [
+        "\\[LEAF_CONQUERED\\]",
+        "\"violation_code\": \"BASE_CASE_EXECUTION_FAILURE\"",
+        "BASE_CASE_EXECUTION_FAILURE"
+      ],
+      "prohibited_output_patterns": [
+        "=== NODE MERGED:",
+        "\\[COMPOSITE_VERIFIED\\]"
+      ]
+    },
+    {
+      "name": "merge_conflict_unresolved_defect",
+      "description": "Fail-fast when child branch outputs produce contradictory definitions or colliding keys during combine.",
+      "input": "Execute divide and conquer on TASK-006 where child branches emit colliding key mappings under STRUCTURAL_UNION.",
+      "expected_output_patterns": [
+        "=== NODE MERGED:",
+        "\"violation_code\": \"MERGE_CONFLICT_UNRESOLVED\"",
+        "MERGE_CONFLICT_UNRESOLVED"
+      ],
+      "prohibited_output_patterns": [
+        "\\[COMPOSITE_VERIFIED\\]"
+      ]
+    },
+    {
+      "name": "composite_validation_failed_defect",
+      "description": "Fail-fast when merged composite fails top-level requirement checks or dropped orphan subproblems.",
+      "input": "Execute divide and conquer on TASK-007 where merged composite artifact drops required module storage.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"COMPOSITE_VALIDATION_FAILED\"",
+        "COMPOSITE_VALIDATION_FAILED"
+      ],
+      "prohibited_output_patterns": [
+        "\\[COMPOSITE_VERIFIED\\]"
+      ]
+    }
+  ]
+}

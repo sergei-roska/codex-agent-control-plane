@@ -1,0 +1,105 @@
+{
+  "test_suite": "pipes-and-filters-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_full_pipeline_transformation",
+      "description": "Sequential execution of a 3-stage pipeline where all adjacent schemas match and all boundary validations pass to completion.",
+      "input": "Execute pipeline pipe-ingest-source with filters [Sanitizer, Parser, SpecFormatter] on valid initial input.",
+      "expected_output_patterns": [
+        "=== PIPELINE INITIALIZED: pipe-ingest-source Stages: 3 ===",
+        "[STAGE_STARTED] Pipeline: pipe-ingest-source Stage: 1 Filter: Sanitizer",
+        "[STAGE_COMPLETED] Pipeline: pipe-ingest-source Stage: 1",
+        "[STAGE_STARTED] Pipeline: pipe-ingest-source Stage: 2 Filter: Parser",
+        "[STAGE_COMPLETED] Pipeline: pipe-ingest-source Stage: 2",
+        "[STAGE_STARTED] Pipeline: pipe-ingest-source Stage: 3 Filter: SpecFormatter",
+        "[STAGE_COMPLETED] Pipeline: pipe-ingest-source Stage: 3",
+        "=== PIPELINE EXECUTION COMPLETED: pipe-ingest-source"
+      ],
+      "prohibited_output_patterns": [
+        "=== PIPELINE HALTED:",
+        "PIPE_SCHEMA_MISMATCH",
+        "FILTER_EXECUTION_FAILED"
+      ]
+    },
+    {
+      "name": "pipe_schema_mismatch_halts_pipeline",
+      "description": "Filter produces payload that fails its declared output schema or downstream input schema, halting execution with PIPE_SCHEMA_MISMATCH.",
+      "input": "Execute pipeline pipe-ingest-source where Parser filter emits sections: null instead of required array.",
+      "expected_output_patterns": [
+        "=== PIPELINE INITIALIZED: pipe-ingest-source",
+        "[STAGE_STARTED] Pipeline: pipe-ingest-source Stage: 2 Filter: Parser",
+        "\"violation_code\": \"PIPE_SCHEMA_MISMATCH\"",
+        "=== PIPELINE HALTED: pipe-ingest-source FailedAtStage: 2 Code: PIPE_SCHEMA_MISMATCH ==="
+      ],
+      "prohibited_output_patterns": [
+        "[STAGE_STARTED] Pipeline: pipe-ingest-source Stage: 3",
+        "=== PIPELINE EXECUTION COMPLETED:"
+      ]
+    },
+    {
+      "name": "incompatible_pipeline_topology",
+      "description": "Adjacent filters have incompatible declared schemas, halting during pre-flight assembly before any filter executes.",
+      "input": "Assemble pipeline pipe-data-sync where OutputSchema(F1) has user_id of type string but InputSchema(F2) requires user_id of type integer.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"INCOMPATIBLE_PIPELINE_TOPOLOGY\"",
+        "=== PIPELINE HALTED: pipe-data-sync FailedAtStage: 1 Code: INCOMPATIBLE_PIPELINE_TOPOLOGY ==="
+      ],
+      "prohibited_output_patterns": [
+        "[STAGE_STARTED]",
+        "=== PIPELINE EXECUTION COMPLETED:"
+      ]
+    },
+    {
+      "name": "initial_input_rejected",
+      "description": "Initial input payload does not satisfy the input schema of the first filter, halting ingestion with INITIAL_INPUT_REJECTED.",
+      "input": "Execute pipeline pipe-data-proc with null payload when Filter1 requires an object.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"INITIAL_INPUT_REJECTED\"",
+        "=== PIPELINE HALTED: pipe-data-proc FailedAtStage: 1 Code: INITIAL_INPUT_REJECTED ==="
+      ],
+      "prohibited_output_patterns": [
+        "[STAGE_STARTED] Pipeline: pipe-data-proc Stage: 1",
+        "=== PIPELINE EXECUTION COMPLETED:"
+      ]
+    },
+    {
+      "name": "filter_execution_failed",
+      "description": "Filter throws unhandled exception during transformation logic, halting pipeline immediately with FILTER_EXECUTION_FAILED.",
+      "input": "Execute pipeline pipe-process-text where Filter2 handler raises an unhandled exception.",
+      "expected_output_patterns": [
+        "[STAGE_STARTED] Pipeline: pipe-process-text Stage: 2",
+        "\"violation_code\": \"FILTER_EXECUTION_FAILED\"",
+        "=== PIPELINE HALTED: pipe-process-text FailedAtStage: 2 Code: FILTER_EXECUTION_FAILED ==="
+      ],
+      "prohibited_output_patterns": [
+        "=== PIPELINE EXECUTION COMPLETED: pipe-process-text"
+      ]
+    },
+    {
+      "name": "filter_timeout_exceeded",
+      "description": "Filter execution duration exceeds configured timeout_ms, halting pipeline immediately with FILTER_TIMEOUT_EXCEEDED.",
+      "input": "Execute pipeline pipe-heavy-compute where Filter1 has timeout_ms 500 but execution takes 1200ms.",
+      "expected_output_patterns": [
+        "[STAGE_STARTED] Pipeline: pipe-heavy-compute Stage: 1",
+        "\"violation_code\": \"FILTER_TIMEOUT_EXCEEDED\"",
+        "=== PIPELINE HALTED: pipe-heavy-compute FailedAtStage: 1 Code: FILTER_TIMEOUT_EXCEEDED ==="
+      ],
+      "prohibited_output_patterns": [
+        "=== PIPELINE EXECUTION COMPLETED: pipe-heavy-compute"
+      ]
+    },
+    {
+      "name": "empty_pipeline_error",
+      "description": "Pipeline definition provides an empty filters array, failing pre-flight validation with EMPTY_PIPELINE_ERROR.",
+      "input": "Assemble pipeline pipe-empty with filters: [].",
+      "expected_output_patterns": [
+        "\"violation_code\": \"EMPTY_PIPELINE_ERROR\"",
+        "=== PIPELINE HALTED: pipe-empty FailedAtStage: 0 Code: EMPTY_PIPELINE_ERROR ==="
+      ],
+      "prohibited_output_patterns": [
+        "=== PIPELINE INITIALIZED:",
+        "[STAGE_STARTED]"
+      ]
+    }
+  ]
+}

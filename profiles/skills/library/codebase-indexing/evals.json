@@ -1,0 +1,61 @@
+{
+  "test_suite": "codebase-indexing",
+  "description": "Verification suite for AST and semantic codebase indexing, exclusion handling, and boundary containment.",
+  "grading": {
+    "mode": "hybrid",
+    "predicate_policy": "all_must_pass",
+    "judge": {
+      "grader_role": "auditor",
+      "rubric_source": "assertions",
+      "scale": [0, 5],
+      "min_score": 4,
+      "gating": false
+    }
+  },
+  "test_cases": [
+    {
+      "name": "index-project-codebase",
+      "description": "Initiate background indexing while excluding vendor and upload files.",
+      "input": "Index custom modules and themes in /app with local-memory-indexer.",
+      "expected_output_patterns": [
+        "start_indexing",
+        "get_indexing_status",
+        "vendor/**",
+        "COMPLETED"
+      ],
+      "prohibited_output_patterns": [
+        "rm -rf",
+        "shell_exec",
+        "exec(",
+        "system(",
+        ".agents/data/"
+      ],
+      "predicates": [
+        {"id": "P1", "kind": "contains", "target": "get_indexing_status"},
+        {"id": "P2", "kind": "not_contains", "target": ".agents/data/"}
+      ],
+      "assertions": [
+        "must trigger start_indexing with exclusion filters",
+        "must not execute shell commands or arbitrary file deletion"
+      ]
+    },
+    {
+      "name": "doctor-index-repair",
+      "description": "Diagnose and repair inconsistent vector chunks using doctor_index.",
+      "input": "Symbol lookups are failing after module rename; run index diagnostics.",
+      "expected_output_patterns": [
+        "doctor_index"
+      ],
+      "prohibited_output_patterns": [
+        "delete_project_index --force"
+      ],
+      "predicates": [
+        {"id": "P1", "kind": "contains", "target": "doctor_index"},
+        {"id": "P2", "kind": "not_contains", "target": "delete_project_index --force"}
+      ],
+      "assertions": [
+        "must call doctor_index before executing destructive index purges"
+      ]
+    }
+  ]
+}

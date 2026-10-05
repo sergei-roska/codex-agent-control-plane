@@ -29,16 +29,16 @@ Ask the user only when authority is missing, an external or irreversible action 
 | Role | Model and effort | Use |
 | --- | --- | --- |
 | Lead, main session | Selected by the host | Scope, architecture, dispatch, integration, final judgment |
-| `orch-explorer` | GPT-6 Luna, high | Read-only repository and interface mapping |
-| `orch-builder` | GPT-6 Luna, high | Bounded implementation and focused verification |
-| `orch-verifier` | GPT-6 Luna, high | Independent focused tests and reproducible checks within assigned test files |
-| `orch-auditor` | GPT-6.1 Sol, high | Independent read-only flow, regression, and trust-boundary audit |
-| `orch-repair-xhigh` | GPT-6 Luna, xhigh | Harder bounded retry after a concrete Luna failure |
-| `orch-repair-sol` | GPT-6.1 Sol, medium | Escalation after Luna still cannot complete correctly |
-| `orch-architect` | GPT-6.1 Sol, xhigh | Rare read-only second opinion on a narrow consequential decision |
-| `orch-scout` | GPT-6 Luna, medium | Mechanical, uniform read-only inventory when scale warrants it |
+| `explorer` | GPT-6 Luna, high | Read-only repository and interface mapping |
+| `engineer` | GPT-6 Luna, high | Bounded implementation and focused verification |
+| `verifier` | GPT-6 Luna, high | Independent focused tests and reproducible checks within assigned test files |
+| `auditor` | GPT-6.1 Sol, high | Independent read-only flow, regression, and trust-boundary audit |
+| `recovery-engineer` | GPT-6 Luna, xhigh | Harder bounded retry after a concrete Luna failure |
+| `senior-engineer` | GPT-6.1 Sol, medium | Escalation after Luna still cannot complete correctly |
+| `architect` | GPT-6.1 Sol, xhigh | Rare read-only second opinion on a narrow consequential decision |
+| `scout` | GPT-6 Luna, medium | Mechanical, uniform read-only inventory when scale warrants it |
 
-Keep short or dependent work in the lead. Delegate only when separate context or parallel work materially helps. Use `orch-builder` first for implementation. Inspect its actual evidence before escalating to `orch-repair-xhigh`, then to `orch-repair-sol` if needed. The lead decides even after an architect opinion.
+Keep short or dependent work in the lead. Delegate only when separate context or parallel work materially helps. Use `engineer` first for implementation. Inspect its actual evidence before escalating to `recovery-engineer`, then to `senior-engineer` if needed. The lead decides even after an architect opinion.
 
 ## Work contract
 

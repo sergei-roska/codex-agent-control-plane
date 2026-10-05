@@ -163,11 +163,11 @@ test('rejects unknown roles and traversal paths before contacting A2A', async (t
 
 test('enforces repair escalation order', async () => {
   const h = makeHarness({ decisions: [decision('dispatch', [brief('orch-repair-xhigh')])] });
-  await assert.rejects(h.orchestrator.run({ goal: 'Repair defect' }), /only be dispatched after an orch-builder attempt/);
+  await assert.rejects(h.orchestrator.run({ goal: 'Repair defect' }), /only be dispatched after an engineer attempt/);
   assert.equal(h.calls.some((call) => call.type === 'send'), false);
 
   const sameBatch = makeHarness({ decisions: [decision('dispatch', [brief('orch-builder'), brief('orch-repair-xhigh')])] });
-  await assert.rejects(sameBatch.orchestrator.run({ goal: 'Repair defect' }), /only be dispatched after an orch-builder attempt/);
+  await assert.rejects(sameBatch.orchestrator.run({ goal: 'Repair defect' }), /only be dispatched after an engineer attempt/);
   assert.equal(sameBatch.calls.some((call) => call.type === 'send'), false);
 
   const sequential = makeHarness({ decisions: [

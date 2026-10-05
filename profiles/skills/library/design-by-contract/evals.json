@@ -1,0 +1,97 @@
+{
+  "test_suite": "design-by-contract-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_full_contract_fulfillment",
+      "description": "Full contract fulfillment when preconditions, baseline invariants, operation, postconditions, and post-execution invariants all pass.",
+      "input": "Execute operation write_config under contract dbc-write-cfg with valid JSON payload and clean workspace.",
+      "expected_output_patterns": [
+        "=== CONTRACT EVALUATION INITIALIZED: dbc-write-cfg Op: write_config ===",
+        "[PRECONDITIONS_VERIFIED] Contract: dbc-write-cfg Count: 2 Verdict: PASS",
+        "[OPERATION_EXECUTING] Contract: dbc-write-cfg Target: write_config",
+        "[POSTCONDITIONS_VERIFIED] Contract: dbc-write-cfg Count: 2 Verdict: PASS",
+        "[INVARIANTS_VERIFIED] Contract: dbc-write-cfg Verdict: PASS",
+        "=== CONTRACT FULFILLED: dbc-write-cfg Op: write_config Status: CERTIFIED ==="
+      ]
+    },
+    {
+      "name": "precondition_failure_fail_fast",
+      "description": "Fail-fast abort when a precondition evaluates to FALSE. Target operation must not execute, and DbcDefectReport must be emitted.",
+      "input": "Execute operation write_config under contract dbc-write-cfg where target directory does not exist.",
+      "expected_output_patterns": [
+        "=== CONTRACT EVALUATION INITIALIZED: dbc-write-cfg Op: write_config ===",
+        "[PRECONDITION_FAILED] Contract: dbc-write-cfg Predicate: PRE-DIR-EXISTS",
+        "\"violation_code\": \"PRECONDITION_FAILED\"",
+        "=== CONTRACT BREACHED: dbc-write-cfg Code: PRECONDITION_FAILED ==="
+      ],
+      "prohibited_output_patterns": [
+        "[OPERATION_EXECUTING]",
+        "[POSTCONDITIONS_VERIFIED]",
+        "=== CONTRACT FULFILLED:"
+      ]
+    },
+    {
+      "name": "operation_execution_error",
+      "description": "Operation throws an unhandled runtime error during execution, causing state transition to OPERATION_FAILED and halting pipeline.",
+      "input": "Execute operation db_migrate under contract dbc-db-migrate where migration script raises database connection error.",
+      "expected_output_patterns": [
+        "=== CONTRACT EVALUATION INITIALIZED: dbc-db-migrate Op: db_migrate ===",
+        "[PRECONDITIONS_VERIFIED] Contract: dbc-db-migrate Count: 1 Verdict: PASS",
+        "[OPERATION_EXECUTING] Contract: dbc-db-migrate Target: db_migrate",
+        "\"violation_code\": \"CONTRACT_EVALUATION_ERROR\"",
+        "=== CONTRACT BREACHED: dbc-db-migrate Code: CONTRACT_EVALUATION_ERROR ==="
+      ],
+      "prohibited_output_patterns": [
+        "[POSTCONDITIONS_VERIFIED]",
+        "=== CONTRACT FULFILLED:"
+      ]
+    },
+    {
+      "name": "postcondition_failure_rollback",
+      "description": "Operation completes but output fails postcondition validation, triggering compensating rollback and emitting POSTCONDITION_FAILED.",
+      "input": "Execute operation generate_report under contract dbc-gen-rep where output file is generated but is empty (0 bytes).",
+      "expected_output_patterns": [
+        "=== CONTRACT EVALUATION INITIALIZED: dbc-gen-rep Op: generate_report ===",
+        "[PRECONDITIONS_VERIFIED] Contract: dbc-gen-rep Count: 1 Verdict: PASS",
+        "[OPERATION_EXECUTING] Contract: dbc-gen-rep Target: generate_report",
+        "[POSTCONDITION_FAILED] Contract: dbc-gen-rep Predicate: POST-NON-EMPTY",
+        "\"violation_code\": \"POSTCONDITION_FAILED\"",
+        "=== CONTRACT BREACHED: dbc-gen-rep Code: POSTCONDITION_FAILED ==="
+      ],
+      "prohibited_output_patterns": [
+        "[INVARIANTS_VERIFIED]",
+        "=== CONTRACT FULFILLED:"
+      ]
+    },
+    {
+      "name": "invariant_violation_quarantine",
+      "description": "Operation completes and postconditions pass, but workspace invariant is violated, triggering emergency rollback and halting certification.",
+      "input": "Execute operation batch_cleanup under contract dbc-batch-clean where protected file permissions or configuration was mutated.",
+      "expected_output_patterns": [
+        "=== CONTRACT EVALUATION INITIALIZED: dbc-batch-clean Op: batch_cleanup ===",
+        "[PRECONDITIONS_VERIFIED] Contract: dbc-batch-clean Count: 1 Verdict: PASS",
+        "[OPERATION_EXECUTING] Contract: dbc-batch-clean Target: batch_cleanup",
+        "[POSTCONDITIONS_VERIFIED] Contract: dbc-batch-clean Count: 1 Verdict: PASS",
+        "[INVARIANT_VIOLATION] Contract: dbc-batch-clean Invariant: INV-PROTECTED-UNTOUCHED",
+        "\"violation_code\": \"INVARIANT_VIOLATION\"",
+        "=== CONTRACT BREACHED: dbc-batch-clean Code: INVARIANT_VIOLATION ==="
+      ],
+      "prohibited_output_patterns": [
+        "=== CONTRACT FULFILLED:"
+      ]
+    },
+    {
+      "name": "uncontracted_operation_detection",
+      "description": "Attempting to execute an operation requiring formal gates without registering a valid ContractDefinition halts with UNCONTRACTED_OPERATION_DETECTED.",
+      "input": "Attempt protected deployment operation deploy_service with missing or unregistered contract definition.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"UNCONTRACTED_OPERATION_DETECTED\"",
+        "=== CONTRACT BREACHED: unregistered Code: UNCONTRACTED_OPERATION_DETECTED ==="
+      ],
+      "prohibited_output_patterns": [
+        "[OPERATION_EXECUTING]",
+        "=== CONTRACT FULFILLED:"
+      ]
+    }
+  ]
+}

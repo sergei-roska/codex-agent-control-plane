@@ -6,17 +6,18 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { createLeadRole, loadRoles } = require('../src/role-catalog');
+const { canonicalRoleId, getRole, legacyRoleId, roleDisplayName } = require('../src/role-names');
 
 const PROFILES_DIR = path.resolve(__dirname, '..', 'profiles');
 const EXPECTED_ROLE_SANDBOXES = {
-  'orch-architect': 'read-only',
-  'orch-auditor': 'read-only',
-  'orch-builder': 'workspace-write',
-  'orch-explorer': 'read-only',
-  'orch-repair-sol': 'workspace-write',
-  'orch-repair-xhigh': 'workspace-write',
-  'orch-scout': 'read-only',
-  'orch-verifier': 'workspace-write',
+  architect: 'read-only',
+  auditor: 'read-only',
+  engineer: 'workspace-write',
+  explorer: 'read-only',
+  'senior-engineer': 'workspace-write',
+  'recovery-engineer': 'workspace-write',
+  scout: 'read-only',
+  verifier: 'workspace-write',
 };
 const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 
@@ -76,7 +77,7 @@ test('rejects profiles with missing required settings', (t) => {
   t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
   const copiedProfiles = path.join(tempRoot, 'profiles');
   fs.cpSync(PROFILES_DIR, copiedProfiles, { recursive: true });
-  const builder = path.join(copiedProfiles, 'agents', 'orch-builder.toml');
+  const builder = path.join(copiedProfiles, 'agents', 'engineer.toml');
   fs.writeFileSync(builder, fs.readFileSync(builder, 'utf8').replace('model_reasoning_effort = "high"\n', ''));
 
   assert.throws(() => loadRoles({ profilesDir: copiedProfiles }), /model_reasoning_effort is missing/);
@@ -92,7 +93,7 @@ function withProfile(mutate) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-role-tools-'));
   const copied = path.join(tempRoot, 'profiles');
   fs.cpSync(PROFILES_DIR, copied, { recursive: true });
-  const builder = path.join(copied, 'agents', 'orch-builder.toml');
+  const builder = path.join(copied, 'agents', 'engineer.toml');
   fs.writeFileSync(builder, mutate(fs.readFileSync(builder, 'utf8')));
   return { copied, cleanup: () => fs.rmSync(tempRoot, { recursive: true, force: true }) };
 }
@@ -100,11 +101,11 @@ function withProfile(mutate) {
 test('parses an a2a_tools table and treats a missing table as deny-all', (t) => {
   const allow = withProfile((source) => source.replace(/\[a2a_tools\][\s\S]*$/, '[a2a_tools]\nmcp_servers = ["alpha", "beta", "alpha"] # why\nskills = true\n'));
   t.after(allow.cleanup);
-  assert.deepEqual(loadRoles({ profilesDir: allow.copied }).get('orch-builder').tools, { mcpServers: ['alpha', 'beta'], skills: true });
+  assert.deepEqual(loadRoles({ profilesDir: allow.copied }).get('engineer').tools, { mcpServers: ['alpha', 'beta'], skills: true });
 
   const none = withProfile((source) => source.replace(/\n\[a2a_tools\][\s\S]*$/, '\n'));
   t.after(none.cleanup);
-  assert.deepEqual(loadRoles({ profilesDir: none.copied }).get('orch-builder').tools, { mcpServers: [], skills: false });
+  assert.deepEqual(loadRoles({ profilesDir: none.copied }).get('engineer').tools, { mcpServers: [], skills: false });
 });
 
 test('rejects malformed a2a_tools tables', (t) => {
@@ -119,6 +120,54 @@ test('rejects malformed a2a_tools tables', (t) => {
   for (const [label, mutate] of bad) {
     const fixture = withProfile(mutate);
     t.after(fixture.cleanup);
-    assert.throws(() => loadRoles({ profilesDir: fixture.copied }), /orch-builder\.toml/, label);
+    assert.throws(() => loadRoles({ profilesDir: fixture.copied }), /engineer\.toml/, label);
   }
+});
+
+test('canonical role names and labels retain legacy ID compatibility', () => {
+  assert.deepEqual([...loadRoles().keys()].sort(), Object.keys(EXPECTED_ROLE_SANDBOXES).sort());
+  assert.equal(canonicalRoleId('orch-builder'), 'engineer');
+  assert.equal(canonicalRoleId('custom-role'), 'custom-role');
+  assert.equal(legacyRoleId('engineer'), 'orch-builder');
+  assert.equal(roleDisplayName('orch-builder'), 'Software Engineer');
+  assert.equal(roleDisplayName('custom-role'), 'custom-role');
+  assert.equal(getRole(loadRoles(), 'orch-builder').name, 'engineer');
+  assert.equal(createLeadRole().name, 'coordinator');
+  assert.equal(createLeadRole().displayName, 'Team Coordinator');
+});
+
+test('legacy-named custom profiles normalize IDs while checking their source filenames', (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-role-legacy-'));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+  const copiedProfiles = path.join(tempRoot, 'profiles');
+  fs.cpSync(PROFILES_DIR, copiedProfiles, { recursive: true });
+  const agents = path.join(copiedProfiles, 'agents');
+  const profile = path.join(agents, 'engineer.toml');
+  const legacySource = fs.readFileSync(profile, 'utf8')
+    .replace('name = "engineer"', 'name = "orch-builder"')
+    .replace('display_name = "Software Engineer"\n', '');
+  fs.unlinkSync(profile);
+  fs.writeFileSync(path.join(agents, 'orch-builder.toml'), legacySource);
+
+  const role = loadRoles({ profilesDir: copiedProfiles }).get('engineer');
+  assert.equal(role.displayName, 'Software Engineer');
+  assert.equal(loadRoles({ profilesDir: copiedProfiles }).has('orch-builder'), false);
+});
+
+test('accepts safe custom machine IDs and falls back to the ID without display_name', (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-role-custom-'));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+  const copiedProfiles = path.join(tempRoot, 'profiles');
+  fs.cpSync(PROFILES_DIR, copiedProfiles, { recursive: true });
+  const agents = path.join(copiedProfiles, 'agents');
+  const source = fs.readFileSync(path.join(agents, 'engineer.toml'), 'utf8')
+    .replace('name = "engineer"\ndisplay_name = "Software Engineer"\n', 'name = "custom-worker"\n');
+  fs.writeFileSync(path.join(agents, 'custom-worker.toml'), source);
+
+  const role = loadRoles({ profilesDir: copiedProfiles }).get('custom-worker');
+  assert.equal(role.displayName, 'custom-worker');
+  assert.throws(() => {
+    fs.writeFileSync(path.join(agents, 'Bad_Name.toml'), source.replace('custom-worker', 'Bad_Name'));
+    loadRoles({ profilesDir: copiedProfiles });
+  }, /invalid role name/);
 });

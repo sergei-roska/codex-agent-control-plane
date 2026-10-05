@@ -1,0 +1,210 @@
+{
+  "skill_name": "agent-factory",
+  "version": "1.0.0",
+  "description": "Eval dataset for the agent-factory (factory-conductor) master orchestration skill: intent parsing, workspace resolution, the 6-stage DAG execution loop with circuit breaker, and the pre-write quality gate.",
+  "evals": [
+    {
+      "id": "EVAL-AF-001",
+      "description": "Happy path: /factory create runs the full 6-stage pipeline and every stage PASSes on attempt:0, producing SUCCESS.",
+      "eval_type": "happy_path",
+      "input": {
+        "command": "create",
+        "name": "pricing-engine",
+        "source": "sources/pricing_spec.md",
+        "target_dir": "/home/projects/acme-app"
+      },
+      "expected_output": {
+        "status": "SUCCESS",
+        "command": "create",
+        "stage_count": 6,
+        "all_stages_verdict": "PASS",
+        "max_attempt_used": 0,
+        "blocker": null,
+        "last_stage_trace_entry": { "stage": "compile_persist", "archetype": null, "verdict": "PASS" }
+      },
+      "assertions": [
+        "status == 'SUCCESS'",
+        "stage_trace has exactly 6 entries, one per universal pipeline stage in order, including a final compile_persist entry",
+        "the compile_persist entry has archetype == null and secondary_archetype == null",
+        "every stage_trace entry has verdict == 'PASS'",
+        "blocker is null",
+        "output_paths is non-empty"
+      ]
+    },
+    {
+      "id": "EVAL-AF-002",
+      "description": "Invalid input: /factory create is missing the mandatory --source flag, halting at Intent Parsing before any dispatch.",
+      "eval_type": "invalid_input",
+      "input": {
+        "command": "create",
+        "name": "pricing-engine"
+      },
+      "expected_output": {
+        "status": "INPUT_INVALID",
+        "stage_trace": [],
+        "task_id_present": false
+      },
+      "assertions": [
+        "status == 'INPUT_INVALID'",
+        "stage_trace is empty",
+        "no task_id was minted (Step 3 never reached)",
+        "no memory_pointers were written"
+      ]
+    },
+    {
+      "id": "EVAL-AF-003",
+      "description": "Invalid input: an unrecognized verb ('deploy') fails the command enum check at Intent Parsing step 1.3.",
+      "eval_type": "invalid_input",
+      "input": {
+        "command": "deploy",
+        "target_dir": "/home/projects/acme-app"
+      },
+      "expected_output": {
+        "status": "INPUT_INVALID",
+        "stage_trace": []
+      },
+      "assertions": [
+        "status == 'INPUT_INVALID'",
+        "the command field is rejected by the enum constraint before Workspace Resolution runs",
+        "stage_trace is empty"
+      ]
+    },
+    {
+      "id": "EVAL-AF-004",
+      "description": "Boundary case: /factory skill references a --source path that does not exist on disk, failing Workspace Resolution step 2.3 even though Intent Parsing (step 1) passed.",
+      "eval_type": "boundary_case",
+      "input": {
+        "command": "skill",
+        "name": "extractor",
+        "target": "pricing-engine",
+        "source": "sources/does_not_exist.md",
+        "target_dir": "/home/projects/acme-app"
+      },
+      "expected_output": {
+        "status": "INPUT_INVALID",
+        "stage_trace": [],
+        "task_id_present": false
+      },
+      "assertions": [
+        "status == 'INPUT_INVALID'",
+        "failure occurs at Workspace Resolution (step 2.3), not Intent Parsing (step 1.3), since all required fields were present and well-typed",
+        "no task_id was minted"
+      ]
+    },
+    {
+      "id": "EVAL-AF-005",
+      "description": "Boundary case: Stage 1 (Sanitize & Ground, archetype:censor, default tier flash) FAILs on attempt:0 and must auto-escalate to pro on attempt:1 per the Escalation on Failure rule, then PASS, yielding overall SUCCESS.",
+      "eval_type": "boundary_case",
+      "input": {
+        "command": "doc",
+        "doc_type": "prd",
+        "subject": "checkout-flow",
+        "source": "sources/checkout_notes.md"
+      },
+      "expected_output": {
+        "status": "SUCCESS",
+        "stage_1_attempt_0": { "model_used": "flash", "verdict": "FAIL", "pro_validated": false },
+        "stage_1_attempt_1": { "model_used": "pro", "verdict": "PASS", "pro_validated": true },
+        "max_attempt_used_for_stage_1": 1
+      },
+      "assertions": [
+        "stage_trace contains two entries for the sanitize_ground stage: attempt 0 (model_used starts as flash tier, verdict FAIL, pro_validated false since flash is tag-exempt) and attempt 1 (model_used escalated to pro, verdict PASS, pro_validated true)",
+        "no stage attempt index exceeds 2",
+        "final status == 'SUCCESS'"
+      ]
+    },
+    {
+      "id": "EVAL-AF-006",
+      "description": "Edge case: Stage 5 (Adversarial Audit, archetype:critic) FAILs on attempt:0, attempt:1, and attempt:2, tripping the circuit breaker and halting the pipeline with BLOCKED before Stage 6 ever runs.",
+      "eval_type": "edge_case",
+      "input": {
+        "command": "prompt",
+        "name": "billing-alert-prompt",
+        "reqs": "sources/billing_alert_reqs.md"
+      },
+      "expected_output": {
+        "status": "BLOCKED",
+        "blocker": {
+          "stage": "adversarial_audit",
+          "attempts_exhausted": true
+        },
+        "output_paths": []
+      },
+      "assertions": [
+        "status == 'BLOCKED'",
+        "blocker.stage == 'adversarial_audit'",
+        "blocker.attempts_exhausted == true",
+        "stage_trace shows exactly 3 dispatch attempts (0, 1, 2) for adversarial_audit, all verdict FAIL",
+        "no compile_persist stage entry exists in stage_trace",
+        "output_paths is empty (no file was written)"
+      ]
+    },
+    {
+      "id": "EVAL-AF-007",
+      "description": "Edge case: a subagent classified as ambiguous between specifier (primary) and critic (secondary) is dispatched with both archetype fields populated in its stage_trace entry, per the primary/secondary classification heuristic, and the pipeline still completes with SUCCESS.",
+      "eval_type": "edge_case",
+      "input": {
+        "command": "review",
+        "target_path": "/home/projects/acme-app/.agents/agents/legacy-billing-agent.md",
+        "mode": "all"
+      },
+      "expected_output": {
+        "status": "SUCCESS",
+        "ambiguous_stage_trace_entry": { "archetype": "specifier", "secondary_archetype": "critic", "verdict": "PASS" }
+      },
+      "assertions": [
+        "status == 'SUCCESS'",
+        "the ambiguously-classified stage's stage_trace entry has archetype == 'specifier' (primary) and secondary_archetype == 'critic' (secondary), matching references/archetypes.md's classification heuristic worked example",
+        "the corresponding Blackboard handoff record carries both archetype:specifier and archetype:critic tags per references/blackboard.md",
+        "model tier and reasoning depth for that dispatch follow the primary archetype (specifier) only"
+      ]
+    },
+    {
+      "id": "EVAL-AF-008",
+      "description": "Happy path: /factory review --mode executability with an explicit --model pro override applies the override tier to every stage instead of the archetype defaults, and completes with SUCCESS.",
+      "eval_type": "happy_path",
+      "input": {
+        "command": "review",
+        "target_path": "/home/projects/acme-app/.agents/agents/legacy-billing-agent.md",
+        "mode": "executability",
+        "model": "pro"
+      },
+      "expected_output": {
+        "status": "SUCCESS",
+        "every_stage_model_used": "pro",
+        "reasoning_tags_required_every_stage": true
+      },
+      "assertions": [
+        "status == 'SUCCESS'",
+        "every non-compile_persist stage_trace entry has model_used == 'pro', overriding the Model Selection Matrix defaults",
+        "every non-compile_persist stage_trace entry has pro_validated == true, since all stages ran at pro and were validated for <scratchpad>/<decision_log>/<handoff_payload> tag compliance"
+      ]
+    },
+    {
+      "id": "EVAL-AF-009",
+      "description": "Boundary case: every stage PASSes including Stage 5 (Adversarial Audit), but the Step 7.1 file write itself fails (e.g. target_dir became unwritable after Step 2.2's earlier check), producing a non-retrying BLOCKED distinct from a circuit-breaker BLOCKED.",
+      "eval_type": "boundary_case",
+      "input": {
+        "command": "brainstorm",
+        "topic": "checkout-abandonment-causes",
+        "output": "/home/projects/acme-app/docs/brainstorm-checkout.md"
+      },
+      "expected_output": {
+        "status": "BLOCKED",
+        "blocker": {
+          "stage": "compile_persist",
+          "attempts_exhausted": false
+        },
+        "output_paths": []
+      },
+      "assertions": [
+        "status == 'BLOCKED'",
+        "blocker.stage == 'compile_persist'",
+        "blocker.attempts_exhausted == false, distinguishing this from the circuit-breaker BLOCKED case in EVAL-AF-006 where attempts_exhausted == true",
+        "every stage_trace entry for stages sanitize_ground through adversarial_audit has verdict == 'PASS'",
+        "no compile_persist entry with verdict PASS exists in stage_trace, since the write failed before that entry would be appended",
+        "output_paths is empty"
+      ]
+    }
+  ]
+}

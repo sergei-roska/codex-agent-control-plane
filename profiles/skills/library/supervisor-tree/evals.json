@@ -1,0 +1,91 @@
+{
+  "test_suite": "supervisor-tree-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_one_for_one_worker_recovery",
+      "description": "Supervisor configured with one-for-one strategy intercepts single worker crash, reaps zombie tasks, respawns isolated worker without disturbing siblings, and certifies topology.",
+      "input": "Initialize supervisor sup-1 with strategy one-for-one, max_restarts 3, window 60s, and children [worker-1, worker-2, worker-3]. Simulate crash of worker-2.",
+      "expected_output_patterns": [
+        "=== SUPERVISOR INITIALIZED: sup-1 Strategy: one-for-one ===",
+        "[CHILD_CRASHED] Child: worker-2",
+        "[TERMINATING_CHILD] Child: worker-2",
+        "[CHILD_RESPAWNED] Child: worker-2 Restarts: 1",
+        "[TOPOLOGY_RESTORED] Supervisor: sup-1"
+      ],
+      "prohibited_output_patterns": [
+        "[TERMINATING_CHILD] Child: worker-1",
+        "[TERMINATING_CHILD] Child: worker-3",
+        "=== SUPERVISOR CRASHED: sup-1",
+        "RESTART_INTENSITY_EXCEEDED"
+      ]
+    },
+    {
+      "name": "one_for_all_cascade_recovery",
+      "description": "Supervisor configured with one-for-all strategy intercepts worker crash, cascades teardown in reverse order across all siblings, reaps zombies, and respawns entire pool in forward order.",
+      "input": "Initialize supervisor sup-pipeline with strategy one-for-all, max_restarts 3, window 60s, and children [reader (order 1), transformer (order 2), writer (order 3)]. Simulate crash of transformer.",
+      "expected_output_patterns": [
+        "=== SUPERVISOR INITIALIZED: sup-pipeline Strategy: one-for-all ===",
+        "[CHILD_CRASHED] Child: transformer",
+        "[TERMINATING_CHILD] Child: writer",
+        "[TERMINATING_CHILD] Child: transformer",
+        "[TERMINATING_CHILD] Child: reader",
+        "[CHILD_RESPAWNED] Child: reader",
+        "[CHILD_RESPAWNED] Child: transformer",
+        "[CHILD_RESPAWNED] Child: writer",
+        "[TOPOLOGY_RESTORED] Supervisor: sup-pipeline"
+      ],
+      "prohibited_output_patterns": [
+        "=== SUPERVISOR CRASHED:",
+        "RESTART_INTENSITY_EXCEEDED"
+      ]
+    },
+    {
+      "name": "rest_for_one_topological_recovery",
+      "description": "Supervisor configured with rest-for-one strategy intercepts crash of middle worker, stops only successor workers in reverse order while preserving predecessor, and respawns in order.",
+      "input": "Initialize supervisor sup-dag with strategy rest-for-one, max_restarts 3, window 60s, and children [worker-a (order 1), worker-b (order 2), worker-c (order 3)]. Simulate crash of worker-b.",
+      "expected_output_patterns": [
+        "=== SUPERVISOR INITIALIZED: sup-dag Strategy: rest-for-one ===",
+        "[CHILD_CRASHED] Child: worker-b",
+        "[TERMINATING_CHILD] Child: worker-c",
+        "[TERMINATING_CHILD] Child: worker-b",
+        "[CHILD_RESPAWNED] Child: worker-b",
+        "[CHILD_RESPAWNED] Child: worker-c",
+        "[TOPOLOGY_RESTORED] Supervisor: sup-dag"
+      ],
+      "prohibited_output_patterns": [
+        "[TERMINATING_CHILD] Child: worker-a",
+        "[CHILD_RESPAWNED] Child: worker-a",
+        "=== SUPERVISOR CRASHED:"
+      ]
+    },
+    {
+      "name": "restart_intensity_exceeded_supervisor_crash",
+      "description": "Cumulative worker crashes exceed max_restarts within the sliding window, causing the supervisor to trip the circuit breaker, halt recovery, and crash.",
+      "input": "Supervisor sup-int configured with max_restarts 2 and window 60s. Worker crashes 3 times within 10 seconds.",
+      "expected_output_patterns": [
+        "=== SUPERVISOR INTENSITY BREACHED: Restarts: 3 Window: 60s ===",
+        "RESTART_INTENSITY_EXCEEDED",
+        "=== SUPERVISOR CRASHED: sup-int Reason: INTENSITY_BREACHED ==="
+      ],
+      "prohibited_output_patterns": [
+        "[CHILD_RESPAWNED]",
+        "[TOPOLOGY_RESTORED] Supervisor: sup-int"
+      ]
+    },
+    {
+      "name": "zero_zombie_process_reaping_enforcement",
+      "description": "Worker with spawned child tasks crashes. Supervisor asserts and reaps all sub-processes before allowing respawn to ensure zero zombie tasks.",
+      "input": "Worker worker-parent spawns subtask-1 and subtask-2 then crashes under one-for-one supervisor.",
+      "expected_output_patterns": [
+        "[CHILD_CRASHED] Child: worker-parent",
+        "[TERMINATING_CHILD] Child: worker-parent",
+        "[CHILD_RESPAWNED] Child: worker-parent Restarts: 1",
+        "[TOPOLOGY_RESTORED] Supervisor: sup-clean"
+      ],
+      "prohibited_output_patterns": [
+        "ZOMBIE_PROCESS_LEAK",
+        "=== SUPERVISOR CRASHED:"
+      ]
+    }
+  ]
+}

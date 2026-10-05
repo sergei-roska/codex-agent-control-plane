@@ -1,0 +1,58 @@
+{
+  "test_suite": "codebase-search",
+  "description": "Verification suite for local memory hybrid search, caller/callee tracing, and context pack assembly.",
+  "grading": {
+    "mode": "hybrid",
+    "predicate_policy": "all_must_pass",
+    "judge": {
+      "grader_role": "auditor",
+      "rubric_source": "assertions",
+      "scale": [0, 5],
+      "min_score": 4,
+      "gating": false
+    }
+  },
+  "test_cases": [
+    {
+      "name": "hybrid-search-service-definition",
+      "description": "Locate service definition and usage via hybrid search.",
+      "input": "Find service definitions for booking notification in custom_booking.",
+      "expected_output_patterns": [
+        "search_hybrid",
+        "custom_booking.notifier",
+        "BookingNotifierInterface",
+        "project_path"
+      ],
+      "prohibited_output_patterns": [
+        "grep -r"
+      ],
+      "predicates": [
+        {"id": "P1", "kind": "contains", "target": "project_path"},
+        {"id": "P2", "kind": "not_contains", "target": "grep -r"}
+      ],
+      "assertions": [
+        "must invoke search_hybrid with query",
+        "must return matching service definitions"
+      ]
+    },
+    {
+      "name": "find-callers-before-refactoring",
+      "description": "Trace all callers of a method to evaluate refactoring blast radius.",
+      "input": "Find all callers of BookingManagerInterface::createBooking.",
+      "expected_output_patterns": [
+        "find_callers",
+        "BookingManagerInterface::createBooking"
+      ],
+      "prohibited_output_patterns": [
+        "query_or_symbol"
+      ],
+      "predicates": [
+        {"id": "P1", "kind": "contains", "target": "find_callers"},
+        {"id": "P2", "kind": "not_contains", "target": "query_or_symbol"}
+      ],
+      "assertions": [
+        "must call find_callers with symbol"
+      ]
+    }
+  ]
+}

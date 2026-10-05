@@ -1,0 +1,88 @@
+{
+  "test_suite": "raft-quorum-consensus-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_strict_majority_quorum_commit",
+      "description": "Cluster of 3 delegates deliberates on prop-jwt with 2 affirmative votes and 1 dissenting vote. Strict majority quorum floor(3/2)+1 = 2 is achieved and decision committed to log.",
+      "input": "Execute consensus deliberation on prop-jwt in cluster-auth (3 delegates) with 2 VOTE_GRANT and 1 VOTE_DENY.",
+      "expected_output_patterns": [
+        "=== CLUSTER INITIALIZED: [cluster-auth] Members: [3] Quorum: [2] ===",
+        "=== PROPOSAL BROADCAST: [prop-jwt] Term: [1] ===",
+        "[BALLOT_RECORDED] Voter: [perf_architect] Vote: [VOTE_GRANT] Term: [1]",
+        "[BALLOT_RECORDED] Voter: [domain_analyst] Vote: [VOTE_GRANT] Term: [1]",
+        "[BALLOT_RECORDED] Voter: [security_critic] Vote: [VOTE_DENY] Term: [1]",
+        "[TALLY_COMPLETED] Grants: [2] Denies: [1] Needed: [2]",
+        "=== CONSENSUS COMMITTED: [prop-jwt] Term: [1] ==="
+      ],
+      "prohibited_output_patterns": [
+        "QUORUM_NOT_REACHED",
+        "=== CONSENSUS REJECTED:",
+        "EVEN_CLUSTER_MEMBERSHIP_DETECTED"
+      ]
+    },
+    {
+      "name": "majority_quorum_not_reached_rejection",
+      "description": "Cluster of 5 delegates receives only 2 affirmative votes and 2 dissenting votes plus 1 timeout abstain, failing majority quorum threshold (3) and emitting QUORUM_NOT_REACHED.",
+      "input": "Execute consensus deliberation on prop-eval in cluster-eval (5 delegates) with 2 VOTE_GRANT, 2 VOTE_DENY, and 1 ABSTAIN.",
+      "expected_output_patterns": [
+        "=== CLUSTER INITIALIZED: [cluster-eval] Members: [5] Quorum: [3] ===",
+        "=== PROPOSAL BROADCAST: [prop-eval] Term: [1] ===",
+        "[TALLY_COMPLETED] Grants: [2] Denies: [2] Needed: [3]",
+        "=== CONSENSUS REJECTED: [prop-eval] Term: [1] ===",
+        "QUORUM_NOT_REACHED"
+      ],
+      "prohibited_output_patterns": [
+        "=== CONSENSUS COMMITTED:"
+      ]
+    },
+    {
+      "name": "stale_term_ballot_dropped",
+      "description": "A ballot arriving with a Term counter lower than the active Term is discarded with STALE_BALLOT_DROPPED.",
+      "input": "Delegate submits ballot with Term 1 while active Term is 2 for proposal prop-data-303.",
+      "expected_output_patterns": [
+        "=== CLUSTER INITIALIZED: [cluster-data] Members: [3] Quorum: [2] ===",
+        "=== PROPOSAL BROADCAST: [prop-data-303] Term: [2] ===",
+        "[STALE_BALLOT_DROPPED] Voter: [worker-delayed] BallotTerm: [1]",
+        "[TALLY_COMPLETED] Grants: [2] Denies: [0] Needed: [2]",
+        "=== CONSENSUS COMMITTED: [prop-data-303] Term: [2] ==="
+      ],
+      "prohibited_output_patterns": [
+        "[BALLOT_RECORDED] Voter: [worker-delayed] Vote: [VOTE_GRANT] Term: [1]"
+      ]
+    },
+    {
+      "name": "even_cluster_membership_detected_rejection",
+      "description": "Attempting to assemble a quorum cluster with an even number of delegates (e.g. 4) fails fast with EVEN_CLUSTER_MEMBERSHIP_DETECTED.",
+      "input": "Initialize cluster cluster-invalid-even with 4 delegates.",
+      "expected_output_patterns": [
+        "EVEN_CLUSTER_MEMBERSHIP_DETECTED",
+        "Voting cluster must maintain an odd number of voting delegates"
+      ],
+      "prohibited_output_patterns": [
+        "=== CLUSTER INITIALIZED:",
+        "=== PROPOSAL BROADCAST:"
+      ]
+    },
+    {
+      "name": "unregistered_voter_rejected",
+      "description": "A ballot received from an unauthorized agent address not present in voting_members is rejected.",
+      "input": "Unauthorized voter unauthorized-agent submits ballot for active proposal.",
+      "expected_output_patterns": [
+        "[UNREGISTERED_VOTER_REJECTED] Voter: [unauthorized-agent]"
+      ],
+      "prohibited_output_patterns": [
+        "[BALLOT_RECORDED] Voter: [unauthorized-agent]"
+      ]
+    },
+    {
+      "name": "voting_timeout_expired_abstain_synthesis",
+      "description": "When voting timer expires before all members submit, missing voters are synthesized as ABSTAIN.",
+      "input": "Voting timer expires with missing ballot from agent_D.",
+      "expected_output_patterns": [
+        "[BALLOT_RECORDED] Voter: [agent_D] Vote: [ABSTAIN] Term: [1]",
+        "[TALLY_COMPLETED]"
+      ],
+      "prohibited_output_patterns": []
+    }
+  ]
+}

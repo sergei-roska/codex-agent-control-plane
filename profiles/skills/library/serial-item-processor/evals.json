@@ -1,0 +1,181 @@
+{
+  "test_suite": "serial-item-processor-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_multi_item_serial",
+      "description": "Multi-item serial execution where each item completes full lifecycle (VALIDATING -> PROCESSING -> VERIFYING) with all standard log markers and context purge before advancing.",
+      "input": "Execute serial-item-processor for batch serial-acc-001 with input items [{\"name\": \"alpha\"}, {\"name\": \"beta\"}, {\"name\": \"gamma\"}].",
+      "expected_output_patterns": [
+        "=== START: alpha ===",
+        "[VALIDATION] Status: OK",
+        "[PROCESSING] Action:",
+        "[VERIFICATION] Status: PASS",
+        "=== END: alpha ===",
+        "*Context purged.*",
+        "=== START: beta ===",
+        "[VALIDATION] Status: OK",
+        "[PROCESSING] Action:",
+        "[VERIFICATION] Status: PASS",
+        "=== END: beta ===",
+        "*Context purged.*",
+        "=== START: gamma ===",
+        "[VALIDATION] Status: OK",
+        "[PROCESSING] Action:",
+        "[VERIFICATION] Status: PASS",
+        "=== END: gamma ===",
+        "*Context purged.*",
+        "| ITEM_IDENTIFIER | STATUS | SUMMARY |",
+        "| alpha | SUCCESS |",
+        "| beta | SUCCESS |",
+        "| gamma | SUCCESS |"
+      ],
+      "prohibited_output_patterns": [
+        "LOOKAHEAD_VIOLATION",
+        "BATCH_POLLUTION_DETECTED"
+      ]
+    },
+    {
+      "name": "single_item_boundary_condition",
+      "description": "Boundary condition with exactly one item executing complete lifecycle without index overflow.",
+      "input": "Execute serial-item-processor for batch serial-single-001 with 1 item [{\"name\": \"solo_item\"}].",
+      "expected_output_patterns": [
+        "=== START: solo_item ===",
+        "[VALIDATION] Status: OK",
+        "[PROCESSING] Action:",
+        "[VERIFICATION] Status: PASS",
+        "=== END: solo_item ===",
+        "*Context purged.*",
+        "| ITEM_IDENTIFIER | STATUS | SUMMARY |",
+        "| solo_item | SUCCESS |"
+      ]
+    },
+    {
+      "name": "empty_input_array_boundary",
+      "description": "Supplying zero elements triggers immediate transition to terminal summary with empty table and EMPTY_INPUT_ARRAY notification.",
+      "input": "Execute serial-item-processor for batch serial-empty-001 with empty input items [].",
+      "expected_output_patterns": [
+        "| ITEM_IDENTIFIER | STATUS | SUMMARY |"
+      ],
+      "prohibited_output_patterns": [
+        "=== START:",
+        "[VALIDATION] Status: OK"
+      ]
+    },
+    {
+      "name": "item_validation_failure_recovery",
+      "description": "Item fails precondition validation, skips processing and verification, emits FAIL, purges context, and proceeds to subsequent item.",
+      "input": "Execute serial-item-processor for batch serial-val-fail with [{\"name\": \"invalid_doc\"}, {\"name\": \"valid_doc\"}]. Assume invalid_doc fails validation.",
+      "expected_output_patterns": [
+        "=== START: invalid_doc ===",
+        "[VALIDATION] Status: FAIL",
+        "=== END: invalid_doc ===",
+        "*Context purged.*",
+        "=== START: valid_doc ===",
+        "[VALIDATION] Status: OK",
+        "[PROCESSING] Action:",
+        "[VERIFICATION] Status: PASS",
+        "=== END: valid_doc ===",
+        "*Context purged.*",
+        "| invalid_doc | FAIL |",
+        "| valid_doc | SUCCESS |"
+      ],
+      "prohibited_output_patterns": [
+        "[PROCESSING] Action: Processing invalid_doc",
+        "[VERIFICATION] Status: PASS, Note: Verified invalid_doc"
+      ]
+    },
+    {
+      "name": "item_processing_failure_recovery",
+      "description": "Item fails during core processing, skips verification, logs FAIL, purges context, and continues with remaining items.",
+      "input": "Execute serial-item-processor for batch serial-proc-fail with [{\"name\": \"faulty_task\"}, {\"name\": \"healthy_task\"}]. Assume faulty_task encounters unhandled processing error.",
+      "expected_output_patterns": [
+        "=== START: faulty_task ===",
+        "[VALIDATION] Status: OK",
+        "[PROCESSING] Status: FAIL",
+        "=== END: faulty_task ===",
+        "*Context purged.*",
+        "=== START: healthy_task ===",
+        "[VALIDATION] Status: OK",
+        "[PROCESSING] Action:",
+        "[VERIFICATION] Status: PASS",
+        "=== END: healthy_task ===",
+        "*Context purged.*",
+        "| faulty_task | FAIL |",
+        "| healthy_task | SUCCESS |"
+      ],
+      "prohibited_output_patterns": [
+        "[VERIFICATION] Status: PASS, Note: Verified faulty_task"
+      ]
+    },
+    {
+      "name": "item_verification_failure_recovery",
+      "description": "Item fails verification checklist / DoD, records FAIL, purges context, and continues.",
+      "input": "Execute serial-item-processor for batch serial-verif-fail with [{\"name\": \"unverified_item\"}, {\"name\": \"good_item\"}]. Assume unverified_item fails ASCII or DoD check.",
+      "expected_output_patterns": [
+        "=== START: unverified_item ===",
+        "[VALIDATION] Status: OK",
+        "[PROCESSING] Action:",
+        "[VERIFICATION] Status: FAIL",
+        "=== END: unverified_item ===",
+        "*Context purged.*",
+        "=== START: good_item ===",
+        "[VALIDATION] Status: OK",
+        "[PROCESSING] Action:",
+        "[VERIFICATION] Status: PASS",
+        "=== END: good_item ===",
+        "*Context purged.*",
+        "| unverified_item | FAIL |",
+        "| good_item | SUCCESS |"
+      ]
+    },
+    {
+      "name": "abort_on_first_error_enforcement",
+      "description": "When abort_on_first_error is true, first item failure terminates pipeline immediately, skipping remaining items.",
+      "input": "Execute serial-item-processor for batch serial-abort-001 with abort_on_first_error: true and items [{\"name\": \"item_err\"}, {\"name\": \"item_skipped\"}]. item_err fails validation.",
+      "expected_output_patterns": [
+        "=== START: item_err ===",
+        "[VALIDATION] Status: FAIL",
+        "=== END: item_err ===",
+        "*Context purged.*",
+        "| item_err | FAIL |",
+        "| item_skipped | SKIPPED |"
+      ],
+      "prohibited_output_patterns": [
+        "=== START: item_skipped ==="
+      ]
+    },
+    {
+      "name": "violation_lookahead_detected",
+      "description": "Detects and prohibits preemptive inspection or reasoning about item N+1 while item N is active.",
+      "input": "Process [{\"name\": \"item_1\"}, {\"name\": \"item_2\"}]. While validating item_1, also check parameters of item_2.",
+      "expected_output_patterns": [
+        "LOOKAHEAD_VIOLATION"
+      ],
+      "prohibited_output_patterns": [
+        "[PROCESSING] Action: Processing item_2"
+      ]
+    },
+    {
+      "name": "violation_batch_pollution_detected",
+      "description": "Detects and prohibits batching items into shared concurrent execution or multi-item summaries prior to Phase 3.",
+      "input": "Process [{\"name\": \"X\"}, {\"name\": \"Y\"}]. Generate a joint analysis for X and Y together before running verification.",
+      "expected_output_patterns": [
+        "BATCH_POLLUTION_DETECTED"
+      ],
+      "prohibited_output_patterns": [
+        "Joint summary for X and Y"
+      ]
+    },
+    {
+      "name": "invalid_config_schema_validation",
+      "description": "Rejects malformed batch_id or missing required fields according to SerialProcessorConfig schema.",
+      "input": "Initialize serial-item-processor with batch_id \"invalid_id_format\" (missing serial- prefix) and empty input_items.",
+      "expected_output_patterns": [
+        "SCHEMA_VALIDATION_ERROR"
+      ],
+      "prohibited_output_patterns": [
+        "=== START:"
+      ]
+    }
+  ]
+}

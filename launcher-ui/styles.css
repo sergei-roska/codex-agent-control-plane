@@ -593,10 +593,14 @@
       gap: 6px;
     }
     .about-role-name {
-      font-family: 'JetBrains Mono', monospace;
       font-size: 12px;
       font-weight: 600;
       color: var(--text-main);
+    }
+    .about-role-id {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--text-dim);
     }
     .about-badge {
       font-size: 10px;

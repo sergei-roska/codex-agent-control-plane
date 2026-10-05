@@ -1,0 +1,4 @@
+interface:
+  display_name: "Drupal Frontend Accessibility Twig"
+  short_description: "Audit and implement accessible markup, ARIA roles, and keyboard focus in Twig components"
+  default_prompt: "Use $a11y-frontend-twig to audit or implement component accessibility, ARIA attributes, and keyboard focus behavior."

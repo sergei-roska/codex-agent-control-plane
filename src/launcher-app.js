@@ -274,6 +274,7 @@ function createLauncherApp({
     try {
       const pick = (r) => ({
         name: r.name,
+        displayName: r.displayName || r.name,
         description: r.description,
         model: r.model,
         effort: r.effort,

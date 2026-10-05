@@ -5,8 +5,8 @@ This project runs the eight development-team roles adapted from `codex-universal
 ```text
 A2A client -> /orchestrator (lead)
                   | A2A dispatch
-                  +-> /agents/orch-explorer -> Codex App Server thread
-                  +-> /agents/orch-builder  -> Codex App Server thread
+                  +-> /agents/explorer -> Codex App Server thread
+                  +-> /agents/engineer  -> Codex App Server thread
                   +-> /agents/...           -> Codex App Server thread
 ```
 
@@ -37,22 +37,25 @@ The default target workspace is the current directory. Set `CODEX_WORKSPACE=/abs
 
 Codex App Server RPC requests time out after 120 seconds. Model turns have a separate 10-minute completion timeout; set `CODEX_A2A_TURN_TIMEOUT_MS` to a positive integer number of milliseconds to change it.
 
-The lead Agent Card is at `http://127.0.0.1:3000/orchestrator/agent-card.json`. Each specialist has a card at `http://127.0.0.1:3000/agents/<role>/agent-card.json`; for example, `/agents/orch-explorer/agent-card.json`. A2A clients can discover these cards without credentials. Requests to the JSON-RPC endpoints require `Authorization: Bearer <token>`. The server creates the token at `.runtime/a2a-token` with owner-only access, and `npm run ask` reads it automatically. Keep that file private. For a custom client, read the token locally and send it as the bearer value. Set `CODEX_A2A_TOKEN_FILE` to use a different token path.
+The lead Agent Card is at `http://127.0.0.1:3000/orchestrator/agent-card.json`. Each specialist has a card at `http://127.0.0.1:3000/agents/<role>/agent-card.json`; for example, `/agents/explorer/agent-card.json`. A2A clients can discover these cards without credentials. Requests to the JSON-RPC endpoints require `Authorization: Bearer <token>`. The server creates the token at `.runtime/a2a-token` with owner-only access, and `npm run ask` reads it automatically. Keep that file private. For a custom client, read the token locally and send it as the bearer value. Set `CODEX_A2A_TOKEN_FILE` to use a different token path.
 
 ## Roles
 
-| Agent | Workspace access |
-| --- | --- |
-| `orch-explorer` | Read-only |
-| `orch-builder` | Workspace write |
-| `orch-verifier` | Workspace write |
-| `orch-auditor` | Read-only |
-| `orch-repair-xhigh` | Workspace write |
-| `orch-repair-sol` | Workspace write |
-| `orch-architect` | Read-only |
-| `orch-scout` | Read-only |
+| Machine ID | Interface name | Workspace access |
+| --- | --- | --- |
+| `coordinator` | Team Coordinator | Read-only |
+| `explorer` | Code Explorer | Read-only |
+| `engineer` | Software Engineer | Workspace write |
+| `verifier` | Quality Engineer | Workspace write |
+| `auditor` | Code Auditor | Read-only |
+| `recovery-engineer` | Recovery Engineer | Workspace write |
+| `senior-engineer` | Senior Engineer | Workspace write |
+| `architect` | Systems Architect | Read-only |
+| `scout` | Quick Scout | Read-only |
 
 The lead uses GPT-6.1 Sol at high effort in a read-only Codex thread. Specialist model and effort settings are read from the bundled TOML profiles and can be changed for the signed-in Codex account.
+
+The interface shows human role names with machine IDs as secondary labels. New profiles and endpoints use the IDs above. Legacy `orch-*` role endpoints and stored assignments remain compatible through aliases; task storage namespaces are retained so existing sessions can resume.
 
 ## Role tool surface
 
@@ -66,7 +69,15 @@ mcp_servers = ["some-server"]  # names as in [mcp_servers.*] of your Codex confi
 skills = false                 # true keeps the Codex skills listing
 ```
 
-A missing table means no MCP servers and no skills. The pack's own `orch-*` skills are read as files by path and do not need the listing. An allowlisted name that is not configured is ignored and reported in `permissionConfig.toolPolicy.mcpMissing`. If the configured servers cannot be enumerated, the turn still runs and the policy is marked `enforced: false` (a cost problem, not a safety boundary). Sandbox and approvals are unaffected.
+A missing table means no MCP servers and no automatic skills listing. The pack's own `orch-*` skills are read as files by path and do not need the listing. An allowlisted name that is not configured is ignored and reported in `permissionConfig.toolPolicy.mcpMissing`. If the configured servers cannot be enumerated, the turn still runs and the policy is marked `enforced: false` (a cost problem, not a safety boundary). Sandbox and approvals are unaffected.
+
+## Skills for each assignment
+
+The imported skill library lives in [`profiles/skills/library/`](profiles/skills/library/). It contains the remaining skills copied from `ws-knowledge/skills`, including their references, scripts, and evaluation files. The library includes computer science patterns and the retained project and tooling workflows.
+
+The lead receives the library's compact skill IDs and up to 12 relevant descriptions. It selects zero to five skills for each assignment through the `skills` field. Workers receive only those selected skills as explicit App Server skill inputs; the global skills listing stays disabled. Instruction hashes are pinned in the dispatch checkpoint and included in result provenance. Unknown IDs, duplicates, excessive selections, and instruction drift are rejected.
+
+Skill instructions remain subordinate to the task, project and role rules, permissions, allowed files, and worker report contract. Importing a skill does not connect its MCP dependencies or authorize new agents, git changes, or broader filesystem access. See [skill-routing.md](docs/skill-routing.md) for the selection and versioning behavior.
 
 ## Writer admission
 

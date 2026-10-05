@@ -1,0 +1,3 @@
+interface:
+  display_name: "Performance Maintainability Drupal"
+  short_description: "Cache/query/render optimization with safe rollout"

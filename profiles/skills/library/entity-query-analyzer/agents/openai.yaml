@@ -1,0 +1,4 @@
+interface:
+  display_name: "Drupal Entity Query Analyzer"
+  short_description: "Find EntityQuery access and loading risks"
+  default_prompt: "Use $entity-query-analyzer to audit custom Drupal code for EntityQuery access and repeated-loading risks."

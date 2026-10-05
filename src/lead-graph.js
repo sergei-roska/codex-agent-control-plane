@@ -12,6 +12,8 @@ const {
 } = require('./contracts');
 const { runAcceptance, assessWithoutChecks } = require('./acceptance');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
+const { loadSkillCatalog, findSkillCandidates, resolveSkillSelection } = require('./skill-catalog');
+const { canonicalRoleId, getRole, roleDisplayName } = require('./role-names');
 
 const DEFAULT_RECONCILE_WAIT_MS = 30_000;
 const MAX_OUTCOME_TEXT_CHARS = 12_000;
@@ -168,7 +170,7 @@ function sha256(text) {
 }
 
 // Pinned run context: workspace, role/team rules, and project instruction files.
-function readPinned({ roles, leadRole, workspace }) {
+function readPinned({ roles, leadRole, workspace, skillCatalog }) {
   const rules = [...roles.values()].map((role) => [role.name, role.sandbox, role.model, role.effort, role.instructions || ''])
     .sort((a, b) => (a[0] < b[0] ? -1 : 1));
   const projectInstructions = [];
@@ -182,6 +184,8 @@ function readPinned({ roles, leadRole, workspace }) {
     workspace,
     teamRulesSha256: sha256(JSON.stringify([rules, leadRole?.instructions || ''])),
     projectInstructions,
+    skills: [...(skillCatalog || new Map()).values()].map(({ id, sha256: hash }) => ({ id, sha256: hash }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
   };
 }
 
@@ -196,6 +200,13 @@ function instructionChanges(previous, current) {
     else if (before.get(name) !== hash) notes.push(`${name} changed since the run started. Re-read it before delegating.`);
   }
   for (const name of before.keys()) if (!after.has(name)) notes.push(`${name} was removed since the run started.`);
+  const priorSkills = new Map((previous.skills || []).map((entry) => [entry.id, entry.sha256]));
+  const currentSkills = new Map((current.skills || []).map((entry) => [entry.id, entry.sha256]));
+  for (const [id, hash] of currentSkills) {
+    if (!priorSkills.has(id)) notes.push(`Skill ${id} was added since the run started.`);
+    else if (priorSkills.get(id) !== hash) notes.push(`Skill ${id} changed since the run started.`);
+  }
+  for (const id of priorSkills.keys()) if (!currentSkills.has(id)) notes.push(`Skill ${id} was removed since the run started.`);
   return notes;
 }
 
@@ -311,6 +322,7 @@ function buildLeadGraph(deps) {
   const {
     appServer, roles, leadRole, workspace, maxRounds, journal, pollIntervalMs,
   } = deps;
+  const skillCatalog = deps.skillCatalog || loadSkillCatalog();
   const { admission } = deps;
   const reconcileWaitMs = Number.isFinite(deps.reconcileWaitMs) ? deps.reconcileWaitMs : DEFAULT_RECONCILE_WAIT_MS;
 
@@ -327,7 +339,9 @@ function buildLeadGraph(deps) {
     return {
       assignmentId: item.assignmentId,
       attemptId: item.attemptId,
-      role: item.role,
+      role: canonicalRoleId(item.role),
+      roleName: roleDisplayName(item.role),
+      skills: (item.assignment?.skillPins || []).map(({ id, sha256: hash }) => ({ id, sha256: hash })),
       sandbox: item.sandbox,
       taskId: result.taskId || item.taskId || null,
       status: result.status,
@@ -351,7 +365,10 @@ function buildLeadGraph(deps) {
       'The lead must not edit files. Delegate all changes through the A2A role agents.',
       `User goal:\n${state.goal}`,
       `Dispatch rounds already used: ${state.round}/${maxRounds}. A dispatch decision consumes one round.`,
-      'Available roles:\n' + JSON.stringify([...roles.values()].map(({ name, description, sandbox, model, effort }) => ({ name, description, sandbox, model, effort }))),
+      'Available roles:\n' + JSON.stringify([...roles.values()].map(({ name, displayName, description, sandbox, model, effort }) => ({ id: canonicalRoleId(name), name: displayName || roleDisplayName(name), description, sandbox, model, effort }))),
+      `Available skill candidates (choose 0-5 relevant IDs for each assignment; no skill is required for unrelated work):\n${JSON.stringify(extras.skillCandidates)}`,
+      `Available skill IDs and names (trusted selectable IDs):\n${JSON.stringify(extras.skillNames)}`,
+      'The candidate descriptions are lexical hints. You may select any listed skill ID based on semantic relevance to the task, even when it was not in the candidate shortlist.',
     ];
     if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
     sections.push('Open worker decisions (each must be resolved in resolutions, or listed in humanInput.relatedDecisionIds):\n' + JSON.stringify(openDecisions));
@@ -362,7 +379,7 @@ function buildLeadGraph(deps) {
     if (state.humanAnswers.length > 0) sections.push('Human answers (authoritative):\n' + JSON.stringify(state.humanAnswers));
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(state.outcomes));
     sections.push([
-      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, and stopConditions. Writable roles require one or more explicit safe relative allowedFiles. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
+      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and skills. Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
       'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, and humanInput. Use empty arrays, an empty string, or null for unused fields.',
       'Worker decision requests: resolve them yourself (resolutions: decisionId, choice, rationale) whenever the evidence supports a choice. Worker reports are self-reported; check scopeViolations and reportError.',
       'Use request_human_input only for missing_authority, irreversible_or_external, or product_choice, and only after investigating: give options, a recommendation, the evidence checked, and the independent work that can proceed.',
@@ -410,7 +427,7 @@ function buildLeadGraph(deps) {
   async function intake(state, config) {
     const runtime = runtimeOf(config);
     if (!isNonEmptyString(state.goal)) throw new TypeError('goal must be a non-empty string');
-    const current = readPinned({ roles, leadRole, workspace });
+    const current = readPinned({ roles, leadRole, workspace, skillCatalog });
     if (!state.pinned) return { pinned: current };
     runtime.pendingNotes = [...(runtime.pendingNotes || []), ...instructionChanges(state.pinned, current)];
     return { pinned: current };
@@ -427,17 +444,24 @@ function buildLeadGraph(deps) {
     if (runtime.resumed) {
       runtime.resumed = false;
       notes.push('This run was resumed after an interruption (restart, pause, or usage limit). A previous lead turn may have been repeated. Outcomes marked interrupted or outcome_unknown have unknown workspace effects.');
-      const current = readPinned({ roles, leadRole, workspace });
+      const current = readPinned({ roles, leadRole, workspace, skillCatalog });
       notes.push(...instructionChanges(state.pinned, current));
       update.pinned = current;
     }
 
+    const priorSkillContext = state.outcomes.map((outcome) => ({
+      role: outcome.role,
+      summary: (outcome.report?.summary || outcome.text || outcome.reportError || '').slice(0, 300),
+    })).slice(-12);
+    const skillCandidates = findSkillCandidates(skillCatalog, [state.goal, ...priorSkillContext.map((item) => item.summary)].join('\n'), { limit: 12 });
+    const skillNames = [...skillCatalog.values()].map(({ id, name }) => ({ id, name }));
+    const candidateIds = skillNames.map(({ id }) => id);
     let leadResult;
     try {
       leadResult = await appServer.run({
         role: leadRole,
         cwd: workspace,
-        input: decisionPrompt(state, { notes }),
+        input: decisionPrompt(state, { notes, skillCandidates, skillNames }),
         ...(state.threadId ? { threadId: state.threadId } : {}),
         outputSchema: DECISION_SCHEMA,
         signal,
@@ -471,6 +495,8 @@ function buildLeadGraph(deps) {
       outcomeCount: state.outcomes.length,
       unresolvedWriterCount: state.unresolvedWriters.length,
       openDecisionIds: new Set(state.openDecisions.map((entry) => entry.id)),
+      skillCatalog,
+      skillCandidateIds: candidateIds,
     });
     deps.emit(runtime.onEvent, { type: 'decision', round: state.round + 1, action: decision.action });
 
@@ -490,7 +516,11 @@ function buildLeadGraph(deps) {
         text: decision.final.trim() || `Stopped after reaching the limit of ${maxRounds} dispatch rounds.`,
       };
     }
-    return { ...update, pendingAssignments: decision.assignments };
+    const pendingAssignments = decision.assignments.map((assignment) => {
+      const selected = resolveSkillSelection(skillCatalog, assignment.skills || []);
+      return { ...assignment, skills: selected.map(({ id }) => id), skillPins: selected.map(({ id, sha256: hash }) => ({ id, sha256: hash })) };
+    });
+    return { ...update, pendingAssignments };
   }
 
   function parseDecision(text) {
@@ -523,13 +553,18 @@ function buildLeadGraph(deps) {
   }
 
   async function submitItem(item, signal) {
-    const role = roles.get(item.role);
+    const role = getRole(roles, item.role);
     const client = await deps.clientFor(item.role);
     const row = journal.get(item.attemptId);
     if (row?.state === 'finished') return { ...item, state: 'finished', taskId: row.taskId, result: row.result };
     if (row?.state === 'submitted') return { ...item, state: 'submitted', taskId: row.taskId };
 
     if (signal?.aborted) return item;
+    // A dispatched assignment is pinned before checkpointing. Never update its hash on resume.
+    const skillIds = item.assignment?.skills || [];
+    const skillPins = item.assignment?.skillPins || [];
+    if (!row) resolveSkillSelection(skillCatalog, skillIds, { pins: skillPins });
+
     if (!row) {
       journal.recordSubmitting({
         attemptId: item.attemptId,
@@ -548,7 +583,7 @@ function buildLeadGraph(deps) {
         return { ...item, state: 'submitted', taskId: found.id };
       }
       if (item.sandbox !== 'read-only') {
-        return finishItem(item, syntheticResult('outcome_unknown', `Submission of ${role.name} was interrupted and no A2A task exists for it; it was not re-sent because the role can write. Workspace effects are unknown.`, { contextId: item.contextId }));
+        return finishItem(item, syntheticResult('outcome_unknown', `Submission of ${roleDisplayName(item.role)} was interrupted and no A2A task exists for it; it was not re-sent because the role can write. Workspace effects are unknown.`, { contextId: item.contextId }));
       }
     }
 
@@ -585,7 +620,7 @@ function buildLeadGraph(deps) {
       }
       if (item.sandbox !== 'read-only') {
         const lookup = reconcileFailed ? 'the A2A task lookup also failed' : 'the immediate A2A task lookup found no task';
-        return finishItem(item, syntheticResult('outcome_unknown', `Submission of ${role.name} failed (${errorText(error)}) and ${lookup}; a task may be accepted later, so workspace effects are unknown.`, {
+        return finishItem(item, syntheticResult('outcome_unknown', `Submission of ${roleDisplayName(item.role)} failed (${errorText(error)}) and ${lookup}; a task may be accepted later, so workspace effects are unknown.`, {
           contextId: item.contextId, failure: { name: error?.name || 'Error', message: errorText(error) },
         }));
       }
@@ -597,10 +632,10 @@ function buildLeadGraph(deps) {
     const task = resultTask(submitted);
     if (!task) {
       if (item.sandbox !== 'read-only') {
-        return finishItem(item, syntheticResult('outcome_unknown', `A2A role ${role.name} returned no task ID; it may have accepted the writable task, so workspace effects are unknown.`, { contextId: item.contextId }));
+        return finishItem(item, syntheticResult('outcome_unknown', `A2A role ${roleDisplayName(item.role)} returned no task ID; it may have accepted the writable task, so workspace effects are unknown.`, { contextId: item.contextId }));
       }
       if (submitted?.message) return finishItem(item, { ...syntheticResult('TASK_STATE_COMPLETED', ''), contextId: item.contextId, text: extractTextParts(submitted.message.parts).slice(0, MAX_REPORT_CHARS) });
-      return finishItem(item, syntheticResult('dispatch_error', `A2A role ${role.name} did not return a task ID`, { contextId: item.contextId }));
+      return finishItem(item, syntheticResult('dispatch_error', `A2A role ${roleDisplayName(item.role)} did not return a task ID`, { contextId: item.contextId }));
     }
     journal.recordSubmitted(item.attemptId, task.id);
     if (isTaskFinished(task)) return finishItem({ ...item, taskId: task.id }, assignmentResult(task));
@@ -613,11 +648,13 @@ function buildLeadGraph(deps) {
     const update = {};
     if (!batch) {
       const round = state.round + 1;
-      const parallel = state.pendingAssignments.every((assignment) => roles.get(assignment.role).sandbox === 'read-only');
+      const parallel = state.pendingAssignments.every((assignment) => getRole(roles, assignment.role).sandbox === 'read-only');
       batch = {
         round,
         parallel,
         items: state.pendingAssignments.map((assignment, index) => {
+          const skillPins = assignment.skillPins || [];
+          resolveSkillSelection(skillCatalog, assignment.skills || [], { pins: skillPins });
           const assignmentId = makeAssignmentId(state.runId, round, index);
           const attemptId = makeAttemptId(assignmentId);
           return {
@@ -626,7 +663,7 @@ function buildLeadGraph(deps) {
             attemptId,
             contextId: deterministicContextId(attemptId),
             role: assignment.role,
-            sandbox: roles.get(assignment.role).sandbox,
+            sandbox: getRole(roles, assignment.role).sandbox,
             assignment,
             state: 'pending',
             taskId: null,

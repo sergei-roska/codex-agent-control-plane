@@ -111,8 +111,12 @@ test('specialist RPC mounts require bearer auth while their cards remain public'
   const protectedApp = protectRoleRpcMounts(app, authMiddleware);
   protectedApp.use('/agents/orch-builder', () => {});
   protectedApp.use('/agents/orch-builder/agent-card.json', () => {});
+  protectedApp.use('/agents/engineer', () => {});
+  protectedApp.use('/agents/engineer/agent-card.json', () => {});
   assert.equal(mounts[0][1], authMiddleware);
   assert.equal(mounts[1][1] === authMiddleware, false);
+  assert.equal(mounts[2][1], authMiddleware);
+  assert.equal(mounts[3][1] === authMiddleware, false);
 });
 
 test('lead executor reports cancellation as failed until downstream cancellation is confirmed', async () => {
@@ -367,6 +371,8 @@ test('startup passes checkpointer and journal to the orchestrator factory', asyn
   try {
     assert.ok(options.checkpointer);
     assert.equal(typeof options.journal.recordSubmitting, 'function');
+    assert.equal(options.leadRole.name, 'coordinator');
+    assert.ok(options.skillCatalog instanceof Map);
   } finally {
     await runtime.close();
     fs.rmSync(dir, { recursive: true, force: true });

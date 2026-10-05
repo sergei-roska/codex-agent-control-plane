@@ -1,0 +1,105 @@
+{
+  "test_suite": "finite-state-machine-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_full_fsm_lifecycle",
+      "description": "Deterministic progression through all declared states to terminal COMPLETED state with valid guards and atomic actions.",
+      "input": "Execute generic lifecycle FSM fsm-refactor from IDLE through PLANNING, EXECUTING, and VERIFYING to COMPLETED with passing guards.",
+      "expected_output_patterns": [
+        "=== FSM INITIALIZED: fsm-refactor InitialState: IDLE ===",
+        "[EVENT_RECEIVED] FSM: fsm-refactor Event: START_WORKFLOW State: IDLE",
+        "[STATE_TRANSITION] FSM: fsm-refactor From: IDLE Event: START_WORKFLOW To: PLANNING",
+        "[EVENT_RECEIVED] FSM: fsm-refactor Event: PLAN_APPROVED State: PLANNING",
+        "[STATE_TRANSITION] FSM: fsm-refactor From: PLANNING Event: PLAN_APPROVED To: EXECUTING",
+        "[EVENT_RECEIVED] FSM: fsm-refactor Event: TASKS_DONE State: EXECUTING",
+        "[STATE_TRANSITION] FSM: fsm-refactor From: EXECUTING Event: TASKS_DONE To: VERIFYING",
+        "[EVENT_RECEIVED] FSM: fsm-refactor Event: VERIFY_PASS State: VERIFYING",
+        "[STATE_TRANSITION] FSM: fsm-refactor From: VERIFYING Event: VERIFY_PASS To: COMPLETED",
+        "=== FSM TERMINATED: fsm-refactor FinalState: COMPLETED Count: 4 ==="
+      ],
+      "prohibited_output_patterns": [
+        "UNAUTHORIZED_TRANSITION_ATTEMPT",
+        "GUARD_EVALUATION_FAILED",
+        "INFINITE_LOOP_DETECTED",
+        "=== FSM TERMINATED: fsm-refactor FinalState: FAILED"
+      ]
+    },
+    {
+      "name": "unauthorized_transition_blocked",
+      "description": "Attempt to execute an undefined or illegal transition triggers UNAUTHORIZED_TRANSITION_ATTEMPT and halts execution.",
+      "input": "Execute fsm-deploy-pipeline currently in PLANNING state when event DEPLOY_CODE is received with no registered transition.",
+      "expected_output_patterns": [
+        "[EVENT_RECEIVED] FSM: fsm-deploy-pipeline Event: DEPLOY_CODE State: PLANNING",
+        "\"violation_code\": \"UNAUTHORIZED_TRANSITION_ATTEMPT\"",
+        "No registered transition from state PLANNING on event DEPLOY_CODE"
+      ],
+      "prohibited_output_patterns": [
+        "[STATE_TRANSITION] FSM: fsm-deploy-pipeline From: PLANNING Event: DEPLOY_CODE To: DEPLOYED",
+        "=== FSM TERMINATED: fsm-deploy-pipeline FinalState: COMPLETED"
+      ]
+    },
+    {
+      "name": "guard_evaluation_failure_blocks_transition",
+      "description": "Transition lookup succeeds but boolean guard evaluation returns false, discarding event and keeping current state.",
+      "input": "Execute fsm-refactor in VERIFYING state receiving event VERIFY_PASS where all_checks_passed evaluates to false.",
+      "expected_output_patterns": [
+        "[EVENT_RECEIVED] FSM: fsm-refactor Event: VERIFY_PASS State: VERIFYING",
+        "[TRANSITION_BLOCKED] FSM: fsm-refactor Event: VERIFY_PASS Reason: Guard evaluation failed",
+        "\"violation_code\": \"GUARD_EVALUATION_FAILED\""
+      ],
+      "prohibited_output_patterns": [
+        "[STATE_TRANSITION] FSM: fsm-refactor From: VERIFYING Event: VERIFY_PASS To: COMPLETED",
+        "=== FSM TERMINATED: fsm-refactor FinalState: COMPLETED"
+      ]
+    },
+    {
+      "name": "atomic_exit_action_failure_halts",
+      "description": "Failure during atomic exit action triggers EXIT_ACTION_FAILED and transitions FSM to FAILED.",
+      "input": "Execute fsm-refactor transitioning from PLANNING to EXECUTING where on_exit_planning throws unhandled disk error.",
+      "expected_output_patterns": [
+        "[EVENT_RECEIVED] FSM: fsm-refactor Event: PLAN_APPROVED State: PLANNING",
+        "\"violation_code\": \"EXIT_ACTION_FAILED\"",
+        "[STATE_TRANSITION] FSM: fsm-refactor From: PLANNING Event: PLAN_APPROVED To: FAILED"
+      ],
+      "prohibited_output_patterns": [
+        "[STATE_TRANSITION] FSM: fsm-refactor From: PLANNING Event: PLAN_APPROVED To: EXECUTING",
+        "=== FSM TERMINATED: fsm-refactor FinalState: COMPLETED"
+      ]
+    },
+    {
+      "name": "atomic_entry_action_failure_halts",
+      "description": "Failure during atomic entry action triggers ENTRY_ACTION_FAILED and transitions FSM to FAILED.",
+      "input": "Execute fsm-refactor transitioning into EXECUTING state where on_enter_executing throws an initialization exception.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"ENTRY_ACTION_FAILED\"",
+        "[STATE_TRANSITION] FSM: fsm-refactor From: PLANNING Event: PLAN_APPROVED To: FAILED"
+      ],
+      "prohibited_output_patterns": [
+        "=== FSM TERMINATED: fsm-refactor FinalState: COMPLETED"
+      ]
+    },
+    {
+      "name": "infinite_loop_detection_bound_exceeded",
+      "description": "FSM cycling between operational states exceeds max_transitions bound, tripping INFINITE_LOOP_DETECTED defect.",
+      "input": "Execute fsm-loop-tester with max_transitions set to 10 cycling repeatedly between EXECUTING and VERIFYING.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"INFINITE_LOOP_DETECTED\"",
+        "=== FSM TERMINATED: fsm-loop-tester FinalState: FAILED"
+      ],
+      "prohibited_output_patterns": [
+        "=== FSM TERMINATED: fsm-loop-tester FinalState: COMPLETED"
+      ]
+    },
+    {
+      "name": "undeclared_terminal_state_rejection",
+      "description": "Validation detects a dead-end state with zero outgoing transitions that is not declared in terminal_states.",
+      "input": "Validate FsmDefinition with states [IDLE, PROCESSING, STUCK, COMPLETED] where STUCK has no outgoing transitions and is not in terminal_states.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"UNDECLARED_TERMINAL_STATE\""
+      ],
+      "prohibited_output_patterns": [
+        "=== FSM INITIALIZED:"
+      ]
+    }
+  ]
+}

@@ -37,6 +37,7 @@ test('schemas satisfy strict structured output rules', () => {
   assert.equal(WORKER_REPORT_SCHEMA.properties.decisionRequest.anyOf[1].type, 'null');
   assert.equal(DECISION_SCHEMA.properties.humanInput.anyOf[1].type, 'null');
   assert.deepEqual(DECISION_SCHEMA.properties.action.enum, ['dispatch', 'finish', 'request_human_input']);
+  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills']);
 });
 
 function report(overrides = {}) {
@@ -187,14 +188,40 @@ test('validateDecision enforces assignment rules', () => {
     bad({ role: 'orch-builder', allowedFiles: [file] }, /Unsafe allowedFiles/);
   }
   const writer = { allowedFiles: ['a.js'] };
-  bad({ role: 'orch-repair-xhigh', ...writer }, /after an orch-builder attempt/);
-  bad({ role: 'orch-repair-sol', ...writer }, /after an orch-repair-xhigh attempt/);
+  bad({ role: 'orch-repair-xhigh', ...writer }, /after an engineer attempt/);
+  bad({ role: 'orch-repair-sol', ...writer }, /after a recovery-engineer attempt/);
   validateDecision(dispatch([assignment({ role: 'orch-repair-xhigh', ...writer })]), ctx({ attemptedRoles: new Set(['orch-builder']) }));
   validateDecision(dispatch([assignment({ role: 'orch-repair-sol', ...writer })]), ctx({ attemptedRoles: new Set(['orch-repair-xhigh']) }));
   bad({ role: 'orch-architect' }, /prior evidence/, ctx({ outcomeCount: 0 }));
   bad({ role: 'orch-architect', objective: 'x'.repeat(241) }, /narrowly framed/);
   throws(dispatch([assignment({ role: 'orch-architect' }), assignment()]), ctx(), /narrowly framed/);
   validateDecision(dispatch([assignment({ role: 'orch-architect', objective: 'x'.repeat(240) })]), ctx());
+});
+
+test('canonical role IDs and legacy assignment IDs resolve to the same escalation gates', () => {
+  const canonicalRoles = new Map([
+    ['engineer', { name: 'engineer', sandbox: 'workspace-write' }],
+    ['recovery-engineer', { name: 'recovery-engineer', sandbox: 'workspace-write' }],
+    ['senior-engineer', { name: 'senior-engineer', sandbox: 'workspace-write' }],
+  ]);
+  const recovery = assignment({ role: 'recovery-engineer', allowedFiles: ['src/a.js'] });
+  throws(dispatch([recovery]), ctx({ roles: canonicalRoles }), /recovery-engineer.*engineer/);
+  const oldBuilder = assignment({ role: 'orch-builder', allowedFiles: ['src/a.js'] });
+  validateDecision(dispatch([oldBuilder]), ctx({ roles: canonicalRoles }));
+  assert.equal(oldBuilder.role, 'engineer');
+  validateDecision(dispatch([recovery]), ctx({ roles: canonicalRoles, attemptedRoles: new Set(['orch-builder']) }));
+  throws(dispatch([assignment({ role: 'senior-engineer', allowedFiles: ['src/a.js'] })]), ctx({ roles: canonicalRoles }), /senior-engineer.*recovery-engineer/);
+});
+
+test('assignment skills are bounded, unique, catalog-selectable, and legacy decisions remain valid', () => {
+  validateDecision(dispatch(), ctx()); // Older runtime callers omit skills.
+  const candidateCtx = ctx({ skillCandidateIds: new Set(['design', 'testing']), skillCatalog: new Map([['design', {}], ['testing', {}]]) });
+  validateDecision(dispatch([assignment({ skills: ['design', 'testing'] })]), candidateCtx);
+  throws(dispatch([assignment({ skills: ['design', 'design'] })]), ctx(), /skills must be unique/);
+  throws(dispatch([assignment({ skills: Array.from({ length: 6 }, (_, i) => `skill-${i}`) })]), ctx(), /at most 5/);
+  throws(dispatch([assignment({ skills: ['unknown'] })]), candidateCtx, /not advertised/);
+  throws(dispatch([assignment({ skills: ['not-catalogued'] })]), ctx({ skillCatalog: new Map() }), /Unknown skill/);
+  throws(dispatch([{ ...assignment(), skills: [], skillPins: [] }]), ctx(), /optionally skills/);
 });
 
 test('validateDecision enforces humanInput rules', () => {

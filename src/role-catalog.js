@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { canonicalRoleId, roleDisplayName } = require('./role-names');
 
 const DEFAULT_PROFILES_DIR = path.resolve(__dirname, '..', 'profiles');
 const REQUIRED_FIELDS = [
@@ -12,7 +13,7 @@ const REQUIRED_FIELDS = [
   'sandbox_mode',
   'developer_instructions',
 ];
-const STRING_FIELDS = new Set(REQUIRED_FIELDS);
+const STRING_FIELDS = new Set([...REQUIRED_FIELDS, 'display_name']);
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const SANDBOXES = new Set(['read-only', 'workspace-write']);
 const TOOLS_TABLE = 'a2a_tools';
@@ -98,7 +99,7 @@ function parseProfile(source, filePath) {
       throw new Error(`${filePath}: required non-empty string field ${key} is missing`);
     }
   }
-  if (!/^orch-[a-z0-9-]+$/.test(values.name)) {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(values.name)) {
     throw new Error(`${filePath}: invalid role name ${JSON.stringify(values.name)}`);
   }
   if (!EFFORTS.has(values.model_reasoning_effort)) {
@@ -110,8 +111,11 @@ function parseProfile(source, filePath) {
   if (!/^gpt-[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(values.model)) {
     throw new Error(`${filePath}: invalid model ${JSON.stringify(values.model)}`);
   }
+  const name = canonicalRoleId(values.name);
   return {
-    name: values.name,
+    name,
+    displayName: values.display_name || roleDisplayName(name),
+    sourceName: values.name,
     description: values.description,
     model: values.model,
     effort: values.model_reasoning_effort,
@@ -147,9 +151,10 @@ function loadRoles({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
   for (const fileName of fs.readdirSync(agentsDir).filter((name) => name.endsWith('.toml')).sort()) {
     const filePath = path.join(agentsDir, fileName);
     const role = parseProfile(fs.readFileSync(filePath, 'utf8'), filePath);
-    if (fileName !== `${role.name}.toml`) {
-      throw new Error(`${filePath}: filename must match role name ${role.name}`);
+    if (fileName !== `${role.sourceName}.toml`) {
+      throw new Error(`${filePath}: filename must match role name ${role.sourceName}`);
     }
+    delete role.sourceName;
     if (roles.has(role.name)) throw new Error(`${filePath}: duplicate role name ${role.name}`);
     role.instructions = runtimeInstructions(role.instructions, teamPath);
     roles.set(role.name, role);
@@ -166,7 +171,8 @@ function createLeadRole({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
   const inlineRules = teamRules.replaceAll('profiles/skills/', skillPath);
 
   return {
-    name: 'orch-lead',
+    name: 'coordinator',
+    displayName: roleDisplayName('coordinator'),
     description: 'Read-only orchestrator lead that plans work and dispatches bounded tasks to A2A roles.',
     model: 'gpt-6.1-sol',
     effort: 'high',

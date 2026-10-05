@@ -1,0 +1,86 @@
+{
+  "test_suite": "copy-on-write-evals",
+  "test_cases": [
+    {
+      "name": "pure_read_passthrough_zero_shadow_duplication",
+      "description": "Pure read operations routed directly to immutable baseline with zero shadow file duplication.",
+      "input": "Execute read on src/index.py and config.json under session cow-2026-read-test.",
+      "expected_output_patterns": [
+        "=== COW SESSION INITIALIZED: cow-2026-read-test ===",
+        "[COW_READ] Path: src/index.py ResolvedLayer: BASELINE",
+        "[COW_READ] Path: config.json ResolvedLayer: BASELINE"
+      ],
+      "prohibited_output_patterns": [
+        "[COW_DUPLICATION]",
+        "[COW_MUTATION]",
+        "\"violation_code\": \"BASELINE_MUTATION_BREACH\""
+      ]
+    },
+    {
+      "name": "lazy_copy_on_first_write_mutation",
+      "description": "First write to an unmodified resource triggers lazy copy to shadow directory, preserving baseline immutability.",
+      "input": "Execute write on auth_provider.py with updated async tokens in session cow-2026-001.",
+      "expected_output_patterns": [
+        "=== COW SESSION INITIALIZED: cow-2026-001 ===",
+        "[COW_DUPLICATION] File: auth_provider.py BaselineChecksum:",
+        "[COW_MUTATION] File: auth_provider.py MutationIndex: 1"
+      ],
+      "prohibited_output_patterns": [
+        "[COW_READ] Path: auth_provider.py ResolvedLayer: SHADOW",
+        "\"violation_code\": \"BASELINE_MUTATION_BREACH\""
+      ]
+    },
+    {
+      "name": "repeated_mutations_to_existing_shadow_file",
+      "description": "Subsequent write to already shadowed resource updates shadow copy directly without re-copying.",
+      "input": "Execute second and third writes to parser.py when resource is already present in ShadowRegistry.",
+      "expected_output_patterns": [
+        "[COW_MUTATION] File: parser.py MutationIndex: 2",
+        "[COW_MUTATION] File: parser.py MutationIndex: 3"
+      ],
+      "prohibited_output_patterns": [
+        "[COW_DUPLICATION] File: parser.py BaselineChecksum:"
+      ]
+    },
+    {
+      "name": "hypothesis_validation_pass_atomic_merge",
+      "description": "Validation command succeeds with exit code 0, promoting verified shadow mutations into baseline atomically.",
+      "input": "Initiate hypothesis validation for cow-2026-001 with test_command 'pytest tests/test_auth.py' passing 100 percent.",
+      "expected_output_patterns": [
+        "[HYPOTHESIS_VERIFIED] Session: cow-2026-001 Verdict: PASS",
+        "=== COW SESSION MERGED: cow-2026-001 ==="
+      ],
+      "prohibited_output_patterns": [
+        "[HYPOTHESIS_VERIFIED] Session: cow-2026-001 Verdict: FAIL",
+        "=== COW SESSION DISCARDED: cow-2026-001 ===",
+        "\"violation_code\": \"MERGE_VALIDATION_FAILED\""
+      ]
+    },
+    {
+      "name": "hypothesis_validation_fail_clean_discard",
+      "description": "Validation command fails with non-zero exit code or regression, destroying shadow directory and restoring 100 percent pristine baseline.",
+      "input": "Initiate hypothesis validation for cow-2026-002 with test_command 'pytest tests/test_perf.py' failing with regression.",
+      "expected_output_patterns": [
+        "[HYPOTHESIS_VERIFIED] Session: cow-2026-002 Verdict: FAIL",
+        "\"violation_code\": \"MERGE_VALIDATION_FAILED\"",
+        "=== COW SESSION DISCARDED: cow-2026-002 ==="
+      ],
+      "prohibited_output_patterns": [
+        "[HYPOTHESIS_VERIFIED] Session: cow-2026-002 Verdict: PASS",
+        "=== COW SESSION MERGED: cow-2026-002 ==="
+      ]
+    },
+    {
+      "name": "baseline_mutation_breach_blocked",
+      "description": "Attempt to bypass virtual router and write directly to baseline path halts immediately with BASELINE_MUTATION_BREACH.",
+      "input": "Attempt direct write to /workspace/project/src/index.py bypassing shadow routing.",
+      "expected_output_patterns": [
+        "\"violation_code\": \"BASELINE_MUTATION_BREACH\""
+      ],
+      "prohibited_output_patterns": [
+        "[COW_MUTATION]",
+        "=== COW SESSION MERGED:"
+      ]
+    }
+  ]
+}

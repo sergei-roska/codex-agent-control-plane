@@ -1,0 +1,77 @@
+{
+  "test_suite": "lru-context-pruner-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_threshold_triggered_eviction",
+      "description": "Full lifecycle execution where context utilization exceeds high watermark threshold, triggering LRU eviction down to target low watermark capacity and inserting semantic stub pointers.",
+      "input": "Ingest context reaching 85000 tokens in a 100000 capacity window with high_watermark_ratio 0.80 and low_watermark_ratio 0.60.",
+      "expected_output_patterns": [
+        "=== CONTEXT HIGH WATERMARK BREACHED: Tokens: 85000",
+        "[PRUNING_FILTER_APPLIED]",
+        "[BLOCK_EVICTED]",
+        "=== CONTEXT PRUNING COMPLETE:"
+      ],
+      "prohibited_output_patterns": [
+        "\"violation_code\": \"CONTEXT_BUDGET_OVERRUN\"",
+        "\"violation_code\": \"PRUNING_TARGET_UNREACHABLE\""
+      ]
+    },
+    {
+      "name": "dependency_preservation_skips_prerequisite",
+      "description": "Evaluates dependency graph preservation ensuring the lowest-recency block is protected from eviction when an active uncompleted task declares it as a dependent.",
+      "input": "Trigger pruning when oldest block ctx-02 is listed in dependent_block_ids of active block ctx-04.",
+      "expected_output_patterns": [
+        "=== CONTEXT HIGH WATERMARK BREACHED:",
+        "[PRUNING_FILTER_APPLIED]",
+        "[BLOCK_EVICTED] BlockId: ctx-03",
+        "=== CONTEXT PRUNING COMPLETE:"
+      ],
+      "prohibited_output_patterns": [
+        "[BLOCK_EVICTED] BlockId: ctx-02",
+        "\"violation_code\": \"ORPHANED_REFERENCE_PREVENTION\""
+      ]
+    },
+    {
+      "name": "pinned_block_immunity",
+      "description": "Verifies that system prompt and pinned memory blocks are immune from eviction regardless of age or recency order.",
+      "input": "Execute pruning on working context where oldest block ctx-01 has is_pinned set to true.",
+      "expected_output_patterns": [
+        "=== CONTEXT HIGH WATERMARK BREACHED:",
+        "[PRUNING_FILTER_APPLIED]",
+        "[BLOCK_EVICTED]",
+        "=== CONTEXT PRUNING COMPLETE:"
+      ],
+      "prohibited_output_patterns": [
+        "[BLOCK_EVICTED] BlockId: ctx-01",
+        "\"violation_code\": \"PINNED_BLOCK_EVICTION_ATTEMPT\""
+      ]
+    },
+    {
+      "name": "context_under_threshold_stable",
+      "description": "Verifies that context utilization below the high watermark ratio maintains active context without triggering candidate selection or eviction.",
+      "input": "Evaluate context footprint at 55000 tokens in a 100000 capacity window with high_watermark_ratio 0.80.",
+      "expected_output_patterns": [
+        "[CONTEXT_OK] Tokens: 55000/100000"
+      ],
+      "prohibited_output_patterns": [
+        "=== CONTEXT HIGH WATERMARK BREACHED:",
+        "[BLOCK_EVICTED]",
+        "=== CONTEXT PRUNING COMPLETE:"
+      ]
+    },
+    {
+      "name": "insufficient_headroom_defect_halt",
+      "description": "Fails fast and emits PRUNING_TARGET_UNREACHABLE defect report when all unpruned blocks are pinned or locked by dependencies, preventing attainment of low watermark.",
+      "input": "Execute pruning when context is 88000 tokens in a 100000 capacity window and all candidate blocks are either pinned or active dependencies.",
+      "expected_output_patterns": [
+        "=== CONTEXT HIGH WATERMARK BREACHED:",
+        "[PRUNING_FILTER_APPLIED] TotalBlocks: 3 Evictable: 0 Protected: 3",
+        "\"violation_code\": \"PRUNING_TARGET_UNREACHABLE\""
+      ],
+      "prohibited_output_patterns": [
+        "[BLOCK_EVICTED]",
+        "=== CONTEXT PRUNING COMPLETE:"
+      ]
+    }
+  ]
+}

@@ -1,12 +1,14 @@
 'use strict';
 
 const path = require('node:path');
+const { canonicalRoleId, getRole } = require('./role-names');
 
 const MAX_ASSIGNMENTS = 4;
 const MAX_ITEMS = 20;
 const MAX_CHARS = 3_000;
 const WORKER_REPORT_CONTRACT = 'worker-report/v1';
 const ASSIGNMENT_FIELDS = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
+const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills'];
 const ASSIGNMENT_ARRAY_FIELDS = ASSIGNMENT_FIELDS.filter((field) => field !== 'role' && field !== 'objective');
 const REPORT_OUTCOMES = ['completed', 'blocked', 'needs_decision', 'failed'];
 const CHECK_RESULTS = ['passed', 'failed', 'not_run'];
@@ -88,7 +90,7 @@ const DECISION_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ASSIGNMENT_FIELDS,
+        required: DECISION_ASSIGNMENT_FIELDS,
         properties: {
           role: { type: 'string' },
           objective: { type: 'string' },
@@ -98,6 +100,7 @@ const DECISION_SCHEMA = {
           acceptanceCriteria: stringArray,
           checks: stringArray,
           stopConditions: stringArray,
+          skills: { type: 'array', items: { type: 'string' }, maxItems: 5 },
         },
       },
     },
@@ -256,11 +259,15 @@ function parseWorkerReport(text) {
 
 function checkAssignment(assignment, decision, ctx) {
   if (!isPlainObject(assignment)) throw new Error('Each assignment must be an object');
-  if (!sameKeys(assignment, ASSIGNMENT_FIELDS)) {
-    throw new Error('Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, and stopConditions');
+  const legacy = sameKeys(assignment, ASSIGNMENT_FIELDS);
+  if (!legacy && !sameKeys(assignment, DECISION_ASSIGNMENT_FIELDS)) {
+    throw new Error('Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and optionally skills');
   }
-  const role = ctx.roles.get(assignment.role);
+  // Older checkpoints and callers predate assignment skill routing.
+  if (legacy) assignment.skills = [];
+  const role = getRole(ctx.roles, assignment.role);
   if (!role) throw new Error(`Unknown role: ${String(assignment.role)}`);
+  assignment.role = role.name;
   if (!isNonEmptyString(assignment.objective)) throw new Error(`Assignment for ${role.name} needs an objective`);
   for (const field of ASSIGNMENT_ARRAY_FIELDS) {
     if (!Array.isArray(assignment[field]) || assignment[field].some((value) => !isNonEmptyString(value))) {
@@ -269,6 +276,17 @@ function checkAssignment(assignment, decision, ctx) {
     if (assignment[field].length > MAX_ITEMS || assignment[field].some((value) => value.length > MAX_CHARS)) {
       throw new Error(`Assignment for ${role.name} exceeds the size limit for ${field}`);
     }
+  }
+  if (!Array.isArray(assignment.skills) || assignment.skills.some((id) => !isNonEmptyString(id))) {
+    throw new Error(`Assignment for ${role.name} needs a string array for skills`);
+  }
+  if (assignment.skills.length > 5) throw new Error(`Assignment for ${role.name} may select at most 5 skills`);
+  if (new Set(assignment.skills).size !== assignment.skills.length) throw new Error(`Assignment for ${role.name} skills must be unique`);
+  const selectable = ctx.skillCandidateIds ? new Set(ctx.skillCandidateIds) : null;
+  const catalog = ctx.skillCatalog;
+  for (const id of assignment.skills) {
+    if (selectable && !selectable.has(id)) throw new Error(`Skill ${id} was not advertised as a candidate`);
+    if (catalog && !catalog.has(id)) throw new Error(`Unknown skill: ${id}`);
   }
   if (assignment.inputs.length === 0) throw new Error(`Assignment for ${role.name} requires bounded inputs`);
   if (assignment.evidence.length === 0) throw new Error(`Assignment for ${role.name} requires prior evidence`);
@@ -281,13 +299,15 @@ function checkAssignment(assignment, decision, ctx) {
   if (assignment.acceptanceCriteria.length === 0 || assignment.checks.length === 0 || assignment.stopConditions.length === 0) {
     throw new Error(`Assignment for ${role.name} requires acceptanceCriteria, checks, and stopConditions`);
   }
-  if (role.name === 'orch-repair-xhigh' && !ctx.attemptedRoles.has('orch-builder')) {
-    throw new Error('orch-repair-xhigh can only be dispatched after an orch-builder attempt');
+  const attemptedRoles = new Set([...ctx.attemptedRoles].map(canonicalRoleId));
+  const canonicalRole = canonicalRoleId(role.name);
+  if (canonicalRole === 'recovery-engineer' && !attemptedRoles.has('engineer')) {
+    throw new Error('recovery-engineer can only be dispatched after an engineer attempt');
   }
-  if (role.name === 'orch-repair-sol' && !ctx.attemptedRoles.has('orch-repair-xhigh')) {
-    throw new Error('orch-repair-sol can only be dispatched after an orch-repair-xhigh attempt');
+  if (canonicalRole === 'senior-engineer' && !attemptedRoles.has('recovery-engineer')) {
+    throw new Error('senior-engineer can only be dispatched after a recovery-engineer attempt');
   }
-  if (role.name === 'orch-architect') {
+  if (canonicalRole === 'architect') {
     if (ctx.outcomeCount === 0) throw new Error('orch-architect requires inspected prior evidence');
     if (assignment.objective.length > 240 || decision.assignments.length !== 1) {
       throw new Error('orch-architect must receive one narrowly framed decision');
@@ -353,7 +373,7 @@ function validateDecision(decision, ctx) {
     if (decision.humanInput !== null) throw new Error('Dispatch decisions must leave humanInput null');
     for (const assignment of decision.assignments) checkAssignment(assignment, decision, ctx);
     const unresolved = ctx.unresolvedWriterCount || 0;
-    if (unresolved > 0 && decision.assignments.some((assignment) => ctx.roles.get(assignment.role)?.sandbox !== 'read-only')) {
+    if (unresolved > 0 && decision.assignments.some((assignment) => getRole(ctx.roles, assignment.role)?.sandbox !== 'read-only')) {
       throw new Error(`Writable dispatch refused: ${unresolved} writer outcome(s) are unresolved`);
     }
   }
@@ -400,5 +420,6 @@ module.exports = {
   findCodexErrorInfo,
   safeRelativePath,
   ASSIGNMENT_FIELDS,
+  DECISION_ASSIGNMENT_FIELDS,
   MAX_ASSIGNMENTS,
 };

@@ -1,0 +1,108 @@
+{
+  "test_suite": "event-sourcing-evals",
+  "test_cases": [
+    {
+      "name": "happy_path_event_append_and_projection",
+      "description": "Standard operational action generates an event envelope, calculates SHA-256 integrity hash, passes optimistic concurrency check, appends to stream, and updates state projection cleanly.",
+      "input": "Record file creation src/main.py in stream workspace:ws-01 with expected_version: 0.",
+      "expected_output_patterns": [
+        "=== EVENT STREAM INITIALIZED: workspace:ws-01 ===",
+        "[EVENT_APPENDED] Stream: workspace:ws-01 Seq: 1 Type: FileCreated",
+        "[PROJECTION_UPDATED] Stream: workspace:ws-01 Seq: 1"
+      ],
+      "prohibited_output_patterns": [
+        "[DEFECT_REPORT]",
+        "EVENT_MUTATION_FORBIDDEN",
+        "OPTIMISTIC_CONCURRENCY_CONFLICT",
+        "FAULTED"
+      ]
+    },
+    {
+      "name": "deterministic_replay_time_travel",
+      "description": "Reconstruct system state up to sequence 1 from baseline on-demand, verifying reproducible state.",
+      "input": "Execute replay on stream workspace:ws-01 with target_seq: 1.",
+      "expected_output_patterns": [
+        "[REPLAY_INIT] Stream: workspace:ws-01 FromSeq: 1 ToSeq: 1",
+        "[REPLAY_COMPLETE] Stream: workspace:ws-01 TargetSeq: 1"
+      ],
+      "prohibited_output_patterns": [
+        "[DEFECT_REPORT]",
+        "REPLAY_DIVERGENCE_DETECTED",
+        "INTEGRITY_HASH_MISMATCH"
+      ]
+    },
+    {
+      "name": "optimistic_concurrency_conflict_rejection",
+      "description": "Attempt to append event with expected_version different from current_seq is rejected with OPTIMISTIC_CONCURRENCY_CONFLICT.",
+      "input": "Propose event for workspace:ws-01 with expected_version: 0 when current_seq is 1.",
+      "expected_output_patterns": [
+        "OPTIMISTIC_CONCURRENCY_CONFLICT",
+        "Stream version divergence"
+      ],
+      "prohibited_output_patterns": [
+        "[EVENT_APPENDED] Stream: workspace:ws-01 Seq: 1",
+        "[PROJECTION_UPDATED]"
+      ]
+    },
+    {
+      "name": "event_mutation_forbidden_defect",
+      "description": "Any update or deletion attempt against historical event log halts execution immediately with EVENT_MUTATION_FORBIDDEN.",
+      "input": "Attempt in-place overwrite of historical event record sequence 1 in workspace:ws-01.",
+      "expected_output_patterns": [
+        "EVENT_MUTATION_FORBIDDEN",
+        "Historical event record altered or corrupted"
+      ],
+      "prohibited_output_patterns": [
+        "[EVENT_APPENDED]",
+        "[PROJECTION_UPDATED]"
+      ]
+    },
+    {
+      "name": "sequence_gap_detected_defect",
+      "description": "Attempt to append event with sequence gap or non-contiguous sequence is rejected with SEQUENCE_GAP_DETECTED.",
+      "input": "Append event with sequence 3 when current_seq is 1 in stream workspace:ws-01.",
+      "expected_output_patterns": [
+        "SEQUENCE_GAP_DETECTED"
+      ],
+      "prohibited_output_patterns": [
+        "[EVENT_APPENDED] Stream: workspace:ws-01 Seq: 3",
+        "[PROJECTION_UPDATED]"
+      ]
+    },
+    {
+      "name": "projection_fold_failure_defect",
+      "description": "Exception during projection handler execution transitions system to FAULTED state with PROJECTION_FOLD_FAILURE.",
+      "input": "Execute projection fold where handler throws unhandled exception for event payload.",
+      "expected_output_patterns": [
+        "PROJECTION_FOLD_FAILURE",
+        "FAULTED"
+      ],
+      "prohibited_output_patterns": [
+        "[PROJECTION_UPDATED] Stream: workspace:ws-01"
+      ]
+    },
+    {
+      "name": "schema_validation_error_defect",
+      "description": "Event with invalid payload schema or missing required fields halts append with SCHEMA_VALIDATION_ERROR.",
+      "input": "Propose event with missing required metadata fields or malformed payload schema.",
+      "expected_output_patterns": [
+        "SCHEMA_VALIDATION_ERROR"
+      ],
+      "prohibited_output_patterns": [
+        "[EVENT_APPENDED]",
+        "[PROJECTION_UPDATED]"
+      ]
+    },
+    {
+      "name": "integrity_hash_mismatch_defect",
+      "description": "Replay detects corrupted event envelope whose computed SHA-256 hash does not match integrity_hash.",
+      "input": "Execute replay on stream workspace:ws-01 where event record 2 has modified payload bytes.",
+      "expected_output_patterns": [
+        "INTEGRITY_HASH_MISMATCH"
+      ],
+      "prohibited_output_patterns": [
+        "[REPLAY_COMPLETE] Stream: workspace:ws-01 TargetSeq: 2"
+      ]
+    }
+  ]
+}
