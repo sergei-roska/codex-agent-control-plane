@@ -51,11 +51,13 @@ Policy:
   `accepted`. FAIL wins over UNKNOWN, so a failed check is never hidden.
 - Advisory predicates are recorded and shown, and never change a disposition.
 - A violation record is
-  `{ predicate, result, code, boundary, detail, evidence }`: `predicate` is the
-  registry id, `code` is a stable snake_case string, `boundary` is `dispatch`,
-  `settlement`, or `acceptance`, `detail` is at most 500 chars, and `evidence`
-  is a list of evidence refs (`docs/evidence-artifact-contract.md`) or source
-  pointers such as `writer_executions:<executionId>`.
+  `{ predicate, result, code, boundary, detail, evidence, advisory }`:
+  `predicate` is the registry id, `code` is a stable snake_case string,
+  `boundary` is `dispatch`, `settlement`, or `acceptance`, `detail` is at most
+  500 chars, `evidence` is a list of evidence refs
+  (`docs/evidence-artifact-contract.md`) or source pointers such as
+  `writer_executions:<executionId>`, and `advisory` is true only for advisory
+  predicates. Records are kept for `FAIL`, `UNKNOWN`, and `ERROR` results only.
 
 ## Predicate registry
 
