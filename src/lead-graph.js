@@ -386,6 +386,18 @@ function outcomeDigest(outcome, { compact = false } = {}) {
   };
 }
 
+function elisionEntry(outcome) {
+  const codes = (outcome.boundary?.results || []).filter((entry) => entry.advisory !== true).map((entry) => entry.code);
+  return {
+    elided: true,
+    assignmentId: outcome.assignmentId ?? null,
+    attemptId: outcome.attemptId ?? null,
+    role: outcome.role ?? null,
+    status: outcome.status ?? outcome.state ?? null,
+    violationCodes: [...new Set(codes.filter((code) => typeof code === 'string'))],
+  };
+}
+
 // Outcome JSON for the lead prompt: newest outcomes in full while they fit, older ones as digests.
 function boundedOutcomes(outcomes, limit = MAX_PROMPT_OUTCOMES_CHARS) {
   const size = (value) => JSON.stringify(value).length + 1;
@@ -394,7 +406,7 @@ function boundedOutcomes(outcomes, limit = MAX_PROMPT_OUTCOMES_CHARS) {
   let used = 200; // headroom for the elision note
   // Reconciliation outcomes are small and always kept in full.
   outcomes.forEach((outcome, index) => { if (outcome.kind === 'reconciliation') { picked[index] = outcome; used += size(outcome); } });
-  let elided = 0;
+  const unfit = [];
   for (let index = outcomes.length - 1; index >= 0; index -= 1) {
     if (picked[index]) continue;
     const full = outcomes[index];
@@ -402,7 +414,14 @@ function boundedOutcomes(outcomes, limit = MAX_PROMPT_OUTCOMES_CHARS) {
     // Only the newest outcome may stay full when it fits; once one is digested, older ones are digests.
     const start = picked.slice(index + 1).some((entry) => entry?.digest) ? 1 : 0;
     const fit = candidates.slice(start).map((make) => make()).find((candidate) => used + size(candidate) <= limit);
-    if (fit) { picked[index] = fit; used += size(fit); } else { elided += 1; }
+    if (fit) { picked[index] = fit; used += size(fit); } else { unfit.push(index); }
+  }
+  // Outcomes that do not fit even as compact digests shrink to an elision entry (identity, status,
+  // blocking violation codes); only when those do not fit either does a bare count remain.
+  let elided = 0;
+  for (const index of unfit) {
+    const entry = elisionEntry(outcomes[index]);
+    if (used + size(entry) <= limit) { picked[index] = entry; used += size(entry); } else { elided += 1; }
   }
   const result = picked.filter(Boolean);
   if (elided > 0) result.unshift({ digest: true, elided, note: 'Older outcomes were elided to fit the prompt bound.' });

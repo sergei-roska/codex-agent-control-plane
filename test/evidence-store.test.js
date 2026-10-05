@@ -149,8 +149,8 @@ test('put rejects invalid input', () => {
 
 test('per-run quota yields a not_stored ref and does not throw', () => {
   const { store } = setup();
-  const chunk = Buffer.alloc(MAX_STORED_BYTES, 1);
-  for (let i = 0; i < MAX_RUN_BYTES / MAX_STORED_BYTES; i += 1) assert.equal(store.put(input(chunk)).stored, true);
+  // Distinct bytes per put: identical producer output would be an idempotent replay.
+  for (let i = 0; i < MAX_RUN_BYTES / MAX_STORED_BYTES; i += 1) assert.equal(store.put(input(Buffer.alloc(MAX_STORED_BYTES, i + 1))).stored, true);
   const over = store.put(input('one more'));
   assert.equal(over.stored, false);
   assert.equal(over.error, 'evidence_quota_exceeded');
@@ -371,4 +371,50 @@ test('CLI main returns codes through injected streams and opens read-only', (t) 
   assert.equal(main(['--run', 'run-1', '--state', path.join(path.dirname(file), 'missing.sqlite')], {}, io), 1);
   assert.equal(main([], {}, io), 2);
   assert.equal(err.length, 2);
+});
+
+test('put is idempotent for the same producer output and writes nothing twice', () => {
+  const { db, store } = setup();
+  const first = store.put(input('same bytes', { attemptId: 'a1', taskId: 't1', checkId: 'c1' }));
+  const again = store.put(input('same bytes', { attemptId: 'a1', taskId: 't1', checkId: 'c1' }));
+  assert.equal(again.id, first.id);
+  assert.deepEqual(again, first);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM evidence').get().n, 1);
+  // Null ids compare equal to null.
+  const n1 = store.put(input('null ids'));
+  assert.equal(store.put(input('null ids')).id, n1.id);
+  // A different key component produces a new row.
+  assert.notEqual(store.put(input('same bytes', { attemptId: 'a2', taskId: 't1', checkId: 'c1' })).id, first.id);
+  assert.notEqual(store.put(input('same bytes', { attemptId: 'a1', taskId: 't1', checkId: 'c1', kind: 'check_stderr' })).id, first.id);
+  assert.notEqual(store.put(input('other bytes', { attemptId: 'a1', taskId: 't1', checkId: 'c1' })).id, first.id);
+  assert.notEqual(store.put(input('same bytes', { attemptId: 'a1', taskId: 't1', checkId: 'c1', runId: 'run-2' })).id, first.id);
+});
+
+test('an idempotent put does not consume quota again and also covers not_stored rows', () => {
+  const { db, store } = setup();
+  const big = Buffer.alloc(MAX_STORED_BYTES - 1, 'a');
+  const refs = [];
+  for (let i = 0; i < 8; i += 1) refs.push(store.put(input(Buffer.concat([big, Buffer.from([98 + i])]), { checkId: `c${i}` })));
+  assert.ok(refs.every((ref) => ref.stored));
+  const used = () => db.prepare("SELECT SUM(stored_bytes) AS n FROM evidence WHERE state = 'stored'").get().n;
+  assert.ok(used() <= MAX_RUN_BYTES);
+  const replay = store.put(input(Buffer.concat([big, Buffer.from([98])]), { checkId: 'c0' }));
+  assert.equal(replay.id, refs[0].id);
+  const over = store.put(input('overflow content that exceeds nothing but quota', { checkId: 'cx', content: Buffer.alloc(MAX_STORED_BYTES, 'z') }));
+  assert.equal(over.stored, false);
+  assert.equal(over.error, 'evidence_quota_exceeded');
+  const rows = db.prepare('SELECT COUNT(*) AS n FROM evidence').get().n;
+  const overAgain = store.put(input('x', { checkId: 'cx', content: Buffer.alloc(MAX_STORED_BYTES, 'z') }));
+  assert.equal(overAgain.id, over.id);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM evidence').get().n, rows);
+});
+
+test('an expired row is not reused by put', () => {
+  const { store, tick } = setup();
+  const first = store.put(input('data', { checkId: 'c1' }));
+  tick(31 * 24 * 60 * 60 * 1000);
+  store.sweepExpired();
+  const second = store.put(input('data', { checkId: 'c1' }));
+  assert.notEqual(second.id, first.id);
+  assert.equal(second.stored, true);
 });

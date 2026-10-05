@@ -1653,3 +1653,43 @@ test('boundedOutcomes keeps newest outcomes whole, digests older ones with diagn
   const few = [outcome(1), outcome(2)];
   assert.equal(boundedOutcomes(few), few);
 });
+
+test('boundedOutcomes elides older outcomes into entries with identity and blocking violation codes', () => {
+  const outcome = (index) => ({
+    assignmentId: `a${index}`, attemptId: `run:r1:a${index}:t1`, role: 'engineer', status: 'TASK_STATE_FAILED',
+    report: { outcome: 'failed', summary: 's'.repeat(2000) }, reportError: null, failureKind: null, scopeViolations: [],
+    attestedScopeViolations: [], attestedDeltaKnown: true, writerExecution: null, effects: null, filler: 'f'.repeat(5000),
+    boundary: { contract: 'legacy', results: [
+      { predicate: 'p1', result: 'FAIL', code: `block_${index % 3}`, advisory: false },
+      { predicate: 'p2', result: 'FAIL', code: `block_${index % 3}` },
+      { predicate: 'p3', result: 'FAIL', code: 'only_advisory', advisory: true },
+    ] },
+    evidence: [{ id: `ev_${String(index).padStart(32, '0')}` }],
+  });
+  const many = Array.from({ length: 90 }, (_, i) => outcome(i));
+  const limit = 20_000;
+  const bounded = boundedOutcomes(many, limit);
+  assert.ok(JSON.stringify(bounded).length <= limit, `${JSON.stringify(bounded).length}`);
+  const elided = bounded.filter((entry) => entry.elided === true);
+  assert.ok(elided.length >= 3, `${elided.length} elision entries`);
+  for (const entry of elided) {
+    const index = Number(entry.assignmentId.slice(1));
+    assert.deepEqual(Object.keys(entry).sort(), ['assignmentId', 'attemptId', 'elided', 'role', 'status', 'violationCodes']);
+    assert.equal(entry.attemptId, `run:r1:a${index}:t1`);
+    assert.equal(entry.role, 'engineer');
+    assert.equal(entry.status, 'TASK_STATE_FAILED');
+    assert.deepEqual(entry.violationCodes, [`block_${index % 3}`]);
+  }
+  // Newest outcomes stay full or digested; the oldest are the ones elided.
+  assert.equal(bounded.at(-1).assignmentId, 'a89');
+  assert.equal(bounded.at(-1).elided, undefined);
+  const elidedIndexes = elided.map((entry) => Number(entry.assignmentId.slice(1)));
+  const detailed = bounded.filter((entry) => entry.elided !== true && entry.assignmentId).map((entry) => Number(entry.assignmentId.slice(1)));
+  assert.ok(Math.max(...elidedIndexes) < Math.min(...detailed));
+  // When even elision entries do not fit, a single count digest covers the remainder.
+  const tiny = boundedOutcomes(many, 1500);
+  assert.ok(JSON.stringify(tiny).length <= 1500, `${JSON.stringify(tiny).length}`);
+  const counter = tiny.filter((entry) => entry.digest && typeof entry.elided === 'number');
+  assert.equal(counter.length, 1);
+  assert.ok(counter[0].elided > 0 && typeof counter[0].note === 'string');
+});
