@@ -575,7 +575,7 @@ test('onTurnStart runs before turn/start is written and receives the identity', 
   assert.equal(sentAtCall.includes('turn/start'), false);
   assert.deepEqual(seen, { processIdentity: identityOf(4000), threadId: 'thread-1' });
   assert.deepEqual(result.execution, {
-    processIdentity: identityOf(4000), threadId: 'thread-1', turnId: 'turn-1', turnStartSent: true, turnStartRejected: false, turnTerminal: true,
+    processIdentity: identityOf(4000), generation: 1, threadId: 'thread-1', turnId: 'turn-1', turnStartSent: true, turnStartRejected: false, turnTerminal: true,
   });
   assert.equal(client.processIdentity().pid, 4000);
 });
@@ -1331,4 +1331,316 @@ test('reports startupMs and coldStart on the first run of a process only', async
   const second = await client.run({ role, cwd: '/tmp/project', input: 'two' });
   assert.equal(second.usage.coldStart, false);
   assert.equal(second.usage.startupMs, null);
+});
+
+// ---- Supervisor policy (supervisor-policy/v1), driven by a fake clock ----
+
+function fakeClock(start = 1_000_000) {
+  let now = start;
+  let timers = [];
+  let seq = 0;
+  const flush = async () => { for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setImmediate(resolve)); };
+  return {
+    now: () => now,
+    setTimeout(fn, ms) { const timer = { id: ++seq, at: now + ms, fn }; timers.push(timer); return timer; },
+    clearTimeout(timer) { timers = timers.filter((candidate) => candidate !== timer); },
+    pending: () => timers.length,
+    flush,
+    async advance(ms) {
+      const target = now + ms;
+      for (;;) {
+        await flush();
+        const next = timers.filter((timer) => timer.at <= target).sort((a, b) => a.at - b.at || a.id - b.id)[0];
+        if (!next) break;
+        timers = timers.filter((timer) => timer !== next);
+        now = Math.max(now, next.at);
+        next.fn();
+      }
+      now = target;
+      await flush();
+    },
+  };
+}
+
+function supervisedHandler(mode = {}) {
+  const inner = baseHandler();
+  return (request, send) => {
+    if (request.method === 'initialize' && mode.initError) {
+      return send({ id: request.id, error: { code: -1, message: 'init refused' } });
+    }
+    return inner(request, send);
+  };
+}
+
+function supervised(t, { mode = {}, ...options } = {}) {
+  const clock = fakeClock();
+  const fake = fakeSpawn(supervisedHandler(mode));
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, clock, ...options });
+  t.after(() => client.close());
+  const crash = async () => { fake.getChild().emit('exit', 1, null); await clock.flush(); };
+  return { clock, fake, client, crash };
+}
+
+const kindsOf = (client) => client.supervisorState().events.map((event) => event.kind);
+
+test('supervisor: repeated crashes inside the window back off, then exhaust the budget', async (t) => {
+  const { clock, fake, client, crash } = supervised(t);
+  await client.start();
+  assert.equal(client.supervisorState().state, 'running');
+  assert.equal(client.supervisorState().generation, 1);
+
+  await crash();
+  assert.equal(client.supervisorState().state, 'stopped');
+  await client.start(); // 1st charged ending: no delay
+  assert.equal(fake.getChildren().length, 2);
+
+  await crash();
+  const second = Promise.all([client.start(), client.start()]); // 2nd: 1000 ms backoff, shared start
+  await clock.flush();
+  assert.equal(client.supervisorState().state, 'backoff');
+  assert.ok(client.supervisorState().nextStartAt);
+  assert.equal(fake.getChildren().length, 2);
+  await clock.advance(999);
+  assert.equal(fake.getChildren().length, 2);
+  await clock.advance(1);
+  await second;
+  assert.equal(fake.getChildren().length, 3);
+  assert.equal(client.supervisorState().state, 'running');
+
+  await crash();
+  const third = client.start(); // 3rd: 4000 ms backoff
+  await clock.advance(3999);
+  assert.equal(fake.getChildren().length, 3);
+  await clock.advance(1);
+  await third;
+  assert.equal(fake.getChildren().length, 4);
+
+  await crash(); // 4th charged ending inside the window
+  const state = client.supervisorState();
+  assert.equal(state.state, 'exhausted');
+  assert.equal(state.chargedInWindow, 4);
+  assert.ok(state.nextProbeAt);
+  await assert.rejects(client.start(), (error) => {
+    assert.equal(error.name, 'CodexAppServerError');
+    assert.equal(error.code, 'supervisor_exhausted');
+    assert.equal(error.failureClass, 'supervisor_exhausted');
+    assert.equal(error.outcomeUnknown, false);
+    assert.match(error.message, /process_exit/);
+    assert.ok(error.message.includes(state.nextProbeAt));
+    return true;
+  });
+  assert.equal(fake.getChildren().length, 4);
+  assert.deepEqual(kindsOf(client).filter((kind) => kind === 'backoff' || kind === 'exhausted'), ['backoff', 'backoff', 'exhausted']);
+});
+
+test('supervisor: crashes spread outside the window never exhaust the budget', async (t) => {
+  const { clock, fake, client, crash } = supervised(t);
+  await client.start();
+  for (let i = 0; i < 6; i += 1) {
+    await crash();
+    await clock.advance(61_000);
+    await client.start();
+    assert.equal(client.supervisorState().state, 'running');
+  }
+  assert.equal(fake.getChildren().length, 7);
+  assert.equal(client.supervisorState().chargedInWindow, 0);
+  assert.equal(kindsOf(client).includes('backoff'), false);
+  assert.equal(kindsOf(client).includes('exhausted'), false);
+});
+
+async function exhaust(clock, fake, client, crash) {
+  await client.start();
+  for (let i = 0; i < 4; i += 1) {
+    await crash();
+    if (i < 3) {
+      const pending = client.start();
+      await clock.advance(4_000);
+      await pending;
+    }
+  }
+  assert.equal(client.supervisorState().state, 'exhausted');
+}
+
+test('supervisor: a probe after the cooldown recovers and resets the budget; callers share one spawn', async (t) => {
+  const { clock, fake, client, crash } = supervised(t);
+  await exhaust(clock, fake, client, crash);
+  const spawned = fake.getChildren().length;
+  await clock.advance(59_999);
+  await assert.rejects(client.start(), { code: 'supervisor_exhausted' });
+  assert.equal(fake.getChildren().length, spawned);
+  await clock.advance(1);
+  await Promise.all([client.start(), client.start(), client.start()]);
+  assert.equal(fake.getChildren().length, spawned + 1);
+  const state = client.supervisorState();
+  assert.equal(state.state, 'running');
+  assert.equal(state.chargedInWindow, 0);
+  assert.equal(state.nextProbeAt, null);
+  assert.ok(kindsOf(client).includes('probe'));
+  assert.equal(kindsOf(client).at(-1), 'recovered');
+  // The window restarted: one more crash is charged as the first ending again (no delay).
+  await crash();
+  await client.start();
+  assert.equal(fake.getChildren().length, spawned + 2);
+});
+
+test('supervisor: a failed probe doubles the cooldown up to the cap', async (t) => {
+  const mode = {};
+  const { clock, fake, client, crash } = supervised(t, { mode });
+  await exhaust(clock, fake, client, crash);
+  mode.initError = true;
+  const cooldowns = [];
+  let previous = clock.now();
+  let wait = 60_000;
+  for (let i = 0; i < 6; i += 1) {
+    await clock.advance(wait);
+    const spawned = fake.getChildren().length;
+    await assert.rejects(Promise.all([client.start(), client.start()]), { failureClass: 'spawn_failed', outcomeUnknown: false });
+    assert.equal(fake.getChildren().length, spawned + 1);
+    const state = client.supervisorState();
+    assert.equal(state.state, 'exhausted');
+    const gap = Date.parse(state.nextProbeAt) - clock.now();
+    cooldowns.push(gap);
+    wait = gap;
+    previous = clock.now();
+  }
+  assert.deepEqual(cooldowns, [120_000, 240_000, 480_000, 600_000, 600_000, 600_000]);
+  assert.ok(previous > 0);
+  await clock.advance(600_000);
+  mode.initError = false;
+  await client.start();
+  assert.equal(client.supervisorState().state, 'running');
+  // Recovery restores the base cooldown.
+  assert.equal(client.currentCooldownMs, 60_000);
+});
+
+test('supervisor: a leader that never exits is bypassed after exitWaitMs with an unreaped event', async (t) => {
+  const survivors = [{ pid: 5001, ppid: 1, comm: 'sleep', startTime: '9' }];
+  const clock = fakeClock();
+  const fake = fakeSpawn(baseHandler(), { pidBase: 5000 });
+  const client = new CodexAppServer({
+    spawnImpl: fake.spawnImpl,
+    clock,
+    killImpl: () => {},
+    readProcessIdentityImpl: identityOf,
+    listGroupMembersImpl: () => survivors,
+  });
+  t.after(() => client.close());
+  await client.start();
+  const first = fake.getChild();
+  first.kill = () => true; // the leader ignores termination
+  first.stdout.write('not json\n');
+  await clock.flush();
+  assert.equal(client.supervisorState().state, 'stopped');
+
+  const restart = client.start();
+  await clock.advance(4_999);
+  assert.equal(fake.getChildren().length, 1);
+  await clock.advance(1);
+  await restart;
+  assert.equal(fake.getChildren().length, 2);
+  const unreaped = client.supervisorState().events.find((event) => event.kind === 'unreaped');
+  assert.ok(unreaped);
+  assert.deepEqual(unreaped.survivors, survivors);
+  assert.equal(unreaped.generation, 1);
+  assert.equal(client.supervisorState().generation, 2);
+});
+
+test('supervisor: only a run that sent turn/start gets outcomeUnknown after a shared process failure', async (t) => {
+  const clock = fakeClock();
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'thread/resume' && request.params.threadId === 'thread-b') return undefined; // never answered
+    if (request.method === 'turn/start') return send({ id: request.id, result: { turn: { id: 'turn-a', status: 'inProgress' } } });
+    return send({ id: request.id, result: {} });
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, clock });
+  t.after(() => client.close());
+  const started = client.run({ role, cwd: '/tmp/a', input: 'a', threadId: 'thread-a' }).then(() => null, (error) => error);
+  const sibling = client.run({ role, cwd: '/tmp/b', input: 'b', threadId: 'thread-b' }).then(() => null, (error) => error);
+  while (!fake.getChild()?.sent.some((message) => message.method === 'turn/start')) await clock.flush();
+  await clock.flush();
+  fake.getChild().emit('exit', 137, null);
+  const [errorA, errorB] = await Promise.all([started, sibling]);
+  assert.equal(errorA.outcomeUnknown, true);
+  assert.equal(errorA.execution.turnStartSent, true);
+  assert.equal(errorA.failureClass, 'process_exit');
+  assert.equal(errorB.outcomeUnknown, false);
+  assert.equal(errorB.execution.turnStartSent, false);
+  assert.equal(errorB.failureClass, 'process_exit');
+  assert.notEqual(errorA, errorB);
+  assert.equal(errorA.generation, 1);
+  assert.equal(errorB.generation, 1);
+  assert.equal(client.supervisorState().chargedInWindow, 1);
+  assert.ok(client.lastTermination);
+});
+
+test('supervisor: usage_limit, rpc_timeout, request_rejected and domain_failure neither restart nor charge', async (t) => {
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'account/read') return undefined; // times out
+    if (request.method === 'thread/resume') return send({ id: request.id, error: { code: -32000, message: 'no such thread' } });
+    if (request.method === 'thread/start') return send({ id: request.id, result: { thread: { id: `thread-${request.id}` } } });
+    if (request.method === 'turn/start') {
+      const turnId = `turn-${request.id}`;
+      const text = request.params.input[0].text;
+      send({ id: request.id, result: { turn: { id: turnId, status: 'inProgress' } } });
+      const error = text === 'limit' ? { message: 'quota', codexErrorInfo: 'usageLimitExceeded' } : { message: 'bad' };
+      setImmediate(() => send({ method: 'turn/completed', params: { threadId: request.params.threadId, turn: { id: turnId, status: 'failed', error } } }));
+      return undefined;
+    }
+    return send({ id: request.id, result: {} });
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 20 });
+  t.after(() => client.close());
+
+  await assert.rejects(client.getAccount(), { failureClass: 'rpc_timeout' });
+  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'x', threadId: 'gone' }), { failureClass: 'request_rejected' });
+  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'bad' }), { failureClass: 'domain_failure' });
+  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'limit' }), { failureClass: 'usage_limit' });
+  assert.equal(fake.getChildren().length, 1);
+  const state = client.supervisorState();
+  assert.equal(state.state, 'running');
+  assert.equal(state.chargedInWindow, 0);
+  assert.equal(state.generation, 1);
+  assert.deepEqual(kindsOf(client), ['started']);
+});
+
+test('supervisor: a turn/start timeout is charged as turn_start_unknown and carries the generation', async (t) => {
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') return send({ id: request.id, result: { thread: { id: 'thread-t' } } });
+    return undefined; // turn/start never answered
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 30, clock: fakeClock() });
+  t.after(() => client.close());
+  await assert.rejects(client.run({ role, cwd: '/tmp/p', input: 'x' }), (error) => {
+    assert.equal(error.failureClass, 'turn_start_unknown');
+    assert.equal(error.outcomeUnknown, true);
+    assert.equal(error.generation, 1);
+    assert.equal(error.execution.generation, 1);
+    return true;
+  });
+  assert.equal(client.supervisorState().chargedInWindow, 1);
+});
+
+test('supervisor: resetSupervisor clears exhaustion and the window', async (t) => {
+  const { clock, fake, client, crash } = supervised(t);
+  await exhaust(clock, fake, client, crash);
+  client.resetSupervisor();
+  const state = client.supervisorState();
+  assert.equal(state.state, 'stopped');
+  assert.equal(state.chargedInWindow, 0);
+  assert.equal(state.nextProbeAt, null);
+  assert.equal(kindsOf(client).at(-1), 'reset');
+  await client.start();
+  assert.equal(client.supervisorState().state, 'running');
+});
+
+test('classifyFailure assigns one class per failure shape', () => {
+  const { classifyFailure } = require('../src/codex-app-server');
+  assert.equal(classifyFailure(Object.assign(new Error('x'), { failureClass: 'turn_timeout' })), 'turn_timeout');
+  assert.equal(classifyFailure(Object.assign(new Error('x'), { failureClass: 'request_rejected', rpcData: { codexErrorInfo: 'usageLimitExceeded' } })), 'usage_limit');
+  assert.equal(classifyFailure(Object.assign(new Error('x'), { status: 'failed' })), 'domain_failure');
+  assert.equal(classifyFailure(Object.assign(new Error('x'), { rpcResponse: true })), 'request_rejected');
+  assert.equal(classifyFailure(Object.assign(new Error('x'), { name: 'AbortError' })), null);
 });

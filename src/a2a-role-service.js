@@ -94,13 +94,21 @@ function boundaryRecord(predicate, result, code, boundary, detail, advisory = fa
   return { predicate, result, code, boundary, detail: String(detail).slice(0, 500), evidence: [], advisory };
 }
 
+function isSupervisorExhausted(error) {
+  return error?.failureClass === 'supervisor_exhausted' || error?.code === 'supervisor_exhausted';
+}
+
 function failureMetadata(error) {
   const classified = error ? classifyCodexError(error) : 'other';
   return {
-    failureKind: classified === 'usage_limit'
-      ? classified
-      : error?.outcomeUnknown === true ? 'interrupted' : classified,
+    failureKind: isSupervisorExhausted(error)
+      ? 'supervisor_exhausted'
+      : classified === 'usage_limit'
+        ? classified
+        : error?.outcomeUnknown === true ? 'interrupted' : classified,
     codexErrorInfo: error ? findCodexErrorInfo(error) : null,
+    // Restart budget exhausted: no child was spawned and no turn started.
+    ...(isSupervisorExhausted(error) ? { effects: 'none' } : {}),
   };
 }
 

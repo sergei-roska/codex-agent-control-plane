@@ -97,7 +97,7 @@ function makeHarness({ decisions, taskSequence = [], pollIntervalMs = 0, sendMes
       clientFactory,
       pollIntervalMs,
       authToken,
-      cancelTimeoutMs,
+      ...(cancelTimeoutMs === 'default' ? {} : { cancelTimeoutMs }),
       cancelRetryIntervalMs,
     }),
   };
@@ -281,6 +281,11 @@ test('discovers and cancels a task created after sendMessage is aborted', async 
   assert.ok(cancelAttempts >= 2);
   assert.equal(result.assignments[0].taskId, 'late-task');
   assert.equal(h.calls.filter((call) => call.type === 'list').every((call) => call.options.serviceParameters.authorization === 'Bearer test-token'), true);
+});
+
+test('defaults the cancel-confirmation deadline to 20 seconds and keeps it overridable', () => {
+  assert.equal(makeHarness({ decisions: [], cancelTimeoutMs: 'default' }).orchestrator.cancelTimeoutMs, 20_000);
+  assert.equal(makeHarness({ decisions: [], cancelTimeoutMs: 1234 }).orchestrator.cancelTimeoutMs, 1234);
 });
 
 test('throws an explicit error when abort cancellation cannot be confirmed', async () => {
