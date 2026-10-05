@@ -152,3 +152,19 @@ test('deleteLeadTask removes one task and its worker rows', async (t) => {
   assert.deepEqual(getSession(db, 'ctx-a').turns.map((x) => x.leadTask.id), ['t1', 't3']);
   assert.equal(db.prepare('SELECT count(*) AS c FROM dispatch_journal').get().c, 0);
 });
+
+test('deleteLeadTask removes the run evidence and keeps another run', async (t) => {
+  const db = await fixture(t, CHAIN);
+  const { createEvidenceStore } = require('../src/evidence-store');
+  const store = createEvidenceStore(db, { retentionDays: 30 });
+  const put = (runId) => store.put({
+    runId, kind: 'check_stdout', mediaType: 'text/plain; charset=utf-8',
+    content: 'out', summary: 's', source: { producer: 'acceptance' },
+  });
+  put('t2');
+  put('t2');
+  const keep = put('t1');
+  deleteLeadTask(db, 't2');
+  assert.equal(store.listByRun('t2').length, 0);
+  assert.deepEqual(store.listByRun('t1').map((r) => r.id), [keep.id]);
+});

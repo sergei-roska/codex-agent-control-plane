@@ -7,6 +7,7 @@
     "start": "node src/server.js",
     "ask": "node src/cli.js",
     "usage": "node src/usage-report.js",
+    "evidence": "node src/evidence-store.js",
     "test": "node --test test/*.test.js"
   },
   "keywords": [],
