@@ -418,3 +418,15 @@ test('an expired row is not reused by put', () => {
   assert.notEqual(second.id, first.id);
   assert.equal(second.stored, true);
 });
+
+test('idempotent put ignores an expired row that has not been swept yet', () => {
+  const { store, tick } = setup({ retentionDays: 1 });
+  const first = store.put(input('same output', { checkId: 'c' }));
+  tick(23.5 * 3600 * 1000);
+  store.put(input('other', { checkId: 'other' })); // runs the sweep; the first row is not expired yet
+  tick(42 * 60 * 1000); // past the first row's expiry, within the sweep interval
+  const second = store.put(input('same output', { checkId: 'c' }));
+  assert.notEqual(second.id, first.id);
+  const third = store.put(input('same output', { checkId: 'c' }));
+  assert.equal(third.id, second.id);
+});

@@ -80,12 +80,13 @@ function assignmentSkillSelection(text, skillCatalog) {
 
 const BOUNDARY_CONTRACT = 'boundary-contract/v1';
 
-// A structured request is a JSON object carrying both objective and allowedFiles; returns it or null.
+// A structured request is a JSON object carrying both objective and allowedFiles, or requireAcceptance; returns it or null.
 function parseStructuredRequest(text) {
   if (!text.trimStart().startsWith('{')) return null;
   let value;
   try { value = JSON.parse(text); } catch (_) { return null; }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (value.requireAcceptance) return value;
   return Object.hasOwn(value, 'objective') && Object.hasOwn(value, 'allowedFiles') ? value : null;
 }
 
@@ -371,7 +372,11 @@ function makeExecutor({
               try {
                 selectedSkills = assignmentSkillSelection(input, skillCatalog);
               } catch (skillError) {
-                throw new BoundaryViolation('assignment.skills', 'skill_invalid', skillError.message);
+                // Pin and hash mismatches are drift; count, duplicate, and unknown-id problems are shape errors.
+                const drift = /changed since catalog load|pin does not match|path changed/.test(skillError.message);
+                throw drift
+                  ? new BoundaryViolation('dispatch.skill_pins', 'skill_pin_drift', skillError.message)
+                  : new BoundaryViolation('assignment.skills', 'skill_invalid', skillError.message);
               }
             } catch (error) {
               if (!(error instanceof BoundaryViolation)) throw error;

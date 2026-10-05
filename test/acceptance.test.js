@@ -383,15 +383,22 @@ test('a failed check plus an unavailable snapshot is rejected and lists both rec
   assert.deepEqual(result.issues.map((issue) => [issue.predicate, issue.result]), [['accept.checks', 'FAIL'], ['accept.snapshot', 'UNKNOWN']]);
 });
 
-test('unknown-only issues are unverifiable and advisory-only issues are accepted', () => {
+test('unknown-only issues are unverifiable; a reported scope violation rejects while a reported failure is advisory', () => {
   const unknown = dispose({ writers: [okWriter({ deltaKnown: false })] });
   assert.equal(unknown.disposition, 'unverifiable');
   assert.deepEqual(codes(unknown), ['delta_unknown']);
   assert.equal(dispose({ unresolvedWriterCount: 1 }).disposition, 'unverifiable');
-  const advisory = dispose({ writers: [okWriter({ reportedScopeViolations: ['z.js'], reportOutcome: 'failed' })] });
-  assert.equal(advisory.disposition, 'accepted');
-  assert.deepEqual(codes(advisory), ['reported_scope_violation', 'writer_reported_failure']);
-  assert.ok(advisory.issues.every((issue) => issue.advisory === true && issue.result === 'FAIL' && issue.predicate === 'accept.writers'));
+  const reported = dispose({ writers: [okWriter({ reportedScopeViolations: ['z.js'], reportOutcome: 'failed' })] });
+  assert.equal(reported.disposition, 'rejected');
+  assert.deepEqual(codes(reported), ['reported_scope_violation', 'writer_reported_failure']);
+  assert.deepEqual(reported.issues.map((issue) => issue.advisory), [false, true]);
+  assert.ok(reported.issues.every((issue) => issue.result === 'FAIL' && issue.predicate === 'accept.writers'));
+  const failedOnly = dispose({ writers: [okWriter({ reportOutcome: 'failed' })] });
+  assert.equal(failedOnly.disposition, 'accepted');
+  assert.equal(failedOnly.issues[0].advisory, true);
+  // Blind spot: the attested delta is clean but the report lists an out-of-scope path.
+  const blind = dispose({ writers: [okWriter({ attestedScopeViolations: [], reportedScopeViolations: ['elsewhere.js'] })] });
+  assert.equal(blind.disposition, 'rejected');
   const failWins = dispose({ writers: [okWriter({ deltaKnown: false, attestedScopeViolations: ['y.js'] })] });
   assert.equal(failWins.disposition, 'rejected');
 });
@@ -468,4 +475,25 @@ test('computeDisposition renders check results without evidence fields unchanged
     snapshotBefore: { kind: 'git', fingerprint: 'x' }, snapshotAfter: { kind: 'git', fingerprint: 'x' },
   });
   assert.equal(result.issues[0].detail, 'Required check "c" failed (exit 1).');
+});
+
+test('check evidence carries the acceptance attempt; identical output in two runs yields two rows', async () => {
+  const dir = repo();
+  const db = new Database(':memory:');
+  const store = createEvidenceStore(db);
+  const contract = { requiredChecks: [node('same', 'process.stdout.write("same");process.exitCode=Number(process.env.EXIT_CODE||0)')] };
+  const first = await runAcceptance({ workspace: dir, runId: 'run-att', attempt: 1, contract, evidenceStore: store });
+  process.env.EXIT_CODE = '3';
+  let second;
+  try { second = await runAcceptance({ workspace: dir, runId: 'run-att', attempt: 2, contract, evidenceStore: store }); } finally { delete process.env.EXIT_CODE; }
+  const a = first.checks[0].stdoutEvidence;
+  const b = second.checks[0].stdoutEvidence;
+  assert.notEqual(a.id, b.id);
+  assert.equal(a.attemptId, 'run-att:acceptance:1');
+  assert.equal(b.attemptId, 'run-att:acceptance:2');
+  assert.equal(a.source.exitCode, 0);
+  assert.equal(b.source.exitCode, 3);
+  // A replay of the same acceptance attempt reuses the row.
+  const replay = await runAcceptance({ workspace: dir, runId: 'run-att', attempt: 2, contract, evidenceStore: store });
+  assert.equal(replay.checks[0].stdoutEvidence.id, b.id);
 });

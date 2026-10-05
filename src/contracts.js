@@ -24,6 +24,8 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'assignment.writer_scope': Object.freeze(['writer_scope_missing']),
   'assignment.paths': Object.freeze(['path_unsafe', 'path_glob_unsupported']),
   'assignment.skills': Object.freeze(['skill_invalid']),
+  'dispatch.skill_pins': Object.freeze(['skill_pin_drift']),
+  'dispatch.writer_admission': Object.freeze(['fenced', 'admission_blocked']),
   'assignment.role_ladder': Object.freeze(['role_ladder_violation', 'architect_constraint']),
   'dispatch.writer_unresolved': Object.freeze(['writer_unresolved']),
   'dispatch.request_input': Object.freeze(['request_invalid', 'guarantee_unavailable']),
@@ -295,6 +297,7 @@ function checkAssignment(assignment, decision, ctx) {
   if (!role) throw violation('assignment.shape', 'role_unknown', `Unknown role: ${String(assignment.role)}`);
   assignment.role = role.name;
   if (!isNonEmptyString(assignment.objective)) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} needs an objective`);
+  if (assignment.objective.length > MAX_CHARS) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} exceeds the size limit for objective`);
   for (const field of ASSIGNMENT_ARRAY_FIELDS) {
     if (!Array.isArray(assignment[field]) || assignment[field].some((value) => !isNonEmptyString(value))) {
       throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} needs a string array for ${field}`);
@@ -359,6 +362,9 @@ const SPECIALIST_ARRAY_KEYS = ['inputs', 'evidence', 'acceptanceCriteria', 'chec
 function checkSpecialistRequest(request, role, { workspace } = {}) {
   const label = String(role?.name || role?.id || 'specialist');
   if (!isPlainObject(request)) throw violation('assignment.shape', 'assignment_shape_invalid', 'Specialist request must be a JSON object');
+  if (request.requireAcceptance) {
+    throw violation('dispatch.request_input', 'guarantee_unavailable', 'requireAcceptance cannot be guaranteed on a direct specialist request');
+  }
   const keys = Object.keys(request);
   for (const key of SPECIALIST_REQUIRED_KEYS) {
     if (!Object.hasOwn(request, key)) throw violation('assignment.shape', 'assignment_shape_invalid', `Specialist request needs ${key}`);
@@ -398,9 +404,6 @@ function checkSpecialistRequest(request, role, { workspace } = {}) {
       throw violation('assignment.paths', 'path_glob_unsupported', `Unsupported glob in allowedFiles path for ${label}: ${file}`);
     }
     if (!safeRelativePath(file)) throw violation('assignment.paths', 'path_unsafe', `Unsafe allowedFiles path for ${label}: ${file}`);
-  }
-  if (request.requireAcceptance) {
-    throw violation('dispatch.request_input', 'guarantee_unavailable', 'requireAcceptance cannot be guaranteed on a direct specialist request');
   }
   if (request.workspace !== undefined) {
     if (typeof request.workspace !== 'string' || !workspace || path.resolve(request.workspace) !== path.resolve(workspace)) {

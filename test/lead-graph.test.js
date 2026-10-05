@@ -1337,6 +1337,34 @@ test('a rejected decision is fed back to the lead, keeps the thread, and is not 
   });
 });
 
+test('a reconciliation with thousands of changed paths stores capped lists and still fails acceptance', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('Done')],
+    workerFinal: (roleName, contextId) => {
+      world.admission.rows.set(contextId, admissionRow(contextId, 'unresolved'));
+      return unresolvedWriterTask(roleName);
+    },
+  });
+  const many = Array.from({ length: 5000 }, (_, index) => `other/file-${index}.js`);
+  world.admission.reconcile = async function reconcile(executionId) {
+    const row = this.get(executionId);
+    row.state = 'reconciled';
+    row.delta = { known: true, headChanged: false, changedPaths: many };
+    return { state: row.state, delta: row.delta };
+  };
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    const reconciliation = result.assignments.find((entry) => entry.kind === 'reconciliation');
+    assert.equal(reconciliation.changedPaths.length, 50);
+    assert.equal(reconciliation.changedPathCount, 5000);
+    assert.equal(reconciliation.attestedScopeViolations.length, 50);
+    assert.equal(reconciliation.attestedScopeViolationCount, 5000);
+    assert.ok(JSON.stringify(reconciliation).length < 20000);
+    assert.equal(reconciliation.boundary.results[0].code, 'attested_scope_violation');
+    assert.ok(result.acceptance.issues.some((issue) => issue.code === 'attested_scope_violation' && issue.result === 'FAIL' && issue.advisory === false));
+  });
+});
+
 test('three consecutive rejected decisions pause the run with the violation codes', async () => {
   const bad = dispatch(brief('orch-builder', ['src/*']));
   const world = makeWorld({ script: [bad, bad, bad, finish('Never reached')] });
@@ -1344,6 +1372,18 @@ test('three consecutive rejected decisions pause the run with the violation code
     await assert.rejects(session.orchestrator.run({ goal: 'Build', runId: RUN_ID }), /rejected 3 times.*path_glob_unsupported/);
     assert.equal(world.leadTurns, 3);
     assert.equal(world.sends.length, 0);
+  });
+});
+
+test('a resume after the rejection pause allows two automatic retries again', async () => {
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  const world = makeWorld({ script: [bad, bad, bad, bad, bad, finish('Done')] });
+  await withSession(world, async (session) => {
+    await assert.rejects(session.orchestrator.run({ goal: 'Build', runId: RUN_ID }), /rejected 3 times/);
+    assert.equal(world.leadTurns, 3);
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 6);
   });
 });
 
@@ -1430,7 +1470,7 @@ test('settlement records an out-of-scope writer, an unknown delta, an invalid re
   await withSession(failed, async (session) => {
     const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
     assert.deepEqual(recordCodes(outcome), ['settle.reported_scope:FAIL:reported_scope_violation', 'settle.report_outcome:FAIL:writer_reported_failure']);
-    assert.ok(outcome.boundary.results.every((entry) => entry.advisory === true));
+    assert.deepEqual(outcome.boundary.results.map((entry) => entry.advisory), [false, true]);
   });
 });
 

@@ -110,7 +110,7 @@ Branch `feature/orchestrator-phase-a`, recorded 2026-10-05.
 | DBC-02b | done | `9e01dce`; per-attempt pins, FAIL-over-UNKNOWN acceptance |
 | DBC-03 | done | `f4b7172`; executor-side specialist contract |
 | DBC-04 | done | `9bd2c23`; test/runtime-contracts.test.js |
-| M1 | in review | full suite green; independent safety audit pending |
+| M1 | done | 502 tests green; independent safety audit found F1 (blocker: reported scope advisory) and F2-F7, all fixed before merge; OPS-02 recorded |
 
 ## Phase A: baseline, compact evidence, executable contracts
 

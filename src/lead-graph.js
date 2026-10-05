@@ -511,6 +511,7 @@ const LeadState = Annotation.Root({
   unresolvedWriters: last(() => []),
   contract: last(() => ({ requiredChecks: [] })),
   acceptanceAttempts: last(() => 0),
+  acceptanceRuns: last(() => 0),
   acceptance: last(() => null),
   status: last(() => null),
   text: last(() => ''),
@@ -637,7 +638,7 @@ function buildLeadGraph(deps) {
       results.push(settlementRecord('settle.report_valid', 'FAIL', 'report_invalid', analysis.reportError || 'The worker did not return a valid report.', { advisory: !writer }));
     }
     if (violationCount > 0) {
-      results.push(settlementRecord('settle.reported_scope', 'FAIL', 'reported_scope_violation', `Reported files outside allowedFiles: ${violations.join(', ')}`, { advisory: true }));
+      results.push(settlementRecord('settle.reported_scope', 'FAIL', 'reported_scope_violation', `Reported files outside allowedFiles: ${violations.join(', ')}`, { advisory: !writer }));
     }
     if (attested.count > 0) {
       results.push(settlementRecord('settle.attested_scope', 'FAIL', 'attested_scope_violation', `Changed files outside allowedFiles: ${attestedViolations.join(', ')}`));
@@ -777,7 +778,11 @@ function buildLeadGraph(deps) {
       const current = readPinned({ roles, leadRole, workspace, skillCatalog });
       notes.push(...instructionChanges(state.pinned, current));
       update.pinned = current;
+      // A resume is new human intent: the automatic-retry allowance starts over.
+      update.consecutiveRejections = 0;
+      update.retryDecide = false;
     }
+    const priorRejections = update.consecutiveRejections ?? (state.consecutiveRejections || 0);
 
     const priorSkillContext = state.outcomes.map((outcome) => ({
       role: outcome.role,
@@ -837,7 +842,7 @@ function buildLeadGraph(deps) {
       });
     } catch (error) {
       if (!(error instanceof BoundaryViolation)) throw error;
-      const consecutive = (state.consecutiveRejections || 0) + 1;
+      const consecutive = priorRejections + 1;
       if (consecutive > MAX_AUTO_REJECTIONS) {
         const codes = [...new Set([...(state.retryDecide ? (state.rejections.at(-1)?.violations || []) : []), ...error.violations].map((entry) => entry.code))];
         throw new Error(`Lead decision rejected ${consecutive} times in a row (${codes.join(', ')}): ${error.message}`, { cause: error });
@@ -1233,16 +1238,23 @@ function buildLeadGraph(deps) {
           const violations = Array.isArray(allowed) ? outsideAllowed(result.changedPaths, allowed, workspace) : [];
           const records = [];
           if (violations.length > 0) {
-            records.push(settlementRecord('settle.attested_scope', 'FAIL', 'attested_scope_violation', `Changed files outside allowedFiles: ${violations.join(', ')}`));
+            records.push(settlementRecord('settle.attested_scope', 'FAIL', 'attested_scope_violation', `Changed files outside allowedFiles: ${violations.slice(0, MAX_VIOLATION_PATHS).join(', ')}`));
           } else if (result.deltaKnown !== true) {
             records.push(settlementRecord('settle.attested_scope', 'UNKNOWN', 'delta_unknown', 'The writer ran but its workspace delta is unknown.'));
           }
           if (result.state === 'legacy_unverified') {
             records.push(settlementRecord('settle.writer_settled', 'UNKNOWN', 'writer_unresolved', `The writer execution cannot be proven ended: ${result.reason}.`));
           }
+          // Violations are computed on the full list; only the stored lists are capped.
+          const changed = result.changedPaths || [];
+          const cut = changed.length > MAX_VIOLATION_PATHS;
+          const cutViolations = violations.length > MAX_VIOLATION_PATHS;
           return {
             ...result,
-            attestedScopeViolations: violations,
+            changedPaths: cut ? changed.slice(0, MAX_VIOLATION_PATHS) : changed,
+            ...(cut ? { changedPathCount: changed.length } : {}),
+            attestedScopeViolations: cutViolations ? violations.slice(0, MAX_VIOLATION_PATHS) : violations,
+            ...(cutViolations ? { attestedScopeViolationCount: violations.length } : {}),
             ...(entry.contract ? { contract: entry.contract } : {}),
             boundary: { contract: entry.contract ? BOUNDARY_CONTRACT_ID : 'legacy', results: records },
           };
@@ -1317,7 +1329,7 @@ function buildLeadGraph(deps) {
     return runAcceptance({
       workspace,
       runId: state.runId,
-      attempt: state.acceptanceAttempts + 1,
+      attempt: (state.acceptanceRuns || 0) + 1,
       contract: state.contract,
       writers,
       unresolvedWriterCount,
@@ -1342,9 +1354,9 @@ function buildLeadGraph(deps) {
     }
     deps.emit(runtime.onEvent, { type: 'acceptance', round: state.round, disposition: acceptance.disposition, reasons: acceptance.reasons });
     if (acceptance.disposition === 'rejected' && state.acceptanceAttempts < 1) {
-      return { acceptance, acceptanceAttempts: state.acceptanceAttempts + 1, status: null, text: '' };
+      return { acceptance, acceptanceRuns: (state.acceptanceRuns || 0) + 1, acceptanceAttempts: state.acceptanceAttempts + 1, status: null, text: '' };
     }
-    return { acceptance };
+    return { acceptance, acceptanceRuns: (state.acceptanceRuns || 0) + 1 };
   }
 
   async function finish(state) {

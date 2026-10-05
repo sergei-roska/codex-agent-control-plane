@@ -219,7 +219,7 @@ const ISSUE_META = {
   delta_unknown: ['accept.writers', 'UNKNOWN', false],
   attested_scope_violation: ['accept.writers', 'FAIL', false],
   report_invalid: ['accept.writers', 'FAIL', false],
-  reported_scope_violation: ['accept.writers', 'FAIL', true],
+  reported_scope_violation: ['accept.writers', 'FAIL', false],
   writer_reported_failure: ['accept.writers', 'FAIL', true],
   acceptance_canceled: ['accept.run', 'UNKNOWN', false],
   acceptance_error: ['accept.run', 'UNKNOWN', false],
@@ -323,7 +323,7 @@ function canceledAcceptance(requiredChecks, checks, admissionHeld) {
 }
 
 // Stores one stream capture as evidence; a store failure yields { ref: null, error } and never throws.
-function storeCheckStream(evidenceStore, runId, check, result, stream, capture) {
+function storeCheckStream(evidenceStore, runId, attemptId, check, result, stream, capture) {
   const text = capture.tail.toString('utf8').slice(-500);
   const omitted = capture.originalBytes - capture.head.length - capture.tail.length;
   const how = omitted > 0 ? `first ${capture.head.length} and last ${capture.tail.length} bytes kept, ${omitted} omitted` : 'complete';
@@ -331,6 +331,7 @@ function storeCheckStream(evidenceStore, runId, check, result, stream, capture) 
   try {
     const ref = evidenceStore.put({
       runId,
+      attemptId,
       checkId: check.id,
       kind: stream === 'stdout' ? 'check_stdout' : 'check_stderr',
       mediaType: 'text/plain; charset=utf-8',
@@ -380,8 +381,8 @@ async function runAcceptance({
       let captured = null;
       const result = await runCheckImpl(check, { cwd: workspace, onSpawn, signal, onCapture: (value) => { captured = value; } });
       if (captured && result && typeof result === 'object') {
-        const out = evidenceStore ? storeCheckStream(evidenceStore, runId, check, result, 'stdout', captured.stdout) : { ref: null, error: null };
-        const err = evidenceStore ? storeCheckStream(evidenceStore, runId, check, result, 'stderr', captured.stderr) : { ref: null, error: null };
+        const out = evidenceStore ? storeCheckStream(evidenceStore, runId, `${runId}:acceptance:${attempt}`, check, result, 'stdout', captured.stdout) : { ref: null, error: null };
+        const err = evidenceStore ? storeCheckStream(evidenceStore, runId, `${runId}:acceptance:${attempt}`, check, result, 'stderr', captured.stderr) : { ref: null, error: null };
         result.stdoutEvidence = out.ref;
         result.stderrEvidence = err.ref;
         const failure = out.error || err.error;

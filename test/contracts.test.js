@@ -363,6 +363,7 @@ test('validateDecision throws BoundaryViolation with predicate ids and codes', (
   expectFail(dispatch('str'), ctx(), 'assignment.shape', 'assignment_shape_invalid', /must be an object/);
   expectFail(dispatch(base('ghost')), ctx(), 'assignment.shape', 'role_unknown', /Unknown role: ghost/);
   expectFail(dispatch(withField('objective', '')), ctx(), 'assignment.shape', 'field_invalid', /needs an objective/);
+  expectFail(dispatch(withField('objective', 'x'.repeat(3001))), ctx(), 'assignment.shape', 'field_invalid', /size limit for objective/);
   expectFail(dispatch(base('orch-builder', [])), ctx(), 'assignment.writer_scope', 'writer_scope_missing', /requires explicit allowedFiles/);
   expectFail(dispatch(base('orch-builder', ['.'])), ctx(), 'assignment.paths', 'path_unsafe', /Unsafe allowedFiles path/);
   expectFail(dispatch(base('orch-builder', ['../x'])), ctx(), 'assignment.paths', 'path_unsafe', /Unsafe allowedFiles path/);

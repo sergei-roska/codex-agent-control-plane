@@ -853,6 +853,29 @@ function structured(overrides = {}) {
   });
 }
 
+test('a JSON request with requireAcceptance but no allowedFiles still fails with guarantee_unavailable', async () => {
+  for (const text of [JSON.stringify({ requireAcceptance: true }), JSON.stringify({ objective: 'Do it', requireAcceptance: true })]) {
+    const meta = await rejected('orch-writer-a', text);
+    assert.equal(meta.failureKind, 'guarantee_unavailable');
+    assert.equal(meta.boundary.results[0].code, 'guarantee_unavailable');
+    assert.equal(meta.boundary.results[0].predicate, 'dispatch.request_input');
+  }
+});
+
+test('skill pin mismatches are skill_pin_drift; skill shape errors stay skill_invalid', async () => {
+  const { loadSkillCatalog } = require('../src/skill-catalog');
+  const skillCatalog = loadSkillCatalog();
+  const id = [...skillCatalog.keys()][0];
+  const drift = await rejected('orch-planner', structured({ skills: [id], skillPins: [{ id, sha256: '0'.repeat(64) }] }), { skillCatalog });
+  assert.equal(drift.boundary.results[0].predicate, 'dispatch.skill_pins');
+  assert.equal(drift.boundary.results[0].code, 'skill_pin_drift');
+  const shape = await rejected('orch-planner', structured({ skills: [id, id] }), { skillCatalog });
+  assert.equal(shape.boundary.results[0].predicate, 'assignment.skills');
+  assert.equal(shape.boundary.results[0].code, 'skill_invalid');
+  const unknown = await rejected('orch-planner', structured({ skills: ['no-such-skill'] }), { skillCatalog });
+  assert.equal(unknown.boundary.results[0].code, 'skill_invalid');
+});
+
 // Admission whose snapshots report a known delta touching the given paths.
 function deltaAdmission(changed) {
   let calls = 0;

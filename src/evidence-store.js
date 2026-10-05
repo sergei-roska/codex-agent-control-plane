@@ -218,9 +218,9 @@ function createEvidenceStore(db, { now = Date.now, retentionDays, randomId = def
       const existing = db.prepare(`
         SELECT * FROM evidence
         WHERE run_id = ? AND attempt_id IS ? AND task_id IS ? AND check_id IS ? AND kind = ?
-          AND original_sha256 = ? AND state IN ('stored', 'not_stored')
+          AND original_sha256 = ? AND state IN ('stored', 'not_stored') AND expires_at > ?
         ORDER BY created_at ASC, id ASC LIMIT 1
-      `).get(input.runId, attemptId, taskId, checkIdValue, input.kind, normalized.originalSha256);
+      `).get(input.runId, attemptId, taskId, checkIdValue, input.kind, normalized.originalSha256, at);
       if (existing) return existing;
       const used = db.prepare("SELECT COALESCE(SUM(stored_bytes), 0) AS n FROM evidence WHERE run_id = ? AND state = 'stored'")
         .get(input.runId).n;

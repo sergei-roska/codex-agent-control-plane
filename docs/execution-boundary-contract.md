@@ -146,7 +146,8 @@ run error:
    short rule reminder for the failed predicate.
 4. At most two consecutive rejections are retried automatically. A third
    consecutive rejection pauses the run as today (`kind: 'error'`), and the pause
-   message names the violation codes. Any accepted decision resets the counter.
+   message names the violation codes. Any accepted decision resets the counter,
+   and so does any resume of the run (human answer, restart, or budget resume).
 5. Rejections are not outcomes: they do not count toward rounds, writers, or
    acceptance.
 
