@@ -10,6 +10,15 @@ const { parseCheckCommand } = require('./acceptance');
 const { CodexAppServer } = require('./codex-app-server');
 const { loadRoles, createLeadRole } = require('./role-catalog');
 const { ProjectError } = require('./launcher-projects');
+const {
+  SessionError,
+  TERMINAL_STATES,
+  formatLeadTask,
+  listSessions,
+  getSession,
+  deleteLeadTask,
+  deleteSession,
+} = require('./launcher-sessions');
 
 const UI_DIR = path.join(__dirname, '..', 'launcher-ui');
 const PROJECT_ID = /^[0-9a-f]{10}$/;
@@ -20,7 +29,7 @@ const ERROR_STATUS = {
   not_managed: 409,
   no_port: 503,
 };
-const DELETABLE_STATES = ['TASK_STATE_COMPLETED', 'TASK_STATE_FAILED', 'TASK_STATE_CANCELED', 'TASK_STATE_REJECTED'];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function escapeHtml(s) {
   return String(s)
@@ -35,58 +44,6 @@ function sendProjectError(res, err) {
   res.status(status).json({ success: false, error: err.message || String(err) });
 }
 
-function formatLeadTask(db, lead) {
-  let goal = '';
-  let lastInstruction = '';
-  let continuesFrom = '';
-  if (lead.history) {
-    try {
-      const history = JSON.parse(lead.history);
-      const userMsgs = history.filter(m => m.role === 'ROLE_USER' || m.role === 1 || m.role === 'user');
-      if (userMsgs.length > 0) {
-        const firstMsg = userMsgs[0];
-        if (Array.isArray(firstMsg.referenceTaskIds) && typeof firstMsg.referenceTaskIds[0] === 'string') {
-          continuesFrom = firstMsg.referenceTaskIds[0];
-        }
-        for (const part of firstMsg.parts || []) {
-          const text = part.text || part.content?.value;
-          if (typeof text === 'string' && text.trim()) {
-            goal = text.trim();
-            break;
-          }
-        }
-        if (userMsgs.length > 1) {
-          const lastMsg = userMsgs[userMsgs.length - 1];
-          for (const part of lastMsg.parts || []) {
-            const text = part.text || part.content?.value;
-            if (typeof text === 'string' && text.trim()) {
-              lastInstruction = text.trim();
-              break;
-            }
-          }
-        }
-      }
-    } catch (_) {}
-  }
-
-  const workers = db.prepare("SELECT role, state, task_id, updated_at FROM dispatch_journal WHERE run_id = ? ORDER BY created_at ASC").all(lead.id);
-
-  return {
-    leadTask: {
-      id: lead.id,
-      goal: goal || null,
-      lastInstruction: lastInstruction || null,
-      continuesFrom: continuesFrom || null,
-      state: lead.status_state,
-      status: lead.status ? JSON.parse(lead.status) : null,
-      artifacts: lead.artifacts ? JSON.parse(lead.artifacts) : [],
-      metadata: lead.metadata ? JSON.parse(lead.metadata) : {},
-      updatedAt: lead.status_last_updated
-    },
-    workers
-  };
-}
-
 function createLauncherApp({
   projects,
   readAuthToken,
@@ -98,6 +55,8 @@ function createLauncherApp({
   let lastLimitsFetch = 0;
 
   app.use(express.json());
+
+  app.get('/favicon.ico', (req, res) => res.status(204).end());
 
   // Main UI: modern orchestrator console interface
   app.use('/ui', express.static(UI_DIR, { index: false }));
@@ -175,16 +134,21 @@ function createLauncherApp({
         return res.status(400).json({ success: false, error: 'Orchestrator server is not running!' });
       }
 
-      const { goal, checks, taskId, continueFrom, decision, choice } = req.body;
+      const { goal, checks, taskId, continueFrom, decision, choice, contextId: newContextId } = req.body;
       if (taskId && continueFrom) {
         return res.status(400).json({ success: false, error: 'taskId and continueFrom are mutually exclusive' });
+      }
+      // A client-provided contextId only names a new session (no taskId, no continueFrom).
+      const startsSession = !taskId && !continueFrom && newContextId !== undefined && newContextId !== null && newContextId !== '';
+      if (startsSession && !(typeof newContextId === 'string' && UUID.test(newContextId))) {
+        return res.status(400).json({ success: false, error: 'contextId must be a UUID' });
       }
       const baseUrl = projects.baseUrl(id);
       const authToken = readAuthToken(process.env.CODEX_A2A_TOKEN_FILE ? { filePath: process.env.CODEX_A2A_TOKEN_FILE } : undefined);
       const client = await createClient(baseUrl);
       const requestOptions = { serviceParameters: { Authorization: `Bearer ${authToken}` } };
 
-      let contextId = '';
+      let contextId = startsSession ? newContextId : '';
       const lookupId = taskId || continueFrom;
       if (lookupId) {
         const existing = await client.getTask({ tenant: '', id: lookupId }, requestOptions);
@@ -223,99 +187,62 @@ function createLauncherApp({
     }
   });
 
-  // API: Get latest task state
-  app.get('/api/projects/:id/tasks/latest', (req, res) => {
+  // Runs fn(db) on the project state DB; returns undefined when the DB file does not exist yet.
+  function withTasksDb(projectId, options, fn) {
+    const dbPath = projects.stateDbPath(projectId);
+    if (!fs.existsSync(dbPath)) return undefined;
+    const db = openTasksDb(dbPath, options);
     try {
-      const dbPath = projects.stateDbPath(req.params.id);
-      if (!fs.existsSync(dbPath)) return res.json({ leadTask: null, workers: [] });
+      return fn(db);
+    } finally {
+      db.close();
+    }
+  }
 
-      const db = openTasksDb(dbPath, { readonly: true });
-      try {
-        const lead = db.prepare("SELECT * FROM tasks WHERE owner = 'orchestrator' ORDER BY status_last_updated DESC LIMIT 1").get();
-        if (!lead) return res.json({ leadTask: null, workers: [] });
-
-        res.json(formatLeadTask(db, lead));
-      } finally {
-        db.close();
-      }
+  // API: sessions (one A2A contextId = one conversation of lead tasks)
+  app.get('/api/projects/:id/sessions', (req, res) => {
+    try {
+      const sessions = withTasksDb(req.params.id, { readonly: true }, listSessions);
+      res.json({ sessions: sessions || [] });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // API: List all tasks in history
-  app.get('/api/projects/:id/tasks/history', (req, res) => {
+  app.get('/api/projects/:id/sessions/:contextId', (req, res) => {
     try {
-      const dbPath = projects.stateDbPath(req.params.id);
-      if (!fs.existsSync(dbPath)) return res.json({ tasks: [] });
-
-      const db = openTasksDb(dbPath, { readonly: true });
-      try {
-        const leads = db.prepare("SELECT * FROM tasks WHERE owner = 'orchestrator' ORDER BY status_last_updated DESC").all();
-        const tasks = leads.map(lead => {
-          let goal = '';
-          let continuesFrom = null;
-          if (lead.history) {
-            try {
-              const h = JSON.parse(lead.history);
-              const userMsg = h.find(m => m.role === 'ROLE_USER' || m.role === 1 || m.role === 'user');
-              if (userMsg && Array.isArray(userMsg.referenceTaskIds) && typeof userMsg.referenceTaskIds[0] === 'string') {
-                continuesFrom = userMsg.referenceTaskIds[0];
-              }
-              if (userMsg && Array.isArray(userMsg.parts)) {
-                for (const part of userMsg.parts) {
-                  const text = part.text || part.content?.value;
-                  if (typeof text === 'string' && text.trim()) {
-                    goal = text.trim();
-                    break;
-                  }
-                }
-              }
-            } catch (_) {}
-          }
-          const workerCount = db.prepare("SELECT count(*) as c FROM dispatch_journal WHERE run_id = ?").get(lead.id).c;
-          let disposition = null;
-          if (lead.artifacts) {
-            try {
-              const arts = JSON.parse(lead.artifacts);
-              disposition = arts?.at(-1)?.metadata?.acceptance?.disposition || null;
-            } catch (_) {}
-          }
-          return {
-            id: lead.id,
-            goal: goal || '(no description)',
-            state: lead.status_state,
-            updatedAt: lead.status_last_updated,
-            workerCount,
-            disposition,
-            continuesFrom
-          };
-        });
-        res.json({ tasks });
-      } finally {
-        db.close();
-      }
+      const session = withTasksDb(req.params.id, { readonly: true }, db => getSession(db, req.params.contextId));
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+      res.json(session);
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/projects/:id/sessions/:contextId', (req, res) => {
+    try {
+      const deletedIds = withTasksDb(req.params.id, {}, db => deleteSession(db, req.params.contextId));
+      if (!deletedIds) return res.status(404).json({ success: false, error: 'Session not found' });
+      res.json({ success: true, deletedIds });
+    } catch (err) {
+      if (err instanceof SessionError) {
+        return res.status(err.code === 'not_found' ? 404 : 400).json({ success: false, error: err.message });
+      }
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 
   // API: Details of a specific task by ID
   app.get('/api/projects/:id/tasks/:taskId', (req, res) => {
     try {
-      const taskId = req.params.taskId;
       const dbPath = projects.stateDbPath(req.params.id);
       if (!fs.existsSync(dbPath)) return res.status(404).json({ error: 'Database not found' });
-
-      const db = openTasksDb(dbPath, { readonly: true });
-      try {
-        const lead = db.prepare("SELECT * FROM tasks WHERE owner = 'orchestrator' AND id = ?").get(taskId);
-        if (!lead) return res.status(404).json({ error: 'Task not found' });
-
-        res.json(formatLeadTask(db, lead));
-      } finally {
-        db.close();
-      }
+      const result = withTasksDb(req.params.id, { readonly: true }, (db) => {
+        const lead = db.prepare("SELECT * FROM tasks WHERE owner = 'orchestrator' AND id = ?").get(req.params.taskId);
+        return lead ? formatLeadTask(db, lead) : null;
+      });
+      if (!result) return res.status(404).json({ error: 'Task not found' });
+      res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -327,36 +254,16 @@ function createLauncherApp({
       const taskId = req.params.taskId;
       const dbPath = projects.stateDbPath(req.params.id);
       if (!fs.existsSync(dbPath)) return res.status(404).json({ error: 'Database not found' });
-
-      const db = openTasksDb(dbPath);
-      try {
+      const outcome = withTasksDb(req.params.id, {}, (db) => {
         const lead = db.prepare("SELECT * FROM tasks WHERE owner = 'orchestrator' AND id = ?").get(taskId);
-        if (!lead) return res.status(404).json({ error: 'Task not found' });
-
-        if (!DELETABLE_STATES.includes(lead.status_state)) {
-          return res.status(400).json({ error: 'Cannot delete an active task!' });
+        if (!lead) return { status: 404, body: { error: 'Task not found' } };
+        if (!TERMINAL_STATES.includes(lead.status_state)) {
+          return { status: 400, body: { error: 'Cannot delete an active task!' } };
         }
-
-        const deleteTx = db.transaction(() => {
-          const workers = db.prepare("SELECT task_id FROM dispatch_journal WHERE run_id = ?").all(taskId).map(r => r.task_id);
-          if (workers.length > 0) {
-            const placeholders = workers.map(() => '?').join(',');
-            db.prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...workers);
-            try { db.prepare(`DELETE FROM writer_executions WHERE task_id IN (${placeholders})`).run(...workers); } catch (_) {}
-          }
-          db.prepare("DELETE FROM tasks WHERE id = ?").run(taskId);
-          db.prepare("DELETE FROM dispatch_journal WHERE run_id = ?").run(taskId);
-          try { db.prepare("DELETE FROM checkpoints WHERE thread_id = ?").run(taskId); } catch (_) {}
-          try { db.prepare("DELETE FROM writes WHERE thread_id = ?").run(taskId); } catch (_) {}
-          try { db.prepare("DELETE FROM usage_ledger WHERE run_id = ?").run(taskId); } catch (_) {}
-          try { db.prepare("DELETE FROM writer_executions WHERE task_id = ?").run(taskId); } catch (_) {}
-        });
-
-        deleteTx();
-        res.json({ success: true, deletedId: taskId });
-      } finally {
-        db.close();
-      }
+        deleteLeadTask(db, taskId);
+        return { status: 200, body: { success: true, deletedId: taskId } };
+      });
+      res.status(outcome.status).json(outcome.body);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

@@ -1,6 +1,4 @@
 
-    let currentTaskId = null;
-
     function setGoal(text) {
       document.getElementById('taskGoal').value = text;
       document.getElementById('taskGoal').focus();
@@ -16,27 +14,24 @@
       document.getElementById('serverLogsBody').innerText = '';
     }
 
-    // Ctrl+Enter for quick dispatch
+    // Ctrl+Enter sends the message
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        const btn = document.getElementById('dispatchBtn');
-        if (!btn.disabled) dispatchTask();
+        const btn = document.getElementById('sendBtn');
+        if (!btn.disabled) sendMessage();
       }
     });
 
     let serverRunning = false;
-    let displayedTaskTerminal = false;
 
-    function updateContinueBtn() {
-      const btn = document.getElementById('continueBtn');
-      if (displayedTaskTerminal && currentTaskId) {
-        btn.classList.remove('hidden');
-        btn.disabled = !serverRunning;
-      } else {
-        btn.classList.add('hidden');
-        btn.disabled = true;
-      }
-    }
+    // ---- Session state: a session is one A2A contextId; the open one is bound to the tab (?session=<contextId>)
+    let currentSessionId = null;
+    let sessionData = null;       // last transcript received from the launcher
+    let pendingTurn = null;       // { goal, baseTurns } until the sent message shows up as a turn
+    let sending = false;
+    let autoOpenLatest = false;
+    let renderSignature = '';
+    let initialSessionParam = new URLSearchParams(window.location.search).get('session');
 
     // ---- Project binding: each tab is bound to one project (?project=<id>)
     let projectList = [];
@@ -91,18 +86,43 @@
       return projectList.length ? projectList[0].id : null;
     }
 
-    function resetTaskViewState() {
-      currentTaskId = null;
-      viewingArchivedTaskId = null;
-      dismissedTaskId = null;
-      displayedTaskTerminal = false;
-      document.getElementById('decisionCard').classList.add('hidden');
+
+    function newContextId() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+      const b = window.crypto.getRandomValues(new Uint8Array(16));
+      b[6] = (b[6] & 0x0f) | 0x40;
+      b[8] = (b[8] & 0x3f) | 0x80;
+      const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+      return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+    }
+
+    function setSessionParam(id) {
+      try {
+        const url = new URL(window.location.href);
+        if (id) url.searchParams.set('session', id);
+        else url.searchParams.delete('session');
+        history.replaceState(null, '', url);
+      } catch (_) {}
+    }
+
+    function setSession(id) {
+      currentSessionId = id;
+      sessionData = null;
+      pendingTurn = null;
+      renderSignature = '';
+      setSessionParam(id);
+      renderTranscript();
+    }
+
+    function resetSessionView() {
+      sending = false;
+      document.getElementById('sendError').classList.add('hidden');
       document.getElementById('decisionOptionsList').textContent = '';
       document.getElementById('decisionId').value = '';
       document.getElementById('serverLogsBody').textContent = '';
       const badge = document.getElementById('historyCountBadge');
       if (badge) badge.textContent = '0';
-      showEmptyState();
+      setSession(null);
     }
 
     function selectProject(id) {
@@ -114,7 +134,13 @@
         else url.searchParams.delete('project');
         history.replaceState(null, '', url);
       } catch (_) {}
-      if (changed) resetTaskViewState();
+      if (changed) {
+        resetSessionView();
+        if (initialSessionParam) setSession(initialSessionParam);
+        initialSessionParam = null;
+        autoOpenLatest = !currentSessionId;
+        loadSessions();
+      }
       renderProjectBar();
       updateStatus();
     }
@@ -184,9 +210,8 @@
         document.getElementById('serverPill').style.borderColor = 'var(--border-subtle)';
         document.getElementById('startBtn').disabled = true;
         document.getElementById('stopBtn').disabled = true;
-        document.getElementById('dispatchBtn').disabled = true;
         serverRunning = false;
-        updateContinueBtn();
+        updateComposer();
         return;
       }
       try {
@@ -200,11 +225,9 @@
         const pill = document.getElementById('serverPill');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
-        const dispatchBtn = document.getElementById('dispatchBtn');
 
         dot.className = 'status-dot';
         serverRunning = data.status === 'running';
-        updateContinueBtn();
 
         if (data.status === 'running') {
           dot.classList.add('active');
@@ -212,21 +235,19 @@
           pill.style.borderColor = 'rgba(16, 185, 129, 0.4)';
           startBtn.disabled = true;
           stopBtn.disabled = false;
-          dispatchBtn.disabled = false;
         } else if (data.status === 'starting') {
           dot.classList.add('starting');
           text.innerText = 'Starting process...';
           pill.style.borderColor = 'rgba(245, 158, 11, 0.4)';
           startBtn.disabled = true;
           stopBtn.disabled = false;
-          dispatchBtn.disabled = true;
         } else {
           text.innerText = 'Server stopped';
           pill.style.borderColor = 'var(--border-subtle)';
           startBtn.disabled = false;
           stopBtn.disabled = true;
-          dispatchBtn.disabled = true;
         }
+        updateComposer();
 
         const logsBody = document.getElementById('serverLogsBody');
         if (data.logs && data.logs.length) {
@@ -234,23 +255,10 @@
           logsBody.scrollTop = logsBody.scrollHeight;
         }
 
-        if (data.status === 'running') {
-          await syncActiveTask();
-        }
-        await fetchHistoryCount();
+        await pollSession();
         const known = currentProject();
         if (known && known.status !== data.status) refreshProjects();
       } catch (_) {}
-    }
-
-    let viewingArchivedTaskId = null;
-    let dismissedTaskId = null;
-
-    function isActiveState(state) {
-      return state === 'TASK_STATE_SUBMITTED' || state === 1
-        || state === 'TASK_STATE_WORKING' || state === 2
-        || state === 'TASK_STATE_INPUT_REQUIRED' || state === 6
-        || state === 'TASK_STATE_AUTH_REQUIRED' || state === 8;
     }
 
     function isTerminalState(state) {
@@ -260,247 +268,314 @@
         || state === 'TASK_STATE_REJECTED' || state === 7;
     }
 
-    async function syncActiveTask() {
-      if (viewingArchivedTaskId) return;
+    function isPausedState(state) {
+      return state === 'TASK_STATE_INPUT_REQUIRED' || state === 6;
+    }
+
+    function lastTurn() {
+      const turns = sessionData && sessionData.turns;
+      return turns && turns.length ? turns[turns.length - 1].leadTask : null;
+    }
+
+    // ---- Composer and session controls
+    function updateComposer() {
+      const goalEl = document.getElementById('taskGoal');
+      const sendBtn = document.getElementById('sendBtn');
+      const newBtn = document.getElementById('newSessionBtn');
+      const hint = document.getElementById('composerHint');
+      const last = lastTurn();
+      const lastTerminal = !!last && isTerminalState(last.state);
+
+      goalEl.placeholder = currentSessionId
+        ? 'Reply in this session'
+        : 'Describe the goal, for example: Analyze the project and fix validation error in src/...';
+
+      let hintText = '';
+      if (!currentProjectId) hintText = 'Add or select a project first.';
+      else if (!serverRunning) hintText = 'Start the orchestrator to send messages.';
+      else if (sending || pendingTurn) hintText = 'Lead is working on your message...';
+      else if (last && isPausedState(last.state)) hintText = 'Lead is paused: answer through the decision card above.';
+      else if (last && !lastTerminal) hintText = 'Lead is working: wait for the answer before sending another message.';
+
+      const locked = hintText !== '';
+      goalEl.disabled = locked;
+      sendBtn.disabled = locked;
+      hint.textContent = hintText;
+      hint.classList.toggle('hidden', !locked);
+      newBtn.disabled = !(currentSessionId && lastTerminal && !sending && !pendingTurn);
+      document.getElementById('activeTaskIdDisplay').textContent = currentSessionId
+        ? 'session ' + currentSessionId.slice(0, 8)
+        : 'no session';
+    }
+
+    function newSession() {
+      setSession(null);
+      autoOpenLatest = false;
+      document.getElementById('decisionCard').classList.add('hidden');
+      document.getElementById('sendError').classList.add('hidden');
+      updateComposer();
+      document.getElementById('taskGoal').focus();
+    }
+
+    // ---- Transcript
+    function textEl(tag, className, text) {
+      const el = document.createElement(tag);
+      if (className) el.className = className;
+      el.textContent = text;
+      return el;
+    }
+
+    function userBubbles(transcript, goal, lastInstruction) {
+      if (goal) transcript.appendChild(textEl('div', 'bubble bubble-user', goal));
+      if (lastInstruction && lastInstruction !== goal) {
+        transcript.appendChild(textEl('div', 'bubble bubble-followup', 'Follow-up: ' + lastInstruction));
+      }
+    }
+
+    function acceptanceLabel(disposition) {
+      if (disposition === 'accepted') return 'Acceptance: Passed';
+      if (disposition === 'rejected') return 'Acceptance: Rejected';
+      return 'Acceptance: ' + (disposition || 'n/a');
+    }
+
+    function leadBubble(turn) {
+      const t = turn.leadTask;
+      const workers = turn.workers || [];
+      const state = t.state;
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble bubble-lead';
+      const head = document.createElement('div');
+      head.className = 'bubble-head';
+      head.appendChild(textEl('span', '', 'Lead'));
+      let body = '';
+
+      if (state === 'TASK_STATE_WORKING' || state === 2) {
+        head.appendChild(textEl('span', '', 'working'));
+        body = 'Lead analyzes the goal, creates assignments, and coordinates specialists...';
+        if (workers.length) {
+          body += '\n\nRound specialists:\n' + workers.map(w => '  [' + w.state + '] ' + w.role).join('\n');
+        }
+      } else if (isPausedState(state)) {
+        head.appendChild(textEl('span', '', 'paused'));
+        bubble.classList.add('bubble-paused');
+        body = 'Paused: waiting for a human decision.\n\n' + extractParts(t.status?.message?.parts);
+      } else if (state === 'TASK_STATE_COMPLETED' || state === 3) {
+        const artifact = t.artifacts?.at(-1);
+        head.appendChild(textEl('span', '', acceptanceLabel(artifact?.metadata?.acceptance?.disposition)));
+        body = extractParts(artifact?.parts) || extractParts(t.status?.message?.parts) || 'Completed without additional text.';
+      } else if (state === 'TASK_STATE_FAILED' || state === 4) {
+        head.appendChild(textEl('span', '', 'failed'));
+        bubble.classList.add('bubble-failed');
+        body = 'Task failed with an error:\n\n' + extractParts(t.status?.message?.parts);
+      } else {
+        head.appendChild(textEl('span', '', String(state)));
+        body = extractParts(t.status?.message?.parts);
+      }
+      bubble.appendChild(head);
+      bubble.appendChild(textEl('div', '', body));
+      return bubble;
+    }
+
+    function updateStatusBar() {
+      const label = document.getElementById('taskStatusLabel');
+      const badge = document.getElementById('acceptanceBadge');
+      const last = lastTurn();
+      badge.className = 'acceptance-pill acceptance-none';
+      badge.textContent = 'no checks';
+      if (!last) {
+        label.textContent = pendingTurn ? 'Status: task in progress...' : 'Status: waiting to start';
+        return;
+      }
+      const state = last.state;
+      if (state === 'TASK_STATE_WORKING' || state === 2) label.textContent = 'Status: task in progress...';
+      else if (isPausedState(state)) label.textContent = 'Status: human decision required (paused)';
+      else if (state === 'TASK_STATE_COMPLETED' || state === 3) {
+        label.textContent = 'Status: COMPLETED SUCCESSFULLY';
+        const disposition = last.artifacts?.at(-1)?.metadata?.acceptance?.disposition;
+        badge.className = 'acceptance-pill ' + (disposition === 'accepted' ? 'acceptance-accepted'
+          : disposition === 'rejected' ? 'acceptance-rejected' : 'acceptance-none');
+        badge.textContent = acceptanceLabel(disposition);
+      } else if (state === 'TASK_STATE_FAILED' || state === 4) label.textContent = 'Status: FAILED';
+      else label.textContent = 'Status: ' + state;
+    }
+
+    function updateDecisionCard() {
+      const card = document.getElementById('decisionCard');
+      const last = lastTurn();
+      if (!last || !isPausedState(last.state) || sending) {
+        card.classList.add('hidden');
+        return;
+      }
+      const pause = last.metadata?.pause || {};
+      card.classList.remove('hidden');
+      const promptText = pause.kind === 'error'
+        ? 'Lead paused due to an error: ' + (pause.message || 'Error') + '\nSend a message to retry the step.'
+        : (pause.question || pause.message || 'Waiting for response');
+      document.getElementById('decisionQuestion').textContent = promptText;
+      document.getElementById('decisionId').value = pause.decisionId || '';
+      const optContainer = document.getElementById('decisionOptionsList');
+      optContainer.textContent = '';
+      (pause.options || []).forEach(opt => {
+        const pill = textEl('span', 'option-pill', opt.id + ': ' + opt.description);
+        pill.onclick = () => selectOption(opt.id);
+        optContainer.appendChild(pill);
+      });
+    }
+
+    function renderTranscript() {
+      const transcript = document.getElementById('transcript');
+      const turns = (sessionData && sessionData.turns) || [];
+      const signature = JSON.stringify([currentSessionId, sessionData, pendingTurn && pendingTurn.goal]);
+      updateStatusBar();
+      updateDecisionCard();
+      updateComposer();
+      if (signature === renderSignature) return;
+      const firstPaint = renderSignature === '' || !transcript.firstChild;
+      const stickToBottom = firstPaint
+        || transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
+      const keepTop = transcript.scrollTop;
+      renderSignature = signature;
+
+      transcript.textContent = '';
+      turns.forEach(turn => {
+        userBubbles(transcript, turn.leadTask.goal, turn.leadTask.lastInstruction);
+        transcript.appendChild(leadBubble(turn));
+      });
+      if (pendingTurn && turns.length <= pendingTurn.baseTurns) {
+        userBubbles(transcript, pendingTurn.goal, '');
+        const wait = document.createElement('div');
+        wait.className = 'bubble bubble-lead';
+        wait.appendChild(textEl('div', '', 'Dispatching to the Lead...'));
+        transcript.appendChild(wait);
+      }
+      if (!transcript.firstChild) {
+        transcript.appendChild(textEl('div', 'transcript-empty',
+          'Send a message to start a session. Specialist reports and the final verdict will appear here.'));
+      }
+      transcript.scrollTop = stickToBottom ? transcript.scrollHeight : keepTop;
+    }
+
+    async function pollSession() {
       const pid = currentProjectId;
+      const sid = currentSessionId;
+      if (!pid || !sid) return;
       try {
-        const res = await fetch(projectUrl('/tasks/latest'));
+        const res = await fetch(projectUrl('/sessions/' + encodeURIComponent(sid)));
+        if (pid !== currentProjectId || sid !== currentSessionId) return;
+        if (res.status === 404) {
+          // A brand-new session has no row until the lead task is created.
+          if (!pendingTurn && !sending) setSession(null);
+          return;
+        }
         if (!res.ok) return;
         const data = await res.json();
-        if (pid !== currentProjectId || viewingArchivedTaskId) return;
-        if (!data.leadTask) return;
-        if (dismissedTaskId && data.leadTask.id === dismissedTaskId && isTerminalState(data.leadTask.state)) return;
-        if (!isTerminalState(data.leadTask.state) || data.leadTask.id !== dismissedTaskId) dismissedTaskId = null;
-        renderTaskView(data.leadTask, data.workers || [], false);
+        if (pid !== currentProjectId || sid !== currentSessionId) return;
+        sessionData = data;
+        if (pendingTurn && data.turns.length > pendingTurn.baseTurns) pendingTurn = null;
+        renderTranscript();
       } catch (_) {}
     }
 
-    function renderTaskView(leadTask, workers = [], isArchive = false) {
-      if (!leadTask) return;
-
-      currentTaskId = leadTask.id;
-      document.getElementById('activeTaskIdDisplay').innerText = 'ID: ' + leadTask.id;
-      displayedTaskTerminal = isTerminalState(leadTask.state);
-      updateContinueBtn();
-      const resetBadge = document.getElementById('acceptanceBadge');
-      resetBadge.className = 'acceptance-pill acceptance-none';
-      resetBadge.innerText = 'no checks';
-
-      const goalBox = document.getElementById('activeTaskGoalBox');
-      const goalTextEl = document.getElementById('activeTaskGoalText');
-      const goalSubEl = document.getElementById('activeTaskSubText');
-      const goalHeaderTitle = document.getElementById('activeGoalHeaderTitle');
-      const deleteBtn = document.getElementById('deleteCurrentTaskBtn');
-      const archiveBanner = document.getElementById('archiveViewingBanner');
-
-      if (isArchive) {
-        archiveBanner.classList.remove('hidden');
-        goalHeaderTitle.innerText = 'Archived task / Goal:';
-      } else {
-        archiveBanner.classList.add('hidden');
-        goalHeaderTitle.innerText = 'Current task / Goal:';
-      }
-
-      if (leadTask.goal) {
-        goalTextEl.innerText = leadTask.goal;
-        if (leadTask.lastInstruction && leadTask.lastInstruction !== leadTask.goal) {
-          goalSubEl.innerText = 'Follow-up: ' + leadTask.lastInstruction;
-          goalSubEl.classList.remove('hidden');
-        } else {
-          goalSubEl.classList.add('hidden');
-        }
-        if (leadTask.continuesFrom) {
-          const prefix = 'continuation of ' + leadTask.continuesFrom.slice(0, 8) + '...';
-          goalSubEl.innerText = goalSubEl.classList.contains('hidden') ? prefix : prefix + ' | ' + goalSubEl.innerText;
-          goalSubEl.classList.remove('hidden');
-        }
-        goalBox.classList.remove('hidden');
-      } else {
-        goalBox.classList.add('hidden');
-      }
-
-      const state = leadTask.state;
-      const isWorking = state === 'TASK_STATE_WORKING' || state === 2;
-      const isInputRequired = state === 'TASK_STATE_INPUT_REQUIRED' || state === 6;
-      const isCompleted = state === 'TASK_STATE_COMPLETED' || state === 3;
-      const isFailed = state === 'TASK_STATE_FAILED' || state === 4;
-
-      if (isCompleted || isFailed) {
-        deleteBtn.classList.remove('hidden');
-      } else {
-        deleteBtn.classList.add('hidden');
-      }
-
-      const statusLabel = document.getElementById('taskStatusLabel');
-      const out = document.getElementById('taskOutputArea');
-      const dispatchBtn = document.getElementById('dispatchBtn');
-
-      const goalBanner = leadTask.goal ? '🎯 Goal: ' + leadTask.goal + '\n\n' : '';
-
-      if (isWorking) {
-        statusLabel.innerText = 'Status: task in progress...';
-        dispatchBtn.disabled = true;
-        document.getElementById('decisionCard').classList.add('hidden');
-
-        let workerStatusText = '';
-        if (workers && workers.length) {
-          workerStatusText = '\n\nRound specialists:\n' + workers.map(w => {
-            const icon = w.state === 'finished' ? '✅' : w.state === 'submitted' ? '⏳' : '📋';
-            return '  ' + icon + ' ' + w.role + ': ' + w.state;
-          }).join('\n');
-        }
-
-        out.innerText = goalBanner + '>>> Task dispatched to Lead Orchestrator (LangGraph).\nLead analyzes goal, creates assignments, and coordinates specialists...' + workerStatusText;
-
-      } else if (isInputRequired) {
-        statusLabel.innerText = 'Status: human decision required (paused)';
-        dispatchBtn.disabled = false;
-
-        const pause = leadTask.metadata?.pause || {};
-        document.getElementById('decisionCard').classList.remove('hidden');
-        const isErrorPause = pause.kind === 'error';
-        
-        let promptText = isErrorPause
-          ? 'Lead paused due to an error: ' + (pause.message || 'Error') + '\nSend a message to retry the step.'
-          : (pause.question || pause.message || 'Waiting for response');
-          
-        document.getElementById('decisionQuestion').innerText = promptText;
-        document.getElementById('decisionId').value = pause.decisionId || '';
-
-        const optContainer = document.getElementById('decisionOptionsList');
-        optContainer.innerHTML = '';
-        if (pause.options && pause.options.length) {
-          pause.options.forEach(opt => {
-            const pill = document.createElement('span');
-            pill.className = 'option-pill';
-            pill.innerText = opt.id + ': ' + opt.description;
-            pill.onclick = () => selectOption(opt.id);
-            optContainer.appendChild(pill);
-          });
-        }
-
-        const msgText = extractParts(leadTask.status?.message?.parts);
-        out.innerText = goalBanner + '⚠️ TASK PAUSED\nLead is waiting for human decision before continuing.\n\n' + msgText;
-
-      } else if (isCompleted) {
-        statusLabel.innerText = 'Status: COMPLETED SUCCESSFULLY';
-        dispatchBtn.disabled = false;
-        document.getElementById('decisionCard').classList.add('hidden');
-
-        const artifact = leadTask.artifacts?.at(-1);
-        const artifactText = extractParts(artifact?.parts);
-        const disposition = artifact?.metadata?.acceptance?.disposition;
-
-        const accBadge = document.getElementById('acceptanceBadge');
-        if (disposition === 'accepted') {
-          accBadge.className = 'acceptance-pill acceptance-accepted';
-          accBadge.innerText = 'Acceptance: Passed';
-        } else if (disposition === 'rejected') {
-          accBadge.className = 'acceptance-pill acceptance-rejected';
-          accBadge.innerText = 'Acceptance: Rejected';
-        } else {
-          accBadge.className = 'acceptance-pill acceptance-none';
-          accBadge.innerText = 'Acceptance: ' + (disposition || 'n/a');
-        }
-
-        const msgText = extractParts(leadTask.status?.message?.parts);
-        out.innerText = goalBanner + '✅ WORK COMPLETED\n' + (artifactText || msgText || 'Completed without additional text.');
-
-      } else if (isFailed) {
-        statusLabel.innerText = 'Status: FAILED';
-        dispatchBtn.disabled = false;
-        document.getElementById('decisionCard').classList.add('hidden');
-        const msgText = extractParts(leadTask.status?.message?.parts);
-        out.innerText = goalBanner + '❌ Task failed with an error:\n\n' + msgText;
-      } else {
-        statusLabel.innerText = 'Status: ' + state;
-        dispatchBtn.disabled = false;
-        document.getElementById('decisionCard').classList.add('hidden');
-        const msgText = extractParts(leadTask.status?.message?.parts);
-        out.innerText = goalBanner + msgText;
-      }
-    }
-
-    async function fetchHistoryCount() {
+    async function loadSessions() {
       const pid = currentProjectId;
+      if (!pid) return;
       try {
-        const res = await fetch(projectUrl('/tasks/history'));
+        const res = await fetch(projectUrl('/sessions'));
         if (!res.ok) return;
         const data = await res.json();
         if (pid !== currentProjectId) return;
+        const sessions = data.sessions || [];
         const badge = document.getElementById('historyCountBadge');
-        if (badge && data.tasks) badge.innerText = data.tasks.length;
+        if (badge) badge.textContent = sessions.length;
+        if (autoOpenLatest && !currentSessionId && sessions.length) {
+          autoOpenLatest = false;
+          setSession(sessions[0].contextId);
+          pollSession();
+        }
       } catch (_) {}
+    }
+
+    // ---- History modal: one row per session
+    function stateBadge(state) {
+      const badge = document.createElement('span');
+      badge.className = 'acceptance-pill acceptance-none';
+      badge.textContent = String(state);
+      if (state === 'TASK_STATE_WORKING' || state === 2) {
+        badge.className = 'acceptance-pill';
+        badge.style.cssText = 'background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3);';
+        badge.textContent = 'In Progress';
+      } else if (isPausedState(state)) {
+        badge.className = 'acceptance-pill';
+        badge.style.cssText = 'background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);';
+        badge.textContent = 'Awaiting Decision';
+      } else if (state === 'TASK_STATE_COMPLETED' || state === 3) {
+        badge.className = 'acceptance-pill acceptance-accepted';
+        badge.textContent = 'Success';
+      } else if (state === 'TASK_STATE_FAILED' || state === 4) {
+        badge.className = 'acceptance-pill acceptance-rejected';
+        badge.textContent = 'Failed';
+      }
+      return badge;
     }
 
     async function openHistoryModal() {
       const modal = document.getElementById('historyModal');
       const container = document.getElementById('historyListContainer');
       modal.classList.remove('hidden');
-      container.innerHTML = '<div style="text-align: center; color: var(--text-dim); padding: 20px;">Loading history...</div>';
+      container.textContent = '';
+      container.appendChild(textEl('div', '', 'Loading sessions...')).style.cssText = 'text-align: center; color: var(--text-dim); padding: 20px;';
 
       try {
-        const res = await fetch(projectUrl('/tasks/history'));
-        if (!res.ok) throw new Error('Failed to load history');
+        const res = await fetch(projectUrl('/sessions'));
+        if (!res.ok) throw new Error('Failed to load sessions');
         const data = await res.json();
-        const tasks = data.tasks || [];
+        const sessions = data.sessions || [];
+        container.textContent = '';
+        const badge = document.getElementById('historyCountBadge');
+        if (badge) badge.textContent = sessions.length;
 
-        if (tasks.length === 0) {
-          container.innerHTML = '<div style="text-align: center; color: var(--text-dim); padding: 30px;">History is empty. Dispatched tasks will appear here.</div>';
+        if (sessions.length === 0) {
+          container.appendChild(textEl('div', '', 'No sessions yet. Sent messages will appear here.')).style.cssText = 'text-align: center; color: var(--text-dim); padding: 30px;';
           return;
         }
 
-        container.innerHTML = '';
-        tasks.forEach(t => {
+        sessions.forEach(s => {
           const item = document.createElement('div');
           item.className = 'history-item';
 
-          const isWorking = t.state === 'TASK_STATE_WORKING' || t.state === 2;
-          const isInputReq = t.state === 'TASK_STATE_INPUT_REQUIRED' || t.state === 6;
-          const isCompleted = t.state === 'TASK_STATE_COMPLETED' || t.state === 3;
-          const isFailed = t.state === 'TASK_STATE_FAILED' || t.state === 4;
+          const header = document.createElement('div');
+          header.className = 'history-item-header';
+          const badgeWrap = document.createElement('span');
+          badgeWrap.appendChild(stateBadge(s.state));
+          header.appendChild(badgeWrap);
+          header.appendChild(textEl('span', '', s.updatedAt ? new Date(s.updatedAt).toLocaleString('en-US') : ''));
+          item.appendChild(header);
 
-          let statusBadge = '<span class="acceptance-pill acceptance-none">' + escapeHtml(String(t.state)) + '</span>';
-          if (isWorking) statusBadge = '<span class="acceptance-pill" style="background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3);">In Progress</span>';
-          else if (isInputReq) statusBadge = '<span class="acceptance-pill" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">Awaiting Decision</span>';
-          else if (isCompleted) statusBadge = '<span class="acceptance-pill acceptance-accepted">Success</span>';
-          else if (isFailed) statusBadge = '<span class="acceptance-pill acceptance-rejected">Failed</span>';
+          item.appendChild(textEl('div', 'history-item-goal', s.goal));
 
-          const dateStr = t.updatedAt ? new Date(t.updatedAt).toLocaleString('en-US') : '';
-          const canDelete = isCompleted || isFailed;
+          const meta = document.createElement('div');
+          meta.className = 'history-item-meta';
+          meta.appendChild(textEl('span', '', 'Turns: ' + s.turns));
+          meta.appendChild(textEl('span', '', 'Acceptance: ' + (s.disposition || 'n/a')));
+          meta.appendChild(textEl('span', '', 'ID: ' + s.contextId.slice(0, 8) + '...'));
+          item.appendChild(meta);
 
-          item.innerHTML = ''
-            + '<div class="history-item-header">'
-            + '  <span>' + statusBadge + '</span>'
-            + '  <span>' + dateStr + '</span>'
-            + '</div>'
-            + '<div class="history-item-goal">' + escapeHtml(t.goal) + '</div>'
-            + '<div class="history-item-meta">'
-            + '  <span>ID: ' + t.id.slice(0, 8) + '...</span>'
-            + '  <span>Specialists: ' + t.workerCount + '</span>'
-            + '  <span>Acceptance: ' + (t.disposition || 'n/a') + '</span>'
-            + (t.continuesFrom ? '  <span>continuation ' + escapeHtml(t.continuesFrom.slice(0, 8)) + '...</span>' : '')
-            + '</div>'
-            + '<div class="history-item-actions"></div>';
-
-          const actions = item.querySelector('.history-item-actions');
-          if (canDelete) {
-            const delBtn = document.createElement('button');
-            delBtn.className = 'btn btn-danger-outline btn-sm';
-            delBtn.textContent = '🗑 Delete';
-            delBtn.addEventListener('click', () => deleteTaskItem(t.id, t.goal));
+          const actions = document.createElement('div');
+          actions.className = 'history-item-actions';
+          if (isTerminalState(s.state)) {
+            const delBtn = textEl('button', 'btn btn-danger-outline btn-sm', 'Delete');
+            delBtn.addEventListener('click', () => deleteSessionItem(s.contextId, s.goal));
             actions.appendChild(delBtn);
           }
-          const openBtn = document.createElement('button');
-          openBtn.className = 'btn btn-secondary btn-sm';
-          openBtn.textContent = '👁 Open';
-          openBtn.addEventListener('click', () => selectArchivedTask(t.id));
+          const openBtn = textEl('button', 'btn btn-secondary btn-sm', 'Open');
+          openBtn.addEventListener('click', () => openSession(s.contextId));
           actions.appendChild(openBtn);
+          item.appendChild(actions);
           container.appendChild(item);
         });
-
       } catch (err) {
-        container.innerHTML = '<div style="color: var(--danger); text-align: center; padding: 20px;">Failed to load history: ' + escapeHtml(err.message) + '</div>';
+        container.textContent = '';
+        container.appendChild(textEl('div', '', 'Failed to load sessions: ' + err.message)).style.cssText = 'color: var(--danger); text-align: center; padding: 20px;';
       }
     }
 
@@ -508,103 +583,25 @@
       document.getElementById('historyModal').classList.add('hidden');
     }
 
-    async function selectArchivedTask(taskId) {
+    function openSession(contextId) {
       closeHistoryModal();
-      try {
-        const res = await fetch(projectUrl('/tasks/' + encodeURIComponent(taskId)));
-        if (!res.ok) throw new Error('Task not found');
-        const data = await res.json();
-        viewingArchivedTaskId = taskId;
-        renderTaskView(data.leadTask, data.workers || [], true);
-      } catch (err) {
-        alert('Failed to open task: ' + err.message);
-      }
+      autoOpenLatest = false;
+      setSession(contextId);
+      pollSession();
     }
 
-    function showEmptyState() {
-      document.getElementById('activeTaskGoalBox').classList.add('hidden');
-      document.getElementById('archiveViewingBanner').classList.add('hidden');
-      document.getElementById('decisionCard').classList.add('hidden');
-      document.getElementById('taskOutputArea').innerText = 'Task dispatch results, specialist reports, and the final verdict will appear here.';
-      document.getElementById('taskStatusLabel').innerText = 'Status: waiting to start';
-      const badge = document.getElementById('acceptanceBadge');
-      badge.className = 'acceptance-pill acceptance-none';
-      badge.innerText = 'no checks';
-      document.getElementById('activeTaskIdDisplay').innerText = 'no active task';
-      currentTaskId = null;
-      displayedTaskTerminal = false;
-      updateContinueBtn();
-    }
-
-    async function closeTaskView() {
-      const closing = currentTaskId;
-      dismissedTaskId = closing;
-      viewingArchivedTaskId = null;
-      showEmptyState();
+    async function deleteSessionItem(contextId, goalText) {
+      if (!confirm('Delete the whole session from the database?\n"' + goalText + '"')) return;
       try {
-        const res = await fetch(projectUrl('/tasks/latest'));
-        if (!res.ok) return;
+        const res = await fetch(projectUrl('/sessions/' + encodeURIComponent(contextId)), { method: 'DELETE' });
         const data = await res.json();
-        if (data.leadTask && isTerminalState(data.leadTask.state)) dismissedTaskId = data.leadTask.id;
-      } catch (_) {}
-    }
-
-    async function returnToLatestTask() {
-      viewingArchivedTaskId = null;
-      try {
-        const res = await fetch(projectUrl('/tasks/latest'));
-        if (!res.ok) throw new Error('latest');
-        const data = await res.json();
-        if (data.leadTask && isActiveState(data.leadTask.state)) {
-          dismissedTaskId = null;
-          renderTaskView(data.leadTask, data.workers || [], false);
-          return;
-        }
-        dismissedTaskId = data.leadTask ? data.leadTask.id : null;
-      } catch (_) {}
-      showEmptyState();
-    }
-
-    async function deleteTaskItem(taskId, goalText) {
-      if (!confirm('Delete task from database?\n' + (goalText ? '"' + goalText + '"' : taskId))) return;
-
-      try {
-        const res = await fetch(projectUrl('/tasks/' + encodeURIComponent(taskId)), { method: 'DELETE' });
-        const data = await res.json();
-        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete task');
-
-        if (viewingArchivedTaskId === taskId || currentTaskId === taskId) {
-          viewingArchivedTaskId = null;
-          document.getElementById('taskOutputArea').innerText = 'Task deleted from database.';
-          document.getElementById('taskStatusLabel').innerText = 'Status: task deleted';
-          document.getElementById('activeTaskIdDisplay').innerText = '';
-          document.getElementById('activeTaskGoalBox').classList.add('hidden');
-          document.getElementById('archiveViewingBanner').classList.add('hidden');
-          currentTaskId = null;
-          syncActiveTask();
-        }
-
-        fetchHistoryCount();
+        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete session');
+        if (currentSessionId === contextId) setSession(null);
+        loadSessions();
         openHistoryModal();
       } catch (err) {
         alert('Failed to delete: ' + err.message);
       }
-    }
-
-    async function deleteCurrentTask() {
-      if (!currentTaskId) return;
-      const goalEl = document.getElementById('activeTaskGoalText');
-      const goal = goalEl ? goalEl.innerText : currentTaskId;
-      await deleteTaskItem(currentTaskId, goal);
-    }
-
-    function escapeHtml(text) {
-      if (!text) return '';
-      return String(text)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
     }
 
     async function startServer() {
@@ -657,49 +654,39 @@
       setTimeout(updateStatus, 500);
     }
 
-    async function dispatchTask() {
+    async function sendMessage() {
       const goal = document.getElementById('taskGoal').value.trim();
-      if (!goal) return alert('Enter task goal!');
+      if (!goal) return alert('Enter a message!');
 
       const checksRaw = document.getElementById('taskChecks').value.trim();
       const checks = checksRaw ? checksRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-      currentTaskId = null;
-      viewingArchivedTaskId = null;
-      dismissedTaskId = null;
-      document.getElementById('archiveViewingBanner').classList.add('hidden');
-      document.getElementById('decisionCard').classList.add('hidden');
-      await executeA2A({ goal, checks });
-    }
-
-    async function continueTask() {
-      const goal = document.getElementById('taskGoal').value.trim();
-      if (!goal) return alert('Enter task goal!');
-      if (!currentTaskId || !displayedTaskTerminal) return;
-
-      const checksRaw = document.getElementById('taskChecks').value.trim();
-      const checks = checksRaw ? checksRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
-
-      const continueFrom = currentTaskId;
-      currentTaskId = null;
-      viewingArchivedTaskId = null;
-      dismissedTaskId = null;
-      displayedTaskTerminal = false;
-      updateContinueBtn();
-      document.getElementById('archiveViewingBanner').classList.add('hidden');
-      document.getElementById('decisionCard').classList.add('hidden');
-      await executeA2A({ goal, checks, continueFrom });
+      const last = lastTurn();
+      const payload = { goal, checks };
+      if (currentSessionId) {
+        if (!last || !isTerminalState(last.state)) return;
+        payload.continueFrom = last.id;
+      } else {
+        setSession(newContextId());
+        payload.contextId = currentSessionId;
+      }
+      pendingTurn = { goal, baseTurns: sessionData ? sessionData.turns.length : 0 };
+      document.getElementById('taskGoal').value = '';
+      await executeA2A(payload);
     }
 
     async function submitDecision() {
+      const last = lastTurn();
+      if (!last) return;
       const decisionId = document.getElementById('decisionId').value;
       const choice = document.getElementById('decisionChoice').value.trim();
       const answer = document.getElementById('decisionAnswer').value.trim();
 
-      document.getElementById('decisionCard').classList.add('hidden');
+      document.getElementById('decisionAnswer').value = '';
+      document.getElementById('decisionChoice').value = '';
       await executeA2A({
         goal: answer || choice || 'Approved',
-        taskId: currentTaskId,
+        taskId: last.id,
         decision: decisionId,
         choice: choice || undefined
       });
@@ -709,23 +696,15 @@
       document.getElementById('decisionChoice').value = id;
     }
 
+    // The request returns when the lead run ends; the transcript is driven by polling meanwhile.
     async function executeA2A(payload) {
       if (!currentProjectId) return alert('Add or select a project first!');
       const pid = currentProjectId;
-      const out = document.getElementById('taskOutputArea');
-      const statusLabel = document.getElementById('taskStatusLabel');
-      const dispatchBtn = document.getElementById('dispatchBtn');
-
-      if (payload.goal) {
-        document.getElementById('activeTaskGoalText').innerText = payload.goal;
-        document.getElementById('activeTaskSubText').classList.add('hidden');
-        document.getElementById('activeTaskGoalBox').classList.remove('hidden');
-      }
-
-      dispatchBtn.disabled = true;
-      statusLabel.innerText = 'Status: task in progress...';
-      const goalBanner = payload.goal ? '🎯 Goal: ' + payload.goal + '\n\n' : '';
-      out.innerText = goalBanner + '>>> Task dispatched to Lead Orchestrator (LangGraph).\nLead analyzes goal, creates assignments, and delegates them to specialists...\nPlease do not close this page.';
+      const sid = currentSessionId;
+      const errorEl = document.getElementById('sendError');
+      errorEl.classList.add('hidden');
+      sending = true;
+      renderTranscript();
 
       try {
         const res = await fetch(projectUrl('/task/send'), {
@@ -736,84 +715,26 @@
         const data = await res.json();
         if (pid !== currentProjectId) return;
         if (!data.success) throw new Error(data.error);
-
-        const task = data.result;
-        currentTaskId = task.id || currentTaskId;
-        document.getElementById('activeTaskIdDisplay').innerText = currentTaskId ? 'ID: ' + currentTaskId : '';
-
-        const state = task.status?.state;
-        const msgText = extractParts(task.status?.message?.parts);
-
-        const isInputRequired = state === 'TASK_STATE_INPUT_REQUIRED' || state === 6 || state === '6';
-        const isCompleted = state === 'TASK_STATE_COMPLETED' || state === 3 || state === '3';
-        const isFailed = state === 'TASK_STATE_FAILED' || state === 4 || state === '4';
-
-        if (isInputRequired) {
-          statusLabel.innerText = 'Status: Input required (paused)';
-          const pause = task.metadata?.pause || {};
-          
-          document.getElementById('decisionCard').classList.remove('hidden');
-          const isErrorPause = pause.kind === 'error';
-          
-          let promptText = isErrorPause
-            ? 'Error during Lead step: ' + (pause.message || 'Error') + '\nSend a message to retry the step.'
-            : (pause.question || pause.message || 'Waiting for response');
-            
-          document.getElementById('decisionQuestion').innerText = promptText;
-          document.getElementById('decisionId').value = pause.decisionId || '';
-
-          if (isErrorPause && !document.getElementById('decisionAnswer').value) {
-            document.getElementById('decisionAnswer').value = 'Retry without trailing slashes in allowedFiles';
-          }
-
-          const optContainer = document.getElementById('decisionOptionsList');
-          optContainer.innerHTML = '';
-          if (pause.options && pause.options.length) {
-            pause.options.forEach(opt => {
-              const pill = document.createElement('span');
-              pill.className = 'option-pill';
-              pill.innerText = opt.id + ': ' + opt.description;
-              pill.onclick = () => selectOption(opt.id);
-              optContainer.appendChild(pill);
-            });
-          }
-
-          out.innerText = goalBanner + '⚠️ TASK PAUSED\nLead is waiting for response before continuing.\n\n' + msgText;
-
-        } else if (isCompleted) {
-          statusLabel.innerText = 'Status: COMPLETED SUCCESSFULLY';
-          const artifact = task.artifacts?.at(-1);
-          const artifactText = extractParts(artifact?.parts);
-          const disposition = artifact?.metadata?.acceptance?.disposition;
-
-          const accBadge = document.getElementById('acceptanceBadge');
-          if (disposition === 'accepted') {
-            accBadge.className = 'acceptance-pill acceptance-accepted';
-            accBadge.innerText = 'Acceptance: Passed';
-          } else if (disposition === 'rejected') {
-            accBadge.className = 'acceptance-pill acceptance-rejected';
-            accBadge.innerText = 'Acceptance: Rejected';
-          } else {
-            accBadge.className = 'acceptance-pill acceptance-none';
-            accBadge.innerText = 'Acceptance: ' + (disposition || 'n/a');
-          }
-
-          out.innerText = goalBanner + '✅ WORK COMPLETED\n' + (artifactText || msgText || 'Completed without additional text.');
-
-        } else if (isFailed) {
-          statusLabel.innerText = 'Status: FAILED';
-          out.innerText = goalBanner + '❌ Task failed with an error:\n\n' + msgText;
-        } else {
-          statusLabel.innerText = 'Status: ' + state;
-          out.innerText = goalBanner + 'Response status: ' + state + '\n\n' + msgText;
-        }
-
       } catch (err) {
-        if (pid !== currentProjectId) return;
-        statusLabel.innerText = 'Status: error';
-        out.innerText = '❌ Execution error:\n' + err.message;
+        if (pid === currentProjectId) {
+          errorEl.textContent = 'Send failed: ' + err.message;
+          errorEl.classList.remove('hidden');
+          if (payload.taskId === undefined) {
+            document.getElementById('taskGoal').value = payload.goal;
+          }
+        }
       } finally {
-        if (pid === currentProjectId) dispatchBtn.disabled = false;
+        if (pid === currentProjectId) {
+          sending = false;
+          if (sid === currentSessionId) {
+            await pollSession();
+            // The message never became a turn: drop the optimistic bubble.
+            if (pendingTurn && (!sessionData || sessionData.turns.length <= pendingTurn.baseTurns)) pendingTurn = null;
+            if (!sessionData) setSession(null);
+            else renderTranscript();
+          }
+          loadSessions();
+        }
       }
     }
 

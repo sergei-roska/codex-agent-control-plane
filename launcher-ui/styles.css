@@ -381,50 +381,69 @@
       color: var(--text-main);
     }
     .task-viewer::-webkit-scrollbar { width: 6px; }
-    /* Current task card (Goal) */
-    .active-goal-box {
-      background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(99, 102, 241, 0.04));
-      border: 1px solid rgba(99, 102, 241, 0.35);
-      border-radius: var(--radius-md);
-      padding: 12px 16px;
-      display: flex;
-      gap: 12px;
-      align-items: flex-start;
-      animation: fadeIn 0.25s ease;
-    }
-    .active-goal-icon {
-      font-size: 18px;
-      line-height: 1.2;
-      flex-shrink: 0;
-    }
-    .active-goal-content {
+    /* Session transcript */
+    .transcript {
       display: flex;
       flex-direction: column;
-      gap: 4px;
-      overflow: hidden;
-      flex: 1;
+      gap: 10px;
+      white-space: normal;
+      min-height: 260px;
+      max-height: 520px;
     }
-    .active-goal-title {
+    .transcript-empty {
+      color: var(--text-dim);
+    }
+    .bubble {
+      max-width: 88%;
+      padding: 9px 13px;
+      border-radius: var(--radius-md);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .bubble-user {
+      align-self: flex-end;
+      background: rgba(99, 102, 241, 0.16);
+      border: 1px solid rgba(99, 102, 241, 0.35);
+    }
+    .bubble-followup {
+      align-self: flex-end;
+      font-size: 12px;
+      color: var(--text-muted);
+      background: rgba(99, 102, 241, 0.07);
+      border: 1px dashed rgba(99, 102, 241, 0.3);
+    }
+    .bubble-lead {
+      align-self: flex-start;
+      max-width: 100%;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+    }
+    .bubble-lead.bubble-failed {
+      border-color: rgba(244, 63, 94, 0.45);
+    }
+    .bubble-lead.bubble-paused {
+      border-color: rgba(245, 158, 11, 0.45);
+    }
+    .bubble-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 4px;
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       font-weight: 700;
-      color: var(--primary);
+      color: var(--text-dim);
     }
-    .active-goal-text {
-      font-size: 13.5px;
-      font-weight: 500;
-      color: var(--text-main);
-      line-height: 1.5;
-      word-break: break-word;
-    }
-    .active-goal-subtext {
-      font-size: 12px;
+    .composer-hint {
+      font-size: 12.5px;
       color: var(--text-muted);
-      font-style: italic;
-      margin-top: 2px;
-      padding-top: 4px;
-      border-top: 1px dashed rgba(255, 255, 255, 0.08);
+    }
+    .composer-error {
+      font-size: 12.5px;
+      color: var(--danger);
+      white-space: pre-wrap;
     }
 
     /* Human decision card */
@@ -767,16 +786,3 @@
       background: var(--danger);
       color: #fff;
     }
-    .history-active-banner {
-      background: rgba(245, 158, 11, 0.1);
-      border: 1px solid rgba(245, 158, 11, 0.25);
-      border-radius: var(--radius-sm);
-      padding: 8px 12px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 12.5px;
-      color: var(--warning);
-      margin-bottom: 8px;
-    }
-  

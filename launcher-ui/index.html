@@ -129,50 +129,28 @@
       </div>
     </section>
 
-    <!-- Panel 2: Task Dispatcher -->
+    <!-- Panel 2: Session (conversation with the Lead) -->
     <section class="panel">
       <div class="panel-header">
         <h2 class="panel-title">
-          <span>🚀</span> Task Dispatch (A2A Dispatch)
+          <span>🚀</span> Session
         </h2>
         <div style="display: flex; gap: 10px; align-items: center;">
           <button class="btn btn-secondary btn-sm" onclick="openHistoryModal()">
             <span>📜</span> History (<span id="historyCountBadge">0</span>)
           </button>
-          <span id="activeTaskIdDisplay" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim);">no active task</span>
+          <button id="newSessionBtn" class="btn btn-secondary btn-sm" onclick="newSession()" disabled>New session</button>
+          <span id="activeTaskIdDisplay" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim);">no session</span>
         </div>
       </div>
 
-      <div class="field-group">
-        <label class="field-label">
-          <span>Team Goal:</span>
-          <kbd>Ctrl+Enter to dispatch</kbd>
-        </label>
-        <textarea id="taskGoal" rows="4" placeholder="Describe the goal, for example: Analyze the project and fix validation error in src/..."></textarea>
-        <div class="chips-group">
-          <span class="chip" onclick="setGoal('Analyze project architecture and draft improvement plan')">Architecture analysis</span>
-          <span class="chip" onclick="setGoal('Run tests and fix failing errors')">Run & fix tests</span>
-          <span class="chip" onclick="setGoal('Review code for vulnerabilities and contract compliance')">Security audit</span>
+      <!-- Transcript -->
+      <div class="field-group" style="flex-grow: 1;">
+        <div class="task-meta-bar">
+          <span id="taskStatusLabel">Status: waiting to start</span>
+          <span id="acceptanceBadge" class="acceptance-pill acceptance-none">no checks</span>
         </div>
-      </div>
-
-      <div class="field-group">
-        <label class="field-label">Acceptance Checks:</label>
-        <input type="text" id="taskChecks" placeholder="npm test, node --check src/server.js" spellcheck="false">
-        <div class="chips-group">
-          <span class="chip" onclick="addCheck('npm test')">+ npm test</span>
-          <span class="chip" onclick="addCheck('node --check src/server.js')">+ check server.js</span>
-          <span class="chip" onclick="clearChecks()">clear checks</span>
-        </div>
-      </div>
-
-      <div style="display: flex; gap: 10px;">
-        <button id="dispatchBtn" class="btn btn-primary" onclick="dispatchTask()" disabled style="flex: 1; padding: 13px;">
-          <span>⚡</span> Dispatch task via Lead
-        </button>
-        <button id="continueBtn" class="btn btn-secondary hidden" onclick="continueTask()" disabled style="padding: 13px;">
-          <span>↻</span> Continue task
-        </button>
+        <div class="task-viewer transcript" id="transcript" role="log" aria-live="polite" aria-label="Session transcript"></div>
       </div>
 
       <!-- Lead decision request card -->
@@ -186,54 +164,46 @@
         </div>
 
         <div style="display: flex; gap: 8px;">
-          <input type="text" id="decisionId" placeholder="Decision ID" readonly style="flex: 1; font-family: monospace; font-size: 12px;">
-          <input type="text" id="decisionChoice" placeholder="Selected option (optionId)" style="flex: 1; font-family: monospace;">
+          <input type="text" id="decisionId" placeholder="Decision ID" aria-label="Decision ID" readonly style="flex: 1; font-family: monospace; font-size: 12px;">
+          <input type="text" id="decisionChoice" placeholder="Selected option (optionId)" aria-label="Selected option" style="flex: 1; font-family: monospace;">
         </div>
         
-        <textarea id="decisionAnswer" rows="2" placeholder="Additional explanation or response text..."></textarea>
+        <textarea id="decisionAnswer" rows="2" placeholder="Additional explanation or response text..." aria-label="Decision answer"></textarea>
         
         <button class="btn btn-primary" onclick="submitDecision()" style="align-self: flex-start;">
           Submit answer and continue
         </button>
       </div>
 
-      <!-- Result output -->
-      <div class="field-group" style="flex-grow: 1;">
-        <div class="task-meta-bar">
-          <span id="taskStatusLabel">Status: waiting to start</span>
-          <span id="acceptanceBadge" class="acceptance-pill acceptance-none">no checks</span>
+      <!-- Composer -->
+      <div class="field-group">
+        <label class="field-label" for="taskGoal">
+          <span>Message:</span>
+          <kbd>Ctrl+Enter to send</kbd>
+        </label>
+        <textarea id="taskGoal" rows="3" placeholder="Describe the goal, for example: Analyze the project and fix validation error in src/..."></textarea>
+        <div class="chips-group">
+          <span class="chip" onclick="setGoal('Analyze project architecture and draft improvement plan')">Architecture analysis</span>
+          <span class="chip" onclick="setGoal('Run tests and fix failing errors')">Run & fix tests</span>
+          <span class="chip" onclick="setGoal('Review code for vulnerabilities and contract compliance')">Security audit</span>
         </div>
-
-        <!-- Archive mode banner -->
-        <div id="archiveViewingBanner" class="history-active-banner hidden">
-          <span>👁 Archive mode: viewing task from history</span>
-          <button class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 2px 8px;" onclick="returnToLatestTask()">
-            Back to active task ->
-          </button>
-        </div>
-
-        <!-- Active goal card -->
-        <div id="activeTaskGoalBox" class="active-goal-box hidden">
-          <span class="active-goal-icon">🎯</span>
-          <div class="active-goal-content">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div class="active-goal-title" id="activeGoalHeaderTitle">Current task / Goal:</div>
-              <span style="display: flex; gap: 6px;">
-              <button id="closeTaskBtn" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 2px 8px;" onclick="closeTaskView()">
-                <span>✕</span> Close
-              </button>
-              <button id="deleteCurrentTaskBtn" class="btn btn-secondary btn-sm hidden" style="color: var(--danger); font-size: 11px; padding: 2px 8px;" onclick="deleteCurrentTask()">
-                <span>🗑</span> Delete
-              </button>
-              </span>
-            </div>
-            <div class="active-goal-text" id="activeTaskGoalText"></div>
-            <div id="activeTaskSubText" class="active-goal-subtext hidden"></div>
-          </div>
-        </div>
-
-        <div class="task-viewer" id="taskOutputArea">Task dispatch results, specialist reports, and the final verdict will appear here.</div>
       </div>
+
+      <div class="field-group">
+        <label class="field-label" for="taskChecks">Acceptance Checks:</label>
+        <input type="text" id="taskChecks" placeholder="npm test, node --check src/server.js" spellcheck="false">
+        <div class="chips-group">
+          <span class="chip" onclick="addCheck('npm test')">+ npm test</span>
+          <span class="chip" onclick="addCheck('node --check src/server.js')">+ check server.js</span>
+          <span class="chip" onclick="clearChecks()">clear checks</span>
+        </div>
+      </div>
+
+      <div id="composerHint" class="composer-hint hidden"></div>
+      <div id="sendError" class="composer-error hidden" role="alert"></div>
+      <button id="sendBtn" class="btn btn-primary" onclick="sendMessage()" disabled style="padding: 13px;">
+        <span>⚡</span> Send
+      </button>
     </section>
 
   </main>
@@ -243,12 +213,12 @@
     <div class="modal-card">
       <div class="modal-header">
         <h3 class="modal-title">
-          <span>📜</span> Workspace task history
+          <span>📜</span> Project sessions
         </h3>
         <button class="modal-close-btn" onclick="closeHistoryModal()">✕</button>
       </div>
       <div class="modal-body" id="historyListContainer">
-        <div style="text-align: center; color: var(--text-dim); padding: 20px;">Loading history...</div>
+        <div style="text-align: center; color: var(--text-dim); padding: 20px;">Loading sessions...</div>
       </div>
     </div>
   </div>

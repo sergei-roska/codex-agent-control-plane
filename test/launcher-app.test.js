@@ -57,20 +57,20 @@ async function api(method, url, body) {
   return { status: res.status, body: await res.json() };
 }
 
-function leadTask(id, state, goal, updated) {
+function leadTask(id, state, goal, updated, contextId = 'ctx-' + id, refs = []) {
   return {
     id,
-    contextId: 'ctx-' + id,
+    contextId,
     status: { state, timestamp: updated },
     artifacts: [],
     history: [{
       messageId: 'm-' + id,
-      contextId: 'ctx-' + id,
+      contextId,
       taskId: id,
       role: 1,
       parts: [{ content: { $case: 'text', value: goal }, mediaType: 'text/plain', filename: '', metadata: undefined }],
       extensions: [],
-      referenceTaskIds: [],
+      referenceTaskIds: refs,
     }],
     metadata: {},
   };
@@ -96,6 +96,7 @@ before(async () => {
   await makeDb(dbFiles[ID_A], [
     leadTask('task-a1', TaskState.TASK_STATE_COMPLETED, 'goal of A done', '2026-01-01T00:00:00.000Z'),
     leadTask('task-a2', TaskState.TASK_STATE_WORKING, 'goal of A active', '2026-01-02T00:00:00.000Z'),
+    leadTask('task-a3', TaskState.TASK_STATE_COMPLETED, 'follow-up of A', '2026-01-03T00:00:00.000Z', 'ctx-task-a1', ['task-a1']),
   ]);
   await makeDb(dbFiles[ID_B], [
     leadTask('task-b1', TaskState.TASK_STATE_COMPLETED, 'goal of B', '2026-01-03T00:00:00.000Z'),
@@ -163,7 +164,7 @@ describe('project routes', () => {
       const r = await api('POST', `/api/projects/${id}/start`);
       assert.equal(r.status, 404, id);
     }
-    assert.equal((await api('GET', '/api/projects/nothex/tasks/latest')).status, 404);
+    assert.equal((await api('GET', '/api/projects/nothex/sessions')).status, 404);
     assert.deepEqual(calls, []);
   });
 
@@ -176,6 +177,9 @@ describe('project routes', () => {
     assert.deepEqual(r.body.logs, ['one\n', 'two\n']);
   });
 });
+
+const CTX = '0b9f3c1e-5a7d-4c2b-8e11-6f0a2d9b7c34';
+const message = () => sent.find((x) => x.message).message;
 
 describe('task send', () => {
   it('requires a running project', async () => {
@@ -200,20 +204,63 @@ describe('task send', () => {
   });
 });
 
-describe('task read routes use the project own db', () => {
-  it('latest', async () => {
-    const a = await api('GET', `/api/projects/${ID_A}/tasks/latest`);
-    assert.equal(a.body.leadTask.id, 'task-a2');
-    assert.equal(a.body.leadTask.goal, 'goal of A active');
-    const b = await api('GET', `/api/projects/${ID_B}/tasks/latest`);
-    assert.equal(b.body.leadTask.id, 'task-b1');
+describe('task send sessions', () => {
+  it('a new session carries the client contextId and no references', async () => {
+    const r = await api('POST', `/api/projects/${ID_A}/task/send`, { goal: 'x', contextId: CTX });
+    assert.equal(r.status, 200);
+    assert.equal(message().contextId, CTX);
+    assert.deepEqual(message().referenceTaskIds, []);
   });
 
-  it('history', async () => {
-    const a = await api('GET', `/api/projects/${ID_A}/tasks/history`);
-    assert.deepEqual(a.body.tasks.map((t) => t.id), ['task-a2', 'task-a1']);
-    const b = await api('GET', `/api/projects/${ID_B}/tasks/history`);
-    assert.deepEqual(b.body.tasks.map((t) => t.id), ['task-b1']);
+  it('continueFrom derives the contextId from the earlier task', async () => {
+    const r = await api('POST', `/api/projects/${ID_A}/task/send`, { goal: 'x', continueFrom: 'task-a1' });
+    assert.equal(r.status, 200);
+    assert.equal(message().contextId, 'ctx-task-a1');
+    assert.deepEqual(message().referenceTaskIds, ['task-a1']);
+  });
+
+  it('ignores a body contextId when continueFrom or taskId is present', async () => {
+    await api('POST', `/api/projects/${ID_A}/task/send`, { goal: 'x', continueFrom: 'task-a1', contextId: CTX });
+    assert.equal(message().contextId, 'ctx-task-a1');
+    sent = [];
+    await api('POST', `/api/projects/${ID_A}/task/send`, { goal: 'x', taskId: 'task-a2', contextId: 'not-a-uuid' });
+    assert.equal(message().contextId, 'ctx-task-a2');
+    assert.equal(message().taskId, 'task-a2');
+  });
+
+  it('rejects a malformed contextId', async () => {
+    for (const bad of ['not-a-uuid', 42, {}, CTX + 'x']) {
+      const r = await api('POST', `/api/projects/${ID_A}/task/send`, { goal: 'x', contextId: bad });
+      assert.equal(r.status, 400);
+    }
+    assert.deepEqual(sent, []);
+  });
+});
+
+describe('session routes use the project own db', () => {
+  it('lists sessions grouped by context, newest first', async () => {
+    const a = await api('GET', `/api/projects/${ID_A}/sessions`);
+    assert.equal(a.status, 200);
+    assert.deepEqual(a.body.sessions.map((x) => x.contextId), ['ctx-task-a1', 'ctx-task-a2']);
+    const first = a.body.sessions[0];
+    assert.equal(first.goal, 'goal of A done');
+    assert.equal(first.turns, 2);
+    assert.equal(first.lastTaskId, 'task-a3');
+    assert.equal(first.state, 'TASK_STATE_COMPLETED');
+    assert.deepEqual(Object.keys(first).sort(), ['contextId', 'disposition', 'goal', 'lastTaskId', 'state', 'turns', 'updatedAt']);
+    const b = await api('GET', `/api/projects/${ID_B}/sessions`);
+    assert.deepEqual(b.body.sessions.map((x) => x.contextId), ['ctx-task-b1']);
+  });
+
+  it('returns one session with turns oldest first, 404 for unknown or foreign', async () => {
+    const r = await api('GET', `/api/projects/${ID_A}/sessions/ctx-task-a1`);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.contextId, 'ctx-task-a1');
+    assert.deepEqual(r.body.turns.map((t) => t.leadTask.id), ['task-a1', 'task-a3']);
+    assert.equal(r.body.turns[1].leadTask.continuesFrom, 'task-a1');
+    assert.deepEqual(r.body.turns[0].workers, []);
+    assert.equal((await api('GET', `/api/projects/${ID_A}/sessions/nope`)).status, 404);
+    assert.equal((await api('GET', `/api/projects/${ID_B}/sessions/ctx-task-a1`)).status, 404);
   });
 
   it('single task does not leak across projects', async () => {
@@ -222,22 +269,42 @@ describe('task read routes use the project own db', () => {
   });
 
   it('missing db gives empty results and 404', async () => {
-    fakeStatus[ID_MISSING] = 'stopped';
-    const latest = await api('GET', `/api/projects/${ID_MISSING}/tasks/latest`);
-    assert.deepEqual(latest.body, { leadTask: null, workers: [] });
-    assert.deepEqual((await api('GET', `/api/projects/${ID_MISSING}/tasks/history`)).body, { tasks: [] });
+    const list = await api('GET', `/api/projects/${ID_MISSING}/sessions`);
+    assert.deepEqual(list.body, { sessions: [] });
+    assert.equal((await api('GET', `/api/projects/${ID_MISSING}/sessions/x`)).status, 404);
+    assert.equal((await api('DELETE', `/api/projects/${ID_MISSING}/sessions/x`)).status, 404);
     assert.equal((await api('GET', `/api/projects/${ID_MISSING}/tasks/x`)).status, 404);
   });
 
-  it('delete is terminal-only and scoped to the project', async () => {
+  it('single task delete is terminal-only and scoped to the project', async () => {
     assert.equal((await api('DELETE', `/api/projects/${ID_A}/tasks/task-a2`)).status, 400);
-    assert.equal((await api('DELETE', `/api/projects/${ID_B}/tasks/task-a1`)).status, 404);
-    const ok = await api('DELETE', `/api/projects/${ID_A}/tasks/task-a1`);
+    assert.equal((await api('DELETE', `/api/projects/${ID_B}/tasks/task-a3`)).status, 404);
+    const ok = await api('DELETE', `/api/projects/${ID_A}/tasks/task-a3`);
     assert.equal(ok.status, 200);
-    assert.equal(ok.body.deletedId, 'task-a1');
-    const a = await api('GET', `/api/projects/${ID_A}/tasks/history`);
-    assert.deepEqual(a.body.tasks.map((t) => t.id), ['task-a2']);
-    const b = await api('GET', `/api/projects/${ID_B}/tasks/history`);
-    assert.deepEqual(b.body.tasks.map((t) => t.id), ['task-b1']);
+    assert.equal(ok.body.deletedId, 'task-a3');
+    const a = await api('GET', `/api/projects/${ID_A}/sessions/ctx-task-a1`);
+    assert.deepEqual(a.body.turns.map((t) => t.leadTask.id), ['task-a1']);
+  });
+
+  it('session delete refuses an active session, 404s foreign ids, removes a terminal one', async () => {
+    const active = await api('DELETE', `/api/projects/${ID_A}/sessions/ctx-task-a2`);
+    assert.equal(active.status, 400);
+    assert.equal(active.body.success, false);
+    assert.equal((await api('DELETE', `/api/projects/${ID_B}/sessions/ctx-task-a1`)).status, 404);
+    const ok = await api('DELETE', `/api/projects/${ID_A}/sessions/ctx-task-a1`);
+    assert.equal(ok.status, 200);
+    // task-a3 was already removed by the single-task delete test above (the db is shared)
+    assert.deepEqual(ok.body.deletedIds, ['task-a1']);
+    const a = await api('GET', `/api/projects/${ID_A}/sessions`);
+    assert.deepEqual(a.body.sessions.map((x) => x.contextId), ['ctx-task-a2']);
+    const b = await api('GET', `/api/projects/${ID_B}/sessions`);
+    assert.deepEqual(b.body.sessions.map((x) => x.contextId), ['ctx-task-b1']);
+  });
+});
+
+describe('favicon', () => {
+  it('answers 204', async () => {
+    const res = await fetch(base + '/favicon.ico');
+    assert.equal(res.status, 204);
   });
 });
