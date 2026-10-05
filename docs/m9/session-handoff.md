@@ -260,3 +260,21 @@ context pairing successfully (session 204; context/roles/cards 200). The owner
 paused work, then authorized continuing. Server remains running with this
 diagnostic change. Waiting for the new error from the owner's failing profile
 before choosing the actual fix; do not weaken Origin validation speculatively.
+
+The owner's new diagnostic confirmed a portless Origin `http://127.0.0.1`
+despite the page URL including port 3000. The component removing the port remains
+unknown. Implemented a narrow compatibility path, independently audited: raw
+portless loopback Origin must match the validated live-port Host hostname,
+`Sec-Fetch-Site` must be exactly `same-origin`, and a bounded absolute,
+credential-free Referer must have that exact Host origin including the port.
+All three are required. Missing/null/foreign Origins and missing/mismatched
+evidence remain rejected; no generic portless allowlist or forwarded-header trust.
+Security rationale: [Fetch Metadata](https://www.w3.org/TR/fetch-metadata/#sec-fetch-site-header)
+distinguishes same-origin from same-site and its Sec headers cannot be set by
+website JavaScript. Diagnostic output remains sanitized and bounded.
+
+Verification: dashboard auth 15/15, dashboard API plus Atlassian API 13/13,
+independent guard audit two acceptance and 14 denial cases, diff/reference checks.
+Restarted the server; live portless pairing with both corroborating headers
+returned 204, authenticated context 200, and another-port request 403. Issued
+a fresh owner pairing link; verification in the owner's failing profile is pending.

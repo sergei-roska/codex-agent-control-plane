@@ -15,6 +15,7 @@ async function harness({ db = new Database(':memory:'), clock = { t: 1_000_000 }
   app.use(auth.securityHeaders);
   app.use('/api/dashboard/v1', auth.noStore, auth.sessionRouter());
   app.get('/api/dashboard/v1/ping', auth.hostGuard, auth.noStore, auth.requireSession, (req, res) => res.json({ ok: true }));
+  app.post('/api/dashboard/v1/tickets', auth.hostGuard, auth.originGuard, (req, res) => res.status(204).end());
   app.post('/api/dashboard/v1/pairing-codes', auth.pairingCodeHandler);
   const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
   port = server.address().port;
@@ -138,6 +139,69 @@ test('missing or foreign Origin on POST is rejected', async (t) => {
   assert.equal(oversized.status, 403);
   assert.match(oversized.json.error.message, /received: unparseable/);
   assert.ok(oversized.json.error.message.length < 300);
+  assert.equal((await h.login(code)).res.status, 204);
+});
+
+test('portless Origin requires matching same-origin fetch metadata and Referer', async (t) => {
+  const h = await harness(); t.after(h.close);
+  const port = h.server.address().port;
+  for (const hostname of ['127.0.0.1', 'localhost']) {
+    const host = `${hostname}:${port}`;
+    const code = h.auth.issuePairingCode().code;
+    const headers = { 'sec-fetch-site': 'same-origin', referer: `http://${host}/dashboard/` };
+    const login = await h.request('POST', '/api/dashboard/v1/session', {
+      host, origin: `http://${hostname}`, headers, body: { code },
+    });
+    assert.equal(login.status, 204, hostname);
+
+    const cookie = login.headers['set-cookie'][0].split(';')[0];
+    const deletion = await h.request('DELETE', '/api/dashboard/v1/session', {
+      host, origin: `http://${hostname}`, headers: { ...headers, cookie },
+    });
+    assert.equal(deletion.status, 204, `${hostname} DELETE`);
+
+    const ticketMutation = await h.request('POST', '/api/dashboard/v1/tickets', {
+      host, origin: `http://${hostname}`, headers,
+    });
+    assert.equal(ticketMutation.status, 204, `${hostname} ticket mutation`);
+  }
+});
+
+test('portless Origin rejects incomplete or mismatched same-origin evidence', async (t) => {
+  const h = await harness(); t.after(h.close);
+  const port = h.server.address().port;
+  const code = h.auth.issuePairingCode().code;
+  const origin = 'http://127.0.0.1';
+  const referer = `http://127.0.0.1:${port}/dashboard/`;
+  const otherPort = port === 65535 ? port - 1 : port + 1;
+  const attempts = [
+    { name: 'missing fetch metadata', headers: { referer } },
+    { name: 'cross-site', headers: { referer, 'sec-fetch-site': 'cross-site' } },
+    { name: 'same-site', headers: { referer, 'sec-fetch-site': 'same-site' } },
+    { name: 'none', headers: { referer, 'sec-fetch-site': 'none' } },
+    { name: 'missing Referer', headers: { 'sec-fetch-site': 'same-origin' } },
+    { name: 'malformed Referer', headers: { referer: '/dashboard/', 'sec-fetch-site': 'same-origin' } },
+    { name: 'foreign Referer', headers: { referer: 'http://evil.example/path', 'sec-fetch-site': 'same-origin' } },
+    { name: 'different-port Referer', headers: { referer: 'http://127.0.0.1:3001/dashboard/', 'sec-fetch-site': 'same-origin' } },
+    { name: 'credentialed Referer', headers: { referer: `http://user:pass@127.0.0.1:${port}/dashboard/`, 'sec-fetch-site': 'same-origin' } },
+    { name: 'oversized Referer', headers: { referer: `http://127.0.0.1:${port}/${'x'.repeat(3000)}`, 'sec-fetch-site': 'same-origin' } },
+    { name: 'malformed fetch metadata', headers: { referer, 'sec-fetch-site': 'same-origin, cross-site' } },
+    { name: 'cross-host Origin', host: `localhost:${port}`, origin: 'http://127.0.0.1', headers: { referer: `http://localhost:${port}/dashboard/`, 'sec-fetch-site': 'same-origin' } },
+    { name: 'explicit foreign port', origin: `http://127.0.0.1:${otherPort}`, headers: { referer, 'sec-fetch-site': 'same-origin' } },
+  ];
+  for (const attempt of attempts) {
+    const response = await h.request('POST', '/api/dashboard/v1/session', {
+      host: attempt.host, origin: attempt.origin || origin, headers: attempt.headers, body: { code },
+    });
+    assert.equal(response.status, 403, attempt.name);
+    assert.equal(response.json.error.code, 'forbidden', attempt.name);
+  }
+  const diagnostic = await h.request('POST', '/api/dashboard/v1/session', {
+    origin, headers: { referer: `http://user:secret@evil.example/path?token=secret`, 'sec-fetch-site': 'other-value' }, body: { code },
+  });
+  assert.match(diagnostic.json.error.message, /referer: http:\/\/evil\.example/);
+  assert.match(diagnostic.json.error.message, /sec-fetch-site: other/);
+  assert.ok(!/user|secret|token|path/.test(diagnostic.json.error.message));
   assert.equal((await h.login(code)).res.status, 204);
 });
 

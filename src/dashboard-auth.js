@@ -51,6 +51,23 @@ function describeOrigin(origin) {
   }
 }
 
+function describeRefererOrigin(referer) {
+  if (referer === undefined) return 'missing';
+  if (typeof referer !== 'string' || referer.length > 2048) return 'unparseable';
+  try {
+    const parsed = new URL(referer);
+    const description = `${parsed.protocol}//${parsed.host}`;
+    return parsed.host && description.length <= 200 ? description : 'unparseable';
+  } catch {
+    return 'unparseable';
+  }
+}
+
+function describeFetchSite(value) {
+  if (value === undefined) return 'missing';
+  return ['same-origin', 'same-site', 'cross-site', 'none'].includes(value) ? value : 'other';
+}
+
 function createDashboardAuth({ db, getPort, now = () => Date.now(), random = crypto.randomBytes } = {}) {
   if (!db) throw new TypeError('createDashboardAuth requires a db');
   if (typeof getPort !== 'function') throw new TypeError('createDashboardAuth requires getPort');
@@ -113,6 +130,26 @@ function createDashboardAuth({ db, getPort, now = () => Date.now(), random = cry
     const origin = req.headers.origin;
     if (origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`) return next();
     const expected = `http://127.0.0.1:${port} or http://localhost:${port}`;
+    const requestHost = req.headers.host;
+    const hostname = requestHost === `127.0.0.1:${port}` || requestHost === `localhost:${port}`
+      ? requestHost.slice(0, -(String(port).length + 1)) : null;
+    if (origin === 'http://127.0.0.1' || origin === 'http://localhost') {
+      const expectedReferer = `http://${requestHost}`;
+      let refererMatches = false;
+      const referer = req.headers.referer;
+      if (typeof referer === 'string' && referer.length <= 2048) {
+        try {
+          const parsedReferer = new URL(referer);
+          refererMatches = !parsedReferer.username && !parsedReferer.password
+            && parsedReferer.origin === expectedReferer;
+        } catch {
+          // A relative or malformed Referer cannot prove the request's origin.
+        }
+      }
+      if (hostname && origin === `http://${hostname}`
+        && req.headers['sec-fetch-site'] === 'same-origin' && refererMatches) return next();
+      return fail(res, 403, 'forbidden', `Origin not allowed (received: ${describeOrigin(origin)}; expected: ${expected}; referer: ${describeRefererOrigin(referer)}; sec-fetch-site: ${describeFetchSite(req.headers['sec-fetch-site'])})`);
+    }
     return fail(res, 403, 'forbidden', `Origin not allowed (received: ${describeOrigin(origin)}; expected: ${expected})`);
   }
 
