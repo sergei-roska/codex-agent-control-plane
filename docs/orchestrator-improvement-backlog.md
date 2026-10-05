@@ -508,6 +508,17 @@ transport error print the task id so the caller can resume or inspect it.
 Done: a fake slow server test shows the CLI waiting past the timeout and printing
 the final result; existing CLI tests pass.
 
+#### OPS-02 - Pinned acceptance checks survive a pre-checkpoint restart [P1]
+
+Executor: worker-sonnet. Proposed write scope: `src/server.js`,
+`test/server.test.js`. Found by the M1 audit (pre-existing, outside Phase A):
+request-level `metadata.acceptance` (`src/server.js` ~:263) is not recoverable
+when the server restarts before the first checkpoint (~:344); the run then
+continues with no checks, ends `unverified`, and the CLI exits 0. Recover the
+contract from the stored first user message, or mark it invalid
+(`contract_invalid`, UNKNOWN) when it cannot be recovered. Belongs with WAL-01's
+crash-window matrix; fix it there at the latest.
+
 ## Verification and rollout policy
 
 1. Run focused tests in implementation tasks, then the existing project checks at
