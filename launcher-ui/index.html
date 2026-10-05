@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Codex A2A Control Plane</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="brand">
+      <div class="brand-icon">⚡</div>
+      <span>Codex Control Plane</span>
+      <span class="brand-subtitle">Universal A2A</span>
+    </div>
+    
+    <div id="serverPill" class="server-status-pill">
+      <span id="serverDot" class="status-dot"></span>
+      <span id="serverStatusText">Checking connection...</span>
+    </div>
+  </nav>
+
+  <!-- Workspace -->
+  <main class="main-container">
+    
+    <!-- Panel 1: Environment and Server -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2 class="panel-title">
+          <span>📁</span> Workspace & Server
+        </h2>
+        <span style="font-size: 12px; color: var(--text-dim);" id="portHint">port 3000</span>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label">Project path (CODEX_WORKSPACE):</label>
+        <input type="text" id="workspaceInput" value="__DEFAULT_WORKSPACE__" spellcheck="false">
+      </div>
+
+      <div class="btn-group">
+        <button id="startBtn" class="btn btn-success" onclick="startServer()">
+          <span>▶</span> Start Server
+        </button>
+        <button id="stopBtn" class="btn btn-danger" onclick="stopServer()" disabled>
+          <span>■</span> Stop
+        </button>
+      </div>
+
+      <!-- Process log terminal -->
+      <div class="terminal-window">
+        <div class="terminal-bar">
+          <div class="terminal-dots">
+            <span class="terminal-dot dot-red"></span>
+            <span class="terminal-dot dot-yellow"></span>
+            <span class="terminal-dot dot-green"></span>
+          </div>
+          <span class="terminal-title">orchestrator.stdout</span>
+          <div class="terminal-actions">
+            <button class="terminal-btn" onclick="clearLogs()">Clear</button>
+          </div>
+        </div>
+        <div class="terminal-body" id="serverLogsBody">Orchestrator is not running.</div>
+      </div>
+
+      <!-- Usage limits widget (5h and weekly) -->
+      <div class="limits-card">
+        <div class="limits-header">
+          <div class="limits-title">
+            <span>📊</span> Account Limits (<span id="planTypeBadge" style="text-transform: capitalize; color: var(--primary);">ChatGPT</span>)
+          </div>
+          <button class="terminal-btn" onclick="fetchLimits(true)" title="Refresh limits">↻ Refresh</button>
+        </div>
+
+        <!-- Active account information -->
+        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; padding: 6px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-family: 'JetBrains Mono', monospace;">
+          <div style="display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            <span>👤</span>
+            <span id="accountEmail" style="color: var(--text-main);">loading...</span>
+          </div>
+          <span id="accountType" style="color: var(--primary); text-transform: uppercase; font-size: 10px; font-weight: 600;">OAuth</span>
+        </div>
+
+        <!-- 5h limit -->
+        <div class="limit-item">
+          <div class="limit-info">
+            <span class="limit-name">5-hour limit (5h)</span>
+            <span class="limit-value" id="fiveHourVal">...</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="fiveHourBar" style="width: 0%;"></div>
+          </div>
+          <div class="limit-reset" id="fiveHourReset">Reset: loading...</div>
+        </div>
+
+        <!-- Weekly limit -->
+        <div class="limit-item">
+          <div class="limit-info">
+            <span class="limit-name">Weekly limit (Weekly)</span>
+            <span class="limit-value" id="weeklyVal">...</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="weeklyBar" style="width: 0%;"></div>
+          </div>
+          <div class="limit-reset" id="weeklyReset">Reset: loading...</div>
+        </div>
+      </div>
+      <div class="about-card">
+        <div class="limits-title">
+          <span>🧭</span> About Orchestrator
+        </div>
+        <p class="about-text">Local A2A server that executes tasks using a team of Codex agents. The lead operates in read-only mode: analyzes the goal, breaks down work into bounded assignments, and delegates them to roles over the A2A protocol. Each role is an independent Codex invocation with its own model, reasoning effort, and sandbox. Writer roles work on the workspace one at a time, and the server tracks which files were actually modified. At the end, results undergo acceptance checks if specified. State is persisted in SQLite, allowing tasks to pause for human decisions or rate limits and resume after restart.</p>
+        <details class="about-team" open>
+          <summary id="aboutTeamSummary">Team</summary>
+          <div class="about-list" id="aboutTeamList"></div>
+        </details>
+        <div class="limit-reset hidden" id="aboutTeamError"></div>
+      </div>
+    </section>
+
+    <!-- Panel 2: Task Dispatcher -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2 class="panel-title">
+          <span>🚀</span> Task Dispatch (A2A Dispatch)
+        </h2>
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <button class="btn btn-secondary btn-sm" onclick="openHistoryModal()">
+            <span>📜</span> History (<span id="historyCountBadge">0</span>)
+          </button>
+          <span id="activeTaskIdDisplay" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim);">no active task</span>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label">
+          <span>Team Goal:</span>
+          <kbd>Ctrl+Enter to dispatch</kbd>
+        </label>
+        <textarea id="taskGoal" rows="4" placeholder="Describe the goal, for example: Analyze the project and fix validation error in src/..."></textarea>
+        <div class="chips-group">
+          <span class="chip" onclick="setGoal('Analyze project architecture and draft improvement plan')">Architecture analysis</span>
+          <span class="chip" onclick="setGoal('Run tests and fix failing errors')">Run & fix tests</span>
+          <span class="chip" onclick="setGoal('Review code for vulnerabilities and contract compliance')">Security audit</span>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label">Acceptance Checks:</label>
+        <input type="text" id="taskChecks" placeholder="npm test, node --check src/server.js" spellcheck="false">
+        <div class="chips-group">
+          <span class="chip" onclick="addCheck('npm test')">+ npm test</span>
+          <span class="chip" onclick="addCheck('node --check src/server.js')">+ check server.js</span>
+          <span class="chip" onclick="clearChecks()">clear checks</span>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 10px;">
+        <button id="dispatchBtn" class="btn btn-primary" onclick="dispatchTask()" disabled style="flex: 1; padding: 13px;">
+          <span>⚡</span> Dispatch task via Lead
+        </button>
+        <button id="continueBtn" class="btn btn-secondary hidden" onclick="continueTask()" disabled style="padding: 13px;">
+          <span>↻</span> Continue task
+        </button>
+      </div>
+
+      <!-- Lead decision request card -->
+      <div id="decisionCard" class="decision-banner hidden">
+        <h4>⚠️ Lead requests human decision</h4>
+        <p id="decisionQuestion" style="font-size: 13.5px; color: var(--text-main);"></p>
+        
+        <div class="field-group">
+          <label class="field-label">Available options (click to select):</label>
+          <div id="decisionOptionsList" class="decision-options"></div>
+        </div>
+
+        <div style="display: flex; gap: 8px;">
+          <input type="text" id="decisionId" placeholder="Decision ID" readonly style="flex: 1; font-family: monospace; font-size: 12px;">
+          <input type="text" id="decisionChoice" placeholder="Selected option (optionId)" style="flex: 1; font-family: monospace;">
+        </div>
+        
+        <textarea id="decisionAnswer" rows="2" placeholder="Additional explanation or response text..."></textarea>
+        
+        <button class="btn btn-primary" onclick="submitDecision()" style="align-self: flex-start;">
+          Submit answer and continue
+        </button>
+      </div>
+
+      <!-- Result output -->
+      <div class="field-group" style="flex-grow: 1;">
+        <div class="task-meta-bar">
+          <span id="taskStatusLabel">Status: waiting to start</span>
+          <span id="acceptanceBadge" class="acceptance-pill acceptance-none">no checks</span>
+        </div>
+
+        <!-- Archive mode banner -->
+        <div id="archiveViewingBanner" class="history-active-banner hidden">
+          <span>👁 Archive mode: viewing task from history</span>
+          <button class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 2px 8px;" onclick="returnToLatestTask()">
+            Back to active task ->
+          </button>
+        </div>
+
+        <!-- Active goal card -->
+        <div id="activeTaskGoalBox" class="active-goal-box hidden">
+          <span class="active-goal-icon">🎯</span>
+          <div class="active-goal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div class="active-goal-title" id="activeGoalHeaderTitle">Current task / Goal:</div>
+              <span style="display: flex; gap: 6px;">
+              <button id="closeTaskBtn" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 2px 8px;" onclick="closeTaskView()">
+                <span>✕</span> Close
+              </button>
+              <button id="deleteCurrentTaskBtn" class="btn btn-secondary btn-sm hidden" style="color: var(--danger); font-size: 11px; padding: 2px 8px;" onclick="deleteCurrentTask()">
+                <span>🗑</span> Delete
+              </button>
+              </span>
+            </div>
+            <div class="active-goal-text" id="activeTaskGoalText"></div>
+            <div id="activeTaskSubText" class="active-goal-subtext hidden"></div>
+          </div>
+        </div>
+
+        <div class="task-viewer" id="taskOutputArea">Task dispatch results, specialist reports, and the final verdict will appear here.</div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Task history modal -->
+  <div id="historyModal" class="modal-overlay hidden" onclick="if(event.target === this) closeHistoryModal()">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">
+          <span>📜</span> Workspace task history
+        </h3>
+        <button class="modal-close-btn" onclick="closeHistoryModal()">✕</button>
+      </div>
+      <div class="modal-body" id="historyListContainer">
+        <div style="text-align: center; color: var(--text-dim); padding: 20px;">Loading history...</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/app.js"></script>
+</body>
+</html>
