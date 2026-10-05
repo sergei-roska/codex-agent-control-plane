@@ -94,6 +94,25 @@ spawn), `exhausted`.
    explicit `resetSupervisor()` method clears the window and exhaustion for tests
    and future operator tooling.
 
+Generation ownership invariants (added after the M2 audit):
+
+- I1: at most one start (`_startWhenReady`, including its backoff or probe
+  sleep) runs at any time; it alone may set or clear the shared pending start,
+  and `close()` cancels its sleep.
+- I2: an event from generation `g` (exit, error, stdio close, any timer) may
+  change only generation `g`'s state. Once a replacement start for `g` is in
+  flight or `g + 1` exists, events of `g` only resolve `g`'s exit promise and
+  record diagnostics.
+- I3: failing a generation (`_failAll`) happens at most once per generation.
+- I4: a charged fail-safe termination (`turn_start_unknown`, `turn_timeout`,
+  `interrupt_unconfirmed`) fails its generation at the moment of the decision:
+  every run on it is settled by the per-run outcome rule, the generation is no
+  longer reused, and the exit-wait deadline starts on the injected clock even if
+  no new start is requested; on expiry an `unreaped` event is recorded.
+- I5: a run's `execution.generation` is the generation its `turn/start` was
+  sent on; a run never survives into a later generation (leftover runs of a
+  discarded generation are rejected per the per-run rule).
+
 All timing uses an injected clock (`now`, `setTimeout`, `clearTimeout`;
 default real), so tests drive windows, backoff, deadlines, and cooldowns
 deterministically.
@@ -131,8 +150,9 @@ Cancellation semantics stay as implemented: an A2A cancel interrupts the turn;
 "confirmed" means `turn/completed` before the interrupt timeout, otherwise the
 fail-safe terminates the shared child (class `interrupt_unconfirmed`, charged).
 The lead's cancel-confirmation deadline must exceed the specialist's worst case
-(interrupt timeout + 1 s force kill + writer reconcile retry), so its default
-rises from 10 s to 20 s (`src/lead-orchestrator.js:17`).
+(interrupt timeout + 1 s force kill + writer reconcile retry, about 18.3 s
+measured by the M2 audit), so its default rises from 10 s to 30 s
+(`src/lead-orchestrator.js:17`), keeping a margin over the worst case.
 
 ## Known gaps not addressed here
 
