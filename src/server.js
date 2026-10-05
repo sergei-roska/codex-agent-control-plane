@@ -135,6 +135,11 @@ function firstUserGoal(task) {
   return '';
 }
 
+/** True when a validated contract carries anything worth pinning (checks or an invalid marker). */
+function hasContract(contract) {
+  return Boolean(contract) && (contract.requiredChecks?.length > 0 || Boolean(contract.invalid));
+}
+
 /** Metadata of the first non-empty user message in a task history, or {}. */
 function firstUserMetadata(task) {
   for (const message of task?.history || []) {
@@ -201,7 +206,7 @@ function isResumeInputError(error) {
   return error instanceof ResumeInputError;
 }
 
-function makeLeadExecutor({ orchestrator, loadTask }) {
+function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000 }) {
   const controllers = new Map();
   const reservations = new Set();
   const inflight = new Set();
@@ -319,8 +324,31 @@ function makeLeadExecutor({ orchestrator, loadTask }) {
             ? agentMessage(taskId, contextId, `resume-note-${Date.now()}`, 'Resumed. Acceptance metadata on a resume message is ignored; the contract was pinned when the run started.')
             : undefined),
         // Task metadata merges shallowly, so a cleared pause is null rather than absent.
-        metadata: resuming ? { pause: null } : {},
+        // A new run also pins its validated contract in the task record, so a restart before the
+        // first checkpoint recovers it whichever metadata level carried it.
+        metadata: resuming ? { pause: null } : (hasContract(contract) ? { acceptanceContract: contract } : {}),
       }));
+      if (!resuming && hasContract(contract) && loadTask) {
+        // Nothing may execute until the pinned contract is readable from the store.
+        const deadline = Date.now() + durabilityTimeoutMs;
+        let durable = false;
+        for (;;) {
+          let stored = null;
+          try { stored = await loadTask(taskId); } catch (_) { stored = null; }
+          if (stored?.metadata?.acceptanceContract) { durable = true; break; }
+          if (Date.now() >= deadline) break;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        if (!durable) {
+          eventBus.publish(AgentEvent.statusUpdate({
+            taskId,
+            contextId,
+            status: status(TaskState.TASK_STATE_FAILED, agentMessage(taskId, contextId, 'acceptance-durability-error', 'The acceptance contract could not be confirmed as stored; the run was not started.')),
+            metadata: {},
+          }));
+          return;
+        }
+      }
       let result;
       if (resuming) {
         try {
@@ -341,7 +369,9 @@ function makeLeadExecutor({ orchestrator, loadTask }) {
           if (!original) throw new Error('The run has no checkpoint and the original goal could not be recovered from the task history.');
           let originalContract;
           try {
-            originalContract = validateAcceptanceContract(firstUserMetadata(task).acceptance);
+            // Prefer the contract pinned at intake; runs from before that field fall back to message metadata.
+            const pinned = task.metadata?.acceptanceContract;
+            originalContract = validateAcceptanceContract(pinned !== undefined && pinned !== null ? pinned : firstUserMetadata(task).acceptance);
           } catch (contractError) {
             // Never continue as if no checks were required: carry an invalid marker into acceptance.
             originalContract = invalidAcceptanceContract(`Stored acceptance contract is invalid: ${contractError.message}`);

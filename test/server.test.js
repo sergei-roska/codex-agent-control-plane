@@ -960,6 +960,130 @@ test('a restart fallback with an invalid stored contract carries an invalid mark
   assert.equal(validateAcceptanceContract(runs[0].contract).invalid.code, 'contract_invalid');
 });
 
+// Submit a lead task whose run hangs, then replay the stored task into a fresh state DB as a
+// restarted server would find it (no checkpoint), resume it, and return the contract the restart run got.
+async function restartBeforeFirstCheckpoint({ requestMetadata, messageMetadata, mutateStored }) {
+  const dir = tmpDir();
+  const hung = [];
+  const first = await startLeadServer({
+    run(args) {
+      return new Promise((_, reject) => { hung.push(args); args.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); });
+    },
+    async getPause() { return null; },
+  }, dir);
+  let stored;
+  try {
+    const handler = first.leadAgent.requestHandler;
+    const message = userMessage('Build it', messageMetadata ? { metadata: messageMetadata } : {});
+    const submitted = await handler.sendMessage({ message, configuration: { returnImmediately: true }, metadata: requestMetadata }, CALL());
+    for (let i = 0; i < 100 && hung.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(hung.length, 1);
+    const expectPinned = Boolean(requestMetadata?.acceptance || messageMetadata?.acceptance);
+    for (let i = 0; i < 100; i += 1) {
+      stored = JSON.parse(JSON.stringify(await handler.getTask({ id: submitted.id }, CALL())));
+      if (!expectPinned || stored.metadata?.acceptanceContract) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    hung[0].signal.dispatchEvent?.(new Event('abort'));
+  } finally {
+    await first.close();
+  }
+  stored.status = { state: TaskState.TASK_STATE_WORKING, timestamp: new Date().toISOString() };
+  if (mutateStored) mutateStored(stored);
+  const stateFile = path.join(dir, 'restart.sqlite');
+  const seed = await openStateDatabase({ filePath: stateFile });
+  await createTaskStore(seed, 'orchestrator').save(stored, CALL());
+  await seed.close();
+  const runs = [];
+  const second = await startServer({
+    listen: false,
+    stateFile,
+    tokenFile: path.join(dir, 'token'),
+    appServer: CHATGPT_APP_SERVER(),
+    orchestratorFactory: () => ({
+      async getPause() { return null; },
+      async resume() { throw Object.assign(new Error('none'), { name: 'RunNotFoundError' }); },
+      async run(args) { runs.push(args); return { status: 'completed', text: 'again' }; },
+    }),
+  });
+  try {
+    const handler = second.leadAgent.requestHandler;
+    const paused = await handler.getTask({ id: stored.id }, CALL());
+    assert.equal(paused.metadata.pause.kind, 'restart');
+    await handler.sendMessage({ message: userMessage('', { taskId: paused.id, contextId: paused.contextId }), configuration: {} }, CALL());
+  } finally {
+    await second.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  assert.equal(runs.length, 1);
+  return { contract: runs[0].contract, stored };
+}
+
+const pinnedContract = { id: 'acceptance-contract/v1', requiredChecks: [{ id: 'unit', argv: ['npm', 'test'], timeoutMs: 600000 }] };
+
+test('a request-level contract survives a restart before the first checkpoint', async () => {
+  const { contract, stored } = await restartBeforeFirstCheckpoint({ requestMetadata: { acceptance: validAcceptance } });
+  assert.deepEqual(stored.metadata.acceptanceContract, pinnedContract);
+  assert.deepEqual(contract, pinnedContract);
+});
+
+test('a message-level contract survives a restart before the first checkpoint', async () => {
+  const { contract, stored } = await restartBeforeFirstCheckpoint({ messageMetadata: { acceptance: validAcceptance } });
+  assert.deepEqual(stored.metadata.acceptanceContract, pinnedContract);
+  assert.deepEqual(contract, pinnedContract);
+});
+
+test('a run without any contract restarts with no required checks', async () => {
+  const { contract, stored } = await restartBeforeFirstCheckpoint({});
+  assert.equal('acceptanceContract' in stored.metadata, false);
+  assert.deepEqual(contract.requiredChecks, []);
+  assert.equal(contract.invalid, undefined);
+});
+
+test('a legacy run without the persisted field still recovers the contract from message metadata', async () => {
+  const { contract } = await restartBeforeFirstCheckpoint({
+    messageMetadata: { acceptance: validAcceptance },
+    mutateStored(task) { delete task.metadata.acceptanceContract; },
+  });
+  assert.equal(contract.requiredChecks[0].id, 'unit');
+  assert.equal(contract.invalid, undefined);
+});
+
+test('an unrecoverable persisted contract yields the invalid marker, never no checks', async () => {
+  const { contract } = await restartBeforeFirstCheckpoint({
+    requestMetadata: { acceptance: validAcceptance },
+    mutateStored(task) { task.metadata.acceptanceContract = { requiredChecks: [{ id: 'a', argv: [] }] }; },
+  });
+  assert.equal(contract.invalid.code, 'contract_invalid');
+  assert.match(contract.invalid.detail, /Stored acceptance contract is invalid/);
+});
+
+test('the run starts only after the pinned contract is readable from the store', async () => {
+  const log = [];
+  let reads = 0;
+  const executor = makeLeadExecutor({
+    orchestrator: { async run() { log.push('run'); return { status: 'completed', text: 'x' }; } },
+    loadTask: async () => { reads += 1; log.push('load'); return reads >= 3 ? { metadata: { acceptanceContract: { requiredChecks: [] } } } : { metadata: {} }; },
+  });
+  await executor.execute({ taskId: 't-dur', contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }], metadata: { acceptance: validAcceptance } } }, { publish() {} });
+  assert.deepEqual(log, ['load', 'load', 'load', 'run']);
+});
+
+test('a run is not started when the pinned contract cannot be confirmed stored', async () => {
+  let started = false;
+  const seen = [];
+  const executor = makeLeadExecutor({
+    orchestrator: { async run() { started = true; return { status: 'completed', text: 'x' }; } },
+    loadTask: async () => ({ metadata: {} }),
+    durabilityTimeoutMs: 50,
+  });
+  await executor.execute({ taskId: 't-nodur', contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }], metadata: { acceptance: validAcceptance } } }, { publish: (event) => seen.push(event) });
+  assert.equal(started, false);
+  const final = lastStatus(seen);
+  assert.equal(final.status.state, TaskState.TASK_STATE_FAILED);
+  assert.match(final.status.message.parts[0].content.value, /could not be confirmed as stored/);
+});
+
 test('a user-supplied invalid marker in new-run metadata is rejected', async () => {
   let started = false;
   const executor = makeLeadExecutor({ orchestrator: { async run() { started = true; return { status: 'completed', text: 'x' }; } } });
