@@ -57,6 +57,7 @@ test('pairing code is single use and sets a hardened cookie', async (t) => {
   assert.equal(ping.headers['cache-control'], 'no-store');
   assert.match(ping.headers['content-security-policy'], /default-src 'self'/);
   assert.equal(ping.headers['x-content-type-options'], 'nosniff');
+  assert.equal(ping.headers['referrer-policy'], 'same-origin');
 });
 
 test('requests without a valid session get 401 with the error shape', async (t) => {
@@ -116,6 +117,7 @@ test('missing or foreign Origin on POST is rejected', async (t) => {
   const h = await harness(); t.after(h.close);
   const code = h.auth.issuePairingCode().code;
   assert.equal((await h.request('POST', '/api/dashboard/v1/session', { origin: null, body: { code } })).status, 403);
+  assert.equal((await h.request('POST', '/api/dashboard/v1/session', { origin: 'null', body: { code } })).status, 403);
   assert.equal((await h.request('POST', '/api/dashboard/v1/session', { origin: 'http://evil.example', body: { code } })).status, 403);
   assert.equal((await h.login(code)).res.status, 204);
 });

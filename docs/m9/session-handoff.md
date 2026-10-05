@@ -226,3 +226,15 @@ Fresh pairing URL while this instance is running:
 CODEX_A2A_TOKEN_FILE="$PWD/.runtime/dccourtscode/a2a-token" \
 PORT=3000 npm run dashboard:pair
 ```
+
+The owner then reported Chrome pairing failure `Origin not allowed`. Exact
+browser request headers and URL remain unobserved; valid-origin local API pairing
+passes. Applied a bounded compatibility mitigation: dashboard `Referrer-Policy`
+is now `same-origin`, avoiding the historical browser interaction between
+`no-referrer` and a null Origin without changing the strict origin/host guards.
+Cross-origin referrers remain suppressed. Added regression assertions for the
+served policy and literal `Origin: null` rejection, with the rejected code still
+usable for a valid request. Focused checks: dashboard auth 13/13, Atlassian API
+5/5, diff check and protected reference check pass. Restarted the instance on
+this change; owner Chrome verification remains pending. Do not describe the
+reported browser root cause as confirmed without observing its request.

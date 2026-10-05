@@ -174,7 +174,7 @@ function createDashboardAuth({ db, getPort, now = () => Date.now(), random = cry
   function securityHeaders(req, res, next) {
     res.set('Content-Security-Policy', CSP);
     res.set('X-Content-Type-Options', 'nosniff');
-    res.set('Referrer-Policy', 'no-referrer');
+    res.set('Referrer-Policy', 'same-origin');
     next();
   }
 
