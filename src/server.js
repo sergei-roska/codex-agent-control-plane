@@ -12,7 +12,7 @@ const { LeadOrchestrator, ResumeInputError } = require('./lead-orchestrator');
 const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
 const { WriterAdmission } = require('./writer-admission');
 const { UsageLedger } = require('./usage-ledger');
-const { validateAcceptanceContract, formatAcceptance } = require('./acceptance');
+const { validateAcceptanceContract, formatAcceptance, invalidAcceptanceContract } = require('./acceptance');
 const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
 const { loadSkillCatalog } = require('./skill-catalog');
 const { canonicalRoleId, roleDisplayName } = require('./role-names');
@@ -261,6 +261,7 @@ function makeLeadExecutor({ orchestrator, loadTask }) {
       if (!resuming) {
         const raw = requestContext.userMessage?.metadata?.acceptance ?? requestContext.request?.metadata?.acceptance;
         try {
+          if (raw && typeof raw === 'object' && 'invalid' in raw) throw new TypeError('acceptance has unknown field "invalid"');
           contract = validateAcceptanceContract(raw);
         } catch (error) {
           eventBus.publish(AgentEvent.statusUpdate({
@@ -338,7 +339,12 @@ function makeLeadExecutor({ orchestrator, loadTask }) {
           }
           if (!original) throw new Error('The run has no checkpoint and the original goal could not be recovered from the task history.');
           let originalContract;
-          try { originalContract = validateAcceptanceContract(firstUserMetadata(task).acceptance); } catch (_) { originalContract = undefined; }
+          try {
+            originalContract = validateAcceptanceContract(firstUserMetadata(task).acceptance);
+          } catch (contractError) {
+            // Never continue as if no checks were required: carry an invalid marker into acceptance.
+            originalContract = invalidAcceptanceContract(`Stored acceptance contract is invalid: ${contractError.message}`);
+          }
           result = await orchestrator.run({ goal: original, runId: taskId, contract: originalContract, signal: controller.signal });
         }
       } else {

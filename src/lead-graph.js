@@ -10,7 +10,7 @@ const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
 const {
   DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, BoundaryViolation, parseWorkerReport, classifyCodexError,
 } = require('./contracts');
-const { runAcceptance, assessWithoutChecks } = require('./acceptance');
+const { runAcceptance, assessWithoutChecks, unrunAcceptance } = require('./acceptance');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
 const { loadSkillCatalog, findSkillCandidates, resolveSkillSelection } = require('./skill-catalog');
 const { canonicalRoleId, getRole, roleDisplayName } = require('./role-names');
@@ -189,6 +189,17 @@ function readPinned({ roles, leadRole, workspace, skillCatalog }) {
   };
 }
 
+// Per-role profile hash pinned into each attempt's boundary contract.
+function roleProfileSha256(role) {
+  return sha256(JSON.stringify([role.name, role.sandbox, role.model, role.effort, role.instructions || '']));
+}
+
+const BOUNDARY_CONTRACT_ID = 'boundary-contract/v1';
+
+function settlementRecord(predicate, result, code, detail, { advisory = false, evidence = [] } = {}) {
+  return { predicate, result, code, boundary: 'settlement', detail: String(detail).slice(0, 500), evidence, advisory };
+}
+
 function instructionChanges(previous, current) {
   const notes = [];
   if (!previous) return notes;
@@ -349,10 +360,35 @@ function buildLeadGraph(deps) {
   function outcomeSummary(item) {
     const result = item.result;
     const parsed = result.status === 'TASK_STATE_COMPLETED' ? parseWorkerReport(result.artifacts?.[0]?.text || result.text) : { report: null, error: null };
-    const violations = scopeViolations(parsed.report, item.assignment.allowedFiles, workspace);
+    // Settlement uses the attempt's own pinned allowedFiles; items from old checkpoints are legacy.
+    const allowedFiles = item.contract?.allowedFiles || item.assignment.allowedFiles;
+    const violations = scopeViolations(parsed.report, allowedFiles, workspace);
     const writerExecution = result.writerExecution || null;
     const attestedDelta = writerExecution?.delta || null;
     const attestedPaths = Array.isArray(attestedDelta?.changedPaths) ? attestedDelta.changedPaths : [];
+    const attestedViolations = outsideAllowed(attestedPaths, allowedFiles, workspace);
+    const writer = item.sandbox !== 'read-only';
+    const ran = writerExecution != null && result.effects !== 'none';
+    const results = [];
+    if (result.status === 'TASK_STATE_COMPLETED' && !parsed.report) {
+      results.push(settlementRecord('settle.report_valid', 'FAIL', 'report_invalid', parsed.error || 'The worker did not return a valid report.', { advisory: !writer }));
+    }
+    if (violations.length > 0) {
+      results.push(settlementRecord('settle.reported_scope', 'FAIL', 'reported_scope_violation', `Reported files outside allowedFiles: ${violations.join(', ')}`, { advisory: true }));
+    }
+    if (attestedViolations.length > 0) {
+      results.push(settlementRecord('settle.attested_scope', 'FAIL', 'attested_scope_violation', `Changed files outside allowedFiles: ${attestedViolations.join(', ')}`));
+    } else if (writer && ran && attestedDelta?.known !== true) {
+      results.push(settlementRecord('settle.attested_scope', 'UNKNOWN', 'delta_unknown', 'The writer ran but its workspace delta is unknown.'));
+    }
+    if (writer && !isSettledWriter(result)) {
+      results.push(settlementRecord('settle.writer_settled', 'UNKNOWN', 'writer_unresolved', 'The writer execution is not proven ended.', {
+        evidence: writerExecution?.executionId ? [`writer_executions:${writerExecution.executionId}`] : [],
+      }));
+    }
+    if (writer && parsed.report && ['failed', 'blocked'].includes(parsed.report.outcome)) {
+      results.push(settlementRecord('settle.report_outcome', 'FAIL', 'writer_reported_failure', `The writer reported outcome ${parsed.report.outcome}.`, { advisory: true }));
+    }
     return {
       assignmentId: item.assignmentId,
       attemptId: item.attemptId,
@@ -369,8 +405,10 @@ function buildLeadGraph(deps) {
       scopeViolations: violations,
       writerExecution,
       effects: result.effects || null,
-      attestedScopeViolations: outsideAllowed(attestedPaths, item.assignment.allowedFiles, workspace),
+      attestedScopeViolations: attestedViolations,
       attestedDeltaKnown: attestedDelta?.known === true,
+      ...(item.contract ? { contract: item.contract } : {}),
+      boundary: { contract: item.contract ? BOUNDARY_CONTRACT_ID : 'legacy', results },
       ...(result.failure ? { failure: result.failure } : {}),
     };
   }
@@ -708,14 +746,23 @@ function buildLeadGraph(deps) {
           resolveSkillSelection(skillCatalog, assignment.skills || [], { pins: skillPins });
           const assignmentId = makeAssignmentId(state.runId, round, index);
           const attemptId = makeAttemptId(assignmentId);
+          const role = getRole(roles, assignment.role);
           return {
             runId: state.runId,
             assignmentId,
             attemptId,
             contextId: deterministicContextId(attemptId),
             role: assignment.role,
-            sandbox: getRole(roles, assignment.role).sandbox,
+            sandbox: role.sandbox,
             assignment,
+            contract: {
+              id: BOUNDARY_CONTRACT_ID,
+              reportContract: 'worker-report/v1',
+              allowedFiles: [...(assignment.allowedFiles || [])],
+              sandbox: role.sandbox,
+              roleProfileSha256: roleProfileSha256(role),
+              skillPins: skillPins.map(({ id, sha256: hash }) => ({ id, sha256: hash })),
+            },
             state: 'pending',
             taskId: null,
             result: null,
@@ -840,7 +887,9 @@ function buildLeadGraph(deps) {
         role: item.role,
         contextId: item.result.contextId || item.contextId || null,
         taskId: item.result.taskId || item.taskId || null,
-        allowedFiles: Array.isArray(item.assignment?.allowedFiles) ? item.assignment.allowedFiles : [],
+        allowedFiles: Array.isArray(item.contract?.allowedFiles) ? item.contract.allowedFiles
+          : (Array.isArray(item.assignment?.allowedFiles) ? item.assignment.allowedFiles : []),
+        ...(item.contract ? { contract: item.contract } : {}),
         cause: item.result.status === 'outcome_unknown' ? 'outcome_unknown'
           : (item.result.failureKind || (item.result.writerExecution?.state ? `writer_${item.result.writerExecution.state}` : 'no_writer_execution')),
       });
@@ -908,10 +957,23 @@ function buildLeadGraph(deps) {
       const stuck = results.filter((result) => result.state === 'unresolved');
       if (stuck.length === 0) {
         const attested = results.map((result, index) => {
-          const allowed = state.unresolvedWriters[index].allowedFiles;
+          const entry = state.unresolvedWriters[index];
+          const allowed = entry.allowedFiles;
+          const violations = Array.isArray(allowed) ? outsideAllowed(result.changedPaths, allowed, workspace) : [];
+          const records = [];
+          if (violations.length > 0) {
+            records.push(settlementRecord('settle.attested_scope', 'FAIL', 'attested_scope_violation', `Changed files outside allowedFiles: ${violations.join(', ')}`));
+          } else if (result.deltaKnown !== true) {
+            records.push(settlementRecord('settle.attested_scope', 'UNKNOWN', 'delta_unknown', 'The writer ran but its workspace delta is unknown.'));
+          }
+          if (result.state === 'legacy_unverified') {
+            records.push(settlementRecord('settle.writer_settled', 'UNKNOWN', 'writer_unresolved', `The writer execution cannot be proven ended: ${result.reason}.`));
+          }
           return {
             ...result,
-            attestedScopeViolations: Array.isArray(allowed) ? outsideAllowed(result.changedPaths, allowed, workspace) : [],
+            attestedScopeViolations: violations,
+            ...(entry.contract ? { contract: entry.contract } : {}),
+            boundary: { contract: entry.contract ? BOUNDARY_CONTRACT_ID : 'legacy', results: records },
           };
         });
         for (const result of attested) deps.emit(runtime.onEvent, { type: 'reconciliation', round: state.round, ...result });
@@ -962,6 +1024,7 @@ function buildLeadGraph(deps) {
         ran: (outcome.writerExecution != null && outcome.effects !== 'none') || later?.state === 'reconciled' || later?.state === 'legacy_unverified',
         completed: outcome.status === 'TASK_STATE_COMPLETED',
         reportValid: outcome.report != null,
+        reportOutcome: outcome.report?.outcome || null,
         reportedScopeViolations: outcome.scopeViolations || [],
         attestedScopeViolations: later ? (later.attestedScopeViolations || []) : (outcome.attestedScopeViolations || []),
         deltaKnown: later ? later.deltaKnown === true : outcome.attestedDeltaKnown === true,
@@ -974,6 +1037,9 @@ function buildLeadGraph(deps) {
     const unresolvedWriterCount = state.unresolvedWriters.length;
     const snapshot = deps.snapshot;
     const checks = state.contract?.requiredChecks || [];
+    if (state.contract?.invalid) {
+      return unrunAcceptance('contract_invalid', state.contract.invalid.detail || 'The stored acceptance contract is invalid.');
+    }
     if (checks.length === 0) {
       return assessWithoutChecks({ workspace, writers, unresolvedWriterCount, ...(snapshot ? { snapshot } : {}) });
     }
@@ -1000,18 +1066,7 @@ function buildLeadGraph(deps) {
       acceptance = await assess(state, runtime.signal);
     } catch (error) {
       if (error?.name === 'AbortError') throw error;
-      const detail = errorText(error);
-      acceptance = {
-        disposition: 'unverifiable',
-        reasons: [{ code: 'acceptance_error', detail }],
-        issues: [{ code: 'acceptance_error', detail }],
-        candidate: { kind: null, head: null, fingerprint: null },
-        candidateAfter: { fingerprint: null },
-        checks: [],
-        requiredCheckIds: (state.contract?.requiredChecks || []).map((check) => check.id),
-        verifiedAt: new Date().toISOString(),
-        admissionHeld: false,
-      };
+      acceptance = unrunAcceptance('acceptance_error', errorText(error), (state.contract?.requiredChecks || []).map((check) => check.id));
     }
     deps.emit(runtime.onEvent, { type: 'acceptance', round: state.round, disposition: acceptance.disposition, reasons: acceptance.reasons });
     if (acceptance.disposition === 'rejected' && state.acceptanceAttempts < 1) {
@@ -1025,19 +1080,10 @@ function buildLeadGraph(deps) {
     if (!acceptance) {
       // Canceled, max_rounds or failed before any acceptance run: report what is known without running checks.
       const checks = state.contract?.requiredChecks || [];
-      if (checks.length > 0) {
-        const detail = 'The run ended before the required checks were run.';
-        acceptance = {
-          disposition: 'unverifiable',
-          reasons: [{ code: 'acceptance_not_run', detail }],
-          issues: [{ code: 'acceptance_not_run', detail }],
-          candidate: { kind: null, head: null, fingerprint: null },
-          candidateAfter: { fingerprint: null },
-          checks: [],
-          requiredCheckIds: checks.map((check) => check.id),
-          verifiedAt: new Date().toISOString(),
-          admissionHeld: false,
-        };
+      if (state.contract?.invalid) {
+        acceptance = unrunAcceptance('contract_invalid', state.contract.invalid.detail || 'The stored acceptance contract is invalid.');
+      } else if (checks.length > 0) {
+        acceptance = unrunAcceptance('acceptance_not_run', 'The run ended before the required checks were run.', checks.map((check) => check.id));
       } else {
         acceptance = assessWithoutChecks({
           workspace,

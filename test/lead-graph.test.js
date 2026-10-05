@@ -11,6 +11,7 @@ const { LeadOrchestrator, RunNotFoundError } = require('../src/lead-orchestrator
 const { execFileSync } = require('node:child_process');
 const { UsageLedger } = require('../src/usage-ledger');
 const { loadSkillCatalog } = require('../src/skill-catalog');
+const { invalidAcceptanceContract } = require('../src/acceptance');
 const {
   DispatchJournal, openStateDatabase, assignmentId, attemptId, deterministicContextId,
 } = require('../src/durable-store');
@@ -1363,4 +1364,165 @@ test('a checkpoint written before the rejection state fields existed still resum
     assert.equal(result.status, 'completed');
     assert.match(world.prompts[2], /decision_not_json/);
   });
+});
+
+// ------------------------------------------------- boundary records (DBC-02b)
+
+const recordCodes = (outcome) => outcome.boundary.results.map((entry) => `${entry.predicate}:${entry.result}:${entry.code}`);
+const noReportWriter = (metadata) => () => ({
+  state: TaskState.TASK_STATE_COMPLETED,
+  artifacts: [{ name: 'report', parts: textParts('not json'), metadata }],
+});
+
+test('each dispatched item pins a boundary contract that is copied to its outcome', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('Done')], workerFinal: okWriterFinal() });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    const outcome = result.assignments[0];
+    assert.equal(outcome.contract.id, 'boundary-contract/v1');
+    assert.equal(outcome.contract.reportContract, 'worker-report/v1');
+    assert.deepEqual(outcome.contract.allowedFiles, ['src/example.js']);
+    assert.equal(outcome.contract.sandbox, 'workspace-write');
+    assert.match(outcome.contract.roleProfileSha256, /^[0-9a-f]{64}$/);
+    assert.deepEqual(outcome.contract.skillPins, []);
+    assert.deepEqual(outcome.boundary, { contract: 'boundary-contract/v1', results: [] });
+  });
+});
+
+test('settlement records an out-of-scope writer, an unknown delta, an invalid report and a failed self-report', async () => {
+  const scope = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('a')], workerFinal: okWriterFinal(['lib/other.js']) });
+  await withSession(scope, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(recordCodes(outcome), ['settle.attested_scope:FAIL:attested_scope_violation']);
+    assert.equal(outcome.boundary.results[0].boundary, 'settlement');
+    assert.equal(outcome.boundary.results[0].advisory, false);
+  });
+
+  const unknown = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('a')],
+    workerFinal: () => ({
+      state: TaskState.TASK_STATE_COMPLETED,
+      artifacts: [{ name: 'report', parts: textParts(report('done')), metadata: { writerExecution: { executionId: 'exec-u', state: 'released', delta: { known: false }, reason: null } } }],
+    }),
+  });
+  await withSession(unknown, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(recordCodes(outcome), ['settle.attested_scope:UNKNOWN:delta_unknown']);
+  });
+
+  const invalid = makeWorld({ script: [dispatch(brief('orch-builder')), finish('a')], workerFinal: noReportWriter({ writerExecution: releasedWriter() }) });
+  await withSession(invalid, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(recordCodes(outcome), ['settle.report_valid:FAIL:report_invalid']);
+    assert.equal(outcome.boundary.results[0].advisory, false);
+  });
+
+  const failed = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('a')],
+    workerFinal: () => ({
+      state: TaskState.TASK_STATE_COMPLETED,
+      artifacts: [{ name: 'report', parts: textParts(report('nope', { outcome: 'failed', filesChanged: ['elsewhere.js'] })), metadata: { writerExecution: releasedWriter() } }],
+    }),
+  });
+  await withSession(failed, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(recordCodes(outcome), ['settle.reported_scope:FAIL:reported_scope_violation', 'settle.report_outcome:FAIL:writer_reported_failure']);
+    assert.ok(outcome.boundary.results.every((entry) => entry.advisory === true));
+  });
+});
+
+test('an unsettled writer outcome records writer_unresolved with its execution evidence', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('a')],
+    workerFinal: () => ({
+      state: TaskState.TASK_STATE_COMPLETED,
+      artifacts: [{ name: 'report', parts: textParts(report('done')), metadata: { writerExecution: { executionId: 'exec-x', state: 'unresolved', delta: { known: true, changedPaths: [] }, reason: 'late' } } }],
+    }),
+  });
+  await withSession(world, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    const entry = outcome.boundary.results.find((record) => record.predicate === 'settle.writer_settled');
+    assert.equal(entry.result, 'UNKNOWN');
+    assert.equal(entry.code, 'writer_unresolved');
+    assert.deepEqual(entry.evidence, ['writer_executions:exec-x']);
+  });
+});
+
+test('an invalid read-only report is an advisory settlement record', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-explorer', [])), finish('a')],
+    workerFinal: () => ({ state: TaskState.TASK_STATE_COMPLETED, artifacts: [{ name: 'r', parts: textParts('plain text') }] }),
+  });
+  await withSession(world, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(recordCodes(outcome), ['settle.report_valid:FAIL:report_invalid']);
+    assert.equal(outcome.boundary.results[0].advisory, true);
+    assert.ok(outcome.boundary.results[0].detail.length <= 500);
+  });
+});
+
+test('a writer reporting failed with passing checks is accepted and the advisory record is present', async () => {
+  const workspace = gitRepo();
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('Done')],
+    workerFinal: () => ({
+      state: TaskState.TASK_STATE_COMPLETED,
+      artifacts: [{ name: 'report', parts: textParts(report('could not', { outcome: 'blocked' })), metadata: { writerExecution: releasedWriter() } }],
+    }),
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, contract: contractOf(nodeCheck('ok', 'process.exit(0)')) });
+    assert.equal(result.acceptance.disposition, 'accepted');
+    assert.deepEqual(issueCodes(result), ['writer_reported_failure']);
+    assert.equal(result.acceptance.issues[0].advisory, true);
+    assert.equal(result.acceptance.issues[0].boundary, 'acceptance');
+  }, { workspace });
+});
+
+test('a reconciled out-of-scope writer carries settlement records', async () => {
+  const workspace = gitRepo();
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder', ['docs/x.md'])), finish('a'), finish('b')],
+    workerFinal: (roleName, contextId) => {
+      world.admission.rows.set(contextId, admissionRow(contextId, 'unresolved'));
+      return unresolvedWriterTask(roleName);
+    },
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, contract: contractOf(nodeCheck('ok', 'process.exit(0)')) });
+    const reconciliation = result.assignments.find((entry) => entry.kind === 'reconciliation');
+    assert.equal(reconciliation.boundary.contract, 'boundary-contract/v1');
+    assert.deepEqual(recordCodes(reconciliation), ['settle.attested_scope:FAIL:attested_scope_violation']);
+  }, { workspace });
+});
+
+test('an outcome from an old checkpoint without a pinned contract is legacy and still processes', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('Done')], workerFinal: okWriterFinal(['lib/other.js']) });
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, interruptAfter: ['collect'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    const { values } = await session.orchestrator.graph.getState(config);
+    const items = values.batch.items.map(({ contract, ...rest }) => rest);
+    await session.orchestrator.graph.updateState(config, { batch: { ...values.batch, items } }, 'collect');
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const outcome = result.assignments[0];
+    assert.equal(Object.hasOwn(outcome, 'contract'), false);
+    assert.equal(outcome.boundary.contract, 'legacy');
+    assert.deepEqual(outcome.attestedScopeViolations, ['lib/other.js']);
+    assert.deepEqual(recordCodes(outcome), ['settle.attested_scope:FAIL:attested_scope_violation']);
+  });
+});
+
+test('an invalid acceptance contract marker yields unverifiable with contract_invalid', async () => {
+  const world = makeWorld({ script: [finish('Done')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID, contract: invalidAcceptanceContract('Stored acceptance contract is invalid: bad') });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.acceptance.disposition, 'unverifiable');
+    assert.deepEqual(issueCodes(result), ['contract_invalid']);
+    assert.equal(result.acceptance.issues[0].predicate, 'accept.contract_valid');
+    assert.equal(result.acceptance.issues[0].result, 'UNKNOWN');
+  }, { workspace: gitRepo() });
 });
