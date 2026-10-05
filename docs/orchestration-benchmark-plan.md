@@ -99,13 +99,12 @@ started, restarts it, and resumes with `npm run ask -- --task <id> "continue"`.
 | Recovery time | from server restart to the first lead turn after resume (F5), or from the failed outcome to the next dispatch (F4) | harness timestamps, ledger `started_at` |
 | Lead payload size | bytes of `JSON.stringify(state.outcomes)` in the last lead prompt (fake runtime), and lead `inputTokens` (live) | test hook in F3 fake variant; ledger |
 
-Known gaps, to be closed by MEA-02 before results are claimed for those metrics:
-refused or canceled-before-run worker attempts write no ledger row
-(`src/a2a-role-service.js:294-302`, `:321-342`, `:352-360`), so failed-attempt
-counts are a lower bound; acceptance check run time (`durationMs`,
-`src/acceptance.js:89`) is not in the ledger; there is no explicit queue-wait or
-startup field. Until then these metrics are reported with a "lower bound" or
-"approximate" label.
+Known gaps, closed by MEA-02: refused, canceled-before-run, and input-error
+worker attempts now write a ledger row (outcome `refused`, `canceled`,
+`input_error`; turns 0), so failed-attempt counts are exact; the ledger carries
+`startup_ms`/`cold_start` and `queue_wait_ms`; `usage-report --run` reports
+acceptance check `durationMs`. Rows recorded before MEA-02 read these fields as
+null (unknown) and keep the "lower bound" or "approximate" label.
 
 Total resource use for a task class is the sum over all trials, accepted or not:
 planning, worker turns, failed attempts, retries, and recovery. A change that

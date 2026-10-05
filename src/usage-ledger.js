@@ -28,12 +28,20 @@ function createUsageLedgerTable(db) {
       app_server_version TEXT,
       outcome TEXT,
       permission_events_json TEXT NOT NULL,
-      recorded_at TEXT NOT NULL
+      recorded_at TEXT NOT NULL,
+      startup_ms INTEGER,
+      cold_start INTEGER,
+      queue_wait_ms INTEGER
     );
     CREATE INDEX IF NOT EXISTS usage_ledger_task_idx ON usage_ledger (task_id);
     CREATE INDEX IF NOT EXISTS usage_ledger_run_idx ON usage_ledger (run_id);
     CREATE INDEX IF NOT EXISTS usage_ledger_context_idx ON usage_ledger (context_id);
   `);
+  // Existing state files predate the startup and queue-wait columns; old rows read as null.
+  const columns = db.prepare("PRAGMA table_info('usage_ledger')").all();
+  for (const [name, type] of [['startup_ms', 'INTEGER'], ['cold_start', 'INTEGER'], ['queue_wait_ms', 'INTEGER']]) {
+    if (!columns.some((column) => column.name === name)) db.exec(`ALTER TABLE usage_ledger ADD COLUMN ${name} ${type}`);
+  }
 }
 
 const orNull = (value) => (value === undefined ? null : value);
@@ -63,6 +71,9 @@ function fromRow(row) {
     outcome: row.outcome,
     permissionEvents: parseOrNull(row.permission_events_json) || [],
     recordedAt: row.recorded_at,
+    startupMs: row.startup_ms ?? null,
+    coldStart: row.cold_start == null ? null : row.cold_start === 1,
+    queueWaitMs: row.queue_wait_ms ?? null,
   };
 }
 
@@ -71,16 +82,18 @@ class UsageLedger {
     if (!db || typeof db.prepare !== 'function') throw new TypeError('UsageLedger requires a better-sqlite3 db');
     this.db = db;
     if (!readonly) createUsageLedgerTable(db);
-    this.insert = db.prepare(`
+    // Prepared lazily: a read-only handle on an older database has no new columns to insert into.
+    this.insertSql = (`
       INSERT OR IGNORE INTO usage_ledger
         (entry_id, kind, run_id, role, task_id, context_id, attempt_id, model, effort, started_at, elapsed_ms,
          turns, model_requests, retries, tokens_json, token_source, cumulative_total_json, app_server_version,
-         outcome, permission_events_json, recorded_at)
+         outcome, permission_events_json, recorded_at, startup_ms, cold_start, queue_wait_ms)
       VALUES
         (@entry_id, @kind, @run_id, @role, @task_id, @context_id, @attempt_id, @model, @effort, @started_at, @elapsed_ms,
          @turns, @model_requests, @retries, @tokens_json, @token_source, @cumulative_total_json, @app_server_version,
-         @outcome, @permission_events_json, @recorded_at)
+         @outcome, @permission_events_json, @recorded_at, @startup_ms, @cold_start, @queue_wait_ms)
     `);
+    this.insertStmt = null;
     this.countByContext = db.prepare(
       "SELECT COUNT(*) AS n FROM usage_ledger WHERE kind = 'worker_turn' AND context_id = ?");
     this.selectTask = db.prepare('SELECT * FROM usage_ledger WHERE task_id = ? ORDER BY recorded_at, rowid');
@@ -104,6 +117,7 @@ class UsageLedger {
     `);
     this.selectWorkers = null;
     this.selectWorkersByContext = null;
+    this.selectTaskJoined = null;
   }
 
   /** Number of worker rows already recorded for a context (retries of the same assignment). */
@@ -117,7 +131,8 @@ class UsageLedger {
     if (!entry || typeof entry.entryId !== 'string' || !entry.entryId) throw new TypeError('entryId is required');
     if (!KINDS.has(entry.kind)) throw new TypeError(`Invalid usage kind "${entry.kind}"`);
     if (typeof entry.role !== 'string' || !entry.role) throw new TypeError('role is required');
-    const info = this.insert.run({
+    if (!this.insertStmt) this.insertStmt = this.db.prepare(this.insertSql);
+    const info = this.insertStmt.run({
       entry_id: entry.entryId,
       kind: entry.kind,
       run_id: orNull(entry.runId),
@@ -139,12 +154,37 @@ class UsageLedger {
       outcome: orNull(entry.outcome),
       permission_events_json: JSON.stringify(entry.permissionEvents || []),
       recorded_at: entry.recordedAt || new Date().toISOString(),
+      startup_ms: orNull(entry.startupMs),
+      cold_start: entry.coldStart == null ? null : (entry.coldStart ? 1 : 0),
+      queue_wait_ms: orNull(entry.queueWaitMs),
     });
     return info.changes > 0;
   }
 
   listByTask(taskId) {
-    return this.selectTask.all(taskId).map(fromRow);
+    if (!this.selectTaskJoined) {
+      const hasJournal = this.db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dispatch_journal'").get();
+      if (!hasJournal) return this.selectTask.all(taskId).map(fromRow);
+      this.selectTaskJoined = this.db.prepare(`
+        SELECT u.*, j.attempt_id AS j_attempt_id, j.run_id AS j_run_id
+        FROM usage_ledger u
+        LEFT JOIN dispatch_journal j ON j.task_id = u.task_id
+        WHERE u.task_id = ?
+        ORDER BY u.recorded_at, u.rowid
+      `);
+    }
+    const seen = new Set();
+    const out = [];
+    for (const row of this.selectTaskJoined.all(taskId)) {
+      if (seen.has(row.entry_id)) continue;
+      seen.add(row.entry_id);
+      const entry = fromRow(row);
+      if (row.j_attempt_id != null) entry.attemptId = row.j_attempt_id;
+      if (row.j_run_id != null) entry.runId = row.j_run_id;
+      out.push(entry);
+    }
+    return out;
   }
 
   /** Lead rows of the run plus worker rows linked through the dispatch journal. */

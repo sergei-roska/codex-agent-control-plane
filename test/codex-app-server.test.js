@@ -1318,3 +1318,17 @@ test('a thread created without skills keeps the boundary for a later selected-sk
     type: 'skill', name: 'entity-query-analyzer', path: selectedSkills[0].path,
   });
 });
+
+test('reports startupMs and coldStart on the first run of a process only', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const first = await client.run({ role, cwd: '/tmp/project', input: 'one' });
+  assert.equal(first.usage.coldStart, true);
+  assert.equal(typeof first.usage.startupMs, 'number');
+  assert.ok(first.usage.startupMs >= 0);
+  assert.ok(first.usage.elapsedMs >= first.usage.startupMs);
+  const second = await client.run({ role, cwd: '/tmp/project', input: 'two' });
+  assert.equal(second.usage.coldStart, false);
+  assert.equal(second.usage.startupMs, null);
+});

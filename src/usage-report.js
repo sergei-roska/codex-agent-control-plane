@@ -60,10 +60,11 @@ function summarize(rows) {
     for (const key of TOKEN_KEYS) tokens[key] = sumKnown(known.map((row) => row.tokens[key]));
   }
   const counts = {};
-  for (const key of ['turns', 'elapsedMs', 'retries']) {
+  for (const key of ['turns', 'elapsedMs', 'retries', 'startupMs', 'queueWaitMs']) {
     const knownRows = rows.filter((row) => isNum(row[key])).length;
     counts[key] = { knownRows, unknownRows: rows.length - knownRows, partial: rows.length - knownRows > 0 };
   }
+  const coldKnown = rows.filter((row) => typeof row.coldStart === 'boolean');
   return {
     rows: rows.length,
     turns: sumKnown(rows.map((row) => row.turns)),
@@ -78,6 +79,18 @@ function summarize(rows) {
     retriesKnownRows: counts.retries.knownRows,
     retriesUnknownRows: counts.retries.unknownRows,
     retriesPartial: counts.retries.partial,
+    startupMs: sumKnown(rows.map((row) => row.startupMs)),
+    startupMsKnownRows: counts.startupMs.knownRows,
+    startupMsUnknownRows: counts.startupMs.unknownRows,
+    startupMsPartial: counts.startupMs.partial,
+    queueWaitMs: sumKnown(rows.map((row) => row.queueWaitMs)),
+    queueWaitMsKnownRows: counts.queueWaitMs.knownRows,
+    queueWaitMsUnknownRows: counts.queueWaitMs.unknownRows,
+    queueWaitMsPartial: counts.queueWaitMs.partial,
+    coldStarts: coldKnown.length ? coldKnown.filter((row) => row.coldStart).length : null,
+    coldStartKnownRows: coldKnown.length,
+    coldStartUnknownRows: rows.length - coldKnown.length,
+    coldStartPartial: rows.length - coldKnown.length > 0,
     tokens,
     tokensKnownRows: known.length,
     tokensUnknownRows: unknownCount,
@@ -103,6 +116,9 @@ function attemptRow(row) {
     modelRequests: row.modelRequests,
     elapsedMs: row.elapsedMs,
     retries: row.retries,
+    startupMs: row.startupMs ?? null,
+    coldStart: row.coldStart ?? null,
+    queueWaitMs: row.queueWaitMs ?? null,
     tokens: row.tokens,
     tokenSource: row.tokenSource,
     outcome: row.outcome,
@@ -157,6 +173,29 @@ function hasTable(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
 }
 
+// Acceptance block of the lead task (task id === run id), from its stored artifact metadata.
+function acceptanceOf(db, runId) {
+  if (!hasTable(db, 'tasks')) return null;
+  const row = db.prepare('SELECT artifacts FROM tasks WHERE id = ? ORDER BY status_last_updated DESC LIMIT 1').get(runId);
+  if (!row?.artifacts) return null;
+  let artifacts;
+  try { artifacts = JSON.parse(row.artifacts); } catch (_) { return null; }
+  if (!Array.isArray(artifacts)) return null;
+  for (let i = artifacts.length - 1; i >= 0; i -= 1) {
+    const acceptance = artifacts[i]?.metadata?.acceptance;
+    if (!acceptance || typeof acceptance !== 'object') continue;
+    return {
+      disposition: typeof acceptance.disposition === 'string' ? acceptance.disposition : null,
+      checks: (Array.isArray(acceptance.checks) ? acceptance.checks : []).map((check) => ({
+        id: check?.id ?? null,
+        result: check?.result ?? null,
+        durationMs: isNum(check?.durationMs) ? check.durationMs : null,
+      })),
+    };
+  }
+  return null;
+}
+
 function buildReport(db, { runId, taskId, priceTable } = {}) {
   if (!runId === !taskId) throw new TypeError('Provide exactly one of runId or taskId');
   const entries = hasTable(db, 'usage_ledger')
@@ -177,6 +216,7 @@ function buildReport(db, { runId, taskId, priceTable } = {}) {
     attempts: entries.map(attemptRow),
     repeatedAssignments: runId && hasTable(db, 'dispatch_journal') ? repeatedAssignments(db, runId) : null,
   };
+  if (runId) report.acceptance = acceptanceOf(db, runId);
   if (priceTable) report.hypotheticalApiCost = hypotheticalCost(entries, priceTable);
   return report;
 }

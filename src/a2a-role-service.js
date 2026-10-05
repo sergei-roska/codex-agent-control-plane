@@ -141,7 +141,7 @@ function makeRoleCard({ roleId, role, endpoint }) {
 let ledgerWarned = false;
 
 // Build the worker-turn ledger entry from a run result or thrown error. Absent usage -> nulls.
-function workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries }) {
+function workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries, queueWaitMs = null }) {
   const usage = source?.usage || null;
   const turnId = source?.execution?.turnId || source?.turnId || null;
   return {
@@ -165,6 +165,38 @@ function workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries 
     appServerVersion: usage?.appServerVersion ?? null,
     outcome,
     permissionEvents: Array.isArray(source?.permissionEvents) ? source.permissionEvents : [],
+    startupMs: usage?.startupMs ?? null,
+    coldStart: usage?.coldStart ?? null,
+    queueWaitMs,
+  };
+}
+
+// Attempt that ended before any App Server turn: no usage, no tokens, one explicit row.
+function preTurnUsageEntry({ roleId, taskId, contextId, outcome, retries, elapsedMs, startedAt, queueWaitMs }) {
+  return {
+    entryId: `${roleId}:${taskId}:pre`,
+    kind: 'worker_turn',
+    runId: null,
+    role: roleId,
+    taskId,
+    contextId,
+    attemptId: null,
+    model: null,
+    effort: null,
+    startedAt,
+    elapsedMs,
+    turns: 0,
+    modelRequests: null,
+    retries,
+    tokens: null,
+    tokenSource: 'unavailable',
+    cumulativeTotal: null,
+    appServerVersion: null,
+    outcome,
+    permissionEvents: [],
+    startupMs: null,
+    coldStart: null,
+    queueWaitMs,
   };
 }
 
@@ -258,6 +290,31 @@ function makeExecutor({
         ...(writer ? { writerExecution: writer } : {}),
         ...(telemetry ? telemetry : {}),
       });
+      const executeStartedAt = new Date().toISOString();
+      const executeStartMs = performance.now();
+      // Writer attempts only: ms from the admission request to admitted or refused. Null for read-only.
+      let queueWaitMs = null;
+      const recordPreTurn = (outcome) => {
+        if (!usageLedger) return;
+        try {
+          const retries = usageLedger.workerRowsForContext(contextId);
+          usageLedger.record(preTurnUsageEntry({
+            roleId,
+            taskId,
+            contextId,
+            outcome,
+            retries,
+            elapsedMs: Math.round(performance.now() - executeStartMs),
+            startedAt: executeStartedAt,
+            queueWaitMs,
+          }));
+        } catch (error) {
+          if (!ledgerWarned) {
+            ledgerWarned = true;
+            console.warn(`usage ledger write failed: ${error?.message || error}`);
+          }
+        }
+      };
       const recordUsage = (source, outcome) => {
         const usage = source?.usage ?? null;
         const permissionEvents = Array.isArray(source?.permissionEvents) ? source.permissionEvents : [];
@@ -277,7 +334,7 @@ function makeExecutor({
         if (!usageLedger) return;
         try {
           const retries = usageLedger.workerRowsForContext(contextId);
-          usageLedger.record(workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries }));
+          usageLedger.record(workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries, queueWaitMs }));
         } catch (error) {
           if (!ledgerWarned) {
             ledgerWarned = true;
@@ -291,6 +348,7 @@ function makeExecutor({
           input = extractText(requestContext.userMessage);
           selectedSkills = assignmentSkillSelection(input, skillCatalog);
         } catch (error) {
+          recordPreTurn('input_error');
           publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
             messageId: `${taskId}-input-error`,
             contextId,
@@ -317,14 +375,19 @@ function makeExecutor({
               metadata: {},
             }));
           }
+          const admissionRequestedMs = performance.now();
           try {
             execution = await admission.acquire({ role: roleId, taskId, contextId, signal: controller.signal });
+            queueWaitMs = Math.round(performance.now() - admissionRequestedMs);
           } catch (error) {
+            queueWaitMs = Math.round(performance.now() - admissionRequestedMs);
             if (controller.signal.aborted) {
+              recordPreTurn('canceled');
               publishTerminalStatus(TaskState.TASK_STATE_CANCELED);
               return;
             }
             if (error?.code !== 'fenced' && error?.code !== 'admission_blocked') throw error;
+            recordPreTurn('refused');
             publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
               messageId: `${taskId}-error`,
               contextId,
@@ -355,6 +418,7 @@ function makeExecutor({
             await settleWriter(execution.executionId, true);
             settled = true;
           }
+          recordPreTurn('canceled');
           publishTerminalStatus(TaskState.TASK_STATE_CANCELED);
           return;
         }

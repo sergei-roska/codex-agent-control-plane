@@ -752,3 +752,86 @@ test('a second turn on the same A2A task is recorded under its own turn id', asy
   assert.equal(workerUsageEntry({ roleId: 'r', taskId: 't', source: {} }).entryId, 'r:t');
   assert.equal(workerUsageEntry({ roleId: 'r', taskId: 't', source: { execution: { turnId: 'u' } } }).entryId, 'r:t:u');
 });
+
+// ---------------------------------------------------------------- MEA-02 pre-turn rows and queue wait
+
+test('an input error writes one pre-turn row with outcome input_error and turns 0', async () => {
+  const { usageLedger } = ledgerDb();
+  let runs = 0;
+  const { agents, context } = makeService({ async run() { runs += 1; return okResult(); } }, { usageLedger });
+  const failed = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('x', [])), context));
+  assert.equal(failed.status.state, 4);
+  assert.equal(runs, 0);
+  const rows = usageLedger.listByTask(failed.id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].entryId, `orch-planner:${failed.id}:pre`);
+  assert.equal(rows[0].outcome, 'input_error');
+  assert.equal(rows[0].turns, 0);
+  assert.equal(rows[0].tokens, null);
+  assert.equal(rows[0].tokenSource, 'unavailable');
+  assert.equal(typeof rows[0].elapsedMs, 'number');
+  assert.equal(rows[0].queueWaitMs, null);
+});
+
+test('a fenced writer writes a refused row that counts toward later retries of the context', async () => {
+  const { usageLedger } = ledgerDb();
+  const admission = makeAdmission({});
+  admission.fence('ctx-fenced', 'lead gave up');
+  const { agents, context } = makeService({ async run() { return okResult(); } }, { roles: writerRoles, admission, usageLedger });
+  const first = taskResult(await agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a', { contextId: 'ctx-fenced' })), context));
+  const second = taskResult(await agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a2', { contextId: 'ctx-fenced' })), context));
+  const [r1] = usageLedger.listByTask(first.id);
+  const [r2] = usageLedger.listByTask(second.id);
+  assert.equal(r1.outcome, 'refused');
+  assert.equal(r1.turns, 0);
+  assert.equal(r1.retries, 0);
+  assert.equal(typeof r1.queueWaitMs, 'number');
+  assert.equal(r2.outcome, 'refused');
+  assert.equal(r2.retries, 1);
+});
+
+test('a writer canceled while waiting for admission writes a canceled row; a queued writer records queue wait', async () => {
+  const { usageLedger } = ledgerDb();
+  const gate = deferred();
+  const { agents, context } = makeService({
+    async run(options) {
+      if (options.role.id === 'orch-writer-a') await gate.promise;
+      return okResult();
+    },
+  }, { roles: writerRoles, admission: makeAdmission({}), usageLedger });
+
+  const a = agents.get('orch-writer-a').handler.sendMessage(sendParams(writerMessage('a')), context);
+  await tick();
+  const canceledTask = taskResult(await agents.get('orch-writer-b').handler.sendMessage(
+    sendParams(writerMessage('b'), { returnImmediately: true }), context));
+  await tick();
+  await agents.get('orch-writer-b').handler.cancelTask({ id: canceledTask.id }, context);
+  await tick();
+  const waiter = agents.get('orch-writer-b').handler.sendMessage(sendParams(writerMessage('c')), context);
+  await tick(80);
+  gate.resolve();
+  const doneA = taskResult(await a);
+  const doneC = taskResult(await waiter);
+
+  const [canceled] = usageLedger.listByTask(canceledTask.id);
+  assert.equal(canceled.outcome, 'canceled');
+  assert.equal(canceled.turns, 0);
+  assert.equal(typeof canceled.queueWaitMs, 'number');
+  const [queued] = usageLedger.listByTask(doneC.id);
+  assert.equal(queued.outcome, 'completed');
+  assert.ok(queued.queueWaitMs >= 50, `queueWaitMs ${queued.queueWaitMs}`);
+  const [first] = usageLedger.listByTask(doneA.id);
+  assert.ok(first.queueWaitMs < 50);
+});
+
+test('a read-only role records null queue wait and passes startup fields through', async () => {
+  const { usageLedger } = ledgerDb();
+  const { agents, context } = makeService({
+    async run() { return { ...okResult(), usage: { ...sampleUsage(), startupMs: 12, coldStart: true } }; },
+  }, { usageLedger });
+  const done = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('go')), context));
+  const [row] = usageLedger.listByTask(done.id);
+  assert.equal(row.queueWaitMs, null);
+  assert.equal(row.startupMs, 12);
+  assert.equal(row.coldStart, true);
+});

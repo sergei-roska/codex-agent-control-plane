@@ -96,3 +96,48 @@ test('listByRun also joins worker rows by context when the journal task id is nu
   assert.deepEqual(ids, ['r:ta', 'r:task-c', 'r:tb']);
   await state.close();
 });
+
+test('migrates an old usage_ledger table in place; old rows read the new fields as null', async () => {
+  const Database = require('better-sqlite3');
+  const db = new Database(':memory:');
+  db.exec(`CREATE TABLE usage_ledger (
+    entry_id TEXT PRIMARY KEY, kind TEXT NOT NULL, run_id TEXT, role TEXT NOT NULL, task_id TEXT, context_id TEXT,
+    attempt_id TEXT, model TEXT, effort TEXT, started_at TEXT, elapsed_ms INTEGER, turns INTEGER, model_requests INTEGER,
+    retries INTEGER, tokens_json TEXT, token_source TEXT, cumulative_total_json TEXT, app_server_version TEXT,
+    outcome TEXT, permission_events_json TEXT NOT NULL, recorded_at TEXT NOT NULL)`);
+  db.prepare("INSERT INTO usage_ledger (entry_id, kind, role, task_id, permission_events_json, recorded_at) VALUES ('old', 'worker_turn', 'r', 'old-task', '[]', 'now')").run();
+  const ledger = new UsageLedger({ db });
+  const [old] = ledger.listByTask('old-task');
+  assert.equal(old.entryId, 'old');
+  assert.equal(old.startupMs, null);
+  assert.equal(old.coldStart, null);
+  assert.equal(old.queueWaitMs, null);
+  ledger.record(worker({ entryId: 'new', taskId: 'new-task', startupMs: 5, coldStart: false, queueWaitMs: 7 }));
+  const [fresh] = ledger.listByTask('new-task');
+  assert.deepEqual([fresh.startupMs, fresh.coldStart, fresh.queueWaitMs], [5, false, 7]);
+  // Re-opening an already migrated table is a no-op.
+  new UsageLedger({ db });
+  // A read-only handle on an un-migrated table can still read.
+  const old2 = new Database(':memory:');
+  old2.exec(`CREATE TABLE usage_ledger (entry_id TEXT PRIMARY KEY, kind TEXT NOT NULL, run_id TEXT, role TEXT NOT NULL, task_id TEXT,
+    context_id TEXT, attempt_id TEXT, model TEXT, effort TEXT, started_at TEXT, elapsed_ms INTEGER, turns INTEGER, model_requests INTEGER,
+    retries INTEGER, tokens_json TEXT, token_source TEXT, cumulative_total_json TEXT, app_server_version TEXT, outcome TEXT,
+    permission_events_json TEXT NOT NULL, recorded_at TEXT NOT NULL)`);
+  old2.prepare("INSERT INTO usage_ledger (entry_id, kind, role, task_id, permission_events_json, recorded_at) VALUES ('o', 'worker_turn', 'r', 't', '[]', 'now')").run();
+  assert.equal(new UsageLedger({ db: old2, readonly: true }).listByTask('t')[0].queueWaitMs, null);
+});
+
+test('listByTask fills attemptId and runId from the dispatch journal', async () => {
+  const state = await openStateDatabase({ filePath: ':memory:' });
+  const ledger = new UsageLedger({ db: state.db });
+  journal(state.db, 'att-9', 'run-9', 'task-9');
+  ledger.record(worker({ entryId: 'orch-builder:task-9', taskId: 'task-9' }));
+  ledger.record(worker({ entryId: 'orch-builder:task-x', taskId: 'task-x' }));
+  const [row] = ledger.listByTask('task-9');
+  assert.equal(row.attemptId, 'att-9');
+  assert.equal(row.runId, 'run-9');
+  const [plain] = ledger.listByTask('task-x');
+  assert.equal(plain.attemptId, null);
+  assert.equal(plain.runId, null);
+  await state.close();
+});
