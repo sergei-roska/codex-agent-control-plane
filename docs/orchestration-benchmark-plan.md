@@ -63,10 +63,16 @@ Each trial gets a fresh environment and shares nothing with other trials:
 
 ## Fixtures
 
-Fixture repositories live outside this repository and are small Node projects
-with `node --test` suites. Each fixture states its class, its goal text (sent
-verbatim), its checks, and its grader. The grader is a deterministic script run
-by the harness after the trial; it never calls a model.
+Fixture sources live in `bench/fixtures/<id>/` (small Node projects with
+`node --test` suites). Each has `GOAL.txt` (sent verbatim), `CHECKS.json` (argv
+lists for `--check`), and `FIXTURE.md` (expected answer). A trial workspace is
+made with `node bench/make-trial-workspace.js <id>`, which copies the project
+into a fresh temporary git repository with one fixed commit and prints
+`{ fixture, workspace, commit }`; the goal, checks, expected answer, and F2's
+`REFERENCE_FIX.patch` are not copied, so they cannot leak to the model. Graders
+are `node bench/graders/fN.js --final <file> --workspace <dir> [--disposition
+<value>]`; they print one JSON verdict, exit 0 on pass, and never call a model.
+`test/bench-fixtures.test.js` validates fixtures and graders in the normal suite.
 
 | Id | Class | Setup | Goal and checks | Grader |
 | --- | --- | --- | --- | --- |

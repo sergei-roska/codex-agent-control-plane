@@ -1,0 +1,1 @@
+Run scripts/emit-log.js and report the error code it prints.

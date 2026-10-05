@@ -1,0 +1,11 @@
+--- a/src/price.js
++++ b/src/price.js
+@@ -6,7 +6,7 @@
+ 
+ // pct is a whole-number percentage, e.g. 10 means 10 percent off.
+ function applyDiscount(total, pct) {
+-  return total - total * pct;
++  return total - (total * pct) / 100;
+ }
+ 
+ function withTax(total, rate) {
