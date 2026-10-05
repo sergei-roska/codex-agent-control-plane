@@ -115,15 +115,17 @@ Branch `feature/orchestrator-phase-a`, recorded 2026-10-05.
 ## Phase B progress
 
 Branch `feature/orchestrator-phase-b`. Owner scope for this pass: SUP, WAL-01,
-OPS-02 (WAL-02 and OPT not started).
+WAL-02, OPS-02. OPT (OPT-01..03) was not started; OPT-04 in Phase C depends on it.
 
 | Item | State | Evidence |
 | --- | --- | --- |
 | OPS-02 | done | `6112a3d`; contract persisted in lead task metadata, run gated on durable read |
-| WAL-01 | done | `docs/intent-recovery-contract.md`; decision D1 `synchronous = FULL`; gaps G1-G6 for WAL-02 |
+| WAL-01 | done | `docs/intent-recovery-contract.md`; decision D1 `synchronous = FULL`; gaps G1-G6 |
+| WAL-02 | done | `ef885cd`; FULL fsync (0.02 -> 0.57 ms per commit), guarded journal, G2-G6 |
 | SUP-01 | done | `docs/supervisor-recovery-contract.md` (`supervisor-policy/v1`) |
-| SUP-02 | in progress | |
-| SUP-03 | open | |
+| SUP-02 | done | `26f597d`; window, backoff, exhaustion with probe, per-run outcome rule |
+| SUP-03 | done | `7d9e734`; test/supervisor-integration.test.js; recovery 0/1000/4000 ms |
+| M2 (owner scope) | in review | 535 tests green; independent safety audit pending |
 
 ## Phase A: baseline, compact evidence, executable contracts
 
