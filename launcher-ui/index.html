@@ -189,16 +189,6 @@
         </div>
       </div>
 
-      <div class="field-group">
-        <label class="field-label" for="taskChecks">Acceptance Checks:</label>
-        <input type="text" id="taskChecks" placeholder="npm test, node --check src/server.js" spellcheck="false">
-        <div class="chips-group">
-          <span class="chip" onclick="addCheck('npm test')">+ npm test</span>
-          <span class="chip" onclick="addCheck('node --check src/server.js')">+ check server.js</span>
-          <span class="chip" onclick="clearChecks()">clear checks</span>
-        </div>
-      </div>
-
       <div id="composerHint" class="composer-hint hidden"></div>
       <div id="sendError" class="composer-error hidden" role="alert"></div>
       <button id="sendBtn" class="btn btn-primary" onclick="sendMessage()" disabled style="padding: 13px;">

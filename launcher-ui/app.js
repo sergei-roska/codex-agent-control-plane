@@ -3,13 +3,6 @@
       document.getElementById('taskGoal').value = text;
       document.getElementById('taskGoal').focus();
     }
-    function addCheck(cmd) {
-      const el = document.getElementById('taskChecks');
-      el.value = el.value ? el.value + ', ' + cmd : cmd;
-    }
-    function clearChecks() {
-      document.getElementById('taskChecks').value = '';
-    }
     function clearLogs() {
       document.getElementById('serverLogsBody').innerText = '';
     }
@@ -658,11 +651,9 @@
       const goal = document.getElementById('taskGoal').value.trim();
       if (!goal) return alert('Enter a message!');
 
-      const checksRaw = document.getElementById('taskChecks').value.trim();
-      const checks = checksRaw ? checksRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
 
       const last = lastTurn();
-      const payload = { goal, checks };
+      const payload = { goal };
       if (currentSessionId) {
         if (!last || !isTerminalState(last.state)) return;
         payload.continueFrom = last.id;
