@@ -141,7 +141,8 @@ failure. Consumers can implement against the frozen contract.
 #### PIP-02 - Evidence storage enforces bounded access [P0]
 
 Level 3; parent: PIP; depends on PIP-01; executor: worker-sonnet; estimate: one session.
-Proposed write scope: `src/evidence-store.js`, `test/evidence-store.test.js`.
+Write scope (frozen by PIP-01): `src/evidence-store.js`, `test/evidence-store.test.js`,
+`src/launcher-sessions.js` (run deletion), `test/launcher-sessions.test.js`, `package.json` (`evidence` script).
 
 - Store full evidence under run ownership; return compact reference metadata.
 - Bound writes/reads, enforce retention and ownership, and reject traversal or
@@ -153,8 +154,8 @@ path/symlink escape attempts, missing evidence, and cleanup. No extra LLM calls.
 #### PIP-03 - Lead outcomes carry bounded evidence [P0]
 
 Level 3; parent: PIP; depends on PIP-01, PIP-02; executor: worker-sonnet;
-estimate: one session. Proposed write scope: `src/a2a-role-service.js`,
-`src/lead-graph.js`, `test/a2a-role-service.test.js`, `test/lead-graph.test.js`.
+estimate: one session. Write scope (frozen by PIP-01): `src/lead-graph.js`,
+`src/acceptance.js`, `test/lead-graph.test.js`, `test/acceptance.test.js`.
 
 - Persist oversized reports before summarizing them; preserve required structured
   report fields, failure classifications, and acceptance-relevant evidence.
