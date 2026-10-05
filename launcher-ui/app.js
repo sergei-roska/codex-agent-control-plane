@@ -38,10 +38,162 @@
       }
     }
 
-    async function updateStatus() {
+    // ---- Project binding: each tab is bound to one project (?project=<id>)
+    let projectList = [];
+    let currentProjectId = null;
+
+    function projectUrl(suffix) {
+      return '/api/projects/' + encodeURIComponent(currentProjectId) + suffix;
+    }
+
+    function currentProject() {
+      return projectList.find(p => p.id === currentProjectId) || null;
+    }
+
+    function statusMarker(status) {
+      if (status === 'running') return '[running]';
+      if (status === 'starting') return '[starting]';
+      return '[stopped]';
+    }
+
+    function renderProjectBar() {
+      const select = document.getElementById('projectSelect');
+      const meta = document.getElementById('projectMeta');
+      const removeBtn = document.getElementById('removeProjectBtn');
+      select.textContent = '';
+      projectList.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.name + ' ' + statusMarker(p.status);
+        select.appendChild(opt);
+      });
+      const cur = currentProject();
+      if (cur) {
+        select.value = cur.id;
+        meta.textContent = cur.path + ' | port ' + cur.port;
+        removeBtn.disabled = cur.status !== 'stopped';
+      } else {
+        meta.textContent = projectList.length ? '' : 'No projects yet. Add a project path below.';
+        removeBtn.disabled = true;
+      }
+      select.disabled = projectList.length === 0;
+      document.title = (cur ? cur.name : 'No project') + ' - Codex Control Plane';
+    }
+
+    function pickInitialProject() {
+      const wanted = new URLSearchParams(window.location.search).get('project');
+      if (wanted && projectList.some(p => p.id === wanted)) return wanted;
+      let best = null;
+      projectList.forEach(p => {
+        if (p.lastUsedAt && (!best || p.lastUsedAt > best.lastUsedAt)) best = p;
+      });
+      if (best) return best.id;
+      return projectList.length ? projectList[0].id : null;
+    }
+
+    function resetTaskViewState() {
+      currentTaskId = null;
+      viewingArchivedTaskId = null;
+      dismissedTaskId = null;
+      displayedTaskTerminal = false;
+      document.getElementById('decisionCard').classList.add('hidden');
+      document.getElementById('decisionOptionsList').textContent = '';
+      document.getElementById('decisionId').value = '';
+      document.getElementById('serverLogsBody').textContent = '';
+      const badge = document.getElementById('historyCountBadge');
+      if (badge) badge.textContent = '0';
+      showEmptyState();
+    }
+
+    function selectProject(id) {
+      const changed = id !== currentProjectId;
+      currentProjectId = id;
       try {
-        const res = await fetch('/api/server/status');
+        const url = new URL(window.location.href);
+        if (id) url.searchParams.set('project', id);
+        else url.searchParams.delete('project');
+        history.replaceState(null, '', url);
+      } catch (_) {}
+      if (changed) resetTaskViewState();
+      renderProjectBar();
+      updateStatus();
+    }
+
+    async function refreshProjects() {
+      try {
+        const res = await fetch('/api/projects');
+        if (!res.ok) return;
         const data = await res.json();
+        projectList = data.projects || [];
+        if (!currentProjectId || !currentProject()) {
+          selectProject(pickInitialProject());
+        } else {
+          renderProjectBar();
+        }
+      } catch (_) {}
+    }
+
+    function onProjectSelectChange() {
+      selectProject(document.getElementById('projectSelect').value || null);
+    }
+
+    function logLine(text) {
+      const logs = document.getElementById('serverLogsBody');
+      logs.textContent += text;
+      logs.scrollTop = logs.scrollHeight;
+    }
+
+    async function addProject() {
+      const input = document.getElementById('projectPathInput');
+      const projectPath = input.value.trim();
+      if (!projectPath) return alert('Specify project path!');
+      try {
+        const res = await fetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: projectPath })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to add project');
+        await refreshProjects();
+        selectProject(data.project.id);
+      } catch (err) {
+        alert('Failed to add project: ' + err.message);
+      }
+    }
+
+    async function removeProject() {
+      const cur = currentProject();
+      if (!cur) return;
+      if (!confirm('Remove project from the list?\n' + cur.path + '\n(Files and task history stay on disk.)')) return;
+      try {
+        const res = await fetch(projectUrl(''), { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to remove project');
+        await refreshProjects();
+      } catch (err) {
+        alert('Failed to remove project: ' + err.message);
+      }
+    }
+
+    async function updateStatus() {
+      const pid = currentProjectId;
+      if (!pid) {
+        document.getElementById('serverDot').className = 'status-dot';
+        document.getElementById('serverStatusText').textContent = 'No project selected';
+        document.getElementById('serverPill').style.borderColor = 'var(--border-subtle)';
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('stopBtn').disabled = true;
+        document.getElementById('dispatchBtn').disabled = true;
+        serverRunning = false;
+        updateContinueBtn();
+        return;
+      }
+      try {
+        const res = await fetch(projectUrl('/status'));
+        const data = await res.json();
+        if (pid !== currentProjectId) return;
+        if (!res.ok) throw new Error(data.error || 'status failed');
 
         const dot = document.getElementById('serverDot');
         const text = document.getElementById('serverStatusText');
@@ -86,6 +238,8 @@
           await syncActiveTask();
         }
         await fetchHistoryCount();
+        const known = currentProject();
+        if (known && known.status !== data.status) refreshProjects();
       } catch (_) {}
     }
 
@@ -108,10 +262,12 @@
 
     async function syncActiveTask() {
       if (viewingArchivedTaskId) return;
+      const pid = currentProjectId;
       try {
-        const res = await fetch('/api/tasks/latest');
+        const res = await fetch(projectUrl('/tasks/latest'));
         if (!res.ok) return;
         const data = await res.json();
+        if (pid !== currentProjectId || viewingArchivedTaskId) return;
         if (!data.leadTask) return;
         if (dismissedTaskId && data.leadTask.id === dismissedTaskId && isTerminalState(data.leadTask.state)) return;
         if (!isTerminalState(data.leadTask.state) || data.leadTask.id !== dismissedTaskId) dismissedTaskId = null;
@@ -266,10 +422,12 @@
     }
 
     async function fetchHistoryCount() {
+      const pid = currentProjectId;
       try {
-        const res = await fetch('/api/tasks/history');
+        const res = await fetch(projectUrl('/tasks/history'));
         if (!res.ok) return;
         const data = await res.json();
+        if (pid !== currentProjectId) return;
         const badge = document.getElementById('historyCountBadge');
         if (badge && data.tasks) badge.innerText = data.tasks.length;
       } catch (_) {}
@@ -282,7 +440,7 @@
       container.innerHTML = '<div style="text-align: center; color: var(--text-dim); padding: 20px;">Loading history...</div>';
 
       try {
-        const res = await fetch('/api/tasks/history');
+        const res = await fetch(projectUrl('/tasks/history'));
         if (!res.ok) throw new Error('Failed to load history');
         const data = await res.json();
         const tasks = data.tasks || [];
@@ -353,7 +511,7 @@
     async function selectArchivedTask(taskId) {
       closeHistoryModal();
       try {
-        const res = await fetch('/api/tasks/' + taskId);
+        const res = await fetch(projectUrl('/tasks/' + encodeURIComponent(taskId)));
         if (!res.ok) throw new Error('Task not found');
         const data = await res.json();
         viewingArchivedTaskId = taskId;
@@ -384,7 +542,7 @@
       viewingArchivedTaskId = null;
       showEmptyState();
       try {
-        const res = await fetch('/api/tasks/latest');
+        const res = await fetch(projectUrl('/tasks/latest'));
         if (!res.ok) return;
         const data = await res.json();
         if (data.leadTask && isTerminalState(data.leadTask.state)) dismissedTaskId = data.leadTask.id;
@@ -394,7 +552,7 @@
     async function returnToLatestTask() {
       viewingArchivedTaskId = null;
       try {
-        const res = await fetch('/api/tasks/latest');
+        const res = await fetch(projectUrl('/tasks/latest'));
         if (!res.ok) throw new Error('latest');
         const data = await res.json();
         if (data.leadTask && isActiveState(data.leadTask.state)) {
@@ -411,7 +569,7 @@
       if (!confirm('Delete task from database?\n' + (goalText ? '"' + goalText + '"' : taskId))) return;
 
       try {
-        const res = await fetch('/api/tasks/' + taskId, { method: 'DELETE' });
+        const res = await fetch(projectUrl('/tasks/' + encodeURIComponent(taskId)), { method: 'DELETE' });
         const data = await res.json();
         if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete task');
 
@@ -450,11 +608,9 @@
     }
 
     async function startServer() {
-      const workspace = document.getElementById('workspaceInput').value.trim();
-      if (!workspace) return alert('Specify project path!');
+      if (!currentProjectId) return alert('Add or select a project first!');
 
       const startBtn = document.getElementById('startBtn');
-      const stopBtn = document.getElementById('stopBtn');
       const text = document.getElementById('serverStatusText');
       const dot = document.getElementById('serverDot');
       const logs = document.getElementById('serverLogsBody');
@@ -465,32 +621,39 @@
       logs.innerText = '[LAUNCHER] Initializing server startup...\n';
 
       try {
-        const res = await fetch('/api/server/start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workspace })
-        });
+        const res = await fetch(projectUrl('/start'), { method: 'POST' });
         const data = await res.json();
-        if (!data.success) {
-          logs.innerText += '[ERROR] ' + (data.message || data.error || 'Failed to start server') + '\n';
+        if (!res.ok || !data.success) {
+          logLine('[ERROR] ' + (data.message || data.error || 'Failed to start server') + '\n');
         }
       } catch (err) {
-        logs.innerText += '[NETWORK ERROR] No connection to launcher: ' + err.message + '\n';
+        logLine('[NETWORK ERROR] No connection to launcher: ' + err.message + '\n');
       }
+      refreshProjects();
       setTimeout(updateStatus, 800);
     }
 
     async function stopServer() {
+      if (!currentProjectId) return;
       const stopBtn = document.getElementById('stopBtn');
       const text = document.getElementById('serverStatusText');
       stopBtn.disabled = true;
       text.innerText = 'Stopping...';
 
       try {
-        await fetch('/api/server/stop', { method: 'POST' });
+        const res = await fetch(projectUrl('/stop'), { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          if (res.status === 409) {
+            logLine('[LAUNCHER] Cannot stop: this orchestrator was not started by this launcher (or its process is gone). Stop it manually.\n');
+          } else {
+            logLine('[ERROR] ' + (data.error || 'Failed to stop server') + '\n');
+          }
+        }
       } catch (err) {
         alert('Failed to stop: ' + err.message);
       }
+      refreshProjects();
       setTimeout(updateStatus, 500);
     }
 
@@ -547,6 +710,8 @@
     }
 
     async function executeA2A(payload) {
+      if (!currentProjectId) return alert('Add or select a project first!');
+      const pid = currentProjectId;
       const out = document.getElementById('taskOutputArea');
       const statusLabel = document.getElementById('taskStatusLabel');
       const dispatchBtn = document.getElementById('dispatchBtn');
@@ -563,12 +728,13 @@
       out.innerText = goalBanner + '>>> Task dispatched to Lead Orchestrator (LangGraph).\nLead analyzes goal, creates assignments, and delegates them to specialists...\nPlease do not close this page.';
 
       try {
-        const res = await fetch('/api/task/send', {
+        const res = await fetch(projectUrl('/task/send'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         const data = await res.json();
+        if (pid !== currentProjectId) return;
         if (!data.success) throw new Error(data.error);
 
         const task = data.result;
@@ -643,10 +809,11 @@
         }
 
       } catch (err) {
+        if (pid !== currentProjectId) return;
         statusLabel.innerText = 'Status: error';
         out.innerText = '❌ Execution error:\n' + err.message;
       } finally {
-        dispatchBtn.disabled = false;
+        if (pid === currentProjectId) dispatchBtn.disabled = false;
       }
     }
 
@@ -706,7 +873,8 @@
     }
 
     setInterval(updateStatus, 1000);
-    updateStatus();
+    setInterval(refreshProjects, 3000);
+    refreshProjects();
 
     function addAboutRow(list, agent, isLead) {
       const row = document.createElement('div');

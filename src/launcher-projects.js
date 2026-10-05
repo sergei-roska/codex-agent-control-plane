@@ -87,7 +87,7 @@ function createProjectManager(options = {}) {
   function runtimeFor(id) {
     let rt = runtimes.get(id);
     if (!rt) {
-      rt = { child: null, status: 'stopped', logs: [], exited: null };
+      rt = { child: null, status: 'stopped', logs: [], exited: null, starting: null };
       runtimes.set(id, rt);
     }
     return rt;
@@ -305,6 +305,17 @@ function createProjectManager(options = {}) {
     const rt = runtimeFor(id);
     if (rt.status === 'starting' || rt.status === 'running') return view(record);
     rt.status = 'starting';
+    const pending = runStart(record, rt);
+    rt.starting = pending;
+    try {
+      return await pending;
+    } finally {
+      if (rt.starting === pending) rt.starting = null;
+    }
+  }
+
+  async function runStart(record, rt) {
+    const id = record.id;
     try {
       await ensureToken();
       await serialize(async () => {
@@ -360,6 +371,7 @@ function createProjectManager(options = {}) {
   async function stop(id) {
     const record = findRecord(id);
     const rt = runtimeFor(id);
+    if (rt.starting) await rt.starting.catch(() => {});
     if (rt.status === 'stopped') return view(record);
     if (rt.child) {
       await terminateChild(rt, killGraceMs);

@@ -197,6 +197,33 @@
     }
     textarea { resize: vertical; min-height: 110px; }
 
+    /* Project bar */
+    .project-bar { gap: 6px; }
+    .project-row { display: flex; gap: 8px; align-items: stretch; }
+    .project-row input, .project-row select { flex: 1; min-width: 0; }
+    .project-row .btn { white-space: nowrap; }
+    .project-meta {
+      font-size: 11px;
+      color: var(--text-dim);
+      word-break: break-all;
+      min-height: 14px;
+    }
+    select {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      color: var(--text-main);
+      padding: 10px 12px;
+      font-family: inherit;
+      font-size: 14px;
+    }
+    select:focus {
+      outline: none;
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px var(--primary-glow);
+    }
+
     /* Buttons */
     .btn {
       display: inline-flex;

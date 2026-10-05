@@ -290,6 +290,22 @@ describe('stop', () => {
     assert.equal((await manager.stop(p.id)).status, 'stopped');
   });
 
+  it('waits for an in-flight start before stopping', async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const manager = makeManager({ ensureToken: () => gate });
+    const p = await manager.add(mkdir('a'));
+    const starting = manager.start(p.id);
+    await tick();
+    assert.equal(manager.get(p.id).status, 'starting');
+    const stopping = manager.stop(p.id);
+    release();
+    await starting;
+    const v = await stopping;
+    assert.deepEqual(spawned[0].child.signals, ['SIGTERM']);
+    assert.equal(v.status, 'stopped');
+  });
+
   it('escalates to SIGKILL when SIGTERM is ignored', async () => {
     const manager = makeManager();
     const p = await manager.add(mkdir('a'));

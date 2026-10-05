@@ -34,12 +34,19 @@
         <h2 class="panel-title">
           <span>📁</span> Workspace & Server
         </h2>
-        <span style="font-size: 12px; color: var(--text-dim);" id="portHint">port 3000</span>
       </div>
 
-      <div class="field-group">
-        <label class="field-label">Project path (CODEX_WORKSPACE):</label>
-        <input type="text" id="workspaceInput" value="__DEFAULT_WORKSPACE__" spellcheck="false">
+      <div class="field-group project-bar">
+        <label class="field-label" for="projectSelect">Project:</label>
+        <div class="project-row">
+          <select id="projectSelect" onchange="onProjectSelectChange()"></select>
+          <button id="removeProjectBtn" class="btn btn-secondary btn-sm" onclick="removeProject()" disabled>Remove</button>
+        </div>
+        <div id="projectMeta" class="project-meta"></div>
+        <div class="project-row">
+          <input type="text" id="projectPathInput" value="__DEFAULT_WORKSPACE__" spellcheck="false" aria-label="Project path to add">
+          <button id="addProjectBtn" class="btn btn-secondary btn-sm" onclick="addProject()">Add project</button>
+        </div>
       </div>
 
       <div class="btn-group">
