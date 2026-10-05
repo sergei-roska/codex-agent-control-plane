@@ -190,3 +190,39 @@ the pilot server is stopped and the task repository is clean.
 - Paths created by an agent mid-run are not carved out for already loaded threads.
 - Hosted Git remote waived; top-level `.runtime`, `runtime`, `data`, `.env` in a
   task repo are hidden from agents.
+
+## Operator startup checkpoint: dccourtscode
+
+The owner requested startup for `/home/sr/Projects/dccourtscode` on 2026-10-06.
+No application server was listening on port 3000; Codex ChatGPT login passed.
+Plain `npm start` reproduced the workspace/application overlap rejection because
+`CODEX_WORKSPACE` defaults to the application checkout. The target is a separate
+repository with current branch `dccr-master`.
+
+Started the live server with isolated state, token, and workspace locks under
+`.runtime/dccourtscode/`. Its operator policy `project.json` sets
+`baseRef` to `dccr-master`; no checks were inferred. The previous default state
+and `.runtime/projects.json` refer to tower-defense and were left unchanged.
+Verified dashboard HTTP 200, pairing/session creation, and authenticated context
+reporting the exact dccourtscode workspace. Browser automation was unavailable;
+a fresh pairing URL was issued for the owner. No ticket or model run was started.
+The target has existing untracked files; clean-workspace admission may require
+operator attention before submitting a ticket. No target files were changed.
+Protected dashboard reference remains unchanged.
+
+Repeat launch from the application checkout:
+
+```bash
+CODEX_WORKSPACE=/home/sr/Projects/dccourtscode \
+CODEX_A2A_STATE_DB="$PWD/.runtime/dccourtscode/state.sqlite" \
+CODEX_A2A_TOKEN_FILE="$PWD/.runtime/dccourtscode/a2a-token" \
+CODEX_A2A_WORKSPACE_LOCK_DIR="$PWD/.runtime/dccourtscode/workspace-locks" \
+PORT=3000 npm start
+```
+
+Fresh pairing URL while this instance is running:
+
+```bash
+CODEX_A2A_TOKEN_FILE="$PWD/.runtime/dccourtscode/a2a-token" \
+PORT=3000 npm run dashboard:pair
+```
