@@ -238,3 +238,13 @@ usable for a valid request. Focused checks: dashboard auth 13/13, Atlassian API
 5/5, diff check and protected reference check pass. Restarted the instance on
 this change; owner Chrome verification remains pending. Do not describe the
 reported browser root cause as confirmed without observing its request.
+
+Browser verification then succeeded through the connected `chrome-devtools` MCP
+(the earlier `cua_repl` browser inventory was empty, not a general browser-tool
+limitation). Opened a dashboard tab: `dccourtscode`, `Session: connected`, POST
+session 204 and context/roles/cards 200. In that Chrome 154 context, diagnostic
+invalid-code requests under both `no-referrer` and `same-origin` policies returned
+401 rather than Origin rejection. Therefore the owner's original rejection is
+still unexplained; the header change remains a compatibility mitigation, not
+proof of a current Chrome defect. The connected browser may have a separate
+profile from the owner's failing tab.
