@@ -26,6 +26,7 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'assignment.skills': Object.freeze(['skill_invalid']),
   'assignment.role_ladder': Object.freeze(['role_ladder_violation', 'architect_constraint']),
   'dispatch.writer_unresolved': Object.freeze(['writer_unresolved']),
+  'dispatch.request_input': Object.freeze(['request_invalid', 'guarantee_unavailable']),
 });
 
 /** A lead-managed dispatch predicate FAIL. violations: [{ predicate, result, code, boundary, detail }] */
@@ -343,6 +344,90 @@ function checkAssignment(assignment, decision, ctx) {
   }
 }
 
+const SPECIALIST_REQUIRED_KEYS = ['objective', 'allowedFiles'];
+const SPECIALIST_OPTIONAL_KEYS = [
+  'role', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions',
+  'skills', 'skillPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance',
+];
+const SPECIALIST_ARRAY_KEYS = ['inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
+
+/**
+ * Validate a structured direct specialist request (the JSON object the lead sends, or an equivalent
+ * direct call) for the endpoint role { id, name?, sandbox }. Returns a normalized copy or throws
+ * BoundaryViolation. Does not check skill pins (the executor does).
+ */
+function checkSpecialistRequest(request, role, { workspace } = {}) {
+  const label = String(role?.name || role?.id || 'specialist');
+  if (!isPlainObject(request)) throw violation('assignment.shape', 'assignment_shape_invalid', 'Specialist request must be a JSON object');
+  const keys = Object.keys(request);
+  for (const key of SPECIALIST_REQUIRED_KEYS) {
+    if (!Object.hasOwn(request, key)) throw violation('assignment.shape', 'assignment_shape_invalid', `Specialist request needs ${key}`);
+  }
+  const unknown = keys.filter((key) => !SPECIALIST_REQUIRED_KEYS.includes(key) && !SPECIALIST_OPTIONAL_KEYS.includes(key));
+  if (unknown.length) throw violation('dispatch.request_input', 'request_invalid', `Unknown specialist request key: ${unknown[0]}`);
+  if (request.role !== undefined) {
+    const wanted = new Set([role?.id, role?.name].filter(Boolean).map(canonicalRoleId));
+    if (typeof request.role !== 'string' || !wanted.has(canonicalRoleId(request.role))) {
+      throw violation('assignment.shape', 'role_unknown', `Request role ${String(request.role)} does not match this endpoint (${label})`);
+    }
+  }
+  if (!isNonEmptyString(request.objective)) throw violation('assignment.shape', 'field_invalid', `Request for ${label} needs an objective`);
+  if (request.objective.length > MAX_CHARS) throw violation('assignment.shape', 'field_invalid', `Request for ${label} exceeds the size limit for objective`);
+  const out = { objective: request.objective };
+  for (const field of ['allowedFiles', ...SPECIALIST_ARRAY_KEYS]) {
+    if (request[field] === undefined && field !== 'allowedFiles') { out[field] = []; continue; }
+    const problem = checkStringArray(request[field], field);
+    if (problem) throw violation('assignment.shape', 'field_invalid', `Request for ${label}: ${problem}`);
+    out[field] = request[field].slice();
+  }
+  if (request.skills !== undefined) {
+    if (!Array.isArray(request.skills)) throw violation('assignment.shape', 'field_invalid', `Request for ${label} needs a string array for skills`);
+    out.skills = request.skills.slice();
+  }
+  if (request.skillPins !== undefined) {
+    if (!Array.isArray(request.skillPins)) throw violation('assignment.shape', 'field_invalid', `Request for ${label} needs an array for skillPins`);
+    out.skillPins = request.skillPins.slice();
+  }
+  const readOnly = role?.sandbox === 'read-only';
+  if (readOnly) out.allowedFiles = out.allowedFiles.filter((file) => file !== '.' && file !== './');
+  else if (out.allowedFiles.length === 0) {
+    throw violation('assignment.writer_scope', 'writer_scope_missing', `Writable role ${label} requires explicit allowedFiles`);
+  }
+  for (const file of out.allowedFiles) {
+    if (/[*?[]/.test(file)) {
+      throw violation('assignment.paths', 'path_glob_unsupported', `Unsupported glob in allowedFiles path for ${label}: ${file}`);
+    }
+    if (!safeRelativePath(file)) throw violation('assignment.paths', 'path_unsafe', `Unsafe allowedFiles path for ${label}: ${file}`);
+  }
+  if (request.requireAcceptance) {
+    throw violation('dispatch.request_input', 'guarantee_unavailable', 'requireAcceptance cannot be guaranteed on a direct specialist request');
+  }
+  if (request.workspace !== undefined) {
+    if (typeof request.workspace !== 'string' || !workspace || path.resolve(request.workspace) !== path.resolve(workspace)) {
+      throw violation('dispatch.request_input', 'request_invalid', 'Request workspace does not match the executor workspace');
+    }
+  }
+  for (const key of ['role', 'assignmentId', 'workspace', 'reportContract']) {
+    if (request[key] !== undefined) out[key] = request[key];
+  }
+  return out;
+}
+
+function normalizeRel(file, workspace) {
+  let value = String(file).replace(/\\/g, '/');
+  if (workspace && value.startsWith(`${workspace}/`)) value = value.slice(workspace.length + 1);
+  return path.posix.normalize(value).replace(/^\.\//, '');
+}
+
+// Paths outside allowedFiles (exact file or directory prefix).
+function pathsOutsideAllowed(paths, allowedFiles, workspace) {
+  const allowed = allowedFiles.map((file) => normalizeRel(file, workspace).replace(/\/+$/, ''));
+  return paths.filter((file) => {
+    const rel = normalizeRel(file, workspace);
+    return !allowed.some((entry) => rel === entry || rel.startsWith(`${entry}/`));
+  });
+}
+
 function checkHumanInput(humanInput, openIds) {
   if (!isPlainObject(humanInput)) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input requires a humanInput object');
   const keys = ['reason', 'question', 'options', 'recommendation', 'evidenceChecked', 'independentWork', 'relatedDecisionIds'];
@@ -449,6 +534,8 @@ module.exports = {
   classifyCodexError,
   findCodexErrorInfo,
   safeRelativePath,
+  checkSpecialistRequest,
+  pathsOutsideAllowed,
   ASSIGNMENT_FIELDS,
   DECISION_ASSIGNMENT_FIELDS,
   MAX_ASSIGNMENTS,

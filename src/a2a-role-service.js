@@ -7,6 +7,7 @@ const express = require('express');
 const Database = require('better-sqlite3');
 const {
   WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, classifyCodexError, findCodexErrorInfo,
+  BoundaryViolation, checkSpecialistRequest, parseWorkerReport, pathsOutsideAllowed,
 } = require('./contracts');
 const { WriterAdmission } = require('./writer-admission');
 const { loadSkillCatalog, resolveSkillSelection } = require('./skill-catalog');
@@ -75,6 +76,21 @@ function assignmentSkillSelection(text, skillCatalog) {
     }
   }
   return resolveSkillSelection(skillCatalog, skills, pins === undefined ? {} : { pins });
+}
+
+const BOUNDARY_CONTRACT = 'boundary-contract/v1';
+
+// A structured request is a JSON object carrying both objective and allowedFiles; returns it or null.
+function parseStructuredRequest(text) {
+  if (!text.trimStart().startsWith('{')) return null;
+  let value;
+  try { value = JSON.parse(text); } catch (_) { return null; }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return Object.hasOwn(value, 'objective') && Object.hasOwn(value, 'allowedFiles') ? value : null;
+}
+
+function boundaryRecord(predicate, result, code, boundary, detail, advisory = false) {
+  return { predicate, result, code, boundary, detail: String(detail).slice(0, 500), evidence: [], advisory };
 }
 
 function failureMetadata(error) {
@@ -344,10 +360,47 @@ function makeExecutor({
       };
       try {
         let input;
+        let structured = null;
+        let rejection = null;
         try {
           input = extractText(requestContext.userMessage);
-          selectedSkills = assignmentSkillSelection(input, skillCatalog);
+          const raw = parseStructuredRequest(input);
+          if (raw) {
+            try {
+              structured = checkSpecialistRequest(raw, { id: roleId, name: role.name, sandbox: role.sandbox }, { workspace });
+              try {
+                selectedSkills = assignmentSkillSelection(input, skillCatalog);
+              } catch (skillError) {
+                throw new BoundaryViolation('assignment.skills', 'skill_invalid', skillError.message);
+              }
+            } catch (error) {
+              if (!(error instanceof BoundaryViolation)) throw error;
+              rejection = error;
+              throw error;
+            }
+          } else {
+            selectedSkills = assignmentSkillSelection(input, skillCatalog);
+          }
         } catch (error) {
+          if (rejection) {
+            recordPreTurn('input_error');
+            const results = rejection.violations.map((entry) => ({ ...entry, evidence: [], advisory: false }));
+            const unavailable = results.some((entry) => entry.code === 'guarantee_unavailable');
+            publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
+              messageId: `${taskId}-input-error`,
+              contextId,
+              taskId,
+              role: 2,
+              parts: [{ content: { $case: 'text', value: error.message } }],
+              metadata: {
+                failureKind: unavailable ? 'guarantee_unavailable' : 'request_invalid',
+                codexErrorInfo: null,
+                effects: 'none',
+                boundary: { contract: BOUNDARY_CONTRACT, results },
+              },
+            });
+            return;
+          }
           recordPreTurn('input_error');
           publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
             messageId: `${taskId}-input-error`,
@@ -454,6 +507,28 @@ function makeExecutor({
         const canceled = controller.signal.aborted;
         const completed = result?.status === 'completed';
         if (!canceled && completed) {
+          const parsedReport = parseWorkerReport(resultText);
+          let boundary = { contract: 'legacy' };
+          if (structured) {
+            const results = [];
+            if (parsedReport.error) {
+              results.push(boundaryRecord('settle.report_valid', 'FAIL', 'report_invalid', 'settlement', parsedReport.error, !writable));
+            }
+            if (writable && writer) {
+              const delta = writer.delta;
+              if (!delta || delta.known !== true) {
+                results.push(boundaryRecord('settle.attested_scope', 'UNKNOWN', 'delta_unknown', 'settlement',
+                  'The workspace delta of this writer is unknown'));
+              } else {
+                const outside = pathsOutsideAllowed(delta.changedPaths || [], structured.allowedFiles, workspace);
+                if (outside.length) {
+                  results.push(boundaryRecord('settle.attested_scope', 'FAIL', 'attested_scope_violation', 'settlement',
+                    `Changed paths outside allowedFiles: ${outside.join(', ')}`));
+                }
+              }
+            }
+            boundary = { contract: BOUNDARY_CONTRACT, results };
+          }
           eventBus.publish(AgentEvent.artifactUpdate({
             taskId,
             contextId,
@@ -463,7 +538,9 @@ function makeExecutor({
               description: role.description,
               parts: [{ content: { $case: 'text', value: resultText } }],
               metadata: {
-                contract: WORKER_REPORT_CONTRACT,
+                contract: parsedReport.error ? null : WORKER_REPORT_CONTRACT,
+                ...(parsedReport.error ? { reportError: parsedReport.error } : {}),
+                boundary,
                 threadId: result.threadId || null,
             ...(selectedSkills.length ? { selectedSkills: selectedSkills.map(({ id, sha256 }) => ({ id, sha256 })) } : {}),
                 ...(writer ? { writerExecution: writer } : {}),

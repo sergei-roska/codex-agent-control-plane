@@ -6,6 +6,7 @@ const {
   WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, validateWorkerReport, parseWorkerReport,
   DECISION_SCHEMA, validateDecision, classifyCodexError, findCodexErrorInfo, safeRelativePath,
   ASSIGNMENT_FIELDS, MAX_ASSIGNMENTS, BoundaryViolation, BOUNDARY_PREDICATES,
+  checkSpecialistRequest, pathsOutsideAllowed,
 } = require('../src/contracts');
 
 function walk(schema, visit) {
@@ -376,4 +377,77 @@ test('validateDecision throws BoundaryViolation with predicate ids and codes', (
 
   assert.doesNotThrow(() => validateDecision(dispatch(base('orch-explorer', [])), ctx()));
   assert.throws(() => Object.assign(BOUNDARY_PREDICATES, { x: 1 }));
+});
+
+// ---------------------------------------------------------------- direct specialist requests
+
+const WRITER = { id: 'engineer', name: 'orch-builder', sandbox: 'workspace-write' };
+const READER = { id: 'explorer', name: 'orch-explorer', sandbox: 'read-only' };
+
+function specialist(overrides = {}) {
+  return {
+    role: 'orch-builder', objective: 'Do it', allowedFiles: ['src'], inputs: ['a'], evidence: ['b'],
+    acceptanceCriteria: ['c'], checks: ['d'], stopConditions: ['e'], skills: [], skillPins: [],
+    assignmentId: 'a-1', workspace: '/ws', reportContract: 'worker-report/v1', ...overrides,
+  };
+}
+
+function specialistCode(request, role, expectedPredicate, expectedCode) {
+  assert.throws(() => checkSpecialistRequest(request, role, { workspace: '/ws' }), (error) => {
+    assert.ok(error instanceof BoundaryViolation);
+    assert.equal(error.violations[0].predicate, expectedPredicate);
+    assert.equal(error.violations[0].code, expectedCode);
+    assert.equal(error.violations[0].boundary, 'dispatch');
+    assert.ok(BOUNDARY_PREDICATES[expectedPredicate].includes(expectedCode));
+    return true;
+  });
+}
+
+test('checkSpecialistRequest accepts the shape the lead sends and returns a copy', () => {
+  const input = specialist();
+  const out = checkSpecialistRequest(input, WRITER, { workspace: '/ws' });
+  assert.deepEqual(out, input);
+  assert.notEqual(out.allowedFiles, input.allowedFiles);
+  const minimal = checkSpecialistRequest({ objective: 'x', allowedFiles: [] }, READER, { workspace: '/ws' });
+  assert.deepEqual(minimal.inputs, []);
+  assert.equal(checkSpecialistRequest(specialist({ role: 'engineer' }), WRITER, { workspace: '/ws' }).role, 'engineer');
+});
+
+test('checkSpecialistRequest rejects shape problems', () => {
+  specialistCode('x', WRITER, 'assignment.shape', 'assignment_shape_invalid');
+  specialistCode({ objective: 'x' }, WRITER, 'assignment.shape', 'assignment_shape_invalid');
+  specialistCode(specialist({ role: 'orch-auditor' }), WRITER, 'assignment.shape', 'role_unknown');
+  specialistCode(specialist({ objective: ' ' }), WRITER, 'assignment.shape', 'field_invalid');
+  specialistCode(specialist({ allowedFiles: 'src' }), WRITER, 'assignment.shape', 'field_invalid');
+  specialistCode(specialist({ inputs: [1] }), WRITER, 'assignment.shape', 'field_invalid');
+  specialistCode(specialist({ checks: Array(21).fill('x') }), WRITER, 'assignment.shape', 'field_invalid');
+});
+
+test('checkSpecialistRequest rejects writer scope, paths, and request input problems', () => {
+  specialistCode(specialist({ allowedFiles: [] }), WRITER, 'assignment.writer_scope', 'writer_scope_missing');
+  specialistCode(specialist({ allowedFiles: ['.'] }), WRITER, 'assignment.paths', 'path_unsafe');
+  specialistCode(specialist({ allowedFiles: ['../x'] }), WRITER, 'assignment.paths', 'path_unsafe');
+  specialistCode(specialist({ allowedFiles: ['/etc/x'] }), WRITER, 'assignment.paths', 'path_unsafe');
+  specialistCode(specialist({ allowedFiles: ['src/*.js'] }), WRITER, 'assignment.paths', 'path_glob_unsupported');
+  specialistCode(specialist({ requireAcceptance: true }), WRITER, 'dispatch.request_input', 'guarantee_unavailable');
+  specialistCode(specialist({ workspace: '/other' }), WRITER, 'dispatch.request_input', 'request_invalid');
+  specialistCode(specialist({ surprise: 1 }), WRITER, 'dispatch.request_input', 'request_invalid');
+  assert.equal(checkSpecialistRequest(specialist({ requireAcceptance: false }), WRITER, { workspace: '/ws' }).allowedFiles[0], 'src');
+});
+
+test('checkSpecialistRequest drops "." and "./" from read-only scope', () => {
+  const out = checkSpecialistRequest(specialist({ role: 'orch-explorer', allowedFiles: ['.', './', 'docs'] }), READER, { workspace: '/ws' });
+  assert.deepEqual(out.allowedFiles, ['docs']);
+  assert.deepEqual(checkSpecialistRequest(specialist({ role: 'orch-explorer', allowedFiles: ['.'] }), READER, { workspace: '/ws' }).allowedFiles, []);
+  specialistCode(specialist({ role: 'orch-explorer', allowedFiles: ['../x'] }), READER, 'assignment.paths', 'path_unsafe');
+});
+
+test('pathsOutsideAllowed matches exact files and directory prefixes', () => {
+  assert.deepEqual(pathsOutsideAllowed(['a.js', 'b.js'], ['a.js'], '/ws'), ['b.js']);
+  assert.deepEqual(pathsOutsideAllowed(['src/a.js', 'src/deep/b.js', 'srcx/c.js'], ['src'], '/ws'), ['srcx/c.js']);
+  assert.deepEqual(pathsOutsideAllowed(['src/a.js', 'lib/b.js'], ['src/'], '/ws'), ['lib/b.js']);
+  assert.deepEqual(pathsOutsideAllowed(['/ws/src/a.js', '/ws/lib/b.js'], ['src'], '/ws'), ['/ws/lib/b.js']);
+  assert.deepEqual(pathsOutsideAllowed(['./src/a.js'], ['./src'], '/ws'), []);
+  assert.deepEqual(pathsOutsideAllowed(['src/a.js'], [], '/ws'), ['src/a.js']);
+  assert.deepEqual(pathsOutsideAllowed(['/elsewhere/x.js'], ['src'], '/ws'), ['/elsewhere/x.js']);
 });
