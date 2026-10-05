@@ -125,7 +125,7 @@ WAL-02, OPS-02. OPT (OPT-01..03) was not started; OPT-04 in Phase C depends on i
 | SUP-01 | done | `docs/supervisor-recovery-contract.md` (`supervisor-policy/v1`) |
 | SUP-02 | done | `26f597d`; window, backoff, exhaustion with probe, per-run outcome rule |
 | SUP-03 | done | `7d9e734`; test/supervisor-integration.test.js; recovery 0/1000/4000 ms |
-| M2 (owner scope) | in review | 535 tests green; independent safety audit pending |
+| M2 (owner scope) | fixes handed to Codex | audit found F1-F3 (supervisor), F4 (launcher), F5; see docs/codex-handoff.md |
 
 ## Phase A: baseline, compact evidence, executable contracts
 
