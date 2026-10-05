@@ -134,6 +134,10 @@ transaction, and returns the ref. `put` is idempotent: when a row in state
 `stored` or `not_stored` already has the same `runId`, `attemptId`, `taskId`,
 `checkId`, `kind`, and `originalSha256`, it returns that row's ref and writes
 nothing, so a graph replay never duplicates evidence or consumes quota twice.
+A row whose `expires_at` has passed is never reused. P2 evidence carries the
+acceptance attempt as `attemptId` (`<runId>:acceptance:<n>`, n counting
+acceptance runs from 1), so identical output of a later acceptance run gets its
+own row with its own exit status.
 
 Consumer:
 

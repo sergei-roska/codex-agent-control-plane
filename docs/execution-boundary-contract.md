@@ -99,7 +99,7 @@ with `path_unsafe`, because a dot must never grant whole-repository write scope.
 | Id | Codes | Source | Safety |
 | --- | --- | --- | --- |
 | `settle.report_valid` | `report_invalid` | worker text (`src/contracts.js:190-258`) | safety-critical for writers, advisory for read-only roles |
-| `settle.reported_scope` | `reported_scope_violation` | `report.filesChanged` (self-reported) | advisory |
+| `settle.reported_scope` | `reported_scope_violation` | `report.filesChanged` (self-reported) | safety-critical for writers, advisory for read-only roles |
 | `settle.attested_scope` | `attested_scope_violation`, `delta_unknown` | git delta (`src/workspace-snapshot.js:366-399`) | safety-critical |
 | `settle.writer_settled` | `writer_unresolved` | `writer_executions.state` (`src/lead-graph.js:235-238`, `:808-873`) | safety-critical |
 | `settle.report_outcome` | `writer_reported_failure` | `report.outcome` of a writer (`failed`, `blocked`) | advisory |
@@ -107,6 +107,12 @@ with `path_unsafe`, because a dot must never grant whole-repository write scope.
 `settle.report_outcome` is advisory on purpose: writers are collected across
 rounds, and a later attempt may repair an earlier failed one, so a self-report
 cannot gate acceptance. The authoritative signals are the checks and the delta.
+
+`settle.reported_scope` gates acceptance for writers, as `docs/hardening-spec.md`
+section 3 requires ("no reported scope violation"): the snapshot cannot see
+ignored files, write-then-restore, or writes outside the tree, so a writer's own
+report of an out-of-scope change is the only signal for those cases. (Corrected
+2026-10-05 after the M1 audit; the first frozen version marked it advisory.)
 
 ### Acceptance (evaluated in `assess`)
 
