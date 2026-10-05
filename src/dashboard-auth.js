@@ -38,6 +38,19 @@ function parseCookies(header) {
   return cookies;
 }
 
+function describeOrigin(origin) {
+  if (origin === undefined) return 'missing';
+  if (origin === 'null') return 'null';
+  if (typeof origin !== 'string' || origin.length > 512) return 'unparseable';
+  try {
+    const parsed = new URL(origin);
+    const description = `${parsed.protocol}//${parsed.host}`;
+    return parsed.host && description.length <= 200 ? description : 'unparseable';
+  } catch {
+    return 'unparseable';
+  }
+}
+
 function createDashboardAuth({ db, getPort, now = () => Date.now(), random = crypto.randomBytes } = {}) {
   if (!db) throw new TypeError('createDashboardAuth requires a db');
   if (typeof getPort !== 'function') throw new TypeError('createDashboardAuth requires getPort');
@@ -99,7 +112,8 @@ function createDashboardAuth({ db, getPort, now = () => Date.now(), random = cry
     const port = getPort();
     const origin = req.headers.origin;
     if (origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`) return next();
-    return fail(res, 403, 'forbidden', 'Origin not allowed');
+    const expected = `http://127.0.0.1:${port} or http://localhost:${port}`;
+    return fail(res, 403, 'forbidden', `Origin not allowed (received: ${describeOrigin(origin)}; expected: ${expected})`);
   }
 
   function sessionFromRequest(req) {

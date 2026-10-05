@@ -248,3 +248,15 @@ invalid-code requests under both `no-referrer` and `same-origin` policies return
 still unexplained; the header change remains a compatibility mitigation, not
 proof of a current Chrome defect. The connected browser may have a separate
 profile from the owner's failing tab.
+
+The owner repeated the Origin failure and confirmed the exact URL
+`http://127.0.0.1:3000/dashboard/` in Google Chrome. Added bounded Origin
+diagnostics to the rejection response: missing, literal null, parsed scheme/host,
+or unparseable, plus the expected live-port origins. Credentials, paths, queries,
+fragments, request body and cookies are never echoed; the allowlist is unchanged.
+Dashboard auth tests 13/13 pass; diff/reference checks pass. Verified live
+`Origin: null` rejection with diagnostic text and an independent clean Chrome
+context pairing successfully (session 204; context/roles/cards 200). The owner
+paused work, then authorized continuing. Server remains running with this
+diagnostic change. Waiting for the new error from the owner's failing profile
+before choosing the actual fix; do not weaken Origin validation speculatively.

@@ -115,10 +115,29 @@ test('bad Host is rejected, localhost is accepted', async (t) => {
 
 test('missing or foreign Origin on POST is rejected', async (t) => {
   const h = await harness(); t.after(h.close);
+  const port = h.server.address().port;
   const code = h.auth.issuePairingCode().code;
-  assert.equal((await h.request('POST', '/api/dashboard/v1/session', { origin: null, body: { code } })).status, 403);
-  assert.equal((await h.request('POST', '/api/dashboard/v1/session', { origin: 'null', body: { code } })).status, 403);
-  assert.equal((await h.request('POST', '/api/dashboard/v1/session', { origin: 'http://evil.example', body: { code } })).status, 403);
+  const missing = await h.request('POST', '/api/dashboard/v1/session', { origin: null, body: { code } });
+  assert.equal(missing.status, 403);
+  assert.equal(missing.json.error.code, 'forbidden');
+  assert.match(missing.json.error.message, /received: missing/);
+  assert.match(missing.json.error.message, new RegExp(`expected: http://127\\.0\\.0\\.1:${port} or http://localhost:${port}`));
+
+  const opaque = await h.request('POST', '/api/dashboard/v1/session', { origin: 'null', body: { code } });
+  assert.equal(opaque.status, 403);
+  assert.match(opaque.json.error.message, /received: null/);
+
+  const foreign = await h.request('POST', '/api/dashboard/v1/session', {
+    origin: 'http://user:password@evil.example/private?token=secret#fragment', body: { code },
+  });
+  assert.equal(foreign.status, 403);
+  assert.match(foreign.json.error.message, /received: http:\/\/evil\.example;/);
+  assert.ok(!/user|password|private|token|secret|fragment/.test(foreign.json.error.message));
+
+  const oversized = await h.request('POST', '/api/dashboard/v1/session', { origin: `http://${'x'.repeat(9000)}`, body: { code } });
+  assert.equal(oversized.status, 403);
+  assert.match(oversized.json.error.message, /received: unparseable/);
+  assert.ok(oversized.json.error.message.length < 300);
   assert.equal((await h.login(code)).res.status, 204);
 });
 
