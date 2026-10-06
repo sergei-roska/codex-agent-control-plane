@@ -125,6 +125,13 @@ is skipped or fails. A model-backed baseline/candidate comparison passed
 The [acceptance record](m8/acceptance.md) and [release note](m8/release-notes.md)
 contain the evidence and limits.
 
+## Follow-up plan
+
+OpenTelemetry instrumentation, MLflow GenAI traces and feedback, the production
+adoption decision, and the prompt optimization decision (MLflow optimizers vs
+DSPy) are planned as explicit work packages in the
+[observability and prompt optimization backlog](observability-optimization-backlog.md).
+
 ## Background system maintenance proposal
 
 The owner asks whether system maintenance should have a background agent that

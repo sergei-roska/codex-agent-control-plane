@@ -71,7 +71,9 @@ The owner approved automatic background telemetry from the early integration
 stages, a bounded evaluation of MLflow, and later prompt optimization based on
 data and quality criteria. A background system analysis agent outside the
 delivery roster is under discussion. See
-[telemetry-mlflow-notes.md](telemetry-mlflow-notes.md).
+[telemetry-mlflow-notes.md](telemetry-mlflow-notes.md). The remaining work,
+including OpenTelemetry instrumentation, is planned in the
+[observability and prompt optimization backlog](observability-optimization-backlog.md).
 
 ## Existing assets named by the owner
 
