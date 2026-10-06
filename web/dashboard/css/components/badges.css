@@ -22,6 +22,10 @@
 .badge-status.stopped { color: var(--text-muted); }
 .badge-status.pending { color: var(--text-secondary); }
 .badge-status.backlog { color: var(--text-muted); }
+.badge-status.attn-review { color: var(--accent-green); }
+.badge-status.attn-answer { color: var(--accent-blue); }
+.badge-status.attn-paused { color: var(--text-muted); }
+.badge-status.attn-problem { color: var(--accent-amber); }
 
 .model-chip {
   font-size: 10px;

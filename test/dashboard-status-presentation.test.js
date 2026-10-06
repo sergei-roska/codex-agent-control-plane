@@ -251,3 +251,29 @@ test('dashboard working copy shows skipped stages and the adaptive route block',
   assert.match(run, /Lead model calls skipped: /);
   assert.match(run, /'PM: ' \+ route\.reason/);
 });
+
+test('Board and ticket header tell apart review, answer, paused and blocked attention states', () => {
+  const src = fs.readFileSync(path.join(root, 'web/dashboard/js/util.js'), 'utf8');
+  const take = (re) => src.match(re)[0];
+  const code = [
+    take(/^const ATTENTION_PROBLEM_REASONS = .*$/m), take(/^const ATTENTION_PAUSE_REASONS = .*$/m),
+    take(/^const ATTENTION_PRESENTATION = \{[\s\S]*?^\};$/m)
+  ].join('\n');
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(`${code}\n${src.slice(src.indexOf('function attentionKind('), src.indexOf('function waitReasonLabel('))}`, ctx);
+  const k = (o) => ctx.attentionKind(o);
+  assert.equal(k({ ticketStatus: 'waiting_human', waitReason: 'human_review' }), 'review');
+  assert.equal(k({ status: 'waiting_human', waitReason: 'human_decision' }), 'answer');
+  assert.equal(k({ status: 'waiting_human', phase: 'awaiting_answer' }), 'answer');
+  assert.equal(k({ status: 'blocked' }), 'problem');
+  assert.equal(k({ status: 'paused', waitReason: 'budget' }), 'paused');
+  assert.equal(k({ status: 'paused', waitReason: 'execution_error' }), 'problem');
+  assert.equal(k({ status: 'waiting_human', waitReason: 'something_new' }), null);
+  assert.equal(k({ status: 'done' }), null);
+  assert.equal(ctx.attentionPresentation({ status: 'waiting_human', waitReason: 'human_review' }).label, 'Ready for review');
+  assert.match(fs.readFileSync(path.join(root, 'web/dashboard/js/tabs/board.js'), 'utf8'), /attentionPresentation\(card\)/);
+  assert.match(fs.readFileSync(path.join(root, 'web/dashboard/js/modals/ticket-record.js'), 'utf8'), /attentionPresentation\(/);
+  assert.match(fs.readFileSync(path.join(root, 'web/dashboard/css/components/badges.css'), 'utf8'), /\.badge-status\.attn-review/);
+  assert.match(fs.readFileSync(path.join(root, 'web/dashboard/tabs/board.html'), 'utf8'), /Tickets that wait for your action or are stopped/);
+});

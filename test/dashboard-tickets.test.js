@@ -202,7 +202,7 @@ test('dashboard tickets', async (suite) => {
     assert.equal(revised.ticket.title, 'Revised title');
 
     const detail = await api.json(`/tickets/${ticket.ticketId}`);
-    assert.deepEqual(Object.keys(detail).sort(), ['activeRun', 'artifacts', 'availableActions', 'review', 'revision', 'revisions', 'runs', 'stagedRevision', 'ticket', 'unavailableActions']);
+    assert.deepEqual(Object.keys(detail).sort(), ['activeRun', 'artifacts', 'availableActions', 'review', 'revision', 'revisions', 'route', 'runs', 'stagedRevision', 'ticket', 'unavailableActions']);
     assert.equal(detail.revisions.length, 2);
     assert.deepEqual(Object.keys(detail.revisions[0]).sort(), ['actor', 'createdAt', 'parentRevisionId', 'ordinal', 'revisionId'].sort());
     assert.equal(detail.revision.revisionId, revised.revision.revisionId);

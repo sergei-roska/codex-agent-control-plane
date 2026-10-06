@@ -87,6 +87,38 @@ function ticketStatusClass(status) {
   return TICKET_STATUS_LABELS[status] ? cssToken(status) : 'blocked';
 }
 
+// Why a ticket in the Needs attention column is there. Input: { status, waitReason, phase }
+// (a board card passes ticketStatus; a ticket passes status). Returns null for unknown combinations
+// so the caller keeps the generic presentation.
+const ATTENTION_PROBLEM_REASONS = ['execution_error', 'writer_unresolved', 'dependency', 'run_stopped'];
+const ATTENTION_PAUSE_REASONS = ['budget', 'restart', 'operator_pause'];
+const ATTENTION_PRESENTATION = {
+  review: { label: 'Ready for review', cls: 'attn-review' },
+  answer: { label: 'Needs your answer', cls: 'attn-answer' },
+  paused: { label: 'Paused', cls: 'attn-paused' },
+  problem: { label: 'Blocked', cls: 'attn-problem' }
+};
+
+function attentionKind(ticket) {
+  const t = ticket || {};
+  const status = t.status || t.ticketStatus;
+  const reason = t.waitReason || '';
+  if (status === 'blocked') return 'problem';
+  if (status === 'paused') return ATTENTION_PROBLEM_REASONS.includes(reason) ? 'problem' : 'paused';
+  if (status === 'waiting_human') {
+    if (reason === 'human_review') return 'review';
+    if (ATTENTION_PROBLEM_REASONS.includes(reason)) return 'problem';
+    if (ATTENTION_PAUSE_REASONS.includes(reason)) return 'paused';
+    if (!reason || reason === 'human_decision' || reason === 'intake_clarification' || t.phase === 'awaiting_answer') return 'answer';
+  }
+  return null;
+}
+
+function attentionPresentation(ticket) {
+  const kind = attentionKind(ticket);
+  return kind ? ATTENTION_PRESENTATION[kind] : null;
+}
+
 function waitReasonLabel(reason) {
   if (!reason) return '';
   return WAIT_REASON_LABELS[reason] || String(reason);

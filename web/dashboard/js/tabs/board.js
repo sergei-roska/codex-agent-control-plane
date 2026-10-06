@@ -129,10 +129,11 @@ function createDirectTicketCard(card) {
   el.appendChild(h('div', { class: 'ticket-title', text: card.title || '(untitled)' }));
 
   const status = card.ticketStatus;
+  const attn = attentionPresentation(card);
   const meta = h('div', { class: 'ticket-meta' }, [
     h('span', {
-      class: 'badge badge-status ' + ticketStatusClass(status),
-      text: ticketStatusLabel(status), title: 'Ticket status: ' + status
+      class: 'badge badge-status ' + ticketStatusClass(status) + (attn ? ' ' + attn.cls : ''),
+      text: attn ? attn.label : ticketStatusLabel(status), title: 'Ticket status: ' + status
     })
   ]);
   if (card.phase && card.phase !== 'settled' && (status === 'pending' || status === 'in_progress')) {

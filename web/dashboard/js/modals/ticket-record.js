@@ -469,8 +469,10 @@ function renderTicketRecord() {
   trText('tr-title', shown.title || ticket.title || '(untitled)');
   trText('tr-note', '');
   const badge = document.getElementById('tr-status-badge');
-  badge.className = 'badge badge-status ' + ticketStatusClass(status);
-  badge.textContent = ticketStatusLabel(status);
+  const headRun = d.activeRun || (Array.isArray(d.runs) ? d.runs[0] : null) || {};
+  const attn = attentionPresentation({ status, waitReason: headRun.waitReason, phase: headRun.phase });
+  badge.className = 'badge badge-status ' + ticketStatusClass(status) + (attn ? ' ' + attn.cls : '');
+  badge.textContent = attn ? attn.label : ticketStatusLabel(status);
   badge.title = 'Ticket status: ' + status;
   trText('tr-revision-badge', isNumber(shown.ordinal) ? 'r' + shown.ordinal : '');
 
