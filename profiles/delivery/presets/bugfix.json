@@ -1,6 +1,6 @@
 {
   "presetId": "bugfix",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "classification": "bugfix",
   "description": "Defect correction: reproduce the failure first, fix it within a bounded scope, then review and verify the fix.",
   "stages": [
@@ -55,5 +55,16 @@
   "optionalDependsOn": [
     "implement"
   ],
-  "minChecks": 1
+  "minChecks": 1,
+  "lean": {
+    "skip": [
+      "reproduce"
+    ],
+    "conditional": [
+      "review"
+    ],
+    "purposeOverrides": {
+      "implement": "Minimal fix for the defect; BEFORE changing anything record executed baseline evidence (the failing check output, or the exact quoted defect with file and line); focused checks inside allowedFiles"
+    }
+  }
 }

@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 
 const { validatePlan, validatePresetPlan, STAGE_ROLES } = require('./plan-validator');
+const { evaluatePlanRoute, resolveRouteLimits } = require('./route-gate');
 
 const MAX_INTAKE_TURNS = 3;
 const MAX_QUESTIONS = 5;
@@ -100,6 +101,41 @@ const INTAKE_SCHEMA_V2 = {
     },
   },
 };
+
+const ROUTES = ['full', 'lean'];
+const MAX_ROUTE_REASON = 200;
+
+const routeMode = (projectConfig) => (projectConfig && ['shadow', 'on'].includes(projectConfig.adaptiveRoute) ? projectConfig.adaptiveRoute : 'off');
+
+// Schema sent to the model: the base schema unchanged unless adaptiveRoute is shadow or on.
+function intakeSchemaFor({ pack, projectConfig } = {}) {
+  const base = pack ? INTAKE_SCHEMA_V2 : INTAKE_SCHEMA;
+  if (routeMode(projectConfig) === 'off') return base;
+  const plan = base.properties.plan;
+  return {
+    ...base,
+    properties: {
+      ...base.properties,
+      plan: {
+        ...plan,
+        required: [...plan.required, 'route', 'routeReason'],
+        properties: {
+          ...plan.properties,
+          route: { type: ['string', 'null'], enum: [...ROUTES, null] },
+          routeReason: { type: ['string', 'null'], maxLength: MAX_ROUTE_REASON },
+        },
+      },
+    },
+  };
+}
+
+function routeRuleLines(projectConfig) {
+  const limits = resolveRouteLimits(projectConfig.routeLimits);
+  const extra = limits.protectedPaths.length ? ` Also protected by project policy: ${limits.protectedPaths.join(', ')}.` : '';
+  return [
+    `Route proposal (bugfix only): set plan.route to "lean" only when the defect is a one-file, low-risk fix that an approved check can verify mechanically: at most ${limits.maxFiles} allowedFiles in total, a change of at most ${limits.maxChangedLines} lines, and at least one checkId. Otherwise set plan.route to "full". Never propose lean for authentication, authorization or access control, permissions, security, sessions, secrets or credentials, configuration or config sync files, route or permission definitions, database schema or migrations, install or update hooks, dependency manifests or lockfiles, CI or environment files.${extra} Give a short plan.routeReason (at most ${MAX_ROUTE_REASON} chars). The proposal is advisory: code decides the route, and a ticket can never force lean. For other classifications set plan.route and plan.routeReason to null.`,
+  ];
+}
 
 const DEFAULT_UNAVAILABLE_REASON = 'needs its own contract and pilot';
 
@@ -241,6 +277,7 @@ function buildIntakePrompt({ revision, artifacts = [], extractedTexts = new Map(
     packAware
       ? 'Plan rules: set plan.presetId to the classification\'s preset id; 1..12 stages; stageId [a-z0-9-] up to 40 chars, unique; dependencies name earlier stages only; every required preset stage appears exactly once with presetStageKey set to its key, required true, a role from its list, and dependencies including the preset dependsOn stages; optional stages have presetStageKey null and use only the preset optional roles, depending on the optionalDependsOn stages; writable roles (Developer, QA, Performance, DevOps, Technical Writer) need 1..20 relative allowedFiles, read-only roles []; audit is read-only; checkIds must be a subset of the approved ids with at least minChecks entries. Repair executors are never stage roles.'
       : 'Plan rules: 1..12 stages; stageId [a-z0-9-] up to 40 chars, unique; dependencies name earlier stages only; orch-builder and orch-verifier stages need 1..20 relative allowedFiles, other stages []; feature/bugfix need required builder, verifier and auditor stages (verifier and auditor depending on the builder) and at least one checkId; docs need required builder and auditor; audit is read-only with a required auditor. Repair roles are never stage roles.',
+    ...(routeMode(projectConfig) === 'off' ? [] : routeRuleLines(projectConfig)),
     `readiness: needs_input needs 1..${MAX_QUESTIONS} questions and plan null; ready needs a plan and no questions; unsupported needs unsupportedReason.`,
   ].join('\n'));
   return parts.join('\n\n');
@@ -305,6 +342,17 @@ function validateIntakeOutput(output, { projectConfig, pack, presets } = {}) {
       }
       if (!result.ok) result.errors.forEach((e) => fail(e.path, e.message));
       else normalizedPlan = result.plan;
+      const mode = routeMode(projectConfig);
+      if (normalizedPlan && mode !== 'off') {
+        if (ROUTES.includes(plan.route)) {
+          normalizedPlan.route = plan.route;
+          const why = typeof plan.routeReason === 'string' ? plan.routeReason.trim().slice(0, MAX_ROUTE_REASON) : '';
+          if (why) normalizedPlan.routeReason = why;
+        }
+        if (classification === 'bugfix') {
+          normalizedPlan.routeDecision = evaluatePlanRoute({ classification, plan: normalizedPlan, policy: projectConfig });
+        }
+      }
     }
     if (reason) fail('unsupportedReason', 'ready requires unsupportedReason null');
   } else if (readiness === 'unsupported') {
@@ -347,6 +395,7 @@ function renderRequirementsGoal({ revision, intake }) {
 module.exports = {
   INTAKE_SCHEMA,
   INTAKE_SCHEMA_V2,
+  intakeSchemaFor,
   MAX_INTAKE_TURNS,
   MAX_QUESTIONS,
   MAX_EXTRACTED_CHARS,

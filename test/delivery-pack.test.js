@@ -290,7 +290,7 @@ test('delivery pack', async (suite) => {
         const view = runtime.productStore.getRunView(run.runId);
         assert.equal(view.plan.classification, spec.name);
         assert.equal(view.plan.presetId, spec.name);
-        assert.equal(view.plan.presetVersion, '1.0.0');
+        assert.equal(view.plan.presetVersion, spec.name === 'bugfix' ? '1.1.0' : '1.0.0');
         assert.equal(view.plan.rolePack, 'delivery');
         assert.equal(view.plan.rolePackVersion, runtime.activePack.version);
         assert.equal(view.plan.validatorVersion, 'm4-plan-v1');

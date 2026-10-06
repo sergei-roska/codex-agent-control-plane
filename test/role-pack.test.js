@@ -102,7 +102,7 @@ test('real presets match the table', () => {
   for (const [id, expected] of Object.entries(PRESET_TABLE)) {
     const preset = pack.presets.get(id);
     assert.equal(preset.presetId, id);
-    assert.equal(preset.version, '1.0.0');
+    assert.equal(preset.version, id === 'bugfix' ? '1.1.0' : '1.0.0');
     assert.equal(preset.classification, id);
     assert.ok(preset.description.length > 10);
     assert.deepEqual(preset.stages.map((s) => [s.key, s.roles, s.dependsOn]), expected.stages, id);
@@ -164,6 +164,11 @@ const INVALID = [
   ['preset optional role unknown', (d) => editJson(d, 'presets/docs.json', (p) => { p.optionalRoles = ['ghost']; }), /optionalRoles/],
   ['preset empty stages', (d) => editJson(d, 'presets/docs.json', (p) => { p.stages = []; }), /stages must be an array/],
   ['preset negative minChecks', (d) => editJson(d, 'presets/docs.json', (p) => { p.minChecks = -1; }), /minChecks/],
+  ['lean references a missing stage key', (d) => editJson(d, 'presets/bugfix.json', (p) => { p.lean.skip = ['ghost']; }), /missing stage key "ghost"/],
+  ['lean key both skip and conditional', (d) => editJson(d, 'presets/bugfix.json', (p) => { p.lean.conditional = ['reproduce']; }), /both skip and conditional/],
+  ['lean on a non-bugfix preset', (d) => editJson(d, 'presets/docs.json', (p) => { p.lean = { skip: [], conditional: [], purposeOverrides: {} }; }), /only allowed on a bugfix preset/],
+  ['lean purposeOverrides references a missing stage', (d) => editJson(d, 'presets/bugfix.json', (p) => { p.lean.purposeOverrides = { ghost: 'x' }; }), /missing stage key "ghost"/],
+  ['lean unknown key', (d) => editJson(d, 'presets/bugfix.json', (p) => { p.lean.extra = 1; }), /unknown key "extra"/],
   ['audit stage with only writable roles', (d) => editJson(d, 'presets/audit.json', (p) => { p.stages[0].roles = ['performance']; }), /writable role "performance"/],
   ['audit stage mixing read-only and writable roles', (d) => editJson(d, 'presets/audit.json', (p) => { p.stages[0].roles.push('performance'); }), /writable role "performance"/],
   ['audit optional writable role', (d) => editJson(d, 'presets/audit.json', (p) => { p.optionalRoles.push('performance'); }), /writable role "performance"/],

@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { loadProjectConfig, defaultProjectConfigPath } = require('../src/project-config');
+const { loadProjectConfig, defaultProjectConfigPath, DEFAULT_CONFIG } = require('../src/project-config');
 
 function write(obj) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcfg-'));
@@ -112,4 +112,20 @@ test('delivery.remotes defaults to origin, validates names and count, and change
   }
   assert.throws(() => load({ delivery: { other: 1 } }), /unknown field/);
   assert.throws(() => load({ delivery: [] }), /delivery must be an object/);
+});
+
+test('adaptiveRoute is absent from the defaults and when off, kept for shadow and on, and strict', () => {
+  const defaults = loadProjectConfig({ filePath: path.join(os.tmpdir(), 'nope-none', 'project.json') });
+  assert.equal('adaptiveRoute' in defaults, false);
+  assert.equal('adaptiveRoute' in DEFAULT_CONFIG, false);
+  const omitted = load({});
+  const off = load({ adaptiveRoute: 'off' });
+  assert.equal('adaptiveRoute' in off, false);
+  const { revision: offRevision, ...offRest } = off;
+  const { revision: omittedRevision, ...omittedRest } = omitted;
+  assert.deepEqual(offRest, omittedRest);
+  assert.equal(load({ adaptiveRoute: 'shadow' }).adaptiveRoute, 'shadow');
+  assert.equal(load({ adaptiveRoute: 'on' }).adaptiveRoute, 'on');
+  assert.throws(() => load({ adaptiveRoute: 'maybe' }), /adaptiveRoute must be one of/);
+  assert.throws(() => load({ adaptiveRoute: true }), /adaptiveRoute must be one of/);
 });

@@ -17,6 +17,7 @@ const MAX_STAGES = 12;
 const MANIFEST_KEYS = ['packId', 'version', 'coordinator', 'roles', 'repairChains', 'presets', 'unavailablePresets'];
 const IDENTITY_KEYS = ['publicId', 'runtimeId', 'displayName'];
 const PRESET_KEYS = ['presetId', 'version', 'classification', 'description', 'stages', 'optionalRoles', 'optionalDependsOn', 'minChecks'];
+const LEAN_KEYS = ['skip', 'conditional', 'purposeOverrides'];
 const STAGE_KEYS = ['key', 'roles', 'required', 'dependsOn', 'purpose'];
 
 function fail(where, message) {
@@ -98,8 +99,29 @@ function validateIdentity(value, where) {
   return { publicId: value.publicId, runtimeId: value.runtimeId, displayName: value.displayName };
 }
 
+function validateLean(lean, preset, stageKeys, where) {
+  const at = `${where} lean`;
+  if (preset.classification !== 'bugfix') fail(at, 'lean is only allowed on a bugfix preset');
+  requireExactKeys(lean, LEAN_KEYS, at);
+  requireStringArray(lean.skip, `${at} skip`, STAGE_KEY);
+  requireStringArray(lean.conditional, `${at} conditional`, STAGE_KEY);
+  for (const key of [...lean.skip, ...lean.conditional]) {
+    if (!stageKeys.has(key)) fail(at, `references missing stage key ${JSON.stringify(key)}`);
+  }
+  for (const key of lean.skip) {
+    if (lean.conditional.includes(key)) fail(at, `stage key ${JSON.stringify(key)} is both skip and conditional`);
+  }
+  if (!isPlainObject(lean.purposeOverrides)) fail(at, 'purposeOverrides must be an object');
+  for (const [key, text] of Object.entries(lean.purposeOverrides)) {
+    if (!stageKeys.has(key)) fail(at, `purposeOverrides references missing stage key ${JSON.stringify(key)}`);
+    if (!isNonEmptyString(text)) fail(at, `purposeOverrides.${key} must be a non-empty string`);
+  }
+}
+
 function validatePreset(preset, where, { fileId, publicIds, sandboxByPublic }) {
-  requireExactKeys(preset, PRESET_KEYS, where);
+  if (!isPlainObject(preset)) fail(where, 'must be an object');
+  const { lean, ...presetCore } = preset;
+  requireExactKeys(presetCore, PRESET_KEYS, where);
   if (preset.presetId !== fileId) fail(where, `presetId must equal ${JSON.stringify(fileId)}`);
   if (typeof preset.version !== 'string' || !SEMVER.test(preset.version)) fail(where, 'invalid version');
   if (!isNonEmptyString(preset.classification)) fail(where, 'classification must be a non-empty string');
@@ -137,6 +159,8 @@ function validatePreset(preset, where, { fileId, publicIds, sandboxByPublic }) {
   for (const dep of preset.optionalDependsOn) {
     if (!seen.has(dep)) fail(where, `optionalDependsOn ${JSON.stringify(dep)} is not a stage key`);
   }
+
+  if (lean !== undefined) validateLean(lean, preset, seen, where);
 
   if (preset.presetId === 'audit') {
     // Audit is read-only: no stage or optional role may be writable.
