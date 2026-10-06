@@ -11,7 +11,7 @@ const SENSITIVE_WORDS = Object.freeze([
 ]);
 const MANIFESTS = Object.freeze([
   'composer.json', 'composer.lock', 'package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
-  '.gitlab-ci.yml', 'dockerfile', '.lando.yml', 'settings.php', 'services.yml', 'schema.yml',
+  '.gitlab-ci.yml', 'dockerfile', '.lando.yml', 'schema.yml',
 ]);
 
 const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -54,7 +54,8 @@ function matchesPattern(relPath, pattern) {
   return new RegExp(`${prefix}${source}${tail}`).test(lowerPath);
 }
 
-function builtInProtected(segments) {
+// rawName keeps the original case: Drupal site files are lower-case, a PSR-4 Settings.php is a class.
+function builtInProtected(segments, rawName) {
   const name = segments[segments.length - 1];
   const dirs = segments.slice(0, -1);
   const stem = name.split('.')[0];
@@ -67,7 +68,8 @@ function builtInProtected(segments) {
   if (MANIFESTS.includes(name)) return true;
   if (name === '.env' || name.startsWith('.env.')) return true;
   if (/\.(pem|key|p12|sql)$/.test(name)) return true;
-  if (/^settings\..+\.php$/.test(name) || /^docker-compose.*\.ya?ml$/.test(name)) return true;
+  if (rawName === 'settings.php' || rawName === 'services.yml' || /^settings\..+\.php$/.test(rawName)) return true;
+  if (/^docker-compose.*\.ya?ml$/.test(name)) return true;
   if (dirs.some((seg) => seg === '.github' || seg === '.ddev')) return true;
   return false;
 }
@@ -78,7 +80,8 @@ function isProtectedPath(relPath, extraPatterns = []) {
   if (normalized.startsWith('/') || /^[a-z]:/i.test(normalized)) return true;
   const segments = normalized.toLowerCase().split('/').filter((seg) => seg !== '' && seg !== '.');
   if (segments.length === 0 || segments.includes('..')) return true;
-  if (builtInProtected(segments)) return true;
+  const rawSegments = normalized.split('/').filter((seg) => seg !== '' && seg !== '.');
+  if (builtInProtected(segments, rawSegments[rawSegments.length - 1])) return true;
   const extras = Array.isArray(extraPatterns) ? extraPatterns : [];
   return extras.some((pattern) => typeof pattern === 'string' && matchesPattern(segments.join('/'), pattern));
 }

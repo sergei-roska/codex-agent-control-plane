@@ -34,6 +34,7 @@ test('isProtectedPath built-in categories', () => {
     'Dockerfile', 'docker-compose.override.yml', '.lando.yml', '.ddev/config.yaml', 'dump.sql', 'x/schema.yml',
     'web/themes/custom/x/config/install/x.yml', 'web/modules/custom/x/config/optional/y.yml',
     'web/modules/custom/x/x.routing.yml', 'web/modules/custom/x/x.permissions.yml', 'web/.htaccess', '.htaccess',
+    'sites/default/settings.php', 'sites/default/settings.local.php', 'sites/default/services.yml', 'settings.php',
     '/etc/passwd', '../x.js', 'a/../b.js', '',
   ];
   protectedFiles.forEach((file) => assert.equal(gate.isProtectedPath(file), true, file));
@@ -43,6 +44,7 @@ test('isProtectedPath leaves ordinary files alone', () => {
   const ordinary = [
     'web/themes/custom/b4main/theme-settings.php', 'web/themes/custom/b4main/templates/page.html.twig',
     'web/modules/custom/x/src/Plugin/Block/Foo.php', 'web/themes/custom/b4main/js/app.js', 'src/intake.js',
+    'modules/custom/flickr_api/src/Form/Settings.php', 'web/modules/custom/x/src/Settings.Foo.php',
     'web/modules/custom/x/x.services.yml.bak', 'web/themes/custom/x/js/configurator.js',
   ];
   ordinary.forEach((file) => assert.equal(gate.isProtectedPath(file), false, file));
