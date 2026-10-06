@@ -249,4 +249,5 @@ test('dashboard working copy shows skipped stages and the adaptive route block',
   assert.match(run, /function trrRouteBlock\(/);
   assert.match(run, /Promoted to full: /);
   assert.match(run, /Lead model calls skipped: /);
+  assert.match(run, /'PM: ' \+ route\.reason/);
 });

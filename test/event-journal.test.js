@@ -181,6 +181,8 @@ test('route events keep their payload fields and bound the reason strings', () =
   journal.record('route_promoted', { runId: 'r1', payload: { reasons: ['delta_unknown'], at: 'implement', scriptedDecisions: 2 } });
   const [decided, promoted] = journal.listByRun('r1');
   assert.deepEqual(Object.keys(decided.payload).sort(), ['effective', 'mode', 'reasons', 'requested', 'verdict']);
+  journal.record('route_decided', { runId: 'r2', payload: { mode: 'on', reason: 'one line fix', goal: 'secret' } });
+  assert.deepEqual(journal.listByRun('r2')[0].payload, { mode: 'on', reason: 'one line fix' });
   assert.equal(decided.payload.reasons[0].length, 500);
   assert.equal(decided.payload.reasons[1], 'too_many_files');
   assert.deepEqual(promoted.payload, { reasons: ['delta_unknown'], at: 'implement', scriptedDecisions: 2 });

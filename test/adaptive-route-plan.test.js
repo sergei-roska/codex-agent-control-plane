@@ -71,11 +71,13 @@ test('schema is untouched with off and carries the route proposal with shadow or
 test('prompt describes the lean proposal with limits only when shadow or on', () => {
   const text = promptFor({ ...base, adaptiveRoute: 'shadow', routeLimits: { maxFiles: 2, maxChangedLines: 12, protectedPaths: ['src/legacy/'] } });
   assert.match(text, /plan\.route to "lean" only when/);
-  assert.match(text, /at most 2 allowedFiles/);
+  assert.match(text, /at most 2 single files/);
+  assert.match(text, /approved checks gate acceptance and need not detect the defect themselves/);
+  assert.match(text, /independent QA verify stage confirms the defect is gone/);
   assert.match(text, /at most 12 lines/);
   assert.match(text, /src\/legacy\//);
   assert.match(text, /authentication, authorization or access control/);
-  assert.match(promptFor({ ...base, adaptiveRoute: 'on' }), /at most 3 allowedFiles in total, a change of at most 30 lines/);
+  assert.match(promptFor({ ...base, adaptiveRoute: 'on' }), /at most 3 single files \(allowedFiles in total, each a file with an extension, never a directory\), a change of at most 30 lines/);
   assert.match(text, /^[\x00-\x7f]*$/);
 });
 

@@ -2052,10 +2052,11 @@ test('candidate gate accepts skipped and effectively optional stages and still b
 
 // ---- route observability (journal events and telemetry route view)
 
-async function bugfixRun(policy, route = 'lean') {
+async function bugfixRun(policy, route = 'lean', routeReason = undefined) {
   const pack = loadRolePack({ packDir: DELIVERY_PACK_DIR });
   const intake = readyIntakeV2({ classification: 'bugfix', stages: BUGFIX_STAGES });
   intake.plan.route = route;
+  if (routeReason !== undefined) intake.plan.routeReason = routeReason;
   const h = await ctlHarness({
     intakeScript: [intake],
     projectConfigExtra: { rolePack: pack.packId, ...policy },
@@ -2082,7 +2083,7 @@ test('route_decided is journaled once for shadow and on and never for off; telem
       const event = h.eventLog.find((e) => e.type === 'route_decided');
       assert.deepEqual(event.payload, { mode, requested: 'lean', verdict: 'lean', effective, reasons: [] });
       assert.deepEqual(routeViewOf(h.store, h.store.getRun(runId)), {
-        mode, requested: 'lean', verdict: 'lean', effective, reasons: [], promoted: false, promotionReasons: [], promotedAt: null, scriptedDecisions: 0,
+        mode, requested: 'lean', verdict: 'lean', effective, reasons: [], reason: null, promoted: false, promotionReasons: [], promotedAt: null, scriptedDecisions: 0,
       });
     } finally { await h.close(); }
   }
@@ -2091,6 +2092,17 @@ test('route_decided is journaled once for shadow and on and never for off; telem
     assert.equal(countOf(off.h, 'route_decided'), 0);
     assert.equal(routeViewOf(off.h.store, off.h.store.getRun(off.runId)), null);
   } finally { await off.h.close(); }
+});
+
+test('route_decided carries the cleaned PM reason and telemetry exposes it', async () => {
+  const { h, runId } = await bugfixRun({ adaptiveRoute: 'shadow' }, 'lean', 'one line\nfix ' + 'x'.repeat(300));
+  try {
+    await h.pass();
+    const event = h.eventLog.find((e) => e.type === 'route_decided');
+    assert.equal(event.payload.reason.length, 200);
+    assert.ok(event.payload.reason.startsWith('one line fix '));
+    assert.equal(routeViewOf(h.store, h.store.getRun(runId)).reason, event.payload.reason);
+  } finally { await h.close(); }
 });
 
 test('route_promoted is journaled once with the lead route metadata and not repeated; telemetry shows the promotion', async () => {
@@ -2117,7 +2129,7 @@ test('route_promoted is journaled once with the lead route metadata and not repe
     });
     assert.equal(countOf(h, 'route_decided'), 1);
     assert.deepEqual(routeViewOf(h.store, h.store.getRun(runId)), {
-      mode: 'on', requested: 'lean', verdict: 'lean', effective: 'lean', reasons: [],
+      mode: 'on', requested: 'lean', verdict: 'lean', effective: 'lean', reasons: [], reason: null,
       promoted: true, promotionReasons: ['protected_path:src/auth.js', 'too_many_changed_lines'], promotedAt: 'implement', scriptedDecisions: 2,
     });
   } finally { await h.close(); }

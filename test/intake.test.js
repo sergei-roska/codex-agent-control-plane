@@ -277,10 +277,19 @@ test('pack-aware validation accepts each preset plan and maps roles', () => {
   assert.equal(mapped.publicRoleId, 'developer');
 });
 
-test('pack-aware validation rejects presetId mismatch and legacy roles', () => {
+test('pack-aware validation derives presetId from the classification and still rejects wrong stages', () => {
+  const bad = readyV2('bugfix');
+  bad.plan.presetId = 'feature';
+  const fixed = intake.validateIntakeOutput(bad, v2());
+  assert.equal(fixed.ok, true, JSON.stringify(fixed.errors));
+  assert.equal(fixed.value.plan.presetId, 'bugfix');
+  const empty = readyV2('bugfix');
+  empty.plan.presetId = '';
+  const fromEmpty = intake.validateIntakeOutput(empty, v2());
+  assert.equal(fromEmpty.ok, true, JSON.stringify(fromEmpty.errors));
+  assert.equal(fromEmpty.value.plan.presetId, 'bugfix');
   const wrong = intake.validateIntakeOutput(readyV2('feature', { classification: 'bugfix' }), v2());
   assert.equal(wrong.ok, false);
-  assert.ok(wrong.errors.some((e) => e.path === 'plan.presetId'));
   const legacy = intake.validateIntakeOutput(ready(), v2());
   assert.equal(legacy.ok, false);
 });

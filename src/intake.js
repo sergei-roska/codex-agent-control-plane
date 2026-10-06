@@ -133,7 +133,7 @@ function routeRuleLines(projectConfig) {
   const limits = resolveRouteLimits(projectConfig.routeLimits);
   const extra = limits.protectedPaths.length ? ` Also protected by project policy: ${limits.protectedPaths.join(', ')}.` : '';
   return [
-    `Route proposal (bugfix only): set plan.route to "lean" only when the defect is a one-file, low-risk fix that an approved check can verify mechanically: at most ${limits.maxFiles} allowedFiles in total, a change of at most ${limits.maxChangedLines} lines, and at least one checkId. For a lean proposal every allowedFiles entry must be a single file with an extension, never a directory. Otherwise set plan.route to "full". Never propose lean for authentication, authorization or access control, permissions, security, sessions, secrets or credentials, configuration or config sync files, route or permission definitions, database schema or migrations, install or update hooks, dependency manifests or lockfiles, CI or environment files.${extra} Give a short plan.routeReason (at most ${MAX_ROUTE_REASON} chars). The proposal is advisory: code decides the route, and a ticket can never force lean. For other classifications set plan.route and plan.routeReason to null.`,
+    `Route proposal (bugfix only): set plan.route to "lean" only when the defect is a small, low-risk change confined to at most ${limits.maxFiles} single files (allowedFiles in total, each a file with an extension, never a directory), a change of at most ${limits.maxChangedLines} lines, that an independent QA execution can verify, with at least one approved check selected in checkIds. The approved checks gate acceptance and need not detect the defect themselves; the independent QA verify stage confirms the defect is gone. Otherwise set plan.route to "full". Never propose lean for authentication, authorization or access control, permissions, security, sessions, secrets or credentials, configuration or config sync files, route or permission definitions, database schema or migrations, install or update hooks, dependency manifests or lockfiles, CI or environment files.${extra} Give a short plan.routeReason (at most ${MAX_ROUTE_REASON} chars). The proposal is advisory: code decides the route, and a ticket can never force lean. For other classifications set plan.route and plan.routeReason to null.`,
   ];
 }
 
@@ -334,8 +334,9 @@ function validateIntakeOutput(output, { projectConfig, pack, presets } = {}) {
       let result;
       if (pack) {
         const preset = normalizePresets(pack, presets).available.find((item) => item.classification === classification);
+        // presetId is derived from the classification, never trusted from the model; stage keys and roles still gate it.
         result = preset
-          ? validatePresetPlan(plan, { pack, preset, projectCheckIds })
+          ? validatePresetPlan(plan && typeof plan === 'object' && !Array.isArray(plan) ? { ...plan, presetId: preset.presetId } : plan, { pack, preset, projectCheckIds })
           : { ok: false, errors: [{ path: 'classification', message: `no available preset for classification "${classification}"` }] };
       } else {
         result = validatePlan(plan, { classification, projectCheckIds });

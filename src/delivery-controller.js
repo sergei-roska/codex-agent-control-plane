@@ -441,8 +441,10 @@ function createDeliveryController({
       emit('plan_saved', run, { stageCount: value.plan.stages.length, classification: value.classification });
       const decided = value.plan.routeDecision;
       if (decided) {
+        const why = typeof value.plan.routeReason === 'string' ? value.plan.routeReason.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 200) : '';
         emit('route_decided', run, {
           mode: decided.mode, requested: decided.requested, verdict: decided.verdict, effective: decided.effective, reasons: decided.reasons,
+          ...(why ? { reason: why } : {}),
         });
       }
       return true;

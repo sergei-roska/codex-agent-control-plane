@@ -182,12 +182,18 @@ function collectUsageRows(db, fullRuns) {
 function routeViewOf(productStore, run) {
   try {
     let decision = null;
+    let routeReason = null;
     const seen = new Set();
     for (let cur = run; cur && !decision && !seen.has(cur.runId); cur = cur.parentRunId ? productStore.getRun(cur.parentRunId) : null) {
       seen.add(cur.runId);
       const records = productStore.listIntakeRecords(cur.runId).filter((r) => r.valid && r.output && r.output.readiness === 'ready');
       const plan = records.length ? records[records.length - 1].output.plan : null;
-      if (plan && plan.routeDecision && typeof plan.routeDecision === 'object') decision = plan.routeDecision;
+      if (plan && plan.routeDecision && typeof plan.routeDecision === 'object') {
+        decision = plan.routeDecision;
+        if (typeof plan.routeReason === 'string') {
+          routeReason = plan.routeReason.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 200) || null;
+        }
+      }
     }
     if (!decision) return null;
     const candidate = run.candidateId ? productStore.getCandidate(run.candidateId) : null;
@@ -199,6 +205,7 @@ function routeViewOf(productStore, run) {
       verdict: decision.verdict,
       effective: decision.effective,
       reasons: Array.isArray(decision.reasons) ? decision.reasons : [],
+      reason: routeReason,
       promoted: Boolean(lead && lead.promoted),
       promotionReasons: lead && Array.isArray(lead.reasons) ? lead.reasons : [],
       promotedAt: lead && lead.at ? lead.at : null,

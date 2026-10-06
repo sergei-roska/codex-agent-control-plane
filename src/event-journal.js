@@ -37,7 +37,7 @@ const PAYLOAD_FIELDS = Object.freeze([
   'waitReason', 'kind', 'truncated', 'fileCount', 'created',
   'control', 'deliveryId', 'verdict', 'parentRunId', 'reviewId',
   'method', 'host', 'path', 'durationMs', 'retryErrors',
-  'mode', 'requested', 'effective', 'reasons', 'at', 'scriptedDecisions',
+  'mode', 'requested', 'effective', 'reasons', 'reason', 'at', 'scriptedDecisions',
 ]);
 
 function sanitizeValue(value, depth = 0) {

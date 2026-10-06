@@ -1050,6 +1050,7 @@ function trrRouteBlock(route) {
   ];
   (Array.isArray(route.reasons) ? route.reasons : []).forEach(r => nodes.push(h('span', { class: 'badge', text: String(r) })));
   const box = h('div', { class: 'tr-route' }, nodes);
+  if (typeof route.reason === 'string' && route.reason) box.appendChild(h('div', { class: 'tr-route-line', text: 'PM: ' + route.reason }));
   if (route.promoted) {
     const why = Array.isArray(route.promotionReasons) ? route.promotionReasons.join(', ') : '';
     box.appendChild(h('div', { class: 'tr-route-line', text: 'Promoted to full: ' + (why || 'unspecified') }));
