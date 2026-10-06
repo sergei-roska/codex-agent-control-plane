@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { loadProjectConfig, defaultProjectConfigPath, DEFAULT_CONFIG } = require('../src/project-config');
+const { loadProjectConfig, renderCommitMessage, defaultProjectConfigPath, DEFAULT_CONFIG } = require('../src/project-config');
 
 function write(obj) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcfg-'));
@@ -128,4 +128,18 @@ test('adaptiveRoute is absent from the defaults and when off, kept for shadow an
   assert.equal(load({ adaptiveRoute: 'on' }).adaptiveRoute, 'on');
   assert.throws(() => load({ adaptiveRoute: 'maybe' }), /adaptiveRoute must be one of/);
   assert.throws(() => load({ adaptiveRoute: true }), /adaptiveRoute must be one of/);
+});
+
+test('delivery.commitMessageTemplate: optional, strict, rendered with key or title only', () => {
+  assert.equal('commitMessageTemplate' in load({}).delivery, false);
+  assert.equal(load({ delivery: { commitMessageTemplate: '[{key}] {title}' } }).delivery.commitMessageTemplate, '[{key}] {title}');
+  assert.equal(renderCommitMessage(undefined, { key: 'CDB-364', title: 'cdb_programme_archive strict comparison' }),
+    'CDB-364: cdb_programme_archive strict comparison');
+  assert.equal(renderCommitMessage('{key}: {title}', { title: 'Fix it' }), 'Fix it');
+  assert.equal(renderCommitMessage('{key} - {title}', { title: 'Fix it' }), 'Fix it');
+  assert.equal(renderCommitMessage('fix({key}): {title}', { key: 'CDB-1', title: 'a\nb  c' }), 'fix(CDB-1): a b c');
+  assert.equal(renderCommitMessage('{title}', { key: 'CDB-1', title: 'x'.repeat(3000) }).length, 2000);
+  for (const bad of ['{key}: only', '{title} {other}', '{title}\nx', '{title}\r', '', 5, 'x{title}'.padEnd(201, 'x')]) {
+    assert.throws(() => load({ delivery: { commitMessageTemplate: bad } }), /commitMessageTemplate/, String(bad));
+  }
 });

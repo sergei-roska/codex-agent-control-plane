@@ -1502,7 +1502,7 @@ function trdBuild(el, d) {
   // Commit
   const canCommit = trdAvailable(d, 'commit') && candidate && candidate.candidateId && candidate.integrityHash && !committing;
   if (!commit) {
-    if (trd.message === null) trd.message = (d.revision && d.revision.title) || '';
+    if (trd.message === null) trd.message = (plan && plan.commitMessage) || (d.revision && d.revision.title) || '';
     const input = h('input', { class: 'form-input', attrs: { type: 'text', maxlength: String(TRD_MESSAGE_MAX), 'aria-label': 'Commit message', 'aria-describedby': 'trd-commit-message-help' } });
     input.value = trd.message;
     const err = h('div', { class: 'tf-field-error', attrs: { role: 'alert' } });

@@ -412,10 +412,12 @@ test('m7 operator controls over HTTP', async (suite) => {
 
       assert.equal((await api.review(ticketId, run, candidate)).status, 201);
       const plan = (await api.json(`/tickets/${ticketId}/delivery`)).commitPlan;
-      assert.deepEqual(Object.keys(plan).sort(), ['baseCommit', 'branch', 'files', 'head', 'manifestTruncated', 'remoteRef']);
+      assert.deepEqual(Object.keys(plan).sort(), ['baseCommit', 'branch', 'commitMessage', 'files', 'head', 'manifestTruncated', 'remoteRef']);
       assert.equal(plan.files, 1);
       assert.equal(plan.manifestTruncated, false);
       assert.equal(plan.remoteRef, `refs/heads/${plan.branch}`);
+      assert.equal(typeof plan.commitMessage, 'string');
+      assert.ok(plan.commitMessage.length > 0);
 
       const wrongHash = await api.command(ticketId, 'commit', { ...body, integrityHash: 'e'.repeat(64) });
       assert.equal(wrongHash.status, 409);

@@ -11,6 +11,7 @@ const { MAX_ARTIFACT_BYTES, MAX_EXTRACTED_CHARS, ArtifactError, sanitizeDisplayN
 const { parseWorkerReport } = require('./contracts');
 const { LIMITS, SPECIALTIES, ACTIVE_RUN_STATUSES, MAX_REWORKS } = require('./product-store');
 const { stripUserinfo } = require('./git-delivery');
+const { renderCommitMessage } = require('./project-config');
 const { canReturnToBacklog, projectMonitor, projectDecisions, collectDecisions, projectDocs, readDocsCatalog } = require('./dashboard-projection');
 const { createPipelinesRouter } = require('./dashboard-pipelines-api');
 const { createSettingsRouter, makeSettingsResolver } = require('./dashboard-settings-api');
@@ -600,6 +601,12 @@ function createDashboardApi({
         }
         const runView = candidate ? productStore.getRunView(candidate.runId) : null;
         const view = runView ? runView.candidate : null;
+        // Same key the branch name uses (Jira display key); the owner can still edit the suggestion.
+        const source = productStore.getTicketSource?.(ticket.ticketId);
+        const revision = productStore.getRevision(ticket.ticketId, ticket.currentRevisionId);
+        const commitMessage = renderCommitMessage(projectConfig?.delivery?.commitMessageTemplate, {
+          key: source?.sourceKind === 'jira' ? source.displayKey : undefined, title: revision?.title,
+        });
         res.json({
           candidate: view,
           review: publicReview(evidence.review),
@@ -610,6 +617,7 @@ function createDashboardApi({
             files: candidate.manifest.length,
             manifestTruncated: Boolean(candidate.truncated),
             remoteRef: `refs/heads/${candidate.branch}`,
+            commitMessage,
           } : null,
           remotes,
           deliveries: evidence.deliveries.map(publicDelivery),

@@ -12,7 +12,10 @@ const PREFIX_PATTERN = /^[a-z0-9][a-z0-9/_-]{0,30}$/;
 const TOP_KEYS = ['baseRef', 'branchPrefixes', 'checks', 'rolePack', 'delivery', 'adaptiveRoute', 'routeLimits'];
 const REMOTE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const MAX_REMOTES = 10;
-const DELIVERY_KEYS = ['remotes'];
+const DELIVERY_KEYS = ['remotes', 'commitMessageTemplate'];
+const DEFAULT_COMMIT_MESSAGE_TEMPLATE = '{key}: {title}';
+const MAX_COMMIT_TEMPLATE = 200;
+const MAX_COMMIT_MESSAGE = 2000;
 const ROLE_PACKS = ['delivery', 'legacy-orch'];
 const ROUTE_MODES = ['off', 'shadow', 'on'];
 const ROUTE_LIMIT_KEYS = ['maxFiles', 'maxChangedLines', 'maxChangedBytes', 'protectedPaths'];
@@ -99,6 +102,15 @@ function normalizeConfig(raw) {
   for (const name of remotes) {
     if (typeof name !== 'string' || !REMOTE_PATTERN.test(name)) throw new TypeError(`delivery.remotes entries must match ${REMOTE_PATTERN}`);
   }
+  const template = deliveryRaw.commitMessageTemplate;
+  if (template !== undefined) {
+    if (typeof template !== 'string' || !template.trim() || template.length > MAX_COMMIT_TEMPLATE || /[\r\n\u0000]/.test(template)) {
+      throw new TypeError(`delivery.commitMessageTemplate must be a single-line string of 1..${MAX_COMMIT_TEMPLATE} chars`);
+    }
+    if (!template.includes('{title}')) throw new TypeError('delivery.commitMessageTemplate must contain {title}');
+    const unknown = (template.match(/\{[^{}]*\}/g) || []).find((token) => token !== '{key}' && token !== '{title}');
+    if (unknown) throw new TypeError(`delivery.commitMessageTemplate has unknown placeholder ${unknown}`);
+  }
   const checksRaw = raw.checks === undefined ? [] : raw.checks;
   if (!Array.isArray(checksRaw)) throw new TypeError('checks must be an array');
   if (checksRaw.length > MAX_CHECKS) throw new TypeError(`checks has more than ${MAX_CHECKS} entries`);
@@ -128,9 +140,20 @@ function normalizeConfig(raw) {
     return { id: check.id, argv: check.argv, timeoutMs: check.timeoutMs, description: descriptions[index] };
   });
   const config = { baseRef: baseRef.trim(), branchPrefixes, checks, rolePack, delivery: { remotes: [...new Set(remotes)] } };
+  if (template !== undefined) config.delivery.commitMessageTemplate = template;
   if (adaptiveRoute !== 'off') config.adaptiveRoute = adaptiveRoute;
   if (routeLimits !== undefined) config.routeLimits = routeLimits;
   return config;
+}
+
+// Suggested commit message: {key} and {title} only. Without a source key the "{key}" token and the
+// separator right after it are dropped, so the result is just the title.
+function renderCommitMessage(template, { key, title } = {}) {
+  let text = typeof template === 'string' && template ? template : DEFAULT_COMMIT_MESSAGE_TEMPLATE;
+  const hasKey = typeof key === 'string' && key !== '';
+  if (!hasKey) text = text.replace(/\{key\}[\s:;,|/-]*/g, '');
+  text = text.replace(/\{(key|title)\}/g, (_, name) => (name === 'key' ? key : String(title || '')));
+  return text.replace(/\s+/g, ' ').trim().slice(0, MAX_COMMIT_MESSAGE);
 }
 
 function loadProjectConfig({ filePath } = {}) {
@@ -160,4 +183,4 @@ function defaultProjectConfigPath(stateFile, env = process.env) {
   return path.join(path.dirname(path.resolve(stateFile)), 'project.json');
 }
 
-module.exports = { loadProjectConfig, defaultProjectConfigPath, DEFAULT_CONFIG };
+module.exports = { loadProjectConfig, renderCommitMessage, defaultProjectConfigPath, DEFAULT_CONFIG };

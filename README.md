@@ -98,7 +98,10 @@ Without it the defaults are base ref `main`, branch prefixes `feature/`, `fix/`,
 ```
 
 Other fields: `branchPrefixes` (`feature`, `bugfix`, `docs`), `delivery.remotes`
-(allowed push remotes), and `rolePack` (`delivery` or `legacy-orch`). Checks run
+(allowed push remotes), `delivery.commitMessageTemplate` (suggested commit message,
+default `{key}: {title}`; placeholders `{key}` = Jira key, dropped when the ticket
+has none, and `{title}`; the owner can edit it before committing), and `rolePack`
+(`delivery` or `legacy-orch`). Checks run
 as argv (no shell) in the task repository. Unknown fields are rejected.
 
 `adaptiveRoute` (`off`, `shadow`, `on`; default `off`) controls the lean bugfix
