@@ -32,6 +32,8 @@ test('isProtectedPath built-in categories', () => {
     'pnpm-lock.yaml', '.env', '.env.local', 'certs/a.pem', 'a/b.KEY', 'web/sites/default/settings.php',
     'web/sites/default/settings.local.php', 'x/services.yml', '.github/workflows/ci.yml', '.gitlab-ci.yml',
     'Dockerfile', 'docker-compose.override.yml', '.lando.yml', '.ddev/config.yaml', 'dump.sql', 'x/schema.yml',
+    'web/themes/custom/x/config/install/x.yml', 'web/modules/custom/x/config/optional/y.yml',
+    'web/modules/custom/x/x.routing.yml', 'web/modules/custom/x/x.permissions.yml', 'web/.htaccess', '.htaccess',
     '/etc/passwd', '../x.js', 'a/../b.js', '',
   ];
   protectedFiles.forEach((file) => assert.equal(gate.isProtectedPath(file), true, file));
@@ -41,7 +43,7 @@ test('isProtectedPath leaves ordinary files alone', () => {
   const ordinary = [
     'web/themes/custom/b4main/theme-settings.php', 'web/themes/custom/b4main/templates/page.html.twig',
     'web/modules/custom/x/src/Plugin/Block/Foo.php', 'web/themes/custom/b4main/js/app.js', 'src/intake.js',
-    'web/themes/custom/x/config/install/x.yml',
+    'web/modules/custom/x/x.services.yml.bak', 'web/themes/custom/x/js/configurator.js',
   ];
   ordinary.forEach((file) => assert.equal(gate.isProtectedPath(file), false, file));
 });
@@ -156,4 +158,12 @@ test('delta: reasons keep documented order', () => {
     'check_not_passed', 'outside_allowed_files:.env', 'protected_path:.env',
     'too_many_changed_lines', 'scope_expansion', 'needs_decision',
   ]);
+});
+
+test('delta: allowedFiles entries match as exact file or directory prefix', () => {
+  const inDir = (extra) => delta({ allowedFiles: ['src/lib/', 'docs'], ...extra });
+  assert.equal(inDir({ changed: [{ path: 'src/lib/x.js', addedLines: 1, removedLines: 0 }] }).promote, false);
+  assert.equal(inDir({ changed: [{ path: 'docs/a/b.md', addedLines: 1, removedLines: 0 }] }).promote, false);
+  assert.deepEqual(inDir({ changed: [{ path: 'src/library.js', addedLines: 1, removedLines: 0 }] }).reasons, ['outside_allowed_files:src/library.js']);
+  assert.deepEqual(inDir({ changed: [{ path: 'docs2/a.md', addedLines: 1, removedLines: 0 }] }).reasons, ['outside_allowed_files:docs2/a.md']);
 });

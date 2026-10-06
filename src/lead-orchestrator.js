@@ -10,6 +10,7 @@ const { DECISION_SCHEMA, safeRelativePath, normalizeEffectiveSettings } = requir
 const { InMemoryDispatchJournal } = require('./durable-store');
 const { validateAcceptanceContract } = require('./acceptance');
 const { buildLeadGraph, isTerminalTask, pauseMessage } = require('./lead-graph');
+const { routingOf } = require('./route-runtime');
 
 const DEFAULT_MAX_ROUNDS = 6;
 const DEFAULT_POLL_INTERVAL_MS = 500;
@@ -79,6 +80,7 @@ class LeadOrchestrator {
     usageLedger = null,
     runCheckImpl,
     snapshot,
+    deltaLines,
     repairChains,
     operatorControl,
   } = {}) {
@@ -123,6 +125,7 @@ class LeadOrchestrator {
       usageLedger,
       runCheckImpl,
       snapshot,
+      ...(typeof deltaLines === 'function' ? { deltaLines } : {}),
       ...(repairChains ? { repairChains } : {}),
       ...(typeof operatorControl === 'function' ? { operatorControl } : {}),
       runtimeFor: (runId) => this.runtimes.get(runId),
@@ -162,6 +165,7 @@ class LeadOrchestrator {
         throw new TypeError('each plan stage needs stageId, roleId, dependencies, and allowedFiles');
       }
     }
+    const routing = routingOf(plan);
     const pinned = JSON.parse(JSON.stringify({
       planRevisionId: plan.planRevisionId ?? null,
       classification: plan.classification ?? null,
@@ -177,10 +181,12 @@ class LeadOrchestrator {
         required: stage.required === true,
       })),
       checkIds: Array.isArray(plan.checkIds) ? plan.checkIds : [],
+      ...(routing.effective === 'lean' ? { routing } : {}),
     }));
     return {
       plan: pinned,
-      stageStatuses: Object.fromEntries(pinned.stages.map((stage) => [stage.stageId, { status: 'pending', attemptIds: [] }])),
+      // A skipped stage of a lean route is satisfied from the start and never dispatched.
+      stageStatuses: Object.fromEntries(pinned.stages.map((stage) => [stage.stageId, { status: routing.skipStageIds.includes(stage.stageId) ? 'skipped' : 'pending', attemptIds: [] }])),
     };
   }
 

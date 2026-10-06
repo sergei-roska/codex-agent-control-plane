@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { TaskState } = require('@a2a-js/sdk');
 const {
-  INTAKE_SCHEMA, INTAKE_SCHEMA_V2, MAX_INTAKE_TURNS, MAX_EXTRACTED_CHARS, PROMPT_VERSION, createPmLeadRole, buildIntakePrompt,
+  intakeSchemaFor, MAX_INTAKE_TURNS, MAX_EXTRACTED_CHARS, PROMPT_VERSION, createPmLeadRole, buildIntakePrompt,
   validateIntakeOutput, renderRequirementsGoal,
 } = require('./intake');
 const { VALIDATOR_VERSION, WRITABLE_STAGE_ROLES } = require('./plan-validator');
@@ -19,6 +19,7 @@ const { ProductError, canonicalJson } = require('./product-store');
 const { WriterAdmission } = require('./writer-admission');
 const { takeSnapshot } = require('./workspace-snapshot');
 const { redactDiagnosticMessage } = require('./event-journal');
+const { resolveRouteLimits } = require('./route-gate');
 
 const LEAD_PROMPT_VERSION = 'pm-lead-v1';
 const DEFAULT_TICK_MS = 2000;
@@ -375,7 +376,7 @@ function createDeliveryController({
         : `${basePrompt}\n\nYour previous answer was rejected. Fix these problems and answer again with JSON only:\n${errors.map((e) => `- ${e.path || 'output'}: ${e.message}`).join('\n')}`;
       let result;
       try {
-        result = await appServer.run({ role: intakeRole, cwd: workspace, input, outputSchema: pack ? INTAKE_SCHEMA_V2 : INTAKE_SCHEMA, signal });
+        result = await appServer.run({ role: intakeRole, cwd: workspace, input, outputSchema: intakeSchemaFor({ pack, projectConfig }), signal });
       } catch (error) {
         // Shutdown mid-turn: nothing is persisted, the turn is repeated on the next start (read-only).
         if (stopped || signal.aborted || error?.name === 'AbortError') return false;
@@ -646,6 +647,30 @@ function createDeliveryController({
     ].join('\n\n');
   }
 
+  // Lead routing of a run: present only for an effective lean route (plan.routeDecision from Intake plus the preset lean block).
+  function leadRoutingOf(run, plan, intake) {
+    const decision = intake && intake.plan ? intake.plan.routeDecision : null;
+    if (!decision || decision.effective !== 'lean') return null;
+    const pack = packOfRun(run);
+    const preset = pack && plan.presetId ? pack.presets.get(plan.presetId) : null;
+    const lean = preset && preset.lean;
+    if (!lean) return null;
+    const idsOf = (keys) => plan.stages.filter((stage) => keys.includes(stage.presetStageKey)).map((stage) => stage.stageId);
+    const purposeOverrides = {};
+    plan.stages.forEach((stage) => {
+      const text = lean.purposeOverrides && lean.purposeOverrides[stage.presetStageKey];
+      if (typeof text === 'string') purposeOverrides[stage.stageId] = text;
+    });
+    return {
+      effective: 'lean',
+      skipStageIds: idsOf(lean.skip || []),
+      conditionalStageIds: idsOf(lean.conditional || []),
+      gateStageIds: idsOf(['implement']),
+      limits: resolveRouteLimits(projectConfig && projectConfig.routeLimits),
+      purposeOverrides,
+    };
+  }
+
   async function startLead(run) {
     const plan = planOf(run);
     const planHash = planHashOf(plan);
@@ -670,6 +695,7 @@ function createDeliveryController({
     const revision = store.getRevision(run.ticketId, run.revisionId);
     const intake = latestReadyIntake(run);
     if (!intake) throw new Error(`run ${run.runId} has no ready intake result`);
+    const routing = leadRoutingOf(run, plan, intake);
     const rework = run.runKind === 'rework' ? reworkSection(run) : '';
     const goal = rework ? `${renderRequirementsGoal({ revision, intake })}\n\n${rework}` : renderRequirementsGoal({ revision, intake });
     const acceptance = { requiredChecks: requiredChecksOf(plan) };
@@ -686,6 +712,7 @@ function createDeliveryController({
         } : {}),
         stages: plan.stages,
         checkIds: plan.checkIds,
+        ...(routing ? { routing } : {}),
       },
       // The pinned per-role settings map; the lead pins it in graph state and never re-reads settings.
       ...(run.settings && run.settings.roles ? { settings: run.settings.roles } : {}),
@@ -924,7 +951,9 @@ function createDeliveryController({
     if (!required || canonicalJson([...required].sort()) !== canonicalJson([...plan.checkIds].sort())) {
       return block('check_set_mismatch', 'The accepted check set does not match the saved plan');
     }
-    const open = plan.stages.filter((stage) => stage.required && !stages.some((entry) => entry.stageId === stage.stageId && entry.status === 'succeeded'));
+    // A lean lead result carries the effective `required` flag per stage; a skipped stage is satisfied.
+    const open = plan.stages.filter((stage) => stage.required && !stages.some((entry) => entry.stageId === stage.stageId
+      && (entry.status === 'succeeded' || entry.status === 'skipped' || entry.required === false)));
     if (open.length) return block('stages_incomplete', `Required stages did not succeed: ${open.map((stage) => stage.stageId).join(', ')}`);
     if (run.branchName && capture.branch !== run.branchName) {
       return block('branch_mismatch', 'The checkout is not on the branch prepared for this run');

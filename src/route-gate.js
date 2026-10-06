@@ -59,6 +59,8 @@ function builtInProtected(segments) {
   const stem = name.split('.')[0];
   if (segments.some((seg) => SENSITIVE_WORDS.includes(seg)) || SENSITIVE_WORDS.includes(stem)) return true;
   if (segments[0] === 'config' || (segments[0] === 'web' && segments[1] === 'config' && segments.length > 2)) return true;
+  if (dirs.includes('config')) return true;
+  if (name.endsWith('.routing.yml') || name.endsWith('.permissions.yml') || name === '.htaccess') return true;
   if (dirs.some((seg) => seg === 'migration' || seg === 'migrations' || seg === 'db' || seg === 'database')) return true;
   if (name.endsWith('.install')) return true;
   if (MANIFESTS.includes(name)) return true;
@@ -124,7 +126,10 @@ function evaluateDelta({ allowedFiles, changed, checksPassed, scopeExpansions, n
   if (unknown) reasons.push('delta_unknown');
   if (checksPassed !== true) reasons.push('check_not_passed');
   const paths = entries.filter((entry) => isObject(entry) && typeof entry.path === 'string').map((entry) => entry.path);
-  paths.forEach((file) => { if (!allowed.includes(file)) reasons.push(`outside_allowed_files:${file}`); });
+  const allowedEntries = allowed.filter((entry) => typeof entry === 'string').map((entry) => entry.replace(/\/+$/, ''));
+  paths.forEach((file) => {
+    if (!allowedEntries.some((entry) => file === entry || file.startsWith(`${entry}/`))) reasons.push(`outside_allowed_files:${file}`);
+  });
   paths.forEach((file) => { if (isProtectedPath(file, lim.protectedPaths)) reasons.push(`protected_path:${file}`); });
   if (total > lim.maxChangedLines) reasons.push('too_many_changed_lines');
   if (!(scopeExpansions === 0 || scopeExpansions === undefined || scopeExpansions === null) && !(Number.isFinite(scopeExpansions) && scopeExpansions <= 0)) {

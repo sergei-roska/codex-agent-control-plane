@@ -374,3 +374,23 @@ test('rejects a human choice outside pending options and preserves free-text res
   assert.match(resumedLead.input, /"answer":"Proceed with a text-only answer"/);
   assert.equal(resumedLead.input.includes('"choice"'), false);
 });
+
+test('_planState pins a lean routing and starts skipped stages as skipped; other plans pin none', () => {
+  const stage = (stageId, extra = {}) => ({
+    stageId, roleId: 'orch-builder', dependencies: [], allowedFiles: ['src/a.js'], required: true, ...extra,
+  });
+  const stages = [stage('repro'), stage('impl', { dependencies: ['repro'], presetStageKey: 'implement' }), stage('rev', { dependencies: ['impl'] })];
+  const routing = {
+    effective: 'lean', skipStageIds: ['repro', 'ghost'], conditionalStageIds: ['rev'], gateStageIds: ['impl'], limits: { maxFiles: 3, maxChangedLines: 30 }, purposeOverrides: { impl: 'Fix it' },
+  };
+  const lean = LeadOrchestrator._planState({ planRevisionId: 'p', classification: 'bugfix', stages, checkIds: [], routing });
+  assert.equal(lean.plan.routing.effective, 'lean');
+  assert.deepEqual(lean.plan.routing.skipStageIds, ['repro']);
+  assert.deepEqual(lean.plan.routing.gateStageIds, ['impl']);
+  assert.deepEqual(Object.fromEntries(Object.entries(lean.stageStatuses).map(([id, entry]) => [id, entry.status])), { repro: 'skipped', impl: 'pending', rev: 'pending' });
+  for (const other of [undefined, { effective: 'full' }, { effective: 'shadow', skipStageIds: ['repro'] }]) {
+    const plain = LeadOrchestrator._planState({ planRevisionId: 'p', classification: 'bugfix', stages, checkIds: [], routing: other });
+    assert.equal('routing' in plain.plan, false);
+    assert.deepEqual(Object.values(plain.stageStatuses).map((entry) => entry.status), ['pending', 'pending', 'pending']);
+  }
+});

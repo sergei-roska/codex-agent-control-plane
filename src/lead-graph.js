@@ -12,6 +12,9 @@ const {
 } = require('./contracts');
 const { stageRoleMatches } = require('./plan-validator');
 const { runAcceptance, assessWithoutChecks } = require('./acceptance');
+const {
+  routingOf, isSatisfied, requiredStageIds, evaluateImplementDelta,
+} = require('./route-runtime');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
 
 const DEFAULT_RECONCILE_WAIT_MS = 30_000;
@@ -232,8 +235,36 @@ function stageStatusOf(state, stageId) {
 }
 
 function eligibleStages(state) {
-  return state.plan.stages.filter((stage) => stageStatusOf(state, stage.stageId) !== 'succeeded'
-    && stage.dependencies.every((dep) => stageStatusOf(state, dep) === 'succeeded'));
+  return state.plan.stages.filter((stage) => !isSatisfied(stageStatusOf(state, stage.stageId))
+    && stage.dependencies.every((dep) => isSatisfied(stageStatusOf(state, dep))));
+}
+
+// Effective result rows. `required` is reported only for a lean route, so other runs stay byte-identical.
+function stageRows(state) {
+  const routing = routingOf(state.plan);
+  const required = new Set(requiredStageIds(state.plan, routing, state.routePromotion));
+  return state.plan.stages.map((stage) => ({
+    stageId: stage.stageId,
+    status: stageStatusOf(state, stage.stageId),
+    attemptIds: state.stageStatuses?.[stage.stageId]?.attemptIds || [],
+    ...(routing.effective === 'lean' ? { required: required.has(stage.stageId) } : {}),
+  }));
+}
+
+function routeResultOf(state) {
+  if (!state.plan || routingOf(state.plan).effective !== 'lean') return null;
+  const promotion = state.routePromotion;
+  return {
+    effective: 'lean',
+    promoted: Boolean(promotion),
+    reasons: promotion ? promotion.reasons : [],
+    at: promotion ? promotion.at : null,
+  };
+}
+
+function mergePromotion(current, reasons, at) {
+  if (current || !Array.isArray(reasons) || reasons.length === 0) return null;
+  return { reasons: [...new Set(reasons)], at };
 }
 
 // Stage success: a completed task whose valid worker report says outcome completed, with no scope violations.
@@ -330,6 +361,8 @@ const LeadState = Annotation.Root({
   planRetry: last(() => false),
   acceptanceAttempts: last(() => 0),
   acceptance: last(() => null),
+  // Monotonic: once a promotion is recorded it is never cleared or overwritten.
+  routePromotion: Annotation({ reducer: (current, next) => current || next || null, default: () => null }),
   status: last(() => null),
   reason: last(() => null),
   text: last(() => ''),
@@ -430,6 +463,12 @@ function buildLeadGraph(deps) {
       }));
       sections.push(`Next eligible stages: ${eligible.length > 0 ? eligible.join(', ') : 'none'}.`);
       sections.push('Plan rules: every assignment must set stageId to an eligible stage (dependencies succeeded, stage not yet succeeded), use that stage role (a repair executor from the stage role repair chain may retry an attempted stage, in chain order), and keep allowedFiles within the stage allowedFiles. You may finish only when every required stage has succeeded. A decision that breaks these rules is discarded and counts as a round; two in a row end the run as plan_violation.');
+      const routing = routingOf(state.plan);
+      if (routing.effective === 'lean') {
+        const stageIds = (ids) => ids.join(', ') || 'none';
+        const promotion = state.routePromotion;
+        sections.push(`Route: lean. Skipped stages (do not dispatch): ${stageIds(routing.skipStageIds)}. Conditional stages (${stageIds(routing.conditionalStageIds)}) are required now: ${promotion ? `yes, the route was promoted (${promotion.reasons.join('; ')})` : 'no'}.`);
+      }
     }
     if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
     sections.push('Open worker decisions (each must be resolved in resolutions, or listed in humanInput.relatedDecisionIds):\n' + JSON.stringify(openDecisions));
@@ -609,7 +648,7 @@ function buildLeadGraph(deps) {
           while (grew) {
             grew = false;
             for (const stage of state.plan.stages) {
-              if (!reopen.has(stage.stageId) && stage.dependencies.some((dep) => reopen.has(dep))) {
+              if (!reopen.has(stage.stageId) && stageStatusOf(state, stage.stageId) !== 'skipped' && stage.dependencies.some((dep) => reopen.has(dep))) {
                 reopen.add(stage.stageId);
                 grew = true;
               }
@@ -645,7 +684,8 @@ function buildLeadGraph(deps) {
   function planViolationsOf(state, decision) {
     const problems = [];
     if (decision.action === 'finish') {
-      const open = state.plan.stages.filter((stage) => stage.required && stageStatusOf(state, stage.stageId) !== 'succeeded');
+      const required = new Set(requiredStageIds(state.plan, routingOf(state.plan), state.routePromotion));
+      const open = state.plan.stages.filter((stage) => required.has(stage.stageId) && stageStatusOf(state, stage.stageId) !== 'succeeded');
       if (open.length > 0) problems.push(`finish is not allowed until every required stage has succeeded (open: ${open.map((stage) => stage.stageId).join(', ')})`);
       return problems;
     }
@@ -660,8 +700,9 @@ function buildLeadGraph(deps) {
       if (seen.has(id)) problems.push(`stage ${id} is assigned more than once in one decision`);
       seen.add(id);
       const repairReopen = state.acceptance?.disposition === 'rejected' && hasRepairChain(stage.roleId);
+      if (stageStatusOf(state, id) === 'skipped') problems.push(`stage ${id} is skipped by the route and must not be dispatched`);
       if (stageStatusOf(state, id) === 'succeeded' && !repairReopen) problems.push(`stage ${id} has already succeeded`);
-      const unmet = stage.dependencies.filter((dep) => stageStatusOf(state, dep) !== 'succeeded');
+      const unmet = stage.dependencies.filter((dep) => !isSatisfied(stageStatusOf(state, dep)));
       if (unmet.length > 0) problems.push(`stage ${id} is not eligible: dependencies not succeeded (${unmet.join(', ')})`);
       const attemptIds = new Set(state.stageStatuses?.[id]?.attemptIds || []);
       const attemptedRoles = new Set(state.outcomes.filter((outcome) => attemptIds.has(outcome.attemptId)).map((outcome) => outcome.role));
@@ -915,6 +956,18 @@ function buildLeadGraph(deps) {
     return { batch, ...(runtime.signal?.aborted ? { status: 'canceled', text: CANCELED_TEXT } : {}) };
   }
 
+  // Delta check of a succeeded gate stage (lean route). Fails closed: any unknown input promotes.
+  async function gateReasons(stage, outcome, delta, routing) {
+    const trusted = delta && delta.known === true && delta.headChanged !== true && Array.isArray(delta.changedPaths);
+    let lines = null;
+    if (trusted && delta.changedPaths.length > 0 && typeof deps.deltaLines === 'function') {
+      try { lines = await deps.deltaLines(delta.changedPaths); } catch (_) { lines = null; }
+    }
+    return evaluateImplementDelta({
+      allowedFiles: stage.allowedFiles, delta, lines, report: outcome.report, limits: routing.limits,
+    }).reasons;
+  }
+
   async function verify(state, config) {
     const runtime = runtimeOf(config);
     const finished = state.batch.items.filter((item) => item.state === 'finished');
@@ -950,10 +1003,26 @@ function buildLeadGraph(deps) {
         const stageId = item.assignment?.stageId;
         if (typeof stageId !== 'string' || !state.plan.stages.some((stage) => stage.stageId === stageId)) return;
         const entry = stageStatuses[stageId] || { status: 'pending', attemptIds: [] };
+        if (entry.status === 'skipped') return;
         const attemptIds = entry.attemptIds.includes(item.attemptId) ? entry.attemptIds : [...entry.attemptIds, item.attemptId];
         stageStatuses[stageId] = { status: isStageSuccess(summaries[index]) ? 'succeeded' : 'failed', attemptIds };
       });
       stageUpdate = { stageStatuses };
+      const routing = routingOf(state.plan);
+      if (routing.effective === 'lean' && !state.routePromotion) {
+        const reasons = [];
+        for (let index = 0; index < finished.length; index += 1) {
+          const stageId = finished[index].assignment?.stageId;
+          if (!routing.gateStageIds.includes(stageId)) continue;
+          if (stageStatuses[stageId]?.status !== 'succeeded') reasons.push('stage_not_succeeded');
+          else if (!unresolvedWriters.some((entry) => entry.attemptId === finished[index].attemptId)) {
+            const stage = state.plan.stages.find((entry) => entry.stageId === stageId);
+            reasons.push(...await gateReasons(stage, summaries[index], summaries[index].writerExecution?.delta || null, routing));
+          }
+        }
+        const promotion = mergePromotion(state.routePromotion, reasons, 'implement');
+        if (promotion) stageUpdate.routePromotion = promotion;
+      }
     }
     return {
       ...stageUpdate,
@@ -975,6 +1044,7 @@ function buildLeadGraph(deps) {
       state: 'reconciled',
       changedPaths: Array.isArray(row.delta?.changedPaths) ? row.delta.changedPaths : [],
       deltaKnown: row.delta?.known === true,
+      ...(row.delta?.headChanged === true ? { headChanged: true } : {}),
       reason,
     });
     try {
@@ -1025,7 +1095,23 @@ function buildLeadGraph(deps) {
           };
         });
         for (const result of attested) deps.emit(runtime.onEvent, { type: 'reconciliation', round: state.round, ...result });
-        return { outcomes: [...state.outcomes, ...attested], unresolvedWriters: [] };
+        const update = { outcomes: [...state.outcomes, ...attested], unresolvedWriters: [] };
+        const routing = routingOf(state.plan);
+        if (routing.effective === 'lean' && !state.routePromotion) {
+          const reasons = [];
+          for (const result of attested) {
+            const stage = state.plan.stages.find((entry) => routing.gateStageIds.includes(entry.stageId)
+              && state.stageStatuses?.[entry.stageId]?.status === 'succeeded'
+              && (state.stageStatuses[entry.stageId].attemptIds || []).includes(result.attemptId));
+            const original = stage && state.outcomes.find((outcome) => outcome.kind !== 'reconciliation' && outcome.attemptId === result.attemptId);
+            if (!original) continue;
+            const delta = { known: result.deltaKnown === true, headChanged: result.headChanged === true, changedPaths: result.changedPaths };
+            reasons.push(...await gateReasons(stage, original, delta, routing));
+          }
+          const promotion = mergePromotion(state.routePromotion, reasons, 'implement');
+          if (promotion) update.routePromotion = promotion;
+        }
+        return update;
       }
       const value = { kind: 'writer_unresolved', attempts: stuck.map((result) => ({ attemptId: result.attemptId, role: result.role, reason: result.reason })) };
       value.message = pauseMessage(value);
@@ -1135,10 +1221,14 @@ function buildLeadGraph(deps) {
       };
     }
     deps.emit(runtime.onEvent, { type: 'acceptance', round: state.round, disposition: acceptance.disposition, reasons: acceptance.reasons });
+    const promotion = acceptance.disposition !== 'accepted' && routingOf(state.plan).effective === 'lean'
+      ? mergePromotion(state.routePromotion, [`acceptance_${acceptance.disposition}`], 'accept')
+      : null;
+    const promoted = promotion ? { routePromotion: promotion } : {};
     if (acceptance.disposition === 'rejected' && state.acceptanceAttempts < 1) {
-      return { acceptance, acceptanceAttempts: state.acceptanceAttempts + 1, status: null, text: '' };
+      return { acceptance, acceptanceAttempts: state.acceptanceAttempts + 1, status: null, text: '', ...promoted };
     }
-    return { acceptance };
+    return { acceptance, ...promoted };
   }
 
   async function finish(state) {
@@ -1177,13 +1267,8 @@ function buildLeadGraph(deps) {
         rounds: state.round,
         assignments: state.outcomes,
         acceptance,
-        ...(state.plan ? {
-          stages: state.plan.stages.map((stage) => ({
-            stageId: stage.stageId,
-            status: stageStatusOf(state, stage.stageId),
-            attemptIds: state.stageStatuses?.[stage.stageId]?.attemptIds || [],
-          })),
-        } : {}),
+        ...(state.plan ? { stages: stageRows(state) } : {}),
+        ...(routeResultOf(state) ? { route: routeResultOf(state) } : {}),
       },
     };
   }

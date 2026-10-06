@@ -1799,15 +1799,15 @@ class ProductStore {
   stageView(plan, candidate) {
     if (!plan) return [];
     const recorded = new Map(((candidate && candidate.acceptance && candidate.acceptance.stages) || []).map((entry) => [entry.stageId, entry]));
-    const succeeded = new Set([...recorded.values()].filter((entry) => entry.status === 'succeeded').map((entry) => entry.stageId));
+    const succeeded = new Set([...recorded.values()].filter((entry) => ['succeeded', 'skipped'].includes(entry.status)).map((entry) => entry.stageId));
     return plan.stages.map((stage) => {
       const entry = recorded.get(stage.stageId);
-      let status = entry && ['succeeded', 'failed'].includes(entry.status) ? entry.status : 'pending';
+      let status = entry && ['succeeded', 'failed', 'skipped'].includes(entry.status) ? entry.status : 'pending';
       if (status === 'pending' && stage.dependencies.every((dep) => succeeded.has(dep))) status = 'eligible';
       return {
         stageId: stage.stageId,
         roleId: stage.roleId,
-        required: stage.required,
+        required: entry && typeof entry.required === 'boolean' ? entry.required : stage.required,
         status,
         attempts: ((entry && entry.attemptIds) || []).map((attemptId) => this.attemptView(attemptId)),
       };

@@ -16,8 +16,10 @@ const { LeadOrchestrator } = require('../src/lead-orchestrator');
 const { ProductError } = require('../src/product-store');
 const { createDeliveryController, planHashOf } = require('../src/delivery-controller');
 const { createProjection } = require('../src/dashboard-projection');
+const { INTAKE_SCHEMA, INTAKE_SCHEMA_V2 } = require('../src/intake');
+const { loadRolePack } = require('../src/role-pack');
 const {
-  decision, assignment, humanDecision, workerReport, makeFakeAppServer, planStage, readyIntake, needsInputIntake,
+  decision, assignment, humanDecision, workerReport, makeFakeAppServer, planStage, readyIntake, needsInputIntake, planStageV2, readyIntakeV2,
 } = require('./fixtures/fake-app-server');
 
 // Test files run in parallel processes; keep workspace locks private to this process.
@@ -960,7 +962,8 @@ const { createGitDelivery } = require('../src/git-delivery');
 const RESUME_TEXT = 'Resumed by the operator from the dashboard.';
 const MANIFEST = [{ path: 'src/greet.js', status: 'M', sha256: 'f'.repeat(64), size: 10 }];
 
-async function ctlHarness({ intakeScript = [], workspace = null, gitDelivery = null, adapter = null, snapshotter = takeSnapshot } = {}) {
+async function ctlHarness({ intakeScript = [], workspace = null, gitDelivery = null, adapter = null, snapshotter = takeSnapshot, projectConfigExtra = {}, controllerExtra = {},
+} = {}) {
   const root = tempDir('ctl');
   let ws = workspace;
   if (!ws) {
@@ -1029,7 +1032,7 @@ async function ctlHarness({ intakeScript = [], workspace = null, gitDelivery = n
     store,
     artifactStore: { store: () => { throw new Error('no diff expected'); } },
     gitAdapterFactory: () => h.adapter,
-    projectConfig: { baseRef: 'main', checks: [CHECK], branchPrefixes: {}, rolePack: 'legacy-orch', revision: 'rev-1' },
+    projectConfig: { baseRef: 'main', checks: [CHECK], branchPrefixes: {}, rolePack: 'legacy-orch', revision: 'rev-1', ...projectConfigExtra },
     appServer: h.appServer,
     leadRole: { name: 'orch-lead', model: 'm', effort: 'low', instructions: 'x' },
     leadClient: h.leadClient,
@@ -1041,6 +1044,7 @@ async function ctlHarness({ intakeScript = [], workspace = null, gitDelivery = n
     tickMs: 3600000,
     logger: () => {},
     ...(gitDelivery ? { gitDeliveryFactory: () => gitDelivery } : {}),
+    ...controllerExtra,
   });
   h.controller.start();
   h.pass = async () => { await h.controller.tick(); };
@@ -1089,6 +1093,32 @@ async function toEngineering(h, intake = readyScript) {
   assert.ok(current.leadTaskId);
   return { ticket, runId: run.runId, leadTaskId: current.leadTaskId, intake };
 }
+
+async function firstIntakeSchema(projectConfigExtra) {
+  const h = await ctlHarness({ intakeScript: [readyScript()], projectConfigExtra });
+  try {
+    const seen = [];
+    const run = h.appServer.run.bind(h.appServer);
+    // The fake recognizes Intake by schema identity; a derived schema is recorded and passed on as the base one.
+    h.appServer.run = (args) => {
+      seen.push(args.outputSchema);
+      return run({ ...args, outputSchema: INTAKE_SCHEMA });
+    };
+    submitIt(h, newTicket(h));
+    await h.pass();
+    assert.ok(seen.length >= 1, 'intake turn ran');
+    return seen[0];
+  } finally { await h.close(); }
+}
+
+test('Intake gets the original schema by default and the route proposal fields only with adaptiveRoute on', async () => {
+  assert.equal(await firstIntakeSchema({}), INTAKE_SCHEMA);
+  assert.equal(await firstIntakeSchema({ adaptiveRoute: 'off' }), INTAKE_SCHEMA);
+  const schema = await firstIntakeSchema({ adaptiveRoute: 'on' });
+  assert.notEqual(schema, INTAKE_SCHEMA);
+  assert.ok('route' in schema.properties.plan.properties);
+  assert.ok('routeReason' in schema.properties.plan.properties);
+});
 
 test('pause on a queued run is immediate and Resume continues it from the queue', async () => {
   const h = await ctlHarness({ intakeScript: [readyScript()] });
@@ -1950,4 +1980,71 @@ test('a pause requested right after Resume is not settled from the still-held le
     assert.equal(run.status, 'running');
     assert.equal(run.controlRequest, 'pause');
   } finally { await h.close(); }
+});
+
+// ---- adaptive lean route (AR-3a)
+
+const DELIVERY_PACK_DIR = path.resolve(__dirname, '..', 'profiles', 'delivery');
+const BUGFIX_STAGES = [
+  planStageV2('repro', 'qa', 'reproduce', { allowedFiles: ['test/tiny.test.js'] }),
+  planStageV2('impl', 'developer', 'implement', { dependencies: ['repro'], allowedFiles: ['src/greet.js'] }),
+  planStageV2('rev', 'reviewer', 'review', { dependencies: ['impl'] }),
+  planStageV2('ver', 'qa', 'verify', { dependencies: ['impl'], allowedFiles: ['test/tiny.test.js'] }),
+];
+
+async function bugfixLeadSend(policy, route = 'lean') {
+  const pack = loadRolePack({ packDir: DELIVERY_PACK_DIR });
+  const intake = readyIntakeV2({ classification: 'bugfix', stages: BUGFIX_STAGES });
+  intake.plan.route = route;
+  const h = await ctlHarness({
+    intakeScript: [intake],
+    projectConfigExtra: { rolePack: pack.packId, ...policy },
+    controllerExtra: { deliveryPack: pack },
+  });
+  try {
+    // The fake recognizes Intake by schema identity; a route-aware derived schema is passed on as the base one.
+    const run = h.appServer.run.bind(h.appServer);
+    h.appServer.run = (args) => run(args.outputSchema && args.outputSchema.properties && args.outputSchema.properties.plan && args.outputSchema.properties.plan.properties
+      && args.outputSchema.properties.plan.properties.presetId ? { ...args, outputSchema: INTAKE_SCHEMA_V2 } : args);
+    const ticket = newTicket(h);
+    h.store.submitTicket(ticket.ticketId, { commandId: cmd(), expectedVersion: ticket.version }, h.controller.settingsSnapshot());
+    await h.pass();
+    assert.equal(h.sends.length, 1, `the lead task was started: ${JSON.stringify(h.eventLog.map((e) => [e.type, e.payload]))}`);
+    return h.sends[0].delivery;
+  } finally { await h.close(); }
+}
+
+test('startLead sends the derived lean routing only for an effective lean route', async () => {
+  const lean = await bugfixLeadSend({ adaptiveRoute: 'on' });
+  assert.equal(lean.plan.routing.effective, 'lean');
+  assert.deepEqual(lean.plan.routing.skipStageIds, ['repro']);
+  assert.deepEqual(lean.plan.routing.conditionalStageIds, ['rev']);
+  assert.deepEqual(lean.plan.routing.gateStageIds, ['impl']);
+  assert.deepEqual(Object.keys(lean.plan.routing.purposeOverrides), ['impl']);
+  assert.equal(lean.plan.routing.limits.maxFiles, 3);
+  const withoutRouting = (delivery) => ({ ...delivery, plan: { ...delivery.plan, routing: undefined } });
+  for (const delivery of [await bugfixLeadSend({ adaptiveRoute: 'shadow' }), await bugfixLeadSend({ adaptiveRoute: 'off' }), await bugfixLeadSend({ adaptiveRoute: 'on' }, 'full')]) {
+    assert.equal('routing' in delivery.plan, false);
+    assert.equal(delivery.planHash, withoutRouting(lean).planHash, 'routing never enters the plan hash');
+  }
+});
+
+test('candidate gate accepts skipped and effectively optional stages and still blocks other open stages', async () => {
+  const run = async (stages) => {
+    const h = await ctlHarness({ intakeScript: [readyScript()] });
+    try {
+      const base = await toEngineering(h);
+      taskDone(h, base.leadTaskId);
+      const leadTask = h.tasks.get(base.leadTaskId);
+      leadTask.artifacts[0].metadata.stages = stages;
+      h.setTask(base.leadTaskId, TaskState.TASK_STATE_COMPLETED, { artifacts: leadTask.artifacts });
+      await h.pass();
+      return h.store.getRun(base.runId);
+    } finally { await h.close(); }
+  };
+  const done = (stageId) => ({ stageId, status: 'succeeded', attemptIds: [] });
+  const accepted = await run([{ stageId: 'explore', status: 'skipped', attemptIds: [] }, done('build'), done('verify'), { stageId: 'audit', status: 'pending', required: false, attemptIds: [] }]);
+  assert.equal(accepted.waitReason, 'human_review');
+  const blocked = await run([done('explore'), done('build'), done('verify'), { stageId: 'audit', status: 'pending', attemptIds: [] }]);
+  assert.equal(blocked.waitDetail.code, 'stages_incomplete');
 });

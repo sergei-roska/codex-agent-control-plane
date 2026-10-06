@@ -30,6 +30,8 @@ const { createAccountHealth } = require('./account-health');
 const { createSettingsStore } = require('./settings-store');
 const { loadProjectConfig, defaultProjectConfigPath } = require('./project-config');
 const { createGitAdapter } = require('./git-adapter');
+const { routingOf } = require('./route-runtime');
+const { countChangedLines } = require('./delta-lines');
 const { createGitDelivery } = require('./git-delivery');
 const {
   createDeliveryController, computeRolePackHash, LEAD_PROMPT_VERSION,
@@ -313,6 +315,12 @@ function validateDeliveryPlan(plan, pack, projectCheckIds) {
   return validatePresetPlan({ ...plan, stages }, { pack, preset, projectCheckIds });
 }
 
+// A lean routing proposed in delivery metadata, normalized against the re-validated plan; empty otherwise.
+function leanRoutingOf(raw, plan) {
+  const routing = routingOf({ stages: plan.stages, routing: raw });
+  return routing.effective === 'lean' ? { routing } : {};
+}
+
 function makeLeadExecutor({
   orchestrator: defaultOrchestrator, deliveryOrchestrators = new Map(), events = NOOP_EVENTS, projectConfig = null,
 }) {
@@ -420,7 +428,12 @@ function makeLeadExecutor({
         delivery = {
           ...delivery,
           plan: deliveryPack
-            ? { ...checked.plan, planRevisionId: delivery.plan.planRevisionId ?? null, classification: delivery.plan.classification ?? null }
+            ? {
+              ...checked.plan,
+              planRevisionId: delivery.plan.planRevisionId ?? null,
+              classification: delivery.plan.classification ?? null,
+              ...leanRoutingOf(delivery.plan.routing, checked.plan),
+            }
             : checked.plan,
         };
       }
@@ -527,6 +540,7 @@ function makeLeadExecutor({
               assignments: result?.assignments ?? [],
               ...(result?.acceptance ? { acceptance: result.acceptance } : {}),
               ...(Array.isArray(result?.stages) ? { stages: result.stages } : {}),
+              ...(result?.route ? { route: result.route } : {}),
             },
             extensions: [],
           },
@@ -878,6 +892,7 @@ async function startServer({
     const baseUrl = `http://${HOST}:${actualPort}`;
     const leadRole = createLeadRole(profilesDir ? { profilesDir } : undefined);
     const usageLedger = new UsageLedger({ db: state.db });
+    const deltaLines = (paths) => countChangedLines({ workspace, paths });
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger,
     });
@@ -888,7 +903,7 @@ async function startServer({
       [deliveryPack.packId, {
         pack: deliveryPack,
         orchestrator: orchestratorFactory({
-          appServer, roles: deliveryPack.runtimeRoles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger,
+          appServer, roles: deliveryPack.runtimeRoles, workspace, baseUrl, authToken, checkpointer: state.checkpointer, journal: withDispatchEvents(new DispatchJournal(state), events), admission, usageLedger, deltaLines,
           leadRole: { ...deliveryPack.coordinator.role, promptVersion: LEAD_PROMPT_VERSION }, repairChains: deliveryPack.repairChains,
           operatorControl: controlOf,
         }),
