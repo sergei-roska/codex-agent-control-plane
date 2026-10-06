@@ -706,9 +706,14 @@ const CASES = [
         if (call.report.outcome !== 'failed') problems.push(`${call.role} was expected to fail first`);
         if (call.observedDelta.length > 0) problems.push(`failed attempt ${call.role} left a delta: ${call.observedDelta.join(', ')}`);
       }
-      if (developers[1] && developers[1].model !== 'gpt-6-luna') problems.push(`xhigh repair ran on ${developers[1].model}, expected gpt-6-luna`);
-      if (developers[1] && developers[1].effort !== 'xhigh') problems.push(`xhigh repair effort ${developers[1].effort}`);
-      if (developers[2] && developers[2].model !== 'gpt-6-sol') problems.push(`sol repair ran on ${developers[2].model}, expected gpt-6-sol`);
+      // Expected model and effort come from the repair executors' own profiles, so a profile change cannot stale this check.
+      for (const [index, repairId] of [[1, 'dlv-developer-xhigh'], [2, 'dlv-developer-sol']]) {
+        const call = developers[index];
+        const profile = obs.pack.repairProfiles.get(repairId);
+        if (!profile) { problems.push(`no profile for repair executor ${repairId}`); continue; }
+        if (call && call.model !== profile.model) problems.push(`${repairId} ran on ${call.model}, expected ${profile.model}`);
+        if (call && call.effort !== profile.effort) problems.push(`${repairId} ran at effort ${call.effort} (expected ${profile.effort})`);
+      }
       const lastDev = obs.calls.lastIndexOf(developers[developers.length - 1]);
       const qa = obs.calls.findIndex((call) => call.role === 'dlv-qa');
       const reviewer = obs.calls.findIndex((call) => call.role === 'dlv-reviewer');

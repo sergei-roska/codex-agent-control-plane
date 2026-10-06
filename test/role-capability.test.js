@@ -266,6 +266,19 @@ test('role capability cases', async (suite) => {
     assert.match(joined(result), /did not cite the seeded location src\/price\.js:5/);
   });
 
+  await suite.test('control: a repair executor on the wrong model or effort is flagged', () => {
+    const { loadRolePack } = require('../src/role-pack');
+    const pack = loadRolePack();
+    const xhigh = pack.repairProfiles.get('dlv-developer-xhigh');
+    const sol = pack.repairProfiles.get('dlv-developer-sol');
+    const call = (role, profile, over) => ({ role, model: profile.model, effort: profile.effort, report: { outcome: 'failed' }, observedDelta: [], ...over });
+    const run = (calls) => caseById('repair-chain').check({ calls, pack, view: { stages: [], candidate: {} } }).join('\n');
+    const dev = { role: 'dlv-developer', model: 'm', effort: 'e', report: { outcome: 'failed' }, observedDelta: [] };
+    assert.doesNotMatch(run([dev, call('dlv-developer-xhigh', xhigh), call('dlv-developer-sol', sol)]), /ran on|ran at effort/);
+    assert.match(run([dev, call('dlv-developer-xhigh', xhigh, { model: 'wrong-model' }), call('dlv-developer-sol', sol)]), /dlv-developer-xhigh ran on wrong-model/);
+    assert.match(run([dev, call('dlv-developer-xhigh', xhigh), call('dlv-developer-sol', sol, { effort: 'bogus' })]), /dlv-developer-sol ran at effort bogus/);
+  });
+
   await suite.test('a thrown worker call is reported with a bounded, redacted diagnostic', async () => {
     const result = await runCase(caseById('developer'), {
       behavior: (ctx) => {
