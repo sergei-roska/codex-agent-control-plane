@@ -48,14 +48,15 @@ Mechanisms behind the fixed cost (verified in code):
 
 ### D1. Two routes for `bugfix`: `full` and `lean`
 
-The preset gains route variants. `full` is today's preset unchanged. `lean` has
-`implement` (Developer) and `verify` (QA, independent) as required stages, and
-`review` (Reviewer) as a conditional stage that is present in the plan but
-required only after promotion (D3). `reproduce` is not a lean stage: the lean
-`implement` purpose also carries it, so the Developer records executed baseline
-evidence (the failing check output, or the exact quoted defect) before the change,
-and QA `verify` independently re-runs it. `feature`, `docs`, and `audit` presets are
-out of scope and stay as they are.
+The plan keeps today's four-stage shape for every route; the route is an execution
+mode derived by code, so the PM output, the plan validator, shadow mode, and the
+run-immutable plan contract do not fork. The `bugfix` preset gains a `lean` block
+that names the stages `reproduce` as skipped and `review` as conditional (required
+only after promotion, D3), and a purpose override for `implement`: the Developer
+records executed baseline evidence (the failing check output, or the exact quoted
+defect) before the change, and QA `verify` independently re-runs it. In `full`
+nothing changes. `feature`, `docs`, and `audit` presets are out of scope and stay
+as they are.
 
 ### D2. Route eligibility is decided by code, not by the model
 
@@ -82,10 +83,13 @@ tighten limits and extend the protected list, never shrink the built-in list.
 
 The lead runtime pins the plan per run and has no mutation path (plan revisions,
 graph checkpoints, and readers all assume it). Promotion therefore does not add a
-stage. The conditional `review` stage is always in the lean plan, and its
-required-ness becomes a pure function of the run state:
-`effectiveRequired(plan, route, promotion)`. `planViolationsOf` and `candidateGate`
-use it, so finish is refused until a promoted run's `review` has succeeded.
+stage. Every plan already contains `review`, and required-ness of each stage
+becomes a pure function of the plan, the effective route, and the promotion flag:
+`effectiveRequired(plan, route, promotion)`. In an effective `lean` run
+`reproduce` is skipped (a skipped stage counts as satisfied for dependents and is
+shown as skipped by the readers) and `review` is required only when promoted; in
+`full` everything is required as today. `planViolationsOf` and `candidateGate` use
+it, so finish is refused until a promoted run's `review` has succeeded.
 
 After `implement` completes, the route gate evaluates the delta and promotes the
 run to the full route when any of the following holds: the delta is unknown (fail

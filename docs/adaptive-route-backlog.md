@@ -11,9 +11,9 @@ without a concrete need.
 | --- | --- | --- | --- | --- |
 | AR-0a | Baseline measurement of the two CDB-390 runs | auditor-sonnet | - | done (numbers in the ADR) |
 | AR-0b | Why Intake and lead made 2-5 calls per run | auditor-sonnet | - | dispatched |
-| AR-0c | `npm run usage` covers ticket/product run, Intake and lead rows | worker-sonnet | - | dispatched |
-| AR-1 | `src/route-gate.js` pure module and tests | worker-sonnet | - | dispatched |
-| AR-2 | Preset variants, plan validation, Intake `route` field, project policy | worker-sonnet | AR-1 | planned |
+| AR-0c | `npm run usage` covers ticket/product run, Intake and lead rows | worker-sonnet | - | done (`fe290c7`, totals match the baseline) |
+| AR-1 | `src/route-gate.js` pure module and tests | worker-sonnet | - | done (`f576ec5`) |
+| AR-2 | Preset `lean` block, Intake `route` field and `routeDecision`, project policy, Drupal protected-path additions | worker-sonnet | AR-1 | dispatched |
 | AR-3a | Derived required-ness and promotion in the lead runtime and candidate gate | worker-sonnet, then auditor-opus review | AR-2 | planned |
 | AR-3b | Deterministic `decide` for a clean lean run | worker-sonnet | AR-3a | planned |
 | AR-4a | Resubmit of a blocked ticket reuses the ready Intake and plan | worker-sonnet | AR-3 (same files) | planned |
@@ -41,21 +41,28 @@ without a concrete need.
 
 ### Plan and preset (AR-2)
 
-- `profiles/delivery/presets/bugfix.json` version 1.1.0 adds `variants` with `full`
-  (current stages) and `lean` (stages `implement`, `verify`, and `review` marked
-  `conditional: true`). A conditional stage may have `required: false` in the plan;
-  every other preset stage must stay required.
-- Plan JSON gains `route` ("full" or "lean", default "full"); Intake output gains
-  `route` and `routeReason`. `validatePresetPlan` rejects `lean` on any preset
-  other than `bugfix` and rejects a lean plan that the route gate would not accept
-  (the caller normalizes to `full` and records `routeReasons` instead of failing).
+- The plan keeps the four-stage shape for every route; nothing in stage structure
+  or `required` flags changes. `profiles/delivery/presets/bugfix.json` version 1.1.0
+  keeps `stages` as is and adds a `lean` block: `{ skip: ["reproduce"],
+  conditional: ["review"], purposeOverrides: { implement: "<text>" } }`. The
+  validator checks that the block references existing stage keys.
+- Plan gains optional `route` ("full" or "lean") and `routeReason` (string, at most
+  200 chars), proposed by the PM. The validated Intake result attaches
+  `plan.routeDecision = { requested, verdict, effective, mode, reasons }` computed
+  by `evaluatePlanRoute`; a ticket or model proposal can never force `lean`, and an
+  ineligible proposal is not an error: the verdict is `full` with reasons.
+- Intake prompt and schema mention `route` only when policy `adaptiveRoute` is not
+  `off`; with `off`, the prompt and the persisted plan stay byte-identical to today
+  (no extra tokens, same plan hash, existing tests unchanged).
 - Project policy (`src/project-config.js`): `adaptiveRoute` in `off|shadow|on`
   (default `off`), optional `routeLimits`.
 
 ### Lead runtime (AR-3a, AR-3b)
 
 - `effectiveRequired(plan, route, promotion)` is pure; `planViolationsOf` and
-  `candidateGate` use it. The conditional `review` is required iff promoted.
+  `candidateGate` use it. In an effective lean run `reproduce` is skipped (a
+  skipped stage satisfies its dependents and is reported as skipped) and `review`
+  is required iff promoted.
 - Promotion input comes from the attested writer delta (the source acceptance
   uses), never from worker-reported `filesChanged` alone. Unknown delta promotes.
 - Event `route_promoted` with reason codes (`src/event-journal.js` EVENT_TYPES and
@@ -70,7 +77,7 @@ without a concrete need.
 | --- | --- |
 | AR-0c | `src/usage-report.js`, `test/usage-report.test.js`, minimal `src/usage-ledger.js` |
 | AR-1 | `src/route-gate.js`, `test/route-gate.test.js` |
-| AR-2 | `profiles/delivery/presets/bugfix.json`, `profiles/delivery/pack.json` if needed, `src/plan-validator.js`, `src/intake.js`, `src/project-config.js`, their tests |
+| AR-2 | `profiles/delivery/presets/bugfix.json`, `profiles/delivery/pack.json` if needed, `src/plan-validator.js`, `src/intake.js`, `src/project-config.js`, `src/route-gate.js`, their tests |
 | AR-3a/b | `src/lead-orchestrator.js`, `src/lead-graph.js`, `src/delivery-controller.js` (candidateGate only), `src/event-journal.js`, their tests |
 | AR-4a | `src/delivery-controller.js`, `src/product-store.js`, their tests |
 | AR-5 | `src/ticket-telemetry.js`, `profiles/delivery/TEAM.md`, `docs/m9/operator-guide.md`, tests |
