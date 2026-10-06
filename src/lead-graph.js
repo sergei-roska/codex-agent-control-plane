@@ -16,6 +16,7 @@ const {
   routingOf, isSatisfied, requiredStageIds, evaluateImplementDelta,
 } = require('./route-runtime');
 const { buildLeanDecision } = require('./lean-dispatch');
+const { renderProjectRulesOverlay } = require('./project-rules');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
 
 const DEFAULT_RECONCILE_WAIT_MS = 30_000;
@@ -399,8 +400,15 @@ function buildLeadGraph(deps) {
   const hasRepairChain = (roleId) => Array.isArray(repairChains[roleId]) && repairChains[roleId].length > 0;
   // Pinned per-run settings for a runtime role, or null (legacy runs pin none).
   const settingsFor = (state, roleId) => (state.settings && state.settings[roleId]) || null;
+  // Pinned project rules ride in the same entry; they go in their own role field, never in role.instructions.
   const withSettings = (role, entry) => (entry
-    ? { ...role, model: entry.model, effort: entry.effort, ...(entry.serviceTier ? { serviceTier: entry.serviceTier } : {}) }
+    ? {
+      ...role,
+      model: entry.model,
+      effort: entry.effort,
+      ...(entry.serviceTier ? { serviceTier: entry.serviceTier } : {}),
+      ...(entry.projectRules ? { projectRules: renderProjectRulesOverlay(entry.projectRules) } : {}),
+    }
     : role);
   const reconcileWaitMs = Number.isFinite(deps.reconcileWaitMs) ? deps.reconcileWaitMs : DEFAULT_RECONCILE_WAIT_MS;
 
@@ -824,7 +832,10 @@ function buildLeadGraph(deps) {
           contextId: item.contextId,
           role: A2ARole.ROLE_USER,
           parts: [{ content: { $case: 'text', value: text }, mediaType: 'text/plain' }],
-          metadata: pinned ? { effectiveSettings: { roleRuntimeId: item.role, model: pinned.model, effort: pinned.effort, serviceTier: pinned.serviceTier ?? null } } : {},
+          metadata: pinned ? {
+            effectiveSettings: { roleRuntimeId: item.role, model: pinned.model, effort: pinned.effort, serviceTier: pinned.serviceTier ?? null },
+            ...(pinned.projectRules ? { projectRules: { roleRuntimeId: item.role, ...pinned.projectRules } } : {}),
+          } : {},
           extensions: [],
           referenceTaskIds: [],
         },

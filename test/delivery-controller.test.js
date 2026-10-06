@@ -1146,6 +1146,32 @@ test('Intake gets the original schema by default and the route proposal fields o
   assert.ok('routeReason' in schema.properties.plan.properties);
 });
 
+test('pinned project rules reach Intake and the lead start as a separate field, not later edits', async () => {
+  const rules = new Map([['legacy-orch/orch-lead', { rulesRevisionId: 'r1', rules: ['PM rule one'] }]]);
+  const h = await ctlHarness({
+    intakeScript: [readyScript()],
+    controllerExtra: {
+      roleRulesStore: { effectiveRules: (packId, roleId) => rules.get(`${packId}/${roleId}`) || null },
+      roles: new Map([['orch-lead', { name: 'orch-lead', model: 'm', effort: 'low', sandbox: 'read-only' }]]),
+    },
+  });
+  try {
+    const seen = [];
+    const run = h.appServer.run.bind(h.appServer);
+    h.appServer.run = (args) => { seen.push(args.role); return run(args); };
+    const ticket = newTicket(h);
+    const { run: submitted } = submitIt(h, ticket);
+    assert.deepEqual(h.store.getRun(submitted.runId).settings.projectRules, { 'orch-lead': { rulesRevisionId: 'r1', rules: ['PM rule one'] } });
+    rules.set('legacy-orch/orch-lead', { rulesRevisionId: 'r2', rules: ['changed later'] });
+    await h.pass();
+    assert.match(seen[0].projectRules, /PM rule one/);
+    assert.doesNotMatch(seen[0].projectRules, /changed later/);
+    assert.equal(seen[0].instructions.includes('PM rule one'), false);
+    const pinned = h.sends[0].delivery.settings['orch-lead'];
+    assert.deepEqual(pinned.projectRules, { rulesRevisionId: 'r1', rules: ['PM rule one'] });
+  } finally { await h.close(); }
+});
+
 test('pause on a queued run is immediate and Resume continues it from the queue', async () => {
   const h = await ctlHarness({ intakeScript: [readyScript()] });
   try {

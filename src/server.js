@@ -28,6 +28,7 @@ const { loadRolePack, loadLegacyPack } = require('./role-pack');
 const { createModelCatalog } = require('./model-catalog');
 const { createAccountHealth } = require('./account-health');
 const { createSettingsStore } = require('./settings-store');
+const { createRoleRulesStore } = require('./role-rules-store');
 const { loadProjectConfig, defaultProjectConfigPath } = require('./project-config');
 const { createGitAdapter } = require('./git-adapter');
 const { buildLeanRouting } = require('./route-runtime');
@@ -131,13 +132,13 @@ function assertOperatorPathsOutsideWorkspace(workspace, operatorPaths) {
 
 function mountDashboard(app, {
   auth, authMiddleware, state, roles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController,
-  activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration, gitDeliveryFactory, projectConfig, projectConfigPath, docsPackDir,
+  activePack, legacyPack, modelCatalog, accountHealth, settingsStore, roleRulesStore, atlassianIntegration, gitDeliveryFactory, projectConfig, projectConfigPath, docsPackDir,
 }) {
   assertWebDirOutsideArtifacts(DASHBOARD_WEB_DIR);
   const projection = createProjection({ db: state.db, roleIds: [...roles.keys()], projectId, productStore });
   const api = createDashboardApi({
     projection, events, roles, leadRole, workspace, projectId, startedAt: new Date().toISOString(), version: PACKAGE_VERSION,
-    auth, productStore, artifactStore, deliveryController, activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration, gitDeliveryFactory,
+    auth, productStore, artifactStore, deliveryController, activePack, legacyPack, modelCatalog, accountHealth, settingsStore, roleRulesStore, atlassianIntegration, gitDeliveryFactory,
     projectConfig, projectConfigPath, docsPackDir,
   });
   app.use('/api/dashboard/v1', auth.hostGuard, auth.noStore);
@@ -961,6 +962,15 @@ async function startServer({
         return Boolean(found) && (found.coordinator.runtimeId === roleRuntimeId || found.runtimeRoles.has(roleRuntimeId));
       },
     });
+    const roleRulesStore = createRoleRulesStore({
+      db: state.db,
+      projectId,
+      events,
+      roleExists: (packId, roleRuntimeId) => {
+        const found = packsById.get(packId);
+        return Boolean(found) && (found.coordinator.runtimeId === roleRuntimeId || found.runtimeRoles.has(roleRuntimeId));
+      },
+    });
     const leadTaskStore = createTaskStore(state, 'orchestrator');
     const leadAgent = registerLead(app, {
       leadRole, orchestrator, deliveryOrchestrators, baseUrl, authMiddleware, taskStore: leadTaskStore, events, projectConfig,
@@ -986,13 +996,14 @@ async function startServer({
         deliveryPack,
         legacyPack,
         settingsStore,
+        roleRulesStore,
         modelCatalog,
       });
     }
     const dashboardAuth = createDashboardAuth({ db: state.db, getPort: () => actualPort });
     mountDashboard(app, {
       auth: dashboardAuth, authMiddleware, state, roles: allRoles, leadRole, workspace, events, projectId, productStore, artifactStore, deliveryController,
-      activePack, legacyPack, modelCatalog, accountHealth, settingsStore, atlassianIntegration,
+      activePack, legacyPack, modelCatalog, accountHealth, settingsStore, roleRulesStore, atlassianIntegration,
       gitDeliveryFactory: () => createGitDelivery({ workspace, remotes: projectConfig.delivery.remotes }),
       projectConfig,
       projectConfigPath: projectConfig.source === 'file' ? projectConfigPath : null,
@@ -1017,6 +1028,7 @@ async function startServer({
       modelCatalog,
       accountHealth,
       settingsStore,
+      roleRulesStore,
       atlassianIntegration,
       host: HOST,
       port: actualPort,

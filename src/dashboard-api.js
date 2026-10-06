@@ -334,7 +334,7 @@ function liveStages(db, run, plan, skipStageIds = []) {
 }
 
 function createDashboardApi({
-  projection, events, workspace, projectId, startedAt, version, auth, productStore, artifactStore, deliveryController, activePack, legacyPack, settingsResolver, modelCatalog, accountHealth, settingsStore, atlassianIntegration, gitDeliveryFactory, projectConfig, projectConfigPath, docsPackDir,
+  projection, events, workspace, projectId, startedAt, version, auth, productStore, artifactStore, deliveryController, activePack, legacyPack, settingsResolver, modelCatalog, accountHealth, settingsStore, roleRulesStore, atlassianIntegration, gitDeliveryFactory, projectConfig, projectConfigPath, docsPackDir,
 } = {}) {
   if (!projection || !events) throw new TypeError('createDashboardApi requires projection and events');
   const docsPackDirResolved = docsPackDir || path.resolve(__dirname, '..', 'profiles', 'delivery');
@@ -383,7 +383,7 @@ function createDashboardApi({
   const legacy = legacyPack || loadLegacyPack();
   const pack = activePack || loadRolePack();
   if (modelCatalog && accountHealth && settingsStore && auth) {
-    router.use(createSettingsRouter({ activePack: pack, legacyPack: legacy, modelCatalog, accountHealth, settingsStore, auth }));
+    router.use(createSettingsRouter({ activePack: pack, legacyPack: legacy, modelCatalog, accountHealth, settingsStore, roleRulesStore, auth }));
   }
   router.use(createPipelinesRouter({
     activePack: pack, legacyPack: legacy, productStore, db: productStore ? productStore.db : null,

@@ -34,6 +34,8 @@ cases the interrupted writer is reconciled before another writer is admitted.
 A database created by newer code (a higher product schema version than the running code
 knows) is refused at startup; the server does not downgrade.
 
+Schema version 7 adds `role_rules_revisions` and `role_rules_current` (operator project rules per role); it only creates tables.
+
 The backup contains the database only. Attachment bytes are immutable and are never
 rewritten by migrations, so they need no migration backup; include the attachment
 directory in any regular backup of your own.

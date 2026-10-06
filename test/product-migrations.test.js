@@ -132,7 +132,7 @@ test('migration 2 creates the delivery tables and the one-active-run index', asy
   const result = await migrateProductSchema({ db, now: fixedNow });
   assert.equal(result.toVersion, MIGRATIONS.length);
   assert.deepEqual(MIGRATIONS.map((m) => [m.version, m.name]), [
-    [1, 'product_tickets'], [2, 'delivery_runs'], [3, 'role_settings'], [4, 'plan_identity'], [5, 'jira_source_tracking'], [6, 'operator_controls'],
+    [1, 'product_tickets'], [2, 'delivery_runs'], [3, 'role_settings'], [4, 'plan_identity'], [5, 'jira_source_tracking'], [6, 'operator_controls'], [7, 'role_rules'],
   ]);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
   for (const name of DELIVERY_TABLES) assert.ok(tables.includes(name), name);
@@ -265,7 +265,7 @@ test('migration 6 adds operator controls, reviews and deliveries and keeps versi
   db.exec(`INSERT INTO runs (run_id, ticket_id, revision_id, project_id, status, phase, settings_snapshot_json, command_id, created_at, updated_at)
     VALUES ('run1', 'keep', 'keep-rev', 'project', 'failed', 'settled', '{}', 'cmd', 'a', 'a')`);
   const result = await migrateProductSchema({ db, now: fixedNow });
-  assert.deepEqual([result.fromVersion, result.toVersion], [5, 6]);
+  assert.deepEqual([result.fromVersion, result.toVersion], [5, 7]);
   const run = db.prepare("SELECT * FROM runs WHERE run_id = 'run1'").get();
   assert.equal(run.run_kind, 'initial');
   assert.equal(run.control_request, null);

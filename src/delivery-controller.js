@@ -20,6 +20,7 @@ const { WriterAdmission } = require('./writer-admission');
 const { takeSnapshot } = require('./workspace-snapshot');
 const { redactDiagnosticMessage } = require('./event-journal');
 const { buildLeanRouting } = require('./route-runtime');
+const { normalizeProjectRules, renderProjectRulesOverlay } = require('./project-rules');
 
 const LEAD_PROMPT_VERSION = 'pm-lead-v1';
 const DEFAULT_TICK_MS = 2000;
@@ -65,7 +66,7 @@ function computeRolePackHash(profilesDir) {
 }
 
 /** Settings pinned on a run at submit time (D-M3-6). */
-function buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash = null, appServerVersion = null }) {
+function buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash = null, appServerVersion = null, projectRules = null }) {
   const roleSettings = {};
   for (const [id, role] of roles || []) roleSettings[id] = { model: role.model, effort: role.effort, sandbox: role.sandbox };
   return {
@@ -79,6 +80,7 @@ function buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash = 
     promptVersions: { intake: PROMPT_VERSION, lead: LEAD_PROMPT_VERSION },
     projectPolicyRevision: projectConfig ? projectConfig.revision : null,
     appServerVersion,
+    ...(projectRules ? { projectRules } : {}),
   };
 }
 
@@ -137,7 +139,7 @@ class PinnedSettingsError extends Error {
 function createDeliveryController({
   store, artifactStore, gitAdapterFactory, projectConfig, appServer, leadRole, roles, leadClient, taskReader, snapshotter = takeSnapshot,
   usageLedger, events, now, workspace, writerAdmission, tickMs = DEFAULT_TICK_MS, rolePackHash = null, appServerVersion = null, logger,
-  deliveryPack = null, legacyPack = null, settingsStore = null, modelCatalog = null, gitDeliveryFactory = null,
+  deliveryPack = null, legacyPack = null, settingsStore = null, modelCatalog = null, gitDeliveryFactory = null, roleRulesStore = null,
 } = {}) {
   for (const [name, value] of Object.entries({ store, artifactStore, gitAdapterFactory, projectConfig, appServer, leadRole, leadClient, taskReader })) {
     if (!value) throw new TypeError(`createDeliveryController requires ${name}`);
@@ -161,6 +163,8 @@ function createDeliveryController({
   }
   const pmRoleOf = (pack) => (pack ? pack.coordinator.role : legacyPmRole);
   let admission = writerAdmission || null;
+  // Legacy-orch snapshots without a pack object: every runtime role plus the lead/PM role.
+  const legacyProjectRules = () => projectRulesOf('legacy-orch', [...new Set([...(roles ? [...roles.keys()] : []), leadRole.name])]);
   // Read-only view of the workspace writer holder (active or unresolved), or null when the workspace is free.
   function writerHolder() {
     if (!admission) admission = new WriterAdmission({ db: store.db, workspace });
@@ -253,10 +257,40 @@ function createDeliveryController({
   // A pinned entry that does not normalize fails the run instead of silently using profile values.
   function pinnedRole(run, base) {
     const entry = run.settings && run.settings.roles ? run.settings.roles[base.name] : null;
-    if (!entry) return base;
-    const pinned = normalizeEffectiveSettings(entry);
-    if (!pinned) throw new PinnedSettingsError(base.name);
-    return { ...base, model: pinned.model, effort: pinned.effort, ...(pinned.serviceTier ? { serviceTier: pinned.serviceTier } : {}) };
+    let role = base;
+    if (entry) {
+      const pinned = normalizeEffectiveSettings(entry);
+      if (!pinned) throw new PinnedSettingsError(base.name);
+      role = { ...base, model: pinned.model, effort: pinned.effort, ...(pinned.serviceTier ? { serviceTier: pinned.serviceTier } : {}) };
+    }
+    // Pinned project rules travel in their own field, never in role.instructions (permission isolation).
+    const rules = run.settings && run.settings.projectRules ? run.settings.projectRules[base.name] : null;
+    if (rules) {
+      const normalized = normalizeProjectRules(rules);
+      if (!normalized) throw new PinnedSettingsError(base.name);
+      role = { ...role, projectRules: renderProjectRulesOverlay(normalized) };
+    }
+    return role;
+  }
+
+  function settingsWithRules(settings) {
+    if (!settings.projectRules) return settings.roles;
+    const merged = { ...settings.roles };
+    for (const [id, rules] of Object.entries(settings.projectRules)) {
+      if (merged[id]) merged[id] = { ...merged[id], projectRules: rules };
+    }
+    return merged;
+  }
+
+  // Effective project rules of every given role id of one pack, only for roles that have rules; null when none.
+  function projectRulesOf(packId, ids) {
+    if (!roleRulesStore) return null;
+    const out = {};
+    for (const id of ids) {
+      const normalized = normalizeProjectRules(roleRulesStore.effectiveRules(packId, id));
+      if (normalized) out[id] = normalized;
+    }
+    return Object.keys(out).length > 0 ? out : null;
   }
 
   // ---------------------------------------------------------------- intake
@@ -559,7 +593,8 @@ function createDeliveryController({
     ? appServerVersion
     : (typeof appServer?.appServerVersion === 'string' ? appServer.appServerVersion : null));
 
-  function deliverySnapshotOf(pack, { roleSettings, coordinatorId }, catalogFetchedAt) {
+  function deliverySnapshotOf(pack, { ids, roleSettings, coordinatorId }, catalogFetchedAt) {
+    const projectRules = projectRulesOf(pack.packId, ids);
     return {
       provider: 'openai',
       runtimeAdapter: 'codex-app-server',
@@ -573,6 +608,7 @@ function createDeliveryController({
       projectPolicyRevision: projectConfig ? projectConfig.revision : null,
       appServerVersion: currentAppServerVersion(),
       catalogFetchedAt,
+      ...(projectRules ? { projectRules } : {}),
     };
   }
 
@@ -715,7 +751,8 @@ function createDeliveryController({
         ...(routing ? { routing } : {}),
       },
       // The pinned per-role settings map; the lead pins it in graph state and never re-reads settings.
-      ...(run.settings && run.settings.roles ? { settings: run.settings.roles } : {}),
+      // Pinned project rules ride inside the role entries of the settings map; the lead pins both together.
+      ...(run.settings && run.settings.roles ? { settings: settingsWithRules(run.settings) } : {}),
     };
     if (controlPending(run.runId)) return false; // control arrived while preparing: do not start the lead
     const sent = await leadClient.send({ goal, acceptance, delivery });
@@ -1400,12 +1437,12 @@ function createDeliveryController({
     reconcileDeliveries() { return lane(reconcileDeliveries); },
     settingsSnapshot() {
       if (snapshotPack) return buildDeliverySnapshot(snapshotPack);
-      return buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash, appServerVersion: currentAppServerVersion() });
+      return buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash, appServerVersion: currentAppServerVersion(), projectRules: legacyProjectRules() });
     },
     // Submit path: validates against the live catalog, refreshing it when the TTL has lapsed.
     async validatedSettingsSnapshot() {
       if (snapshotPack) return validatedDeliverySnapshot(snapshotPack);
-      return buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash, appServerVersion: currentAppServerVersion() });
+      return buildSettingsSnapshot({ roles, leadRole, projectConfig, rolePackHash, appServerVersion: currentAppServerVersion(), projectRules: legacyProjectRules() });
     },
   };
 }

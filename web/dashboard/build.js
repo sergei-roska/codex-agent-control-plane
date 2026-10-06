@@ -21,6 +21,7 @@ function assemble() {
   const ticketRecordModal = readFile('modals/ticket-record.html');
   const approvalModal = readFile('modals/approval.html');
   const providerCreateModal = readFile('modals/provider-create.html');
+  const roleRulesModal = readFile('modals/role-rules.html');
   const battlepassModal = readFile('modals/battlepass.html');
   const notPairedPanel = readFile('modals/not-paired.html');
 
@@ -138,6 +139,8 @@ ${approvalModal}
 
 ${providerCreateModal}
 
+${roleRulesModal}
+
 ${battlepassModal}
 
 ${notPairedPanel}
@@ -161,6 +164,7 @@ ${notPairedPanel}
 <script src="js/modals/ticket-run.js"></script>
 <script src="js/modals/approval.js"></script>
 <script src="js/modals/provider-modal.js"></script>
+<script src="js/modals/role-rules.js"></script>
 <script src="js/modals/battlepass.js"></script>
 <script src="js/app.js"></script>
 </body>

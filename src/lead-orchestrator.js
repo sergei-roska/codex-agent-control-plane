@@ -7,6 +7,7 @@ const { TaskState } = require('@a2a-js/sdk');
 const { Command, MemorySaver } = require('@langchain/langgraph');
 const { createLeadRole } = require('./role-catalog');
 const { DECISION_SCHEMA, safeRelativePath, normalizeEffectiveSettings } = require('./contracts');
+const { normalizeProjectRules } = require('./project-rules');
 const { InMemoryDispatchJournal } = require('./durable-store');
 const { validateAcceptanceContract } = require('./acceptance');
 const { buildLeadGraph, isTerminalTask, pauseMessage } = require('./lead-graph');
@@ -198,6 +199,11 @@ class LeadOrchestrator {
       const normalized = normalizeEffectiveSettings(entry);
       if (!normalized) throw new TypeError(`settings for ${roleId} must have a valid model, effort, and serviceTier`);
       pinned[roleId] = normalized;
+      if (entry.projectRules !== undefined && entry.projectRules !== null) {
+        const rules = normalizeProjectRules(entry.projectRules);
+        if (!rules) throw new TypeError(`project rules for ${roleId} must have a revision id and 1..20 valid rules`);
+        pinned[roleId] = { ...normalized, projectRules: rules };
+      }
     }
     return pinned;
   }

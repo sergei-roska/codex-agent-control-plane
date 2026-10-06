@@ -72,6 +72,7 @@ async function initApp() {
   initTicketRecordEvents();
   initApprovalEvents();
   initProviderModalEvents();
+  initRoleRulesEvents();
   initBattlepassEvents();
 
   // Board, sidebar, monitor, decisions, and docs render from the API; other preview tabs may still use fixtures.

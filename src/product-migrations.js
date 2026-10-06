@@ -150,6 +150,19 @@ CREATE TABLE deliveries (
 );
 `;
 
+const MIGRATION_7_SQL = `
+CREATE TABLE role_rules_revisions (
+  rules_revision_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, pack_id TEXT NOT NULL, role_runtime_id TEXT NOT NULL,
+  rules_json TEXT NOT NULL, change_kind TEXT NOT NULL, change_rule_id TEXT, supersedes_id TEXT,
+  actor TEXT NOT NULL, command_id TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX role_rules_revisions_role ON role_rules_revisions (project_id, pack_id, role_runtime_id, created_at);
+CREATE TABLE role_rules_current (
+  project_id TEXT NOT NULL, pack_id TEXT NOT NULL, role_runtime_id TEXT NOT NULL, rules_revision_id TEXT NOT NULL,
+  PRIMARY KEY (project_id, pack_id, role_runtime_id)
+);
+`;
+
 const MIGRATIONS = [
   { version: 1, name: 'product_tickets', sql: MIGRATION_1_SQL },
   { version: 2, name: 'delivery_runs', sql: MIGRATION_2_SQL },
@@ -157,6 +170,7 @@ const MIGRATIONS = [
   { version: 4, name: 'plan_identity', sql: MIGRATION_4_SQL, after: backfillPlanIdentity },
   { version: 5, name: 'jira_source_tracking', sql: MIGRATION_5_SQL },
   { version: 6, name: 'operator_controls', sql: MIGRATION_6_SQL },
+  { version: 7, name: 'role_rules', sql: MIGRATION_7_SQL },
 ];
 
 const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -9,6 +9,7 @@ const {
   WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, classifyCodexError, findCodexErrorInfo, normalizeEffectiveSettings,
 } = require('./contracts');
 const { WriterAdmission } = require('./writer-admission');
+const { normalizeProjectRules, renderProjectRulesOverlay } = require('./project-rules');
 
 const DEFAULT_RECONCILE_RETRY = { intervalMs: 250, totalMs: 5000 };
 
@@ -134,6 +135,15 @@ function workerUsageEntry({ roleId, taskId, contextId, source, outcome, retries 
 
 // Pinned per-run settings sent by the lead; honored only when they name this endpoint's role.
 // An entry naming this role that fails the format check, or (catalog ok) the catalog check, fails the turn.
+// Pinned project rules sent by the lead; honored only when they name this endpoint's role. A malformed entry fails the turn.
+function projectRulesFor(roleId, message) {
+  const raw = message?.metadata?.projectRules;
+  if (!raw || typeof raw !== 'object' || raw.roleRuntimeId !== roleId) return null;
+  const normalized = normalizeProjectRules(raw);
+  if (!normalized) throw new Error(`projectRules for ${roleId} is malformed`);
+  return renderProjectRulesOverlay(normalized);
+}
+
 async function effectiveSettingsFor(roleId, message, catalog) {
   const raw = message?.metadata?.effectiveSettings;
   if (!raw || typeof raw !== 'object' || raw.roleRuntimeId !== roleId) return null;
@@ -339,11 +349,13 @@ function makeExecutor({
         let runError = null;
         try {
           const effective = await effectiveSettingsFor(roleId, requestContext.userMessage, catalog);
+          const projectRules = projectRulesFor(roleId, requestContext.userMessage);
           result = await appServer.run({
             role: {
               id: roleId,
               ...role,
               ...(effective ? { model: effective.model, effort: effective.effort, ...(effective.serviceTier ? { serviceTier: effective.serviceTier } : {}) } : {}),
+              ...(projectRules ? { projectRules } : {}),
             },
             cwd: workspace,
             input,

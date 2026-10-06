@@ -636,6 +636,14 @@ function cmRoleRow(row, catalogOk) {
     }));
   }
 
+  const ruleCount = row.rules && Number.isInteger(row.rules.count) ? row.rules.count : 0;
+  const rulesBtn = h('button', {
+    class: 'btn btn-secondary role-rules-btn', text: ruleCount > 0 ? 'Rules (' + ruleCount + ')' : 'Add rules',
+    attrs: { type: 'button', 'data-role-rules': id, 'aria-label': (ruleCount > 0 ? 'Rules (' + ruleCount + ') for ' : 'Add rules for ') + (row.displayName || id) }
+  });
+  rulesBtn.addEventListener('click', () => { if (typeof openRoleRules === 'function') openRoleRules(row, rulesBtn); });
+  const rulesCell = h('td', { class: 'role-cell-rules' }, [rulesBtn]);
+
   const dirty = cmDirty(row);
   const save = h('button', { class: 'btn btn-primary', text: busy ? 'Working...' : 'Save', attrs: { type: 'button', 'data-role': id } });
   save.disabled = disabled || !dirty || !draft.model || !draft.effort;
@@ -652,7 +660,7 @@ function cmRoleRow(row, catalogOk) {
   if (note) actions.appendChild(h('div', { class: 'role-row-note ' + (note.ok ? 'tone-ok' : 'tone-bad'), text: note.text, attrs: { role: note.ok ? 'status' : 'alert' } }));
   if (invalid) actions.appendChild(h('div', { class: 'role-row-note tone-bad', text: 'Saved default is not valid: choose a supported model and effort, or reset.' }));
 
-  const tr = h('tr', { class: invalid ? 'role-invalid' : '', attrs: { 'data-role': id } }, [nameCell, modelCell, effortCell, speedCell, sourceCell, actions]);
+  const tr = h('tr', { class: invalid ? 'role-invalid' : '', attrs: { 'data-role': id } }, [nameCell, modelCell, effortCell, speedCell, sourceCell, rulesCell, actions]);
   const out = [tr];
   const hs = cm.history[id];
   if (hs && hs.open) out.push(cmHistoryRow(hs));
@@ -660,7 +668,7 @@ function cmRoleRow(row, catalogOk) {
 }
 
 function cmHistoryRow(hs) {
-  const cell = h('td', { class: 'role-history-cell', attrs: { colspan: '6' } });
+  const cell = h('td', { class: 'role-history-cell', attrs: { colspan: '7' } });
   if (hs.loading) cell.appendChild(h('span', { class: 'detail-empty', text: 'Loading history...' }));
   else if (hs.error) cell.appendChild(h('span', { class: 'tf-field-error', text: 'History unavailable: ' + hs.error }));
   else if (!hs.data || !hs.data.revisions.length) cell.appendChild(h('span', { class: 'detail-empty', text: 'No saved revisions yet.' }));
@@ -772,7 +780,7 @@ function renderConnections() {
   const tbody = document.getElementById('role-defaults-body');
   if (!tbody) return;
   cmClear(tbody);
-  const span = (text, cls) => h('tr', {}, [h('td', { attrs: { colspan: '6' } }, [h('span', { class: cls || 'detail-empty', text })])]);
+  const span = (text, cls) => h('tr', {}, [h('td', { attrs: { colspan: '7' } }, [h('span', { class: cls || 'detail-empty', text })])]);
   if (cm.rolesError) { tbody.appendChild(span('Role defaults unavailable: ' + cm.rolesError, 'tf-field-error')); return; }
   if (!cm.roles) { tbody.appendChild(span(cm.rolesLoaded ? 'Role defaults unavailable.' : 'Loading role defaults...')); return; }
   const rows = Array.isArray(cm.roles.roles) ? cm.roles.roles : [];

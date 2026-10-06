@@ -410,13 +410,18 @@ class CodexAppServer {
       effort: role.effort || null,
       serviceTier: role.serviceTier || null,
       instructions: role.instructions || `You are the ${role.name} agent.`,
+      ...(typeof role.projectRules === 'string' && role.projectRules ? { projectRules: role.projectRules } : {}),
       mcpServers: [...new Set(role.tools?.mcpServers || [])].sort(),
       skills: role.tools?.skills === true,
     });
     await this._recycleIfAuthStale();
     await this.start();
 
-    const developerInstructions = role.instructions || `You are the ${role.name} agent.`;
+    // Project rules are composed here, after the permission profile was built from the unmodified role.
+    const baseInstructions = role.instructions || `You are the ${role.name} agent.`;
+    const developerInstructions = typeof role.projectRules === 'string' && role.projectRules
+      ? `${baseInstructions}\n\n${role.projectRules}`
+      : baseInstructions;
     let toolConfig = null;
     if (!existingThreadId || !this.loadedThreads.has(existingThreadId)) {
       const { config, policy } = await this._toolPolicy(role, cwd);

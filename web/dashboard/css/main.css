@@ -30,6 +30,7 @@
 @import "modals/battlepass.css";
 @import "modals/ticket-form.css";
 @import "modals/ticket-run.css";
+@import "modals/role-rules.css";
 
 /* Responsive Breakpoints */
 @import "responsive.css";

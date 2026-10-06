@@ -5,6 +5,7 @@
 
 const crypto = require('node:crypto');
 const express = require('express');
+const { MAX_RULE_CHARS, MAX_RULES, MAX_TOTAL_CHARS } = require('./role-rules-store');
 
 const JSON_BODY_LIMIT = '16kb';
 const STATUS_BY_CODE = Object.freeze({
@@ -55,7 +56,7 @@ function packRoles(pack) {
 }
 
 function createSettingsRouter({
-  activePack, legacyPack, modelCatalog, accountHealth, settingsStore, auth,
+  activePack, legacyPack, modelCatalog, accountHealth, settingsStore, roleRulesStore, auth,
 } = {}) {
   if (!activePack || !modelCatalog || !accountHealth || !settingsStore || !auth) {
     throw new TypeError('createSettingsRouter requires activePack, modelCatalog, accountHealth, settingsStore and auth');
@@ -100,6 +101,7 @@ function createSettingsRouter({
       const profile = selectionOf(entry.role);
       const current = settingsStore.currentFor(activePack.packId, entry.roleRuntimeId);
       const effective = settingsStore.effectiveDefault(activePack.packId, entry.roleRuntimeId, profile);
+      const rulesCurrent = roleRulesStore ? roleRulesStore.currentFor(activePack.packId, entry.roleRuntimeId) : null;
       const verdict = await modelCatalog.validateSelection({ model: effective.model, effort: effective.effort, serviceTier: effective.serviceTier });
       roles.push({
         roleRuntimeId: entry.roleRuntimeId,
@@ -117,6 +119,7 @@ function createSettingsRouter({
         effective: { model: effective.model, effort: effective.effort, serviceTier: effective.serviceTier, source: effective.source },
         valid: verdict.ok,
         errors: verdict.errors,
+        ...(roleRulesStore ? { rules: { rulesRevisionId: rulesCurrent ? rulesCurrent.rulesRevisionId : null, count: rulesCurrent ? rulesCurrent.rules.length : 0 } } : {}),
       });
     }
     return { pack: { packId: activePack.packId, version: activePack.version }, roles };
@@ -161,6 +164,34 @@ function createSettingsRouter({
       revisions: settingsStore.history(pack.packId, entry.roleRuntimeId),
     };
   }));
+
+  if (roleRulesStore) {
+    router.get('/settings/roles/:roleRuntimeId/rules', wrap((req) => {
+      const { pack, entry } = locate(req.params.roleRuntimeId);
+      const current = roleRulesStore.currentFor(pack.packId, entry.roleRuntimeId);
+      return {
+        packId: pack.packId,
+        roleRuntimeId: entry.roleRuntimeId,
+        currentRevisionId: current ? current.rulesRevisionId : null,
+        rules: current ? current.rules : [],
+        limits: { maxRuleChars: MAX_RULE_CHARS, maxRules: MAX_RULES, maxTotalChars: MAX_TOTAL_CHARS },
+        history: roleRulesStore.history(pack.packId, entry.roleRuntimeId),
+      };
+    }));
+
+    const ruleCommand = (method, successStatus) => (req, res, next) => {
+      try {
+        const { pack } = locate(req.params.roleRuntimeId);
+        const body = commandBody(req, req.params.roleRuntimeId, pack.packId);
+        if (req.params.ruleId !== undefined) body.ruleId = req.params.ruleId;
+        const result = roleRulesStore[method](body, { roleExists: roleExistsIn(pack) });
+        res.status(result.replayed ? 200 : successStatus).json({ revision: result.revision, replayed: result.replayed });
+      } catch (error) { next(error); }
+    };
+    router.post('/settings/roles/:roleRuntimeId/rules', auth.originGuard, jsonBody, ruleCommand('addRule', 201));
+    router.put('/settings/roles/:roleRuntimeId/rules/:ruleId', auth.originGuard, jsonBody, ruleCommand('editRule', 200));
+    router.delete('/settings/roles/:roleRuntimeId/rules/:ruleId', auth.originGuard, jsonBody, ruleCommand('removeRule', 200));
+  }
 
   // eslint-disable-next-line no-unused-vars
   router.use((error, req, res, next) => {
