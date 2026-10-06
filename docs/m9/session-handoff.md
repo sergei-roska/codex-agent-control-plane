@@ -531,3 +531,14 @@ regressions passed; real-cdb helper now returns kind=git, one dirty entry, in ab
 0.5 seconds. No full suite. Original unknown writer deltas cannot be retroactively
 attested; resubmit CDB-390 on its owned branch with the existing correct fix
 preserved, then inspect the newly attested candidate before local delivery.
+
+CDB-390 recovery run `run_bSFKL-nCqp35GO7xJfUY8g` needed one Intake answer:
+the current duplicate-free file is the prior run's pending correction, not an
+already resolved Jira task. Operator provided base/branch/run provenance and
+asked to verify the existing diff without recreating the defect. All four stages
+then passed, attestation accepted with no reasons/warnings, whitespace check0.
+Lead rechecked the exact single deletion, accepted candidate
+`cand_rpPGDSdj1nvy-plGYY4Ivg`, and committed through local delivery API:
+`4d07be648c538fc6b83cd6406eb56875740f3bb4` on `bugfix/CDB-390`.
+Target clean, master unchanged. CDB-389 next ticket
+`tkt_hxQyC7P1V17msdhVKVJXAg` submitted; maintain sequential execution.
