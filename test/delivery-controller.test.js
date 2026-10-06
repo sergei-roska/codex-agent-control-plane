@@ -413,6 +413,28 @@ test('delivery controller', async (suite) => {
     });
   });
 
+  await suite.test('a rejected first intake attempt is journaled as bounded retryErrors; a clean run records none', async () => {
+    await withStack(() => makeFakeAppServer({ intakeScript: [{ readiness: 'ready' }, readyIntake({ stages: STAGES })] }), async ({ runtime, appServer }) => {
+      const ticket = makeTicket(runtime);
+      submit(runtime, ticket);
+      await waitStatus(runtime, ticket.ticketId, 'blocked', (r) => r.phase === 'settled').catch(() => null);
+      assert.equal(appServer.intakeCalls.length, 2);
+      const done = runtime.events.listByTicket(ticket.ticketId).filter((e) => e.type === 'intake_completed');
+      assert.equal(done.length, 1);
+      const retryErrors = done[0].payload.retryErrors;
+      assert.ok(Array.isArray(retryErrors) && retryErrors.length > 0 && retryErrors.length <= 10);
+      assert.ok(retryErrors.every((m) => typeof m === 'string' && m.length > 0 && m.length <= 200));
+    });
+    await withStack(() => makeFakeAppServer({ intakeScript: [readyIntake({ stages: STAGES })] }), async ({ runtime }) => {
+      const ticket = makeTicket(runtime);
+      submit(runtime, ticket);
+      await waitStatus(runtime, ticket.ticketId, 'blocked', (r) => r.phase === 'settled').catch(() => null);
+      const done = runtime.events.listByTicket(ticket.ticketId).filter((e) => e.type === 'intake_completed');
+      assert.equal(done.length, 1);
+      assert.equal('retryErrors' in done[0].payload, false);
+    });
+  });
+
   await suite.test('a builder that breaks the check leaves the ticket blocked with a rejected disposition', async () => {
     await withStack((workspace) => makeFakeAppServer({
       intakeScript: [readyIntake({ stages: STAGES })],

@@ -102,6 +102,11 @@ function shorten(text, max = MAX_MESSAGE_CHARS) {
   return value.length > max ? value.slice(0, max) : value;
 }
 
+// Attempt-1 validation failures for the journal: at most 10 "path: message" strings of 200 chars, no control chars.
+function retryErrorsOf(errors) {
+  return errors.slice(0, 10).map((e) => shorten(`${e.path ? `${e.path}: ` : ''}${e.message}`.replace(/[\u0000-\u001f\u007f]/g, ' '), 200));
+}
+
 function messageText(message) {
   const parts = message && Array.isArray(message.parts) ? message.parts : [];
   return parts.map((part) => (part && part.content && part.content.$case === 'text' ? part.content.value : (typeof part?.text === 'string' ? part.text : '')))
@@ -360,9 +365,11 @@ function createDeliveryController({
     let value = null;
     let errors = [];
     let lastRaw = null;
+    let retryErrors = null;
     for (let attempt = 1; attempt <= 2 && !value; attempt += 1) {
       // A control request between attempts: nothing is saved, the (read-only) turn is repeated after Resume.
       if (attempt > 1 && controlPending(run.runId)) return false;
+      if (attempt > 1 && !retryErrors) retryErrors = retryErrorsOf(errors);
       const input = attempt === 1
         ? basePrompt
         : `${basePrompt}\n\nYour previous answer was rejected. Fix these problems and answer again with JSON only:\n${errors.map((e) => `- ${e.path || 'output'}: ${e.message}`).join('\n')}`;
@@ -402,7 +409,7 @@ function createDeliveryController({
     }
 
     if (!value) {
-      emit('intake_completed', run, { turn, outcome: 'invalid', count: errors.length });
+      emit('intake_completed', run, { turn, outcome: 'invalid', count: errors.length, ...(retryErrors ? { retryErrors } : {}) });
       settle(run, {
         status: 'failed', releaseLease: true, ticketStatus: 'blocked', waitReason: 'execution_error',
         waitDetail: {
@@ -415,7 +422,7 @@ function createDeliveryController({
       return true;
     }
 
-    emit('intake_completed', run, { turn, readiness: value.readiness, classification: value.classification });
+    emit('intake_completed', run, { turn, readiness: value.readiness, classification: value.classification, ...(retryErrors ? { retryErrors } : {}) });
     if (value.readiness === 'ready') {
       const checks = value.plan.checkIds.map((id) => {
         const check = projectConfig.checks.find((entry) => entry.id === id);
