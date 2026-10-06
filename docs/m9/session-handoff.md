@@ -429,3 +429,27 @@ Queue, in owner order: CDB-390, CDB-389, CDB-388, CDB-387, CDB-386, CDB-384,
 CDB-383, CDB-382, CDB-381, CDB-380, CDB-378, CDB-377, CDB-372, CDB-370,
 CDB-369, CDB-368, CDB-367, CDB-366, CDB-365, CDB-364, CDB-363, CDB-362,
 CDB-360, CDB-359.
+
+## CDB target mismatch checkpoint - 2026-10-06
+
+All 24 issues imported successfully as internal tickets, with source snapshots
+and no Jira writes. CDB-390 run `run_E5jEsl72p82Wmv_YnEOoeA` and CDB-389 run
+`run_99xb_sMWMt7L_kyWHB1lHg` both correctly stopped at Intake for missing target
+code, before planning, branch creation, or candidate edits. CDB-390 was initially
+returned to local Backlog while awaiting a corrected path.
+
+The owner then confirmed that no other branches exist and explicitly instructed
+cancellation of CDB-390 and subsequent tasks whose file or code is absent.
+An exhaustive read-only comparison of all 24 descriptions against the tracked
+`dccr-master` tree found no runnable targets. Ticket paths were checked with and
+without the `web/` prefix; matching unrelated files are not substitutes. In
+particular, `web/themes/custom/dccourts/theme-settings.php` does not replace the
+missing b4main theme. Cancel these internal tickets only, preserving Jira state.
+The local filename scan also included hidden, ignored, and untracked custom
+module/theme files, with SQL dump globs excluded; targets remained absent.
+All 24 local ticket cancellation commands settled successfully, with zero errors
+or pending cancellations. Jira was not mutated. The target checkout remains
+clean; no task branches, commits, pushes, pull requests, or merges were made.
+Inventory evidence: `/tmp/cdb-pilot-inventory.json`; cancellation evidence:
+`/tmp/cdb-pilot-cancellations.json`. The engineering workflow could not be tested
+with these issue targets; do not describe the batch as implemented.
