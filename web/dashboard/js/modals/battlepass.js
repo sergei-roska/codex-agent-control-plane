@@ -13,7 +13,8 @@ function initBattlepassEvents() {
 
   if (buyBpBtn) {
     buyBpBtn.addEventListener('click', () => {
-      alert("Pass activated! Ultra Neumorphic Boosters engaged.");
+      buyBpBtn.innerHTML = 'Activated!';
+      buyBpBtn.disabled = true;
     });
   }
 
