@@ -855,7 +855,7 @@ test('a stop with repository effect keeps the lease; return to backlog promotes 
   const ticket = store.getTicket(ticketId);
   assert.deepEqual([ticket.status, ticket.title, ticket.currentRevisionId], ['backlog', 'Edited while running', staged.revision.revisionId]);
   assert.equal(store.getStagedRevision(ticketId), null);
-  assert.equal(store.getLease().ticketId, ticketId);
+  assert.equal(store.getLease(), null, 'return to backlog releases the lease: no writer, no commit');
 
   // Backlog keeps the M2 behavior: no staging.
   const direct = store.reviseTicket(ticketId, cc(store, ticketId, { title: 'Backlog edit' }));
@@ -1167,11 +1167,10 @@ test('release repository from a backlog draft preserves the stopped run and its 
   store.returnToBacklog(ticketId, cc(store, ticketId));
   const beforeRun = store.getRun(runId);
   assert.equal(store.getTicket(ticketId).status, 'backlog');
-  assert.equal(store.getLease().ticketId, ticketId);
+  assert.equal(store.getLease(), null, 'return to backlog already released the lease');
 
-  const released = store.releaseRepository(ticketId, cc(store, ticketId));
-  assert.equal(released.ticket.status, 'backlog');
-  assert.equal(store.getLease(), null);
+  expectError(() => store.releaseRepository(ticketId, cc(store, ticketId)), 'invalid_state');
+  assert.equal(store.getTicket(ticketId).status, 'backlog');
   assert.deepEqual(store.getRun(runId), beforeRun);
   assert.equal(store.getRun(runId).branchName, 'feature/work-abcdef');
   assert.ok(store.listRuns(ticketId).some((run) => run.runId === runId));
@@ -1275,6 +1274,83 @@ test('settle and cancel retain repository ownership while the ticket lead writer
   const cancelled = store.cancelTicket(made.ticketId, cc(store, made.ticketId));
   assert.equal(cancelled.ticket.status, 'cancelled');
   assert.equal(store.getLease(), null);
+});
+
+test('return to backlog releases the lease only with no writer and no commit; stop and pause keep it', async () => {
+  const recorded = [];
+  const { store, db } = await makeStore({ events: { record: (type, e) => recorded.push({ type, ...e }) } });
+  const types = (id) => recorded.filter((e) => e.ticketId === id).map((e) => e.type);
+
+  // Interrupted engineering run (repository effect), no writer, no commit: released; only the lease differs.
+  const a = toEngineeringRun(store, 'interrupted');
+  db.prepare("UPDATE runs SET status = 'interrupted', wait_reason = 'execution_error' WHERE run_id = ?").run(a.runId);
+  store.setTicketStatus(a.ticketId, 'blocked', new Date().toISOString());
+  assert.equal(store.getLease().ticketId, a.ticketId);
+  const out = store.returnToBacklog(a.ticketId, cc(store, a.ticketId));
+  assert.equal(out.outcome, 'requested');
+  assert.equal(store.getLease().ticketId, a.ticketId, 'the request alone changes nothing');
+  store.settleControlRequest(a.runId);
+  assert.equal(store.getRun(a.runId).status, 'stopped');
+  assert.equal(store.getTicket(a.ticketId).status, 'backlog');
+  assert.equal(store.getLease(), null);
+  assert.deepEqual(types(a.ticketId).filter((t) => t.startsWith('repository_')), []);
+  assert.ok(types(a.ticketId).includes('ticket_returned_to_backlog') || types(a.ticketId).includes('control_requested'));
+
+  // Active writer on the control path: the lease is kept.
+  const w = toEngineeringRun(store, 'writer');
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'product-return-writer-'));
+  tempDirs.push(workspace);
+  const admission = new WriterAdmission({ db, workspace, snapshot: () => ({ files: [] }) });
+  admission.tryAdmit({ executionId: 'developer:t1', role: 'developer', taskId: 't1', contextId: 'c1' }, { files: [] });
+  store.returnToBacklog(w.ticketId, cc(store, w.ticketId));
+  store.settleControlRequest(w.runId);
+  assert.equal(store.getTicket(w.ticketId).status, 'backlog');
+  assert.equal(store.getLease().ticketId, w.ticketId, 'an active writer keeps the lease');
+
+  // Unresolved writer on the no-active-run branch keeps it; once quiescent the same branch releases it.
+  admission.release('developer:t1');
+  db.prepare("UPDATE writer_executions SET state = 'unresolved' WHERE execution_id = 'developer:t1'").run();
+  store.setTicketStatus(w.ticketId, 'blocked', new Date().toISOString());
+  assert.equal(store.getActiveRun(w.ticketId), null);
+  store.returnToBacklog(w.ticketId, cc(store, w.ticketId));
+  assert.equal(store.getTicket(w.ticketId).status, 'backlog');
+  assert.equal(store.getLease().ticketId, w.ticketId, 'an unresolved writer keeps the lease');
+  db.prepare("DELETE FROM writer_executions WHERE execution_id = 'developer:t1'").run();
+  store.setTicketStatus(w.ticketId, 'blocked', new Date().toISOString());
+  store.returnToBacklog(w.ticketId, cc(store, w.ticketId));
+  assert.equal(store.getLease(), null, 'once quiescent the no-active-run branch releases');
+
+  // Stop and Pause keep the lease.
+  const s = toEngineeringRun(store, 'stop');
+  store.requestStop(s.ticketId, cc(store, s.ticketId, { runId: s.runId }));
+  store.settleControlRequest(s.runId);
+  assert.equal(store.getRun(s.runId).status, 'stopped');
+  assert.equal(store.getLease().ticketId, s.ticketId, 'a stop keeps the lease');
+  // Clear the stopped ticket's lease so the next run can take it.
+  db.prepare('DELETE FROM repository_leases').run();
+
+  const pa = toEngineeringRun(store, 'pause');
+  store.requestPause(pa.ticketId, cc(store, pa.ticketId, { runId: pa.runId }));
+  store.settleControlRequest(pa.runId);
+  assert.equal(store.getRun(pa.runId).status, 'paused');
+  assert.equal(store.getLease().ticketId, pa.ticketId, 'a pause keeps the lease');
+});
+
+test('return to backlog keeps the lease while a commit is intended or succeeded', async () => {
+  const { store, db } = await makeStore();
+  const { ticketId, runId } = submitNew(store, 'intended');
+  const candidate = toReview(store, runId);
+  assert.equal(store.reserveBranch(candidate.branch, ticketId), true);
+  store.recordReview(ticketId, reviewBody(store, ticketId, runId, candidate));
+  store.beginCommit(ticketId, cc(store, ticketId, { candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, message: 'Add feature' }));
+  assert.equal(store.getLease().ticketId, ticketId);
+  for (const state of ['intended', 'succeeded']) {
+    db.prepare("UPDATE deliveries SET state = ? WHERE ticket_id = ? AND kind = 'commit'").run(state, ticketId);
+    store.setTicketStatus(ticketId, 'blocked', new Date().toISOString());
+    store.returnToBacklog(ticketId, cc(store, ticketId));
+    assert.equal(store.getTicket(ticketId).status, 'backlog');
+    assert.equal(store.getLease().ticketId, ticketId, `a ${state} commit keeps the lease`);
+  }
 });
 
 test('completeRun with a pending control: cancel and return to backlog apply, stop and pause are moot', async () => {

@@ -314,18 +314,10 @@ test('m7 operator controls over HTTP', async (suite) => {
       assert.equal(detail.stagedRevision, null);
       assert.equal(detail.revision.ordinal, 2);
       assert.equal(detail.ticket.title, 'Better title');
-      assert.deepEqual(detail.availableActions, ['revise', 'submit', 'cancel', 'release_repository']);
-      assert.equal(runtime.productStore.getLease().ticketId, first.ticketId);
-
-      const checkoutBeforeRelease = fs.readFileSync(path.join(workspace, 'src', 'greet.js'), 'utf8');
-      const released = await api.command(first.ticketId, 'release-repository');
-      assert.equal(released.status, 201);
+      assert.deepEqual(detail.availableActions, ['revise', 'submit', 'cancel']);
       assert.equal(runtime.productStore.getLease(), null);
-      assert.equal(fs.readFileSync(path.join(workspace, 'src', 'greet.js'), 'utf8'), checkoutBeforeRelease);
-      assert.ok(!(await api.ticket(first.ticketId)).availableActions.includes('release_repository'));
       assert.equal(detail.runs[0].status, 'completed');
       assert.ok((await api.eventTypes(first.ticketId)).includes('ticket_returned_to_backlog'));
-      assert.ok((await api.eventTypes(first.ticketId)).includes('repository_released'));
     });
   });
 

@@ -553,6 +553,31 @@ test('delivery controller', async (suite) => {
     });
   });
 
+  await suite.test('return to backlog releases the lease of a dirty checkout; the next ticket is still refused with dirty_worktree', async () => {
+    await withStack((workspace) => makeFakeAppServer({
+      intakeScript: [readyIntake({ stages: STAGES }), readyIntake({ stages: STAGES })],
+      leadScript: happyLeadScript(),
+      workerImpl: builderWorker(workspace),
+    }), async ({ runtime, appServer, workspace }) => {
+      const first = makeTicket(runtime, { title: 'First change' });
+      submit(runtime, first);
+      await waitStatus(runtime, first.ticketId, 'waiting_human', (r) => r.phase === 'settled');
+      assert.equal(runtime.productStore.getLease().ticketId, first.ticketId);
+      assert.notEqual(git(workspace, 'status', '--porcelain').trim(), '', 'the candidate left the checkout dirty');
+
+      const back = runtime.productStore.returnToBacklog(first.ticketId, { commandId: cmd(), expectedVersion: ticketOf(runtime, first.ticketId).version });
+      assert.equal(back.ticket.status, 'backlog');
+      assert.equal(runtime.productStore.getLease(), null);
+
+      const second = makeTicket(runtime, { title: 'Second change' });
+      submit(runtime, second);
+      const run = await waitStatus(runtime, second.ticketId, 'blocked', (r) => r.phase === 'settled');
+      assert.equal(appServer.intakeCalls.length, 2);
+      assert.equal(run.waitDetail.code, 'preflight_failed');
+      assert.ok(run.waitDetail.problems.some((p) => p.code === 'dirty_worktree'));
+    });
+  });
+
   await suite.test('a lead human_decision during engineering becomes a lead_decision and an answer resumes the lead', async () => {
     const script = happyLeadScript();
     await withStack((workspace) => makeFakeAppServer({
@@ -1449,7 +1474,7 @@ test('cancel and return to backlog of a candidate under review keep the complete
     assert.equal(out.ticket.status, 'backlog');
     assert.equal(out.ticket.title, 'Reworded');
     assert.equal(h.store.getRun(run.runId).status, 'completed');
-    assert.equal(h.store.getLease().ticketId, ticket.ticketId);
+    assert.equal(h.store.getLease(), null, 'return to backlog releases the lease: no writer, no commit');
     const cancelled = h.controller.cancelTicket(ticket.ticketId, cmdFor(h, ticket.ticketId));
     assert.equal(cancelled.ticket.status, 'cancelled');
     assert.equal(h.store.getLease(), null);

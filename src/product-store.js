@@ -1164,6 +1164,14 @@ class ProductStore {
     `).get() || null;
   }
 
+  // Return to Backlog hands the repository back when no writer is active or unknown and the
+  // ticket has no commit delivery in progress or done. A dirty checkout is still refused by the
+  // next Submit's branch preflight, so releasing never lets a second ticket write over it.
+  canReleaseOnReturn(ticketId) {
+    if (this.holdingWorkspaceWriter()) return false;
+    return !this.stmt("SELECT 1 FROM deliveries WHERE ticket_id = ? AND kind = 'commit' AND state IN ('succeeded','intended')").get(String(ticketId));
+  }
+
   requireWriterQuiescent(ticketId) {
     const holder = this.holdingWorkspaceWriter();
     if (holder) {
@@ -1187,7 +1195,7 @@ class ProductStore {
       control_request: null,
       finished_at: at,
     }, at);
-    if (cancelled || !this.hasRepositoryEffect(run.ticketId)) {
+    if (cancelled || !this.hasRepositoryEffect(run.ticketId) || (control === 'return_to_backlog' && this.canReleaseOnReturn(run.ticketId))) {
       this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(run.ticketId);
     }
     if (control === 'return_to_backlog') {
@@ -1401,6 +1409,7 @@ class ProductStore {
       this.stmt("UPDATE decisions SET state = 'stale' WHERE ticket_id = ? AND state = 'pending'").run(ticket.ticketId);
       this.promoteStagedRevision(ticket.ticketId, at);
       this.setTicketStatus(ticket.ticketId, 'backlog', at);
+      if (this.canReleaseOnReturn(ticket.ticketId)) this.stmt('DELETE FROM repository_leases WHERE ticket_id = ?').run(ticket.ticketId);
       const latest = this.latestRunOf(ticket.ticketId);
       return this.controlResult(ticket.ticketId, latest ? latest.runId : null, 'settled');
     });
