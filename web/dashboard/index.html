@@ -88,10 +88,16 @@
       <button class="view-btn" id="btn-view-role">Role View</button>
     </div>
     <div class="board-filters">
-      <input type="text" id="board-search" class="input-text" placeholder="Search title or task id..." maxlength="200" aria-label="Search executions" style="width: 220px;">
-      <select id="board-role-filter" class="select-input" aria-label="Filter by role">
-        <option value="all">All Roles</option>
-      </select>
+      <div class="form-group board-filter-field">
+        <input type="text" id="board-search" class="input-text" placeholder="Search title or task id..." maxlength="200" aria-label="Search executions" aria-describedby="board-search-help">
+        <span class="field-help" id="board-search-help">Searches execution titles and task IDs. Enter up to 200 characters.</span>
+      </div>
+      <div class="form-group board-filter-field">
+        <select id="board-role-filter" class="select-input" aria-label="Filter by role" aria-describedby="board-role-help">
+          <option value="all">All Roles</option>
+        </select>
+        <span class="field-help" id="board-role-help">Show executions where this role participates; choose All Roles to clear the filter.</span>
+      </div>
     </div>
   </div>
 
@@ -164,15 +170,27 @@
       <section id="tab-monitor" class="tab-pane">
   <div class="monitor-container">
     <div class="monitor-controls">
-      <select id="monitor-type-filter" class="select-input" disabled>
-        <option value="all">All categories</option>
-      </select>
-      <select id="monitor-role-filter" class="select-input" disabled>
-        <option value="all">Role filter unavailable</option>
-      </select>
-      <select id="monitor-level-filter" class="select-input" disabled>
-        <option value="all">Severity unavailable</option>
-      </select>
+      <div class="form-group monitor-filter-field">
+        <label class="form-label" for="monitor-type-filter">Category</label>
+        <select id="monitor-type-filter" class="select-input" aria-describedby="monitor-type-help" disabled>
+          <option value="all">All categories</option>
+        </select>
+        <span class="field-help" id="monitor-type-help">When categories are available, choose one to limit the event log.</span>
+      </div>
+      <div class="form-group monitor-filter-field">
+        <label class="form-label" for="monitor-role-filter">Role</label>
+        <select id="monitor-role-filter" class="select-input" aria-describedby="monitor-role-help" disabled>
+          <option value="all">Role filter unavailable</option>
+        </select>
+        <span class="field-help" id="monitor-role-help">When roles are available, choose one to show events attributed to that role.</span>
+      </div>
+      <div class="form-group monitor-filter-field">
+        <label class="form-label" for="monitor-level-filter">Severity</label>
+        <select id="monitor-level-filter" class="select-input" aria-describedby="monitor-level-help" disabled>
+          <option value="all">Severity unavailable</option>
+        </select>
+        <span class="field-help" id="monitor-level-help">When severity levels are available, choose one to limit the event log.</span>
+      </div>
       <button class="btn btn-secondary" id="btn-clear-logs" style="margin-left: auto;">Clear Log</button>
     </div>
     <div id="monitor-status" class="detail-empty" role="status"></div>
@@ -261,15 +279,17 @@
       <div id="atlassian-resources-state" class="provider-setup"></div>
       <div class="atlassian-site-row" id="atlassian-site-row" hidden>
         <label for="atlassian-site-select">Available Atlassian site</label>
-        <select class="select-input" id="atlassian-site-select" aria-label="Available Atlassian site"></select>
+        <select class="select-input" id="atlassian-site-select" aria-label="Available Atlassian site" aria-describedby="atlassian-site-help"></select>
+        <span class="field-help" id="atlassian-site-help">Choose an accessible Atlassian site, then select it to save your choice for future sessions.</span>
         <button class="btn btn-secondary" id="btn-atlassian-select-site" type="button">Select site</button>
       </div>
       <div id="atlassian-import-panel" class="atlassian-import-panel" hidden>
         <label for="atlassian-issue-key">Jira issue key or ID</label>
         <div class="atlassian-import-row">
-          <input class="input-text" id="atlassian-issue-key" type="text" maxlength="120" autocomplete="off" placeholder="e.g. PROJ-123">
+          <input class="input-text" id="atlassian-issue-key" type="text" maxlength="120" autocomplete="off" placeholder="e.g. PROJ-123" aria-describedby="atlassian-issue-help">
           <button class="btn btn-primary" id="btn-atlassian-import" type="button">Import Jira issue</button>
         </div>
+        <span class="field-help" id="atlassian-issue-help">Enter an issue key such as PROJ-123 or a numeric Jira issue ID. Imports a read-only copy into this dashboard.</span>
         <div class="provider-sub" id="atlassian-import-site"></div>
       </div>
       <div id="atlassian-message" class="atlassian-message" role="status" aria-live="polite"></div>
@@ -278,6 +298,12 @@
 
   <div class="connections-title connections-title-spaced">Per-Role Model Defaults</div>
   <div class="tr-banner tone-info" id="role-defaults-banner" role="note">Changes apply to new runs only; running and resumed work keeps its pinned settings</div>
+  <div class="role-defaults-help" aria-label="Model setting explanations">
+    <p class="field-help" id="role-save-help">Changes stay as drafts until you choose Save. Save stores the role default for this project across sessions; Reset removes that saved choice and restores the built-in profile default.</p>
+    <p class="field-help" id="role-model-help"><strong>Model:</strong> Choose the model this role uses for new runs.</p>
+    <p class="field-help" id="role-effort-help"><strong>Reasoning effort:</strong> Choose how much reasoning to request; available values depend on the selected model.</p>
+    <p class="field-help" id="role-speed-help"><strong>Speed:</strong> Optional service tier advertised by the model. It is sent only when selected, and availability depends on your account.</p>
+  </div>
   <div id="role-defaults-status" role="status" aria-live="polite"></div>
   <div class="role-defaults-table-container">
     <table class="role-defaults-table">
@@ -559,70 +585,78 @@
 
         <div class="form-group">
           <label class="form-label" for="ticket-title-input">Title *</label>
-          <input type="text" id="ticket-title-input" class="input-text" maxlength="200" autocomplete="off" placeholder="e.g. Implement rate limiter MCP tool" style="width: 100%;">
+          <input type="text" id="ticket-title-input" class="input-text" maxlength="200" autocomplete="off" placeholder="e.g. Implement rate limiter MCP tool" aria-describedby="ticket-title-help err-title ticket-title-counter" style="width: 100%;">
+          <span class="form-hint" id="ticket-title-help">Required. Use a short summary, up to 200 characters.</span>
           <div class="tf-row-hint"><span class="tf-field-error" id="err-title"></span><span class="form-hint" id="ticket-title-counter">0 / 200</span></div>
         </div>
 
         <div class="form-group">
           <label class="form-label" for="ticket-desc-input">Description</label>
-          <textarea id="ticket-desc-input" class="form-textarea" rows="4" placeholder="Detailed objectives and context..." style="width: 100%; resize: vertical;"></textarea>
+          <textarea id="ticket-desc-input" class="form-textarea" rows="4" placeholder="Detailed objectives and context..." aria-describedby="ticket-desc-help err-description" style="width: 100%; resize: vertical;"></textarea>
+          <span class="form-hint" id="ticket-desc-help">Optional. Describe the goal, context, constraints, and relevant details. Maximum 32,000 characters.</span>
           <span class="tf-field-error" id="err-description"></span>
         </div>
 
         <div class="form-group">
           <label class="form-label" for="ticket-ac-input">Acceptance Criteria</label>
-          <textarea id="ticket-ac-input" class="form-textarea" rows="3" placeholder="One criterion per line" style="width: 100%; resize: vertical;"></textarea>
-          <span class="form-hint">One criterion per line; empty lines are dropped.</span>
+          <textarea id="ticket-ac-input" class="form-textarea" rows="3" placeholder="One criterion per line" aria-describedby="ticket-ac-help err-criteria" style="width: 100%; resize: vertical;"></textarea>
+          <span class="form-hint" id="ticket-ac-help">Optional. Put one testable completion condition on each line. Empty lines are ignored; up to 100 criteria and 16,000 characters total.</span>
           <span class="tf-field-error" id="err-criteria"></span>
         </div>
 
         <div class="tf-grid-2">
           <div class="form-group">
             <label class="form-label" for="ticket-priority">Priority</label>
-            <select id="ticket-priority" class="select-input" style="width: 100%;">
+            <select id="ticket-priority" class="select-input" aria-describedby="ticket-priority-help err-priority" style="width: 100%;">
               <option value="low">Low</option>
               <option value="normal" selected>Normal</option>
               <option value="high">High</option>
             </select>
+            <span class="form-hint" id="ticket-priority-help">Choose the urgency recorded for this request. Normal is the default.</span>
             <span class="tf-field-error" id="err-priority"></span>
           </div>
           <div class="form-group">
             <label class="form-label" for="ticket-role">Requested specialty</label>
-            <select id="ticket-role" class="select-input" style="width: 100%;">
+            <select id="ticket-role" class="select-input" aria-describedby="ticket-role-help err-requestedSpecialty" style="width: 100%;">
               <option value="">No preference</option>
             </select>
-            <span class="form-hint">Preference only - the PM coordinates who works on it</span>
+            <span class="form-hint" id="ticket-role-help">Optional preference for the kind of specialist. The project manager coordinates the final assignment.</span>
             <span class="tf-field-error" id="err-requestedSpecialty"></span>
           </div>
         </div>
 
         <div class="form-group">
           <span class="form-label">References</span>
-          <span class="form-hint">Saved as references; not fetched. One per line.</span>
+          <span class="form-hint">Optional. Add one item per line; each reference field accepts up to 20 entries of 2,000 characters each. References are saved with the ticket and are not fetched here.</span>
           <div class="tf-grid-2">
             <div>
               <label class="form-label tf-small" for="ticket-jira-issue">Jira issues</label>
-              <textarea id="ticket-jira-issue" class="form-textarea" rows="2" placeholder="PROJ-101 or https://jira.domain/browse/PROJ-101" style="width: 100%; resize: vertical;"></textarea>
+              <textarea id="ticket-jira-issue" class="form-textarea" rows="2" placeholder="PROJ-101 or https://jira.domain/browse/PROJ-101" aria-describedby="ticket-jira-issue-help err-references.jiraIssues" style="width: 100%; resize: vertical;"></textarea>
+              <span class="form-hint" id="ticket-jira-issue-help">Optional. Enter one Jira issue key or full issue URL per line. Saved as a reference; not fetched here.</span>
               <span class="tf-field-error" id="err-references.jiraIssues"></span>
             </div>
             <div>
               <label class="form-label tf-small" for="ticket-jira-parents">Jira parents / epic</label>
-              <textarea id="ticket-jira-parents" class="form-textarea" rows="2" placeholder="EPIC-10" style="width: 100%; resize: vertical;"></textarea>
+              <textarea id="ticket-jira-parents" class="form-textarea" rows="2" placeholder="EPIC-10" aria-describedby="ticket-jira-parents-help err-references.jiraParents" style="width: 100%; resize: vertical;"></textarea>
+              <span class="form-hint" id="ticket-jira-parents-help">Optional. Enter one parent or epic issue key per line. Saved as a reference; not fetched here.</span>
               <span class="tf-field-error" id="err-references.jiraParents"></span>
             </div>
             <div>
               <label class="form-label tf-small" for="ticket-confluence">Confluence</label>
-              <textarea id="ticket-confluence" class="form-textarea" rows="2" placeholder="https://confluence.../spec" style="width: 100%; resize: vertical;"></textarea>
+              <textarea id="ticket-confluence" class="form-textarea" rows="2" placeholder="https://confluence.../spec" aria-describedby="ticket-confluence-help err-references.confluence" style="width: 100%; resize: vertical;"></textarea>
+              <span class="form-hint" id="ticket-confluence-help">Optional. Enter one full Confluence page URL per line. Saved as a reference; not fetched here.</span>
               <span class="tf-field-error" id="err-references.confluence"></span>
             </div>
             <div>
               <label class="form-label tf-small" for="ticket-figma">Figma</label>
-              <textarea id="ticket-figma" class="form-textarea" rows="2" placeholder="https://figma.com/file/..." style="width: 100%; resize: vertical;"></textarea>
+              <textarea id="ticket-figma" class="form-textarea" rows="2" placeholder="https://figma.com/file/..." aria-describedby="ticket-figma-help err-references.figma" style="width: 100%; resize: vertical;"></textarea>
+              <span class="form-hint" id="ticket-figma-help">Optional. Enter one full Figma file or prototype URL per line. Saved as a reference; not fetched here.</span>
               <span class="tf-field-error" id="err-references.figma"></span>
             </div>
           </div>
           <label class="form-label tf-small" for="ticket-links">Other links</label>
-          <textarea id="ticket-links" class="form-textarea" rows="2" placeholder="https://..." style="width: 100%; resize: vertical;"></textarea>
+          <textarea id="ticket-links" class="form-textarea" rows="2" placeholder="https://..." aria-describedby="ticket-links-help err-references.links" style="width: 100%; resize: vertical;"></textarea>
+          <span class="form-hint" id="ticket-links-help">Optional. Enter one full URL per line for other useful references. Links are saved with the ticket and are not fetched here.</span>
           <span class="tf-field-error" id="err-references.links"></span>
           <span class="tf-field-error" id="err-references"></span>
         </div>
@@ -630,8 +664,9 @@
         <div class="form-group">
           <label class="form-label" for="ticket-attachments-input">Attachments</label>
           <div class="tf-dropzone" id="ticket-dropzone">
-            <input type="file" id="ticket-attachments-input" multiple style="display: none;">
-            <button type="button" class="btn btn-secondary" id="btn-browse-attachments">Browse files</button>
+            <input type="file" id="ticket-attachments-input" multiple aria-describedby="ticket-attachments-help tf-policy-note err-artifactIds" style="display: none;">
+            <button type="button" class="btn btn-secondary" id="btn-browse-attachments" aria-describedby="ticket-attachments-help tf-policy-note">Browse files</button>
+            <span class="form-hint" id="ticket-attachments-help">Optional. Choose or drop files to attach them to the ticket. Unsupported or oversized files are rejected.</span>
             <span class="form-hint">or drop files here</span>
             <div class="form-hint" id="tf-policy-note"></div>
           </div>

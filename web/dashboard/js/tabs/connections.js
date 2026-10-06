@@ -24,7 +24,7 @@ const cm = {
 const ac = {
   loaded: false, loading: false, health: null, healthError: null,
   resources: [], resourcesLoaded: false, resourcesLoading: false, resourcesError: null,
-  resourcesSeq: 0, busy: null, message: '', messageError: false, commands: {}, issueDraft: ''
+  resourcesSeq: 0, busy: null, message: '', messageError: false, commands: {}, issueDraft: '', siteDraft: null
 };
 
 const CM_SETUP_TEXT = {
@@ -184,6 +184,23 @@ function acJiraSites() {
   return sites.filter(site => site && site.sourceKind === 'jira' && typeof site.originId === 'string');
 }
 
+function acAvailableSites(resources, selectedSites) {
+  const available = Array.isArray(resources) ? resources.slice() : [];
+  (Array.isArray(selectedSites) ? selectedSites : []).forEach(site => {
+    const id = site && typeof site.cloudId === 'string' ? site.cloudId : '';
+    if (id && !available.some(resource => resource && resource.id === id)) {
+      available.unshift({ id, name: site.name, url: site.url, saved: true });
+    }
+  });
+  return available;
+}
+
+function acPreferredSiteId(availableSites, draft, selectedSites) {
+  if (draft && availableSites.some(site => site.id === draft)) return draft;
+  const saved = (Array.isArray(selectedSites) ? selectedSites : []).find(site => site && typeof site.cloudId === 'string' && site.cloudId);
+  return saved ? saved.cloudId : '';
+}
+
 function acCallbackTarget() {
   const configured = ac.health && ac.health.callbackOrigin;
   if (typeof configured !== 'string') return null;
@@ -267,20 +284,29 @@ function renderAtlassian() {
     actions.appendChild(acButton('Retry sites', loadAtlassianResources, Boolean(ac.busy || ac.resourcesLoading)));
   } else if (ac.resourcesLoading) state.textContent = 'Loading available sites...';
   else if (ac.resourcesLoaded && !ac.resources.length) state.textContent = 'No accessible Atlassian sites were returned.';
-  else if (!ac.resourcesLoaded) state.textContent = 'Load sites, then select the Jira site used for issue imports.';
+  else if (!ac.resourcesLoaded && ac.health.selectedSites && ac.health.selectedSites.length) state.textContent = 'A saved Atlassian site is selected. Load available sites to add or change the selection.';
+  else if (!ac.resourcesLoaded) state.textContent = 'Load available sites, then select a site to enable source access and Jira issue imports.';
   else state.textContent = ac.resources.length + ' accessible site(s). Choose a Jira site explicitly before importing.';
 
   if (siteRow && siteSelect) {
-    siteRow.hidden = !ac.resourcesLoaded || !ac.resources.length;
-    const oldValue = siteSelect.value;
+    const selectedSites = Array.isArray(ac.health.selectedSites) ? ac.health.selectedSites : [];
+    const availableSites = acAvailableSites(ac.resourcesLoaded ? ac.resources : [], selectedSites);
+    siteRow.hidden = !availableSites.length;
     siteSelect.textContent = '';
-    ac.resources.forEach(resource => {
-      const option = h('option', { text: (resource.name || 'Atlassian site') + ' (' + resource.url + ')', attrs: { value: resource.id } });
-      if ((ac.health.selectedSites || []).some(s => s.cloudId === resource.id || s.originId === resource.id)) option.selected = true;
+    availableSites.forEach(resource => {
+      const label = (resource.name || 'Atlassian site') + (resource.url ? ' (' + resource.url + ')' : '') + (resource.saved ? ' (saved)' : '');
+      const option = h('option', { text: label, attrs: { value: resource.id } });
       siteSelect.appendChild(option);
     });
-    if (oldValue && ac.resources.some(r => r.id === oldValue)) siteSelect.value = oldValue;
-    if (selectBtn) { selectBtn.disabled = Boolean(ac.busy); selectBtn.textContent = ac.busy === 'site' ? 'Selecting...' : 'Select site'; selectBtn.onclick = selectAtlassianSite; }
+    const desiredSite = acPreferredSiteId(availableSites, ac.siteDraft, selectedSites);
+    if (desiredSite && availableSites.some(site => site.id === desiredSite)) siteSelect.value = desiredSite;
+    else if (availableSites.length) siteSelect.value = availableSites[0].id;
+    siteSelect.onchange = () => { ac.siteDraft = siteSelect.value; };
+    if (selectBtn) {
+      selectBtn.disabled = Boolean(ac.busy || !availableSites.length);
+      selectBtn.textContent = ac.busy === 'site' ? 'Selecting...' : 'Select site';
+      selectBtn.onclick = selectAtlassianSite;
+    }
   }
   const jiraSites = acJiraSites();
   if (importPanel) importPanel.hidden = !jiraSites.length;
@@ -338,6 +364,7 @@ async function completeAtlassianCallback(handle) {
     ac.resourcesSeq += 1;
     ac.resourcesLoading = false;
     ac.resourcesLoaded = false; ac.resources = [];
+    ac.siteDraft = null;
     ac.message = 'Atlassian authorization completed. Load sites and select a Jira site.'; ac.messageError = false;
     try { ac.health = await apiGet('/integrations/atlassian'); ac.healthError = null; }
     catch (_) { ac.health = null; ac.healthError = 'Atlassian authorization completed, but connection status could not be read.'; }
@@ -359,6 +386,7 @@ async function selectAtlassianSite() {
   try {
     const result = await apiRequest('PUT', '/integrations/atlassian/site', { body: { cloudId } });
     ac.health.selectedSites = Array.isArray(result && result.sites) ? result.sites : [];
+    ac.siteDraft = cloudId;
     ac.message = 'Selected Atlassian site for read-only imports.';
   } catch (err) { ac.message = acError(err); ac.messageError = true; }
   ac.busy = null; renderAtlassian();
@@ -372,6 +400,7 @@ async function disconnectAtlassian() {
     ac.resourcesSeq += 1;
     ac.resourcesLoading = false;
     ac.health.connected = false; ac.health.selectedSites = []; ac.resources = []; ac.resourcesLoaded = false;
+    ac.siteDraft = null;
     ac.message = 'Atlassian disconnected.';
   } catch (err) { ac.message = acError(err); ac.messageError = true; }
   ac.busy = null; renderAtlassian();
@@ -541,8 +570,8 @@ function cmDirty(row) {
   return d.model !== b.model || d.effort !== b.effort || (d.serviceTier || null) !== (b.serviceTier || null);
 }
 
-function cmSelect(options, value, onChange, disabled, label) {
-  const sel = h('select', { class: 'select-input', attrs: { 'aria-label': label } });
+function cmSelect(options, value, onChange, disabled, label, descriptionId) {
+  const sel = h('select', { class: 'select-input', attrs: { 'aria-label': label, 'aria-describedby': descriptionId } });
   options.forEach(o => {
     const opt = h('option', { text: o.label, attrs: { value: o.value } });
     if (o.value === value) opt.selected = true;
@@ -580,12 +609,12 @@ function cmRoleRow(row, catalogOk) {
     h('div', { class: 'role-name', text: row.displayName || id }),
     h('div', { class: 'role-id', text: id + (row.kind ? ' - ' + row.kind : '') })
   ]);
-  const modelCell = h('td', {}, [cmSelect(cmModelOptions(draft.model), draft.model, v => cmSetDraft(row, { model: v }), disabled, 'Model for ' + id)]);
-  const effortCell = h('td', {}, [cmSelect(cmEffortOptions(entry, draft.effort), draft.effort, v => cmSetDraft(row, { effort: v }), disabled, 'Reasoning effort for ' + id)]);
+  const modelCell = h('td', {}, [cmSelect(cmModelOptions(draft.model), draft.model, v => cmSetDraft(row, { model: v }), disabled, 'Model for ' + id, 'role-model-help')]);
+  const effortCell = h('td', {}, [cmSelect(cmEffortOptions(entry, draft.effort), draft.effort, v => cmSetDraft(row, { effort: v }), disabled, 'Reasoning effort for ' + id, 'role-effort-help')]);
   const speedCell = h('td', {});
   if (entry && entry.serviceTiers.length) {
     const opts = [{ value: '', label: cmTierLabel(null, draft.model) }].concat(entry.serviceTiers.map(t => ({ value: t.id, label: t.name || t.id })));
-    const sel = cmSelect(opts, draft.serviceTier || '', v => cmSetDraft(row, { serviceTier: v || null }), disabled, 'Speed for ' + id);
+    const sel = cmSelect(opts, draft.serviceTier || '', v => cmSetDraft(row, { serviceTier: v || null }), disabled, 'Speed for ' + id, 'role-speed-help');
     sel.title = 'Listed by the model. This does not prove your account is entitled to it.';
     speedCell.appendChild(sel);
   } else {

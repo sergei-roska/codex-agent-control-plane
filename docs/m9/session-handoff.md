@@ -370,3 +370,27 @@ Verification: role-pack, settings-store, dashboard-settings, and delivery-pack
 checks passed with loopback enabled: 71/71, no skips. Updated stale default
 expectations and the removed-model fixture without weakening the checks.
 Whitespace and protected dashboard reference checks passed.
+
+## Dashboard field guidance and Atlassian site checkpoint - 2026-10-06
+
+The owner extended field guidance to the orchestrator and requested that checks
+remain focused rather than running the full suite for copy changes. Active
+ticket, run, decision, source snapshot, Git delivery, board, monitor, Atlassian,
+and per-role model controls now have visible guidance and accessible description
+links. Inactive provider and approval prototypes were excluded; Battle Pass and
+the protected dashboard reference were not changed.
+
+The owner also reported that the Atlassian site did not persist between sessions.
+Backend selection is durable in the same project's SQLite database, verified by
+closing/reopening a file database and recreating the integration. The frontend
+previously hid the selector until available sites were loaded again. It now
+renders the saved cloud ID from connection health immediately, preserves an
+explicit unsaved selection during rerenders, and clears the draft on disconnect
+or OAuth completion. Display restoration performs no automatic network request
+or site selection; the existing backend checks still apply on save/import.
+Completing a new OAuth authorization intentionally clears site selection.
+Verification: focused connection-render checks 4/4 and Atlassian integration
+checks 7/7 passed, without real credentials or network access. Changed JavaScript
+syntax and active-field helper links were inspected. Regenerated only
+`web/dashboard/index.html`; whitespace and protected reference checks passed.
+No full suite or live browser run was performed for these changes.

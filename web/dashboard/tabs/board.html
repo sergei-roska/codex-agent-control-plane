@@ -5,10 +5,16 @@
       <button class="view-btn" id="btn-view-role">Role View</button>
     </div>
     <div class="board-filters">
-      <input type="text" id="board-search" class="input-text" placeholder="Search title or task id..." maxlength="200" aria-label="Search executions" style="width: 220px;">
-      <select id="board-role-filter" class="select-input" aria-label="Filter by role">
-        <option value="all">All Roles</option>
-      </select>
+      <div class="form-group board-filter-field">
+        <input type="text" id="board-search" class="input-text" placeholder="Search title or task id..." maxlength="200" aria-label="Search executions" aria-describedby="board-search-help">
+        <span class="field-help" id="board-search-help">Searches execution titles and task IDs. Enter up to 200 characters.</span>
+      </div>
+      <div class="form-group board-filter-field">
+        <select id="board-role-filter" class="select-input" aria-label="Filter by role" aria-describedby="board-role-help">
+          <option value="all">All Roles</option>
+        </select>
+        <span class="field-help" id="board-role-help">Show executions where this role participates; choose All Roles to clear the filter.</span>
+      </div>
     </div>
   </div>
 

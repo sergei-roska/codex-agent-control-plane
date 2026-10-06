@@ -351,10 +351,11 @@ function trrCorrectionsForm(d, run, data) {
   const st = trrReviewState(d, run, data, 'corrections');
   const area = h('textarea', {
     class: 'form-textarea tr-answer-input',
-    attrs: { rows: '5', maxlength: String(TRR_FINDINGS_MAX), 'aria-label': 'Review findings', placeholder: 'What must change? These findings go to the next run.' }
+    attrs: { rows: '5', maxlength: String(TRR_FINDINGS_MAX), 'aria-label': 'Review findings', placeholder: 'What must change? These findings go to the next run.', 'aria-describedby': 'trr-review-findings-help trr-review-findings-count' }
   });
   area.value = draft.text;
-  const counter = h('span', { class: 'form-hint', text: draft.text.length + ' / ' + TRR_FINDINGS_MAX });
+  const help = h('div', { class: 'form-hint', attrs: { id: 'trr-review-findings-help' }, text: 'Required to request corrections. Describe specific changes for the next run; 1 to ' + TRR_FINDINGS_MAX + ' characters.' });
+  const counter = h('span', { class: 'form-hint', attrs: { id: 'trr-review-findings-count' }, text: draft.text.length + ' / ' + TRR_FINDINGS_MAX });
   const err = h('div', { class: 'tf-field-error', attrs: { role: 'alert' } });
   area.addEventListener('input', () => {
     draft.text = area.value;
@@ -372,7 +373,7 @@ function trrCorrectionsForm(d, run, data) {
   return h('div', { class: 'tr-decision detail-block' }, [
     h('div', { class: 'tr-sub-title', text: 'Request corrections' }),
     h('div', { class: 'form-hint', text: 'A new rework run starts from this candidate on the same branch, with your findings added to its goal. At most 3 rework runs per revision.' }),
-    area, h('div', { class: 'tr-answer-foot' }, [send, counter]), err
+    help, area, h('div', { class: 'tr-answer-foot' }, [send, counter]), err
   ]);
 }
 
@@ -414,7 +415,7 @@ function trrCurrentWaitVisible(d, run) {
 
 function trrBuildHead(el, d, runs, run, data) {
   if (runs.length > 1) {
-    const select = h('select', { class: 'form-select tr-run-select', attrs: { 'aria-label': 'Choose run' } });
+    const select = h('select', { class: 'form-select tr-run-select', attrs: { 'aria-label': 'Choose run', 'aria-describedby': 'tr-run-select-help' } });
     runs.forEach((r, i) => {
       const opt = h('option', {
         text: 'Run ' + (runs.length - i) + ' - ' + r.status + ' - ' + formatAbsTime(r.createdAt),
@@ -432,7 +433,7 @@ function trrBuildHead(el, d, runs, run, data) {
       renderRunPanel();
       trrFetchRun(tr.ticketId, tr.loadSeq);
     });
-    el.appendChild(h('div', { class: 'tr-run-pick' }, [select]));
+    el.appendChild(h('div', { class: 'tr-run-pick' }, [select, h('span', { class: 'form-hint', attrs: { id: 'tr-run-select-help' }, text: 'Choose a run to view its status, decisions, and result.' })]));
   }
 
   const meta = h('div', { class: 'tr-run-meta' }, [
@@ -570,7 +571,7 @@ function trrIntakeForm(dec) {
     const id = 'trr-q-' + cssToken(dec.decisionId) + '-' + i;
     const ta = h('textarea', {
       class: 'form-textarea tr-answer-input',
-      attrs: { id, rows: '3', 'data-question': String(q.id) }
+      attrs: { id, rows: '3', 'data-question': String(q.id), 'aria-describedby': 'trr-question-help-' + cssToken(dec.decisionId) + '-' + i }
     });
     ta.value = draft.answers[q.id] || '';
     if (busy) ta.disabled = true;
@@ -580,6 +581,7 @@ function trrIntakeForm(dec) {
     box.appendChild(h('div', { class: 'form-group tr-question' }, [
       h('label', { class: 'form-label', text: (i + 1) + '. ' + (q.question || ''), attrs: { for: id } }),
       q.why ? h('div', { class: 'form-hint', text: 'Why it matters: ' + q.why }) : null,
+      h('div', { class: 'form-hint', attrs: { id: 'trr-question-help-' + cssToken(dec.decisionId) + '-' + i }, text: 'Required. Answer in up to ' + TRR_ANSWER_MAX + ' characters.' }),
       ta, fieldErr
     ]));
   });
@@ -609,11 +611,12 @@ function trrLeadForm(dec) {
   box.appendChild(h('div', { class: 'tr-question-text', text: req.question || '(no question text)' }));
   if (req.reason) box.appendChild(h('div', { class: 'form-hint', text: 'Reason: ' + req.reason }));
   const recId = req.recommendation;
-  const group = h('div', { class: 'tr-options', attrs: { role: 'radiogroup', 'aria-label': 'Options' } });
+  const choiceHelpId = 'trr-choice-help-' + cssToken(dec.decisionId);
+  const group = h('div', { class: 'tr-options', attrs: { role: 'radiogroup', 'aria-label': 'Options', 'aria-describedby': choiceHelpId } });
   const name = 'trr-opt-' + cssToken(dec.decisionId);
   options.forEach((o, i) => {
     const id = name + '-' + i;
-    const radio = h('input', { attrs: { type: 'radio', name, id, value: String(o.id) } });
+    const radio = h('input', { attrs: { type: 'radio', name, id, value: String(o.id), 'aria-describedby': choiceHelpId } });
     radio.checked = draft.choice === o.id;
     if (busy) radio.disabled = true;
     radio.addEventListener('change', () => { draft.choice = o.id; });
@@ -627,10 +630,12 @@ function trrLeadForm(dec) {
     ]);
     group.appendChild(label);
   });
+  box.appendChild(h('div', { class: 'form-hint', attrs: { id: choiceHelpId }, text: 'Required. Choose one option to continue. The recommendation is marked when one is available.' }));
   box.appendChild(group);
   if (!options.length) box.appendChild(h('div', { class: 'detail-empty', text: 'No options were offered.' }));
   const noteId = 'trr-note-' + cssToken(dec.decisionId);
-  const note = h('textarea', { class: 'form-textarea tr-answer-input', attrs: { id: noteId, rows: '2' } });
+  const noteHelpId = noteId + '-help';
+  const note = h('textarea', { class: 'form-textarea tr-answer-input', attrs: { id: noteId, rows: '2', 'aria-describedby': noteHelpId } });
   note.value = draft.note || '';
   if (busy) note.disabled = true;
   note.addEventListener('input', () => { draft.note = note.value; });
@@ -638,7 +643,8 @@ function trrLeadForm(dec) {
   const noteErr = h('div', { class: 'tf-field-error', attrs: { role: 'alert' } });
   box.appendChild(choiceErr);
   box.appendChild(h('div', { class: 'form-group' }, [
-    h('label', { class: 'form-label', text: 'Note (optional)', attrs: { for: noteId } }), note, noteErr
+    h('label', { class: 'form-label', text: 'Note (optional)', attrs: { for: noteId } }),
+    h('div', { class: 'form-hint', attrs: { id: noteHelpId }, text: 'Optional context for your choice; up to ' + TRR_ANSWER_MAX + ' characters. If blank, the selected option is sent as the answer.' }), note, noteErr
   ]));
   const btn = h('button', { class: 'btn btn-primary', text: busy ? 'Sending...' : 'Send decision', attrs: { type: 'button' } });
   btn.disabled = busy || !options.length;
@@ -1412,13 +1418,14 @@ function trdCommand(slot, path, extra, confirmText) {
 }
 
 function trdRemoteSelect(remotes) {
-  const select = h('select', { class: 'form-select', attrs: { 'aria-label': 'Remote' } });
+  const select = h('select', { class: 'form-select', attrs: { 'aria-label': 'Remote', 'aria-describedby': 'trd-remote-help' } });
   remotes.forEach(r => {
     select.appendChild(h('option', { text: (r.name || '?') + (r.url ? ' - ' + r.url : ''), attrs: { value: r.name || '' } }));
   });
   if (!remotes.some(r => r.name === trd.remote)) trd.remote = remotes[0] ? remotes[0].name : null;
   select.value = trd.remote || '';
   select.addEventListener('change', () => { trd.remote = select.value; });
+  select.id = 'trd-remote-select';
   return select;
 }
 
@@ -1475,7 +1482,7 @@ function trdBuild(el, d) {
   const canCommit = trdAvailable(d, 'commit') && candidate && candidate.candidateId && candidate.integrityHash && !committing;
   if (!commit) {
     if (trd.message === null) trd.message = (d.revision && d.revision.title) || '';
-    const input = h('input', { class: 'form-input', attrs: { type: 'text', maxlength: String(TRD_MESSAGE_MAX), 'aria-label': 'Commit message' } });
+    const input = h('input', { class: 'form-input', attrs: { type: 'text', maxlength: String(TRD_MESSAGE_MAX), 'aria-label': 'Commit message', 'aria-describedby': 'trd-commit-message-help' } });
     input.value = trd.message;
     const err = h('div', { class: 'tf-field-error', attrs: { role: 'alert' } });
     input.addEventListener('input', () => { trd.message = input.value; err.textContent = ''; });
@@ -1494,8 +1501,11 @@ function trdBuild(el, d) {
         'Commit the accepted changes on branch ' + (plan && plan.branch ? plan.branch : 'the task branch') + '?\n\nThis creates a local commit. Nothing is pushed.');
     });
     el.appendChild(h('div', { class: 'tr-decision detail-block' }, [
-      h('div', { class: 'form-hint', text: 'Commit message' }), input, h('div', { class: 'tr-answer-foot' }, [btn]), err
+      h('label', { class: 'form-hint', text: 'Commit message', attrs: { for: 'trd-commit-message-input' } }),
+      h('div', { class: 'form-hint', attrs: { id: 'trd-commit-message-help' }, text: 'Required. Enter 1 to ' + TRD_MESSAGE_MAX + ' characters. This creates a local commit; it does not push the changes.' }),
+      input, h('div', { class: 'tr-answer-foot' }, [btn]), err
     ]));
+    input.id = 'trd-commit-message-input';
   }
 
   // Push
@@ -1516,11 +1526,17 @@ function trdBuild(el, d) {
       trdCommand('push', '/push', { deliveryId: commit.deliveryId, commitSha: commit.commitSha, remote },
         'Push commit ' + shortSha(commit.commitSha) + ' to remote "' + remote + '"?\n\nThis is a normal push, never forced.');
     });
-    el.appendChild(h('div', { class: 'tr-decision detail-block' }, [
-      h('div', { class: 'form-hint', text: 'Committed ' + shortSha(commit.commitSha) + ' on ' + (commit.branch || 'the task branch') + '. Push to a remote:' }),
-      remotes.length ? select : h('span', { class: 'detail-empty', text: 'No remote is configured.' }),
-      h('div', { class: 'tr-answer-foot' }, [btn])
-    ]));
+    const pushBlock = h('div', { class: 'tr-decision detail-block' }, [
+      h('div', { class: 'form-hint', text: 'Committed ' + shortSha(commit.commitSha) + ' on ' + (commit.branch || 'the task branch') + '. Push to a remote:' })
+    ]);
+    if (remotes.length) {
+      pushBlock.appendChild(h('div', { class: 'form-hint', attrs: { id: 'trd-remote-help' }, text: 'Choose the configured Git remote that should receive this commit. Push is not forced.' }));
+      pushBlock.appendChild(select);
+    } else {
+      pushBlock.appendChild(h('span', { class: 'detail-empty', text: 'No remote is configured.' }));
+    }
+    pushBlock.appendChild(h('div', { class: 'tr-answer-foot' }, [btn]));
+    el.appendChild(pushBlock);
   }
 
   // Release repository

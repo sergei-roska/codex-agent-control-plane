@@ -88,3 +88,50 @@ test('a pane that becomes active without a click triggers one load', async () =>
   assert.equal(cm().loaded, true);
   assert.equal(cm().account.status, 'connected');
 });
+
+test('saved Atlassian sites remain visible and selected before loading the available-site list', () => {
+  const { context } = load({});
+  class Element {
+    constructor() { this.children = []; this.hidden = false; this.value = ''; this.listeners = {}; }
+    set textContent(value) { this._textContent = value; if (value === '') this.children = []; }
+    get textContent() { return this._textContent || ''; }
+    setAttribute(name, value) { this[name] = value; }
+    appendChild(child) { this.children.push(child); return child; }
+    addEventListener(name, callback) { this.listeners[name] = callback; }
+  }
+  const elements = Object.fromEntries([
+    'atlassian-status', 'atlassian-description', 'atlassian-actions', 'atlassian-resources-state',
+    'atlassian-site-row', 'atlassian-site-select', 'btn-atlassian-select-site',
+    'atlassian-import-panel', 'atlassian-issue-key', 'btn-atlassian-import', 'atlassian-import-site', 'atlassian-message'
+  ].map(id => [id, new Element()]));
+  context.document = { createElement: () => new Element(), getElementById: id => elements[id] || null };
+  context.h = (tag, options = {}, children = []) => {
+    const node = context.document.createElement(tag);
+    if (options.class) node.className = options.class;
+    if (options.text !== undefined) node.textContent = String(options.text);
+    if (options.attrs) Object.entries(options.attrs).forEach(([name, value]) => node.setAttribute(name, value));
+    children.filter(Boolean).forEach(child => node.appendChild(child));
+    return node;
+  };
+  vm.runInContext(`
+    ac.loaded = true;
+    ac.health = { configured: true, connected: true, selectedSites: [
+      { cloudId: 'saved-confluence', name: 'Docs', url: 'https://docs.example', sourceKind: 'confluence' }
+    ] };
+    ac.resourcesLoaded = false;
+    ac.resources = [];
+    ac.busy = null;
+    ac.siteDraft = null;
+    renderAtlassian();
+  `, context);
+  assert.equal(elements['atlassian-site-row'].hidden, false);
+  assert.equal(elements['atlassian-site-select'].value, 'saved-confluence');
+  assert.equal(elements['atlassian-site-select'].children.length, 1);
+  assert.match(elements['atlassian-resources-state'].textContent, /saved Atlassian site is selected/);
+  const options = JSON.parse(vm.runInContext(`JSON.stringify(acAvailableSites([], [
+    { cloudId: 'saved-confluence', name: 'Docs', url: 'https://docs.example', sourceKind: 'confluence' }
+  ]))`, context));
+  assert.deepEqual(options, [{ id: 'saved-confluence', name: 'Docs', url: 'https://docs.example', saved: true }]);
+  assert.equal(vm.runInContext(`acPreferredSiteId(acAvailableSites([], [{ cloudId: 'saved-confluence' }]), null, [{ cloudId: 'saved-confluence' }])`, context), 'saved-confluence');
+  assert.equal(vm.runInContext(`acPreferredSiteId(acAvailableSites([{ id: 'new-site' }], [{ cloudId: 'saved-confluence' }]), 'new-site', [{ cloudId: 'saved-confluence' }])`, context), 'new-site');
+});

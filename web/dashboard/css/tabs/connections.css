@@ -126,6 +126,8 @@
 .role-defaults-table td:last-child,
 .role-defaults-table th:last-child { text-align: left; }
 .role-defaults-table td.role-cell-source { white-space: nowrap; }
+.role-defaults-help { display: grid; gap: 4px; margin: 0 0 12px; }
+.role-defaults-help strong { color: var(--text-secondary); }
 .role-defaults-table tr.role-invalid > td:first-child { box-shadow: inset 3px 0 0 var(--accent-red); }
 .role-defaults-table .role-name { font-weight: 700; color: var(--text-primary); font-size: 13px; }
 .role-defaults-table .role-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }

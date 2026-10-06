@@ -37,6 +37,16 @@
 .board-filters {
   display: flex;
   gap: 12px;
+  align-items: flex-start;
+}
+
+.board-filter-field {
+  width: min(220px, 100%);
+}
+
+.board-filter-field .input-text,
+.board-filter-field .select-input {
+  width: 100% !important;
 }
 
 .board-columns-container {

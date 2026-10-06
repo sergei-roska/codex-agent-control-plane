@@ -8,9 +8,12 @@
 
 .monitor-controls {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 12px;
 }
+
+.monitor-filter-field { flex: 1 1 160px; min-width: 140px; }
 
 .console-log {
   flex: 1;

@@ -329,7 +329,7 @@ function renderRecordSource() {
 
   if (tr.sourceHistoryError) historyBox.appendChild(h('div', { class: 'detail-empty', text: tr.sourceHistoryError }));
   if (tr.sourceHistory.length) {
-    const select = h('select', { class: 'select-input', attrs: { 'aria-label': 'Saved source snapshot' } });
+    const select = h('select', { class: 'select-input', attrs: { 'aria-label': 'Saved source snapshot', 'aria-describedby': 'tr-source-history-help' } });
     tr.sourceHistory.forEach(item => {
       const label = 'Snapshot ' + item.ordinal + (item.displayKey ? ' - ' + item.displayKey : '') + ' - ' + formatAbsTime(item.fetchedAt) + (item.rootAvailable ? '' : ' - root unavailable');
       const option = h('option', { text: label, attrs: { value: item.snapshotId } });
@@ -339,6 +339,7 @@ function renderRecordSource() {
     const view = h('button', { class: 'btn btn-secondary', text: tr.sourceSnapshotLoading ? 'Loading snapshot...' : 'View saved source context', attrs: { type: 'button' } });
     view.disabled = Boolean(tr.sourceSnapshotLoading);
     view.addEventListener('click', () => loadSourceSnapshot(select.value));
+    historyBox.appendChild(h('div', { class: 'form-hint', attrs: { id: 'tr-source-history-help' }, text: 'Choose a previously saved Jira source snapshot to inspect its retrieved context. Viewing it does not refresh the source.' }));
     const row = h('div', { class: 'tr-source-history-row' }, [select, view]);
     historyBox.appendChild(row);
   } else if (!tr.sourceHistoryError) historyBox.appendChild(h('div', { class: 'detail-empty', text: 'No source snapshots are recorded.' }));

@@ -1,15 +1,27 @@
 <section id="tab-monitor" class="tab-pane">
   <div class="monitor-container">
     <div class="monitor-controls">
-      <select id="monitor-type-filter" class="select-input" disabled>
-        <option value="all">All categories</option>
-      </select>
-      <select id="monitor-role-filter" class="select-input" disabled>
-        <option value="all">Role filter unavailable</option>
-      </select>
-      <select id="monitor-level-filter" class="select-input" disabled>
-        <option value="all">Severity unavailable</option>
-      </select>
+      <div class="form-group monitor-filter-field">
+        <label class="form-label" for="monitor-type-filter">Category</label>
+        <select id="monitor-type-filter" class="select-input" aria-describedby="monitor-type-help" disabled>
+          <option value="all">All categories</option>
+        </select>
+        <span class="field-help" id="monitor-type-help">When categories are available, choose one to limit the event log.</span>
+      </div>
+      <div class="form-group monitor-filter-field">
+        <label class="form-label" for="monitor-role-filter">Role</label>
+        <select id="monitor-role-filter" class="select-input" aria-describedby="monitor-role-help" disabled>
+          <option value="all">Role filter unavailable</option>
+        </select>
+        <span class="field-help" id="monitor-role-help">When roles are available, choose one to show events attributed to that role.</span>
+      </div>
+      <div class="form-group monitor-filter-field">
+        <label class="form-label" for="monitor-level-filter">Severity</label>
+        <select id="monitor-level-filter" class="select-input" aria-describedby="monitor-level-help" disabled>
+          <option value="all">Severity unavailable</option>
+        </select>
+        <span class="field-help" id="monitor-level-help">When severity levels are available, choose one to limit the event log.</span>
+      </div>
       <button class="btn btn-secondary" id="btn-clear-logs" style="margin-left: auto;">Clear Log</button>
     </div>
     <div id="monitor-status" class="detail-empty" role="status"></div>

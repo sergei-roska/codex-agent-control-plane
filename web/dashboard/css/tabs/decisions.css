@@ -51,6 +51,8 @@
   box-shadow: var(--nm-shadow-out);
 }
 
+.decisions-card .field-help { margin-top: -6px; }
+
 .escalation-card {
   cursor: pointer;
   position: relative;
@@ -401,4 +403,3 @@
   font-family: var(--font-mono);
   color: var(--heading-color);
 }
-

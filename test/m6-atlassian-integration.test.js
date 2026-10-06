@@ -137,3 +137,36 @@ test('service enforces callback host, replaces selected site atomically, and cle
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('selected Atlassian site survives service recreation with the same state database', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm6-atlassian-persist-'));
+  const workspace = path.join(root, 'workspace');
+  const dbPath = path.join(root, 'state.sqlite');
+  fs.mkdirSync(workspace);
+  const resource = { id: 'persistent-cloud', url: 'https://persistent.atlassian.net', name: 'Persistent',
+    scopes: ['read:jira-work', 'read:page:confluence', 'offline_access'] };
+  const oauth = {
+    getConnectionRevision: () => 1,
+    async getHealth() { return { connected: true }; },
+    async getResources() { return [resource]; },
+    async beginAuthorization() { throw new Error('not used by this test'); },
+    cancelAuthorization() { return { canceled: true }; },
+    async completeAuthorization() { throw new Error('not used by this test'); },
+    async disconnect() { return { disconnected: true }; },
+  };
+  const createService = (db) => createAtlassianIntegration({ db, productStore: {}, artifactStore: { remove() {} }, workspace, oauth });
+  let db = new Database(dbPath);
+  try {
+    const firstSession = createService(db);
+    await firstSession.selectSite({ cloudId: resource.id });
+    assert.equal((await firstSession.health()).selectedSites[0].cloudId, resource.id);
+    db.close();
+
+    db = new Database(dbPath);
+    const nextSession = createService(db);
+    assert.equal((await nextSession.health()).selectedSites[0].cloudId, resource.id);
+  } finally {
+    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

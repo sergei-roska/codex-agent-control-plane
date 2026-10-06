@@ -26,15 +26,17 @@
       <div id="atlassian-resources-state" class="provider-setup"></div>
       <div class="atlassian-site-row" id="atlassian-site-row" hidden>
         <label for="atlassian-site-select">Available Atlassian site</label>
-        <select class="select-input" id="atlassian-site-select" aria-label="Available Atlassian site"></select>
+        <select class="select-input" id="atlassian-site-select" aria-label="Available Atlassian site" aria-describedby="atlassian-site-help"></select>
+        <span class="field-help" id="atlassian-site-help">Choose an accessible Atlassian site, then select it to save your choice for future sessions.</span>
         <button class="btn btn-secondary" id="btn-atlassian-select-site" type="button">Select site</button>
       </div>
       <div id="atlassian-import-panel" class="atlassian-import-panel" hidden>
         <label for="atlassian-issue-key">Jira issue key or ID</label>
         <div class="atlassian-import-row">
-          <input class="input-text" id="atlassian-issue-key" type="text" maxlength="120" autocomplete="off" placeholder="e.g. PROJ-123">
+          <input class="input-text" id="atlassian-issue-key" type="text" maxlength="120" autocomplete="off" placeholder="e.g. PROJ-123" aria-describedby="atlassian-issue-help">
           <button class="btn btn-primary" id="btn-atlassian-import" type="button">Import Jira issue</button>
         </div>
+        <span class="field-help" id="atlassian-issue-help">Enter an issue key such as PROJ-123 or a numeric Jira issue ID. Imports a read-only copy into this dashboard.</span>
         <div class="provider-sub" id="atlassian-import-site"></div>
       </div>
       <div id="atlassian-message" class="atlassian-message" role="status" aria-live="polite"></div>
@@ -43,6 +45,12 @@
 
   <div class="connections-title connections-title-spaced">Per-Role Model Defaults</div>
   <div class="tr-banner tone-info" id="role-defaults-banner" role="note">Changes apply to new runs only; running and resumed work keeps its pinned settings</div>
+  <div class="role-defaults-help" aria-label="Model setting explanations">
+    <p class="field-help" id="role-save-help">Changes stay as drafts until you choose Save. Save stores the role default for this project across sessions; Reset removes that saved choice and restores the built-in profile default.</p>
+    <p class="field-help" id="role-model-help"><strong>Model:</strong> Choose the model this role uses for new runs.</p>
+    <p class="field-help" id="role-effort-help"><strong>Reasoning effort:</strong> Choose how much reasoning to request; available values depend on the selected model.</p>
+    <p class="field-help" id="role-speed-help"><strong>Speed:</strong> Optional service tier advertised by the model. It is sent only when selected, and availability depends on your account.</p>
+  </div>
   <div id="role-defaults-status" role="status" aria-live="polite"></div>
   <div class="role-defaults-table-container">
     <table class="role-defaults-table">

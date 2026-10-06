@@ -11,6 +11,15 @@ var decisionsView = {
   commandIds: {},
   confirmImpl: function (message) { return window.confirm(message); }
 };
+var decisionsFieldHelpSequence = 0;
+
+function decisionsFieldHelp(text) {
+  var id = 'decisions-field-help-' + (++decisionsFieldHelpSequence);
+  return {
+    id: id,
+    node: h('span', { class: 'field-help', text: text, attrs: { id: id } })
+  };
+}
 
 function decisionsDisplay(value, fallback) {
   return value ? String(value) : (fallback || 'unavailable');
@@ -116,7 +125,8 @@ function pendingReviewCard(item) {
     actions.push(h('button', { class: 'btn btn-secondary btn-sm', text: 'Accept', attrs: { type: 'button', 'data-action': 'accept', 'data-id': item.id } }));
     actions.push(h('button', { class: 'btn btn-secondary btn-sm', text: 'Request corrections', attrs: { type: 'button', 'data-action': 'corrections', 'data-id': item.id } }));
   }
-  var findingsInput = h('textarea', { class: 'decisions-findings', attrs: { rows: '3', placeholder: 'Findings (required for corrections)', 'data-id': item.id } });
+  var findingsHelp = decisionsFieldHelp('Required when requesting corrections. Describe the specific changes needed so the next attempt can address them.');
+  var findingsInput = h('textarea', { class: 'decisions-findings', attrs: { rows: '3', placeholder: 'Findings (required for corrections)', 'data-id': item.id, 'aria-describedby': findingsHelp.id } });
   findingsInput.value = Object.prototype.hasOwnProperty.call(decisionsView.findingsDrafts, String(item.id))
     ? decisionsView.findingsDrafts[String(item.id)] : '';
   findingsInput.addEventListener('input', function () {
@@ -132,6 +142,7 @@ function pendingReviewCard(item) {
   if (actions.length) {
     children.push(h('div', { class: 'decisions-card-actions' }, actions));
     children.push(findingsInput);
+    children.push(findingsHelp.node);
   }
   if (err) children.push(h('div', { class: 'decisions-action-error', text: err }));
   return h('div', { class: 'adr-card decisions-card', attrs: { 'data-id': item.id } }, children);
@@ -176,8 +187,10 @@ function pendingRunDecisionCard(item) {
       children.push(h('div', { class: 'decisions-question', text: question.question || 'Question unavailable' }));
       if (question.why) children.push(h('div', { class: 'decisions-card-meta', text: 'Why it matters: ' + question.why }));
       if (item.actionable) {
-        var area = h('textarea', { class: 'decisions-answer', attrs: { rows: '2', maxlength: '4000', 'aria-label': 'Answer: ' + (question.question || 'Question unavailable') } });
+        var answerHelp = decisionsFieldHelp('Enter an answer between 1 and 4000 characters.');
+        var area = h('textarea', { class: 'decisions-answer', attrs: { rows: '2', maxlength: '4000', 'aria-label': 'Answer: ' + (question.question || 'Question unavailable'), 'aria-describedby': answerHelp.id } });
         children.push(area);
+        children.push(answerHelp.node);
         answers.push({ questionId: question.id, area: area });
       }
     });
@@ -197,7 +210,8 @@ function pendingRunDecisionCard(item) {
     children.push(h('div', { class: 'decisions-question', text: request.question || 'Question unavailable' }));
     if (request.reason) children.push(h('div', { class: 'decisions-card-meta', text: 'Reason: ' + request.reason }));
     var choice = null;
-    var choiceGroup = h('div', { class: 'decisions-options', attrs: { role: 'radiogroup', 'aria-label': 'Decision options' } });
+    var choiceHelp = decisionsFieldHelp('Choose one option to submit this decision.');
+    var choiceGroup = h('div', { class: 'decisions-options', attrs: { role: 'radiogroup', 'aria-label': 'Decision options', 'aria-describedby': choiceHelp.id } });
     (Array.isArray(request.options) ? request.options : []).forEach(function (option) {
       if (item.actionable) {
         var radio = h('input', { attrs: { type: 'radio', name: 'decision-' + cssToken(item.decisionId), value: String(option.id) }, on: { change: function () { choice = option.id; } } });
@@ -209,11 +223,13 @@ function pendingRunDecisionCard(item) {
         children.push(h('div', { class: 'decisions-question', text: String(option.id || 'Option') + (option.description ? ': ' + option.description : '') }));
       }
     });
-    if (item.actionable) children.push(choiceGroup);
+    if (item.actionable) { children.push(choiceGroup); children.push(choiceHelp.node); }
     var note = null;
     if (item.actionable) {
-      note = h('textarea', { class: 'decisions-answer', attrs: { rows: '2', maxlength: '8000', placeholder: 'Note (optional)', 'aria-label': 'Optional note for decision: ' + (request.question || 'Question unavailable') } });
+      var noteHelp = decisionsFieldHelp('Optional context, up to 8000 characters. Leave blank to use the selected option as the answer.');
+      note = h('textarea', { class: 'decisions-answer', attrs: { rows: '2', maxlength: '8000', placeholder: 'Note (optional)', 'aria-label': 'Optional note for decision: ' + (request.question || 'Question unavailable'), 'aria-describedby': noteHelp.id } });
       children.push(note);
+      children.push(noteHelp.node);
     }
     if (item.actionable && Array.isArray(request.options) && request.options.length) {
       children.push(h('button', { class: 'btn btn-secondary btn-sm', text: 'Send decision', attrs: { type: 'button' }, on: { click: function () {
