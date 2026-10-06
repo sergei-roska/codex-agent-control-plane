@@ -15,7 +15,7 @@ const MAX_REMOTES = 10;
 const DELIVERY_KEYS = ['remotes'];
 const ROLE_PACKS = ['delivery', 'legacy-orch'];
 const ROUTE_MODES = ['off', 'shadow', 'on'];
-const ROUTE_LIMIT_KEYS = ['maxFiles', 'maxChangedLines', 'protectedPaths'];
+const ROUTE_LIMIT_KEYS = ['maxFiles', 'maxChangedLines', 'maxChangedBytes', 'protectedPaths'];
 const MAX_PROTECTED_PATHS = 50;
 const MAX_PROTECTED_PATH_LENGTH = 200;
 const PREFIX_KEYS = ['feature', 'bugfix', 'docs'];
@@ -59,7 +59,7 @@ function normalizeConfig(raw) {
     if (!isPlainObject(raw.routeLimits)) throw new TypeError('routeLimits must be an object');
     rejectUnknown(raw.routeLimits, ROUTE_LIMIT_KEYS, 'routeLimits');
     routeLimits = {};
-    for (const key of ['maxFiles', 'maxChangedLines']) {
+    for (const key of ['maxFiles', 'maxChangedLines', 'maxChangedBytes']) {
       const value = raw.routeLimits[key];
       if (value === undefined) continue;
       if (!Number.isInteger(value) || value < 1) throw new TypeError(`routeLimits.${key} must be a positive integer`);

@@ -35,6 +35,29 @@ function routingOf(plan) {
   };
 }
 
+// The one place a lean routing is derived: from the preset lean block, the validated plan and the project
+// policy. Callers never take skip/conditional/gate sets, limits or classification from client metadata.
+// `isWritableRole(roleId)` says whether a stage role may write; every writable stage is a gate stage.
+function buildLeanRouting({ preset, plan, projectConfig, isWritableRole } = {}) {
+  const lean = isObject(preset) ? preset.lean : null;
+  const stages = isObject(plan) && Array.isArray(plan.stages) ? plan.stages : [];
+  if (!isObject(lean) || typeof isWritableRole !== 'function') return null;
+  const idsOf = (keys) => stages.filter((stage) => Array.isArray(keys) && keys.includes(stage.presetStageKey)).map((stage) => stage.stageId);
+  const purposeOverrides = {};
+  stages.forEach((stage) => {
+    const text = isObject(lean.purposeOverrides) ? lean.purposeOverrides[stage.presetStageKey] : null;
+    if (typeof text === 'string') purposeOverrides[stage.stageId] = text;
+  });
+  return {
+    effective: 'lean',
+    skipStageIds: idsOf(lean.skip),
+    conditionalStageIds: idsOf(lean.conditional),
+    gateStageIds: stages.filter((stage) => isWritableRole(stage.roleId)).map((stage) => stage.stageId),
+    limits: resolveRouteLimits(projectConfig && projectConfig.routeLimits),
+    purposeOverrides,
+  };
+}
+
 function isSatisfied(status) {
   return SATISFIED.includes(status);
 }
@@ -51,7 +74,7 @@ function requiredStageIds(plan, routing, promotion) {
 
 // Post-implement check. `delta` is the attested writer delta, `lines` the injected per-path line counts
 // (or null), `report` the validated worker report. Anything unknown fails closed.
-function evaluateImplementDelta({ allowedFiles, delta, lines, report, limits } = {}) {
+function evaluateImplementDelta({ allowedFiles, delta, lines, report, limits, requireChange = true } = {}) {
   let changed = null;
   if (isObject(delta) && delta.known === true && delta.headChanged !== true && Array.isArray(delta.changedPaths)) {
     if (delta.changedPaths.length === 0) changed = [];
@@ -70,11 +93,11 @@ function evaluateImplementDelta({ allowedFiles, delta, lines, report, limits } =
     needsDecision: reportObj.outcome === 'needs_decision',
     limits,
   });
-  // A bugfix implement stage that changed nothing is an anomaly, not a clean run.
-  if (Array.isArray(changed) && changed.length === 0 && !verdict.reasons.includes('empty_delta')) {
+  // A bugfix implement stage that changed nothing is an anomaly, not a clean run (other writers may change nothing).
+  if (requireChange && Array.isArray(changed) && changed.length === 0 && !verdict.reasons.includes('empty_delta')) {
     return { promote: true, reasons: [...verdict.reasons, 'empty_delta'] };
   }
   return verdict;
 }
 
-module.exports = { routingOf, isSatisfied, requiredStageIds, evaluateImplementDelta };
+module.exports = { buildLeanRouting, routingOf, isSatisfied, requiredStageIds, evaluateImplementDelta };

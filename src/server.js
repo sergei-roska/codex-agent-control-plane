@@ -30,7 +30,7 @@ const { createAccountHealth } = require('./account-health');
 const { createSettingsStore } = require('./settings-store');
 const { loadProjectConfig, defaultProjectConfigPath } = require('./project-config');
 const { createGitAdapter } = require('./git-adapter');
-const { routingOf } = require('./route-runtime');
+const { buildLeanRouting } = require('./route-runtime');
 const { evaluatePlanRoute } = require('./route-gate');
 const { countChangedLines } = require('./delta-lines');
 const { createGitDelivery } = require('./git-delivery');
@@ -316,13 +316,24 @@ function validateDeliveryPlan(plan, pack, projectCheckIds) {
   return validatePresetPlan({ ...plan, stages }, { pack, preset, projectCheckIds });
 }
 
-// A lean routing proposed in delivery metadata, normalized against the re-validated plan; empty otherwise.
-// The claim is never trusted: eligibility is recomputed from the plan and the project policy, so a missing
-// policy or a full verdict runs the full route.
-function leanRoutingOf(raw, plan, { classification = null, projectConfig = null } = {}) {
-  const routing = routingOf({ stages: plan.stages, routing: raw });
-  if (routing.effective !== 'lean' || !projectConfig) return {};
-  const verdict = evaluatePlanRoute({ classification, plan: { ...plan, route: 'lean' }, policy: projectConfig });
+// A lean routing claimed in delivery metadata. The claim only says "lean requested": the routing itself is
+// built from the preset lean block, the re-validated plan and the project policy, and eligibility is
+// recomputed from the plan and the policy, so a missing policy or a full verdict runs the full route.
+function leanRoutingOf(raw, plan, { pack = null, projectConfig = null } = {}) {
+  if (!raw || typeof raw !== 'object' || raw.effective !== 'lean' || !projectConfig || !pack) return {};
+  const preset = plan && plan.presetId ? pack.presets.get(plan.presetId) : null;
+  if (!preset) return {};
+  const routing = buildLeanRouting({
+    preset,
+    plan,
+    projectConfig,
+    isWritableRole: (roleId) => {
+      const role = pack.runtimeRoles.get(roleId);
+      return role ? role.sandbox !== 'read-only' : true;
+    },
+  });
+  if (!routing) return {};
+  const verdict = evaluatePlanRoute({ classification: preset.classification, plan: { ...plan, route: 'lean' }, policy: projectConfig });
   return verdict.effective === 'lean' ? { routing } : {};
 }
 
@@ -437,7 +448,7 @@ function makeLeadExecutor({
               ...checked.plan,
               planRevisionId: delivery.plan.planRevisionId ?? null,
               classification: delivery.plan.classification ?? null,
-              ...leanRoutingOf(delivery.plan.routing, checked.plan, { classification: delivery.plan.classification ?? null, projectConfig }),
+              ...leanRoutingOf(delivery.plan.routing, checked.plan, { pack: deliveryPack, projectConfig }),
             }
             : checked.plan,
         };

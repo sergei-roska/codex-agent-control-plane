@@ -109,12 +109,17 @@ Code decides, the PM only proposes: lean needs the PM to propose it AND all of
 these: classification `bugfix`, at most `maxFiles` allowed files, no protected path
 (auth and permissions, config, migrations and install hooks, dependency manifests,
 environment and CI files, database schema, routing and permission definitions), at
-least one approved check, and policy `on`. The server re-checks this itself.
+least one approved check, only single-file allowed entries with an extension (no
+directories or extensionless names), no optional stage in the plan, and policy `on`.
+The server re-checks this itself.
 
 A lean run is promoted to full, never back, when the attested change is unknown,
-leaves the allowed files, touches a protected path, exceeds `maxChangedLines`,
-is empty, a stage fails or reports scope expansion or a needed decision, or the
-acceptance gate does not accept. A promoted run cannot finish before the Reviewer
+leaves the allowed files, touches a protected path, exceeds `maxChangedLines` or
+`maxChangedBytes` (counted cumulatively over every writer so far), changes a file
+mode, is empty after the implement stage, any stage does not succeed, a conditional
+stage (the Reviewer) is dispatched, a stage reports scope expansion or a needed
+decision, or the acceptance gate does not accept. The check runs after every
+writable stage, not only the implement stage. A promoted run cannot finish before the Reviewer
 has approved. The route, its reasons, and any promotion are shown in the ticket
 run details and the Monitor events `route_decided` and `route_promoted`.
 

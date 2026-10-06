@@ -2020,7 +2020,7 @@ test('startLead sends the derived lean routing only for an effective lean route'
   assert.equal(lean.plan.routing.effective, 'lean');
   assert.deepEqual(lean.plan.routing.skipStageIds, ['repro']);
   assert.deepEqual(lean.plan.routing.conditionalStageIds, ['rev']);
-  assert.deepEqual(lean.plan.routing.gateStageIds, ['impl']);
+  assert.deepEqual(lean.plan.routing.gateStageIds, ['repro', 'impl', 'ver'], 'every writable stage is a gate stage');
   assert.deepEqual(Object.keys(lean.plan.routing.purposeOverrides), ['impl']);
   assert.equal(lean.plan.routing.limits.maxFiles, 3);
   const withoutRouting = (delivery) => ({ ...delivery, plan: { ...delivery.plan, routing: undefined } });
@@ -2121,4 +2121,48 @@ test('route_promoted is journaled once with the lead route metadata and not repe
       promoted: true, promotionReasons: ['protected_path:src/auth.js', 'too_many_changed_lines'], promotedAt: 'implement', scriptedDecisions: 2,
     });
   } finally { await h.close(); }
+});
+
+async function leanCandidate({ stages, withSnapshot = true, disposition = 'accepted' }) {
+  const { h, runId } = await bugfixRun({ adaptiveRoute: 'on' });
+  try {
+    const run = h.store.getRun(runId);
+    const { fingerprint } = takeSnapshot(h.ws);
+    h.setTask(run.leadTaskId, TaskState.TASK_STATE_COMPLETED, {
+      artifacts: [{
+        artifactId: `${run.leadTaskId}-result`,
+        metadata: {
+          acceptance: {
+            disposition, requiredCheckIds: ['unit'], reasons: [], checks: [{ id: 'unit', exitCode: 0 }], candidate: withSnapshot ? { fingerprint } : {},
+          },
+          stages,
+          route: { effective: 'lean', promoted: true, reasons: ['acceptance_unverifiable'], at: 'accept', scriptedDecisions: 1 },
+        },
+      }],
+    });
+    await h.pass();
+    await h.pass();
+    return h.store.getRun(runId);
+  } finally { await h.close(); }
+}
+
+const leanStageRows = (overrides = {}) => BUGFIX_STAGES.map((stage) => ({
+  stageId: stage.stageId, status: 'succeeded', required: stage.stageId !== 'repro', attemptIds: [], ...(overrides[stage.stageId] || {}),
+}));
+
+test('candidate gate: a failed stage stays open in a lean run even when it is not required', async () => {
+  const ok = await leanCandidate({ stages: leanStageRows({ repro: { status: 'skipped', required: false }, rev: { status: 'pending', required: false } }) });
+  assert.equal(ok.waitReason, 'human_review');
+  const failedOptional = await leanCandidate({ stages: leanStageRows({ repro: { status: 'skipped', required: false }, rev: { status: 'failed', required: false } }) });
+  assert.equal(failedOptional.waitDetail.code, 'stages_incomplete');
+  assert.match(failedOptional.waitDetail.message, /rev/);
+});
+
+test('candidate gate: a lean run reports the snapshot cause before open stages', async () => {
+  const run = await leanCandidate({
+    stages: leanStageRows({ repro: { status: 'skipped', required: false }, ver: { status: 'pending' } }),
+    withSnapshot: false,
+    disposition: 'unverifiable',
+  });
+  assert.equal(run.waitDetail.code, 'snapshot_unavailable');
 });

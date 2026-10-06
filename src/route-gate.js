@@ -3,7 +3,7 @@
 // Code-side authority for the adaptive delivery route (ADR adaptive-delivery-route D2/D3).
 // The model may only propose a route; these pure functions decide and promote.
 
-const DEFAULT_ROUTE_LIMITS = Object.freeze({ maxFiles: 3, maxChangedLines: 30 });
+const DEFAULT_ROUTE_LIMITS = Object.freeze({ maxFiles: 3, maxChangedLines: 30, maxChangedBytes: 20000 });
 const MODES = Object.freeze(['off', 'shadow', 'on']);
 const SENSITIVE_WORDS = Object.freeze([
   'auth', 'authentication', 'authorization', 'authz', 'permission', 'permissions', 'access',
@@ -25,6 +25,7 @@ function resolveRouteLimits(policyLimits) {
   return {
     maxFiles: isPositiveInt(limits.maxFiles) ? limits.maxFiles : DEFAULT_ROUTE_LIMITS.maxFiles,
     maxChangedLines: isPositiveInt(limits.maxChangedLines) ? limits.maxChangedLines : DEFAULT_ROUTE_LIMITS.maxChangedLines,
+    maxChangedBytes: isPositiveInt(limits.maxChangedBytes) ? limits.maxChangedBytes : DEFAULT_ROUTE_LIMITS.maxChangedBytes,
     protectedPaths: extra,
   };
 }
@@ -82,6 +83,12 @@ function isProtectedPath(relPath, extraPatterns = []) {
   return extras.some((pattern) => typeof pattern === 'string' && matchesPattern(segments.join('/'), pattern));
 }
 
+// A file-like entry names one file: no trailing slash and a dot in the last path segment.
+function isFileLikeEntry(entry) {
+  if (typeof entry !== 'string' || entry.endsWith('/')) return false;
+  return entry.split('/').pop().includes('.');
+}
+
 function evaluatePlanRoute({ classification, plan, policy } = {}) {
   const planObj = isObject(plan) ? plan : {};
   const policyObj = isObject(policy) ? policy : {};
@@ -93,6 +100,7 @@ function evaluatePlanRoute({ classification, plan, policy } = {}) {
     const list = isObject(stage) && Array.isArray(stage.allowedFiles) ? stage.allowedFiles : [];
     list.forEach((file) => { if (!files.includes(file)) files.push(file); });
   });
+  const stageList = Array.isArray(planObj.stages) ? planObj.stages : [];
   const checks = Array.isArray(planObj.checkIds) ? planObj.checkIds : [];
 
   const reasons = [];
@@ -102,6 +110,12 @@ function evaluatePlanRoute({ classification, plan, policy } = {}) {
   files.forEach((file) => {
     if (isProtectedPath(file, limits.protectedPaths)) reasons.push(`protected_path:${file}`);
   });
+  files.forEach((file) => {
+    if (!isFileLikeEntry(file)) reasons.push(`non_file_entry:${file}`);
+  });
+  if (stageList.some((stage) => isObject(stage) && stage.presetStageKey === null)) {
+    reasons.push('optional_stage');
+  }
   if (checks.length < 1) reasons.push('no_mechanical_check');
 
   const verdict = reasons.length === 0 ? 'lean' : 'full';
@@ -116,12 +130,16 @@ function evaluateDelta({ allowedFiles, changed, checksPassed, scopeExpansions, n
   let unknown = !Array.isArray(changed);
   const entries = unknown ? [] : changed;
   let total = 0;
+  let totalBytes = 0;
   entries.forEach((entry) => {
     const ok = isObject(entry) && typeof entry.path === 'string'
       && Number.isInteger(entry.addedLines) && entry.addedLines >= 0
       && Number.isInteger(entry.removedLines) && entry.removedLines >= 0;
-    if (!ok) unknown = true;
-    else total += entry.addedLines + entry.removedLines;
+    if (!ok || !Number.isInteger(entry.bytes) || entry.bytes < 0) unknown = true;
+    else {
+      total += entry.addedLines + entry.removedLines;
+      totalBytes += entry.bytes;
+    }
   });
   if (unknown) reasons.push('delta_unknown');
   if (checksPassed !== true) reasons.push('check_not_passed');
@@ -132,6 +150,8 @@ function evaluateDelta({ allowedFiles, changed, checksPassed, scopeExpansions, n
   });
   paths.forEach((file) => { if (isProtectedPath(file, lim.protectedPaths)) reasons.push(`protected_path:${file}`); });
   if (total > lim.maxChangedLines) reasons.push('too_many_changed_lines');
+  if (totalBytes > lim.maxChangedBytes) reasons.push('too_many_changed_bytes');
+  if (entries.some((entry) => isObject(entry) && entry.modeChanged === true)) reasons.push('mode_change');
   if (!(scopeExpansions === 0 || scopeExpansions === undefined || scopeExpansions === null) && !(Number.isFinite(scopeExpansions) && scopeExpansions <= 0)) {
     reasons.push('scope_expansion');
   }

@@ -12,6 +12,7 @@ const HARDENING_ARGS = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev
 const MAX_UNTRACKED_BYTES = 1024 * 1024;
 const GIT_TIMEOUT_MS = 30 * 1000;
 const GIT_MAX_BUFFER = 8 * 1024 * 1024;
+const MAX_PATHS = 100;
 
 function defaultRunGit(workspace) {
   const exec = promisify(childProcess.execFile);
@@ -27,32 +28,74 @@ function safeRel(file) {
     && !path.isAbsolute(file) && !file.split(/[\\/]/).includes('..');
 }
 
+// Parses numstat -z output (rename form disabled): records "added<TAB>removed<TAB>path" separated by NUL.
+function parseNumstatZ(out) {
+  const counts = new Map();
+  for (const record of out.split('\0')) {
+    if (!record) continue;
+    const first = record.indexOf('\t');
+    const second = first < 0 ? -1 : record.indexOf('\t', first + 1);
+    if (second < 0) return null;
+    const added = record.slice(0, first);
+    const removed = record.slice(first + 1, second);
+    if (!/^\d+$/.test(added) || !/^\d+$/.test(removed)) return null;
+    counts.set(record.slice(second + 1), { addedLines: Number(added), removedLines: Number(removed) });
+  }
+  return counts;
+}
+
+// Parses raw -z output: ":oldmode newmode oldsha newsha status" NUL path NUL. Returns the set of paths
+// whose mode changed, or null when the output is not understood.
+function parseModeChanges(out) {
+  const changed = new Set();
+  const tokens = out.split('\0');
+  for (let i = 0; i < tokens.length; i += 1) {
+    const meta = tokens[i];
+    if (!meta) continue;
+    if (!meta.startsWith(':')) return null;
+    const fields = meta.slice(1).split(' ');
+    const file = tokens[i + 1];
+    if (fields.length < 5 || typeof file !== 'string' || file === '') return null;
+    i += 1;
+    if (fields[0] !== '000000' && fields[1] !== '000000' && fields[0] !== fields[1]) changed.add(file);
+  }
+  return changed;
+}
+
 /**
- * Returns [{ path, addedLines, removedLines }] for every path, or null when any count is unknown
- * (binary file, oversized or unreadable untracked file, unsafe path, git failure).
+ * Returns [{ path, addedLines, removedLines, bytes, modeChanged? }] for every path, or null when any
+ * count is unknown (binary file, oversized or unreadable untracked file, unsafe path, a tracked path
+ * missing from the numstat output, git failure). `bytes` is the patch size (tracked) or file size (untracked).
  */
 async function countChangedLines({ workspace, paths, runGit } = {}) {
   try {
     if (typeof workspace !== 'string' || !workspace || !Array.isArray(paths) || !paths.every(safeRel)) return null;
     if (paths.length === 0) return [];
+    if (paths.length > MAX_PATHS) return null;
     const git = typeof runGit === 'function' ? runGit : defaultRunGit(workspace);
-    const tracked = new Set((await git(['ls-files', '-z', '--', ...paths])).split('\0').filter(Boolean));
+    const tracked = new Set((await git(['--literal-pathspecs', 'ls-files', '-z', '--', ...paths])).split('\0').filter(Boolean));
     const trackedPaths = paths.filter((file) => tracked.has(file));
-    const counts = new Map();
+    let counts = new Map();
+    let modes = new Set();
+    const bytes = new Map();
     if (trackedPaths.length > 0) {
-      const out = await git(['diff', '--numstat', '--no-renames', '--relative', 'HEAD', '--', ...trackedPaths]);
-      for (const line of out.split('\n')) {
-        if (!line) continue;
-        const [added, removed, ...rest] = line.split('\t');
-        if (!/^\d+$/.test(added) || !/^\d+$/.test(removed)) return null;
-        counts.set(rest.join('\t'), { addedLines: Number(added), removedLines: Number(removed) });
+      counts = parseNumstatZ(await git(['--literal-pathspecs', 'diff', '--numstat', '-z', '--no-renames', '--relative', 'HEAD', '--', ...trackedPaths]));
+      if (!counts) return null;
+      modes = parseModeChanges(await git(['--literal-pathspecs', 'diff', 'HEAD', '--raw', '-z', '--no-renames', '--relative', '--', ...trackedPaths]));
+      if (!modes) return null;
+      for (const file of trackedPaths) {
+        if (!counts.has(file)) continue;
+        const patch = await git(['--literal-pathspecs', 'diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--no-renames', '--relative', '--unified=0', '--', file]);
+        bytes.set(file, Buffer.byteLength(patch));
       }
     }
     const rows = [];
     for (const file of paths) {
       if (tracked.has(file)) {
-        // A tracked path absent from numstat has no difference from HEAD.
-        rows.push({ path: file, ...(counts.get(file) || { addedLines: 0, removedLines: 0 }) });
+        // A tracked path git did not report is unknown, not zero: a mismatched name must not fail open.
+        const row = counts.get(file);
+        if (!row) return null;
+        rows.push({ path: file, ...row, bytes: bytes.get(file), ...(modes.has(file) ? { modeChanged: true } : {}) });
         continue;
       }
       const full = path.join(workspace, file);
@@ -60,7 +103,7 @@ async function countChangedLines({ workspace, paths, runGit } = {}) {
       if (!stat.isFile() || stat.size > MAX_UNTRACKED_BYTES) return null;
       let newlines = 0;
       for (const byte of fs.readFileSync(full)) if (byte === 10) newlines += 1;
-      rows.push({ path: file, addedLines: newlines, removedLines: 0 });
+      rows.push({ path: file, addedLines: newlines, removedLines: 0, bytes: stat.size });
     }
     return rows;
   } catch (_) {

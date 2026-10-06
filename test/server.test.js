@@ -1057,24 +1057,46 @@ test('a restart fallback that starts over recovers the contract from the first u
   assert.equal(runs[0].contract.requiredChecks[0].id, 'unit');
 });
 
-test('leanRoutingOf: the server recomputes eligibility instead of trusting the routing claim', () => {
-  const claim = { effective: 'lean', skipStageIds: ['reproduce'], conditionalStageIds: ['review'], gateStageIds: ['implement'] };
-  const planOf = (allowedFiles) => ({
+test('leanRoutingOf: the server builds the routing itself and recomputes eligibility', () => {
+  const { loadRolePack } = require('../src/role-pack');
+  const pack = loadRolePack();
+  const claim = { effective: 'lean' };
+  const planOf = (allowedFiles, extra = {}) => ({
+    presetId: 'bugfix',
     checkIds: ['unit'],
     stages: [
-      { stageId: 'reproduce', allowedFiles: [] },
-      { stageId: 'implement', allowedFiles },
-      { stageId: 'review', allowedFiles: [] },
+      { stageId: 'reproduce', roleId: 'dlv-qa', presetStageKey: 'reproduce', allowedFiles: [] },
+      { stageId: 'implement', roleId: 'dlv-developer', presetStageKey: 'implement', allowedFiles },
+      { stageId: 'review', roleId: 'dlv-reviewer', presetStageKey: 'review', allowedFiles: [] },
+      { stageId: 'verify', roleId: 'dlv-qa', presetStageKey: 'verify', allowedFiles: [] },
     ],
+    ...extra,
   });
   const policy = { adaptiveRoute: 'on' };
-  const ask = (plan, projectConfig, classification = 'bugfix') => leanRoutingOf(claim, plan, { classification, projectConfig });
-  assert.equal(ask(planOf(['src/a.js']), policy).routing.effective, 'lean');
+  const ask = (plan, projectConfig, raw = claim) => leanRoutingOf(raw, plan, { pack, projectConfig });
+  const built = ask(planOf(['src/a.js']), policy).routing;
+  assert.equal(built.effective, 'lean');
+  assert.deepEqual(built.skipStageIds, ['reproduce']);
+  assert.deepEqual(built.conditionalStageIds, ['review']);
+  assert.ok(!built.gateStageIds.includes('review'));
+  assert.ok(built.gateStageIds.includes('verify'));
+  assert.ok(built.gateStageIds.includes('implement'));
   assert.deepEqual(ask(planOf(['.github/workflows/ci.yml']), policy), {});
   assert.deepEqual(ask(planOf(['src/a.js']), null), {});
   assert.deepEqual(ask(planOf(['src/a.js']), { adaptiveRoute: 'shadow' }), {});
   assert.deepEqual(ask(planOf(['src/a.js']), { adaptiveRoute: 'off' }), {});
-  assert.deepEqual(ask(planOf(['src/a.js']), policy, 'feature'), {});
-  assert.deepEqual(ask({ ...planOf(['src/a.js']), checkIds: [] }, policy), {});
-  assert.deepEqual(leanRoutingOf({ effective: 'full' }, planOf(['src/a.js']), { classification: 'bugfix', projectConfig: policy }), {});
+  assert.deepEqual(ask(planOf(['src/lib/']), policy), {});
+  assert.deepEqual(ask(planOf(['src/a.js'], { checkIds: [] }), policy), {});
+  assert.deepEqual(ask(planOf(['src/a.js'], { presetId: 'feature' }), policy), {});
+  assert.deepEqual(ask(planOf(['src/a.js']), policy, { effective: 'full' }), {});
+  // Client-supplied sets, limits and classification are ignored.
+  const forged = {
+    effective: 'lean', gateStageIds: [], skipStageIds: ['implement'], conditionalStageIds: [], limits: { maxChangedLines: 1000000 }, classification: 'feature', purposeOverrides: { implement: 'evil' },
+  };
+  const result = ask(planOf(['src/a.js']), { ...policy, routeLimits: { maxChangedLines: 12 } }, forged).routing;
+  assert.deepEqual(result.gateStageIds, built.gateStageIds);
+  assert.deepEqual(result.skipStageIds, ['reproduce']);
+  assert.deepEqual(result.conditionalStageIds, ['review']);
+  assert.equal(result.limits.maxChangedLines, 12);
+  assert.deepEqual(result.purposeOverrides.implement.startsWith('Minimal fix'), true);
 });

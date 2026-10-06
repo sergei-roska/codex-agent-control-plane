@@ -17,11 +17,11 @@ const on = { adaptiveRoute: 'on' };
 const route = (p, policy = on, classification = 'bugfix') => gate.evaluatePlanRoute({ classification, plan: p, policy });
 
 test('resolveRouteLimits defaults and validation', () => {
-  assert.deepEqual(gate.resolveRouteLimits(), { maxFiles: 3, maxChangedLines: 30, protectedPaths: [] });
-  const bad = gate.resolveRouteLimits({ maxFiles: 0, maxChangedLines: 2.5, protectedPaths: 'x' });
-  assert.deepEqual(bad, { maxFiles: 3, maxChangedLines: 30, protectedPaths: [] });
-  const ok = gate.resolveRouteLimits({ maxFiles: 5, maxChangedLines: 10, protectedPaths: ['src/legacy/'] });
-  assert.deepEqual(ok, { maxFiles: 5, maxChangedLines: 10, protectedPaths: ['src/legacy/'] });
+  assert.deepEqual(gate.resolveRouteLimits(), { maxFiles: 3, maxChangedLines: 30, maxChangedBytes: 20000, protectedPaths: [] });
+  const bad = gate.resolveRouteLimits({ maxFiles: 0, maxChangedLines: 2.5, maxChangedBytes: -1, protectedPaths: 'x' });
+  assert.deepEqual(bad, { maxFiles: 3, maxChangedLines: 30, maxChangedBytes: 20000, protectedPaths: [] });
+  const ok = gate.resolveRouteLimits({ maxFiles: 5, maxChangedLines: 10, maxChangedBytes: 500, protectedPaths: ['src/legacy/'] });
+  assert.deepEqual(ok, { maxFiles: 5, maxChangedLines: 10, maxChangedBytes: 500, protectedPaths: ['src/legacy/'] });
 });
 
 test('isProtectedPath built-in categories', () => {
@@ -85,7 +85,21 @@ test('plan route: each reason code', () => {
   assert.deepEqual(route(plan({ checkIds: [] })).reasons, ['no_mechanical_check']);
   const all = route(plan({ route: 'full', checkIds: [], stages: [{ roleId: 'b', allowedFiles: ['a', 'b', 'c', 'd', '.env'] }] }),
     { adaptiveRoute: 'off' }, 'docs');
-  assert.deepEqual(all.reasons, ['not_bugfix', 'not_requested', 'too_many_files', 'protected_path:.env', 'no_mechanical_check']);
+  assert.deepEqual(all.reasons, [
+    'not_bugfix', 'not_requested', 'too_many_files', 'protected_path:.env',
+    'non_file_entry:a', 'non_file_entry:b', 'non_file_entry:c', 'non_file_entry:d', 'no_mechanical_check',
+  ]);
+});
+
+test('plan route: directory, extensionless and optional-stage plans are full', () => {
+  const entry = (file) => route(plan({ stages: [{ roleId: 'b', presetStageKey: 'implement', allowedFiles: [file] }] }));
+  assert.deepEqual(entry('src/lib/').reasons, ['non_file_entry:src/lib/']);
+  assert.deepEqual(entry('src/lib').reasons, ['non_file_entry:src/lib']);
+  assert.deepEqual(entry('Makefile').reasons, ['non_file_entry:Makefile']);
+  assert.equal(entry('src/lib/a.js').verdict, 'lean');
+  assert.equal(entry('src/.eslintrc').verdict, 'lean');
+  const optional = route(plan({ stages: [{ roleId: 'b', presetStageKey: 'implement', allowedFiles: ['a.js'] }, { roleId: 'c', presetStageKey: null, allowedFiles: [] }] }));
+  assert.deepEqual([optional.verdict, optional.reasons], ['full', ['optional_stage']]);
 });
 
 test('plan route: routeLimits and extra patterns from policy', () => {
@@ -105,7 +119,7 @@ test('plan route: malformed input does not throw', () => {
 
 const delta = (extra = {}) => gate.evaluateDelta({
   allowedFiles: ['src/a.js'],
-  changed: [{ path: 'src/a.js', addedLines: 5, removedLines: 5 }],
+  changed: [{ path: 'src/a.js', addedLines: 5, removedLines: 5, bytes: 10 }],
   checksPassed: true,
   scopeExpansions: 0,
   needsDecision: false,
@@ -122,15 +136,24 @@ test('delta: each reason code', () => {
   assert.deepEqual(delta({ changed: null }).reasons, ['delta_unknown']);
   assert.deepEqual(delta({ checksPassed: false }).reasons, ['check_not_passed']);
   assert.deepEqual(delta({ checksPassed: undefined }).reasons, ['check_not_passed']);
-  assert.deepEqual(delta({ changed: [{ path: 'src/b.js', addedLines: 1, removedLines: 0 }] }).reasons, ['outside_allowed_files:src/b.js']);
+  assert.deepEqual(delta({ changed: [{ path: 'src/b.js', addedLines: 1, removedLines: 0, bytes: 10 }] }).reasons, ['outside_allowed_files:src/b.js']);
   assert.deepEqual(
-    delta({ allowedFiles: ['composer.json'], changed: [{ path: 'composer.json', addedLines: 1, removedLines: 0 }] }).reasons,
+    delta({ allowedFiles: ['composer.json'], changed: [{ path: 'composer.json', addedLines: 1, removedLines: 0, bytes: 10 }] }).reasons,
     ['protected_path:composer.json'],
   );
-  assert.deepEqual(delta({ changed: [{ path: 'src/a.js', addedLines: 20, removedLines: 11 }] }).reasons, ['too_many_changed_lines']);
-  assert.equal(delta({ changed: [{ path: 'src/a.js', addedLines: 20, removedLines: 10 }] }).promote, false);
+  assert.deepEqual(delta({ changed: [{ path: 'src/a.js', addedLines: 20, removedLines: 11, bytes: 10 }] }).reasons, ['too_many_changed_lines']);
+  assert.equal(delta({ changed: [{ path: 'src/a.js', addedLines: 20, removedLines: 10, bytes: 10 }] }).promote, false);
   assert.deepEqual(delta({ scopeExpansions: 1 }).reasons, ['scope_expansion']);
   assert.deepEqual(delta({ needsDecision: true }).reasons, ['needs_decision']);
+});
+
+test('delta: bytes and mode change', () => {
+  assert.deepEqual(delta({ changed: [{ path: 'src/a.js', addedLines: 1, removedLines: 0, bytes: 20001 }] }).reasons, ['too_many_changed_bytes']);
+  assert.equal(delta({ changed: [{ path: 'src/a.js', addedLines: 1, removedLines: 0, bytes: 20000 }] }).promote, false);
+  assert.deepEqual(delta({ changed: [{ path: 'src/a.js', addedLines: 1, removedLines: 0 }] }).reasons, ['delta_unknown']);
+  assert.deepEqual(delta({ changed: [{ path: 'src/a.js', addedLines: 1, removedLines: 0, bytes: 10, modeChanged: true }] }).reasons, ['mode_change']);
+  const limits = gate.resolveRouteLimits({ maxChangedBytes: 5 });
+  assert.deepEqual(delta({ limits }).reasons, ['too_many_changed_bytes']);
 });
 
 test('delta: custom limits and extra protected paths', () => {
@@ -139,9 +162,9 @@ test('delta: custom limits and extra protected paths', () => {
 });
 
 test('delta: fail closed on malformed input', () => {
-  assert.deepEqual(delta({ changed: [{ path: 'src/a.js', addedLines: -1, removedLines: 0 }] }).reasons, ['delta_unknown']);
-  assert.equal(delta({ changed: [{ path: 'src/a.js', addedLines: 1.5, removedLines: 0 }] }).promote, true);
-  assert.equal(delta({ changed: [{ path: 'src/a.js', addedLines: '1', removedLines: 0 }] }).promote, true);
+  assert.deepEqual(delta({ changed: [{ path: 'src/a.js', addedLines: -1, removedLines: 0, bytes: 10 }] }).reasons, ['delta_unknown']);
+  assert.equal(delta({ changed: [{ path: 'src/a.js', addedLines: 1.5, removedLines: 0, bytes: 10 }] }).promote, true);
+  assert.equal(delta({ changed: [{ path: 'src/a.js', addedLines: '1', removedLines: 0, bytes: 10 }] }).promote, true);
   assert.equal(delta({ changed: 'x' }).promote, true);
   assert.equal(delta({ changed: [null] }).promote, true);
   assert.equal(gate.evaluateDelta().promote, true);
@@ -151,7 +174,7 @@ test('delta: fail closed on malformed input', () => {
 
 test('delta: reasons keep documented order', () => {
   const r = gate.evaluateDelta({
-    allowedFiles: [], changed: [{ path: '.env', addedLines: 40, removedLines: 0 }],
+    allowedFiles: [], changed: [{ path: '.env', addedLines: 40, removedLines: 0, bytes: 10 }],
     checksPassed: false, scopeExpansions: 2, needsDecision: true,
   });
   assert.deepEqual(r.reasons, [
@@ -162,8 +185,8 @@ test('delta: reasons keep documented order', () => {
 
 test('delta: allowedFiles entries match as exact file or directory prefix', () => {
   const inDir = (extra) => delta({ allowedFiles: ['src/lib/', 'docs'], ...extra });
-  assert.equal(inDir({ changed: [{ path: 'src/lib/x.js', addedLines: 1, removedLines: 0 }] }).promote, false);
-  assert.equal(inDir({ changed: [{ path: 'docs/a/b.md', addedLines: 1, removedLines: 0 }] }).promote, false);
-  assert.deepEqual(inDir({ changed: [{ path: 'src/library.js', addedLines: 1, removedLines: 0 }] }).reasons, ['outside_allowed_files:src/library.js']);
-  assert.deepEqual(inDir({ changed: [{ path: 'docs2/a.md', addedLines: 1, removedLines: 0 }] }).reasons, ['outside_allowed_files:docs2/a.md']);
+  assert.equal(inDir({ changed: [{ path: 'src/lib/x.js', addedLines: 1, removedLines: 0, bytes: 10 }] }).promote, false);
+  assert.equal(inDir({ changed: [{ path: 'docs/a/b.md', addedLines: 1, removedLines: 0, bytes: 10 }] }).promote, false);
+  assert.deepEqual(inDir({ changed: [{ path: 'src/library.js', addedLines: 1, removedLines: 0, bytes: 10 }] }).reasons, ['outside_allowed_files:src/library.js']);
+  assert.deepEqual(inDir({ changed: [{ path: 'docs2/a.md', addedLines: 1, removedLines: 0, bytes: 10 }] }).reasons, ['outside_allowed_files:docs2/a.md']);
 });

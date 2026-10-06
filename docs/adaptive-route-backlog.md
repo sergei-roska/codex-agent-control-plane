@@ -33,7 +33,7 @@ Run only the named test files, never the full suite.
 ### Route gate (`src/route-gate.js`, AR-1)
 
 - `DEFAULT_ROUTE_LIMITS = { maxFiles: 3, maxChangedLines: 30 }`.
-- `resolveRouteLimits(policyLimits) -> { maxFiles, maxChangedLines, protectedPaths }`;
+- `resolveRouteLimits(policyLimits) -> { maxFiles, maxChangedLines, maxChangedBytes, protectedPaths }`;
   policy can only extend `protectedPaths`.
 - `isProtectedPath(relPath, extraPatterns) -> boolean`.
 - `evaluatePlanRoute({ classification, plan, policy }) -> { requested, verdict, effective, mode, reasons }`;
@@ -43,7 +43,8 @@ Run only the named test files, never the full suite.
 - Reason codes: `not_bugfix`, `not_requested`, `too_many_files`,
   `protected_path:<path>`, `no_mechanical_check`, `policy_off`, `delta_unknown`,
   `check_not_passed`, `outside_allowed_files:<path>`, `too_many_changed_lines`,
-  `scope_expansion`, `needs_decision`.
+  `scope_expansion`, `needs_decision`, `non_file_entry:<entry>`, `optional_stage`,
+  `too_many_changed_bytes`, `mode_change`, `conditional_stage_dispatched`.
 
 ### Plan and preset (AR-2)
 

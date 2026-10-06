@@ -985,15 +985,47 @@ function buildLeadGraph(deps) {
     return { batch, ...(runtime.signal?.aborted ? { status: 'canceled', text: CANCELED_TEXT } : {}) };
   }
 
-  // Delta check of a succeeded gate stage (lean route). Fails closed: any unknown input promotes.
-  async function gateReasons(stage, outcome, delta, routing) {
-    const trusted = delta && delta.known === true && delta.headChanged !== true && Array.isArray(delta.changedPaths);
+  // Cumulative attested delta of every writer attempt so far (reconciled results replace their original outcome).
+  // Unknown when any counted writer has no trusted delta. `skip` holds attempts whose delta is settled later.
+  function cumulativeDelta(outcomes, ownAttemptId, skip) {
+    const reconciled = new Set(outcomes.filter((outcome) => outcome.kind === 'reconciliation').map((outcome) => outcome.attemptId));
+    const paths = [];
+    let known = true;
+    let headChanged = false;
+    for (const outcome of outcomes) {
+      let delta;
+      if (outcome.kind === 'reconciliation') {
+        delta = { known: outcome.deltaKnown === true, headChanged: outcome.headChanged === true, changedPaths: outcome.changedPaths };
+      } else {
+        if (outcome.sandbox === 'read-only' || reconciled.has(outcome.attemptId) || skip.has(outcome.attemptId)) continue;
+        delta = outcome.writerExecution?.delta || null;
+        if (!delta && outcome.effects === 'none' && outcome.attemptId !== ownAttemptId) continue;
+      }
+      if (delta && delta.headChanged === true) headChanged = true;
+      if (!(delta && delta.known === true && Array.isArray(delta.changedPaths))) {
+        known = false;
+        continue;
+      }
+      delta.changedPaths.forEach((file) => { if (!paths.includes(file)) paths.push(file); });
+    }
+    return { known, headChanged, changedPaths: paths };
+  }
+
+  // Gate check after a succeeded writable stage (lean route): cumulative size, protected paths and scope over
+  // every writer so far, against the union of the writable stages' allowedFiles. Fails closed: unknown promotes.
+  async function gateReasons(state, stage, outcome, outcomes, routing, skip) {
+    const delta = cumulativeDelta(outcomes, outcome.attemptId, skip);
+    const trusted = delta.known === true && delta.headChanged !== true;
     let lines = null;
     if (trusted && delta.changedPaths.length > 0 && typeof deps.deltaLines === 'function') {
       try { lines = await deps.deltaLines(delta.changedPaths); } catch (_) { lines = null; }
     }
+    const allowedFiles = [];
+    state.plan.stages.filter((entry) => routing.gateStageIds.includes(entry.stageId)).forEach((entry) => {
+      (Array.isArray(entry.allowedFiles) ? entry.allowedFiles : []).forEach((file) => { if (!allowedFiles.includes(file)) allowedFiles.push(file); });
+    });
     return evaluateImplementDelta({
-      allowedFiles: stage.allowedFiles, delta, lines, report: outcome.report, limits: routing.limits,
+      allowedFiles, delta, lines, report: outcome.report, limits: routing.limits, requireChange: stage.presetStageKey === 'implement',
     }).reasons;
   }
 
@@ -1040,13 +1072,16 @@ function buildLeadGraph(deps) {
       const routing = routingOf(state.plan);
       if (routing.effective === 'lean' && !state.routePromotion) {
         const reasons = [];
+        const skip = new Set(unresolvedWriters.map((entry) => entry.attemptId));
+        const allOutcomes = [...state.outcomes, ...summaries];
         for (let index = 0; index < finished.length; index += 1) {
           const stageId = finished[index].assignment?.stageId;
-          if (!routing.gateStageIds.includes(stageId)) continue;
-          if (stageStatuses[stageId]?.status !== 'succeeded') reasons.push('stage_not_succeeded');
-          else if (!unresolvedWriters.some((entry) => entry.attemptId === finished[index].attemptId)) {
-            const stage = state.plan.stages.find((entry) => entry.stageId === stageId);
-            reasons.push(...await gateReasons(stage, summaries[index], summaries[index].writerExecution?.delta || null, routing));
+          const stage = state.plan.stages.find((entry) => entry.stageId === stageId);
+          if (!stage) continue;
+          if (routing.conditionalStageIds.includes(stageId)) reasons.push('conditional_stage_dispatched');
+          if (stageStatuses[stageId]?.status !== 'succeeded') reasons.push(`stage_not_succeeded:${stageId}`);
+          else if (routing.gateStageIds.includes(stageId) && !skip.has(finished[index].attemptId)) {
+            reasons.push(...await gateReasons(state, stage, summaries[index], allOutcomes, routing, skip));
           }
         }
         const promotion = mergePromotion(state.routePromotion, reasons, 'implement');
@@ -1134,8 +1169,7 @@ function buildLeadGraph(deps) {
               && (state.stageStatuses[entry.stageId].attemptIds || []).includes(result.attemptId));
             const original = stage && state.outcomes.find((outcome) => outcome.kind !== 'reconciliation' && outcome.attemptId === result.attemptId);
             if (!original) continue;
-            const delta = { known: result.deltaKnown === true, headChanged: result.headChanged === true, changedPaths: result.changedPaths };
-            reasons.push(...await gateReasons(stage, original, delta, routing));
+            reasons.push(...await gateReasons(state, stage, original, update.outcomes, routing, new Set()));
           }
           const promotion = mergePromotion(state.routePromotion, reasons, 'implement');
           if (promotion) update.routePromotion = promotion;

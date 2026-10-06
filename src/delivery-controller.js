@@ -19,7 +19,7 @@ const { ProductError, canonicalJson } = require('./product-store');
 const { WriterAdmission } = require('./writer-admission');
 const { takeSnapshot } = require('./workspace-snapshot');
 const { redactDiagnosticMessage } = require('./event-journal');
-const { resolveRouteLimits } = require('./route-gate');
+const { buildLeanRouting } = require('./route-runtime');
 
 const LEAD_PROMPT_VERSION = 'pm-lead-v1';
 const DEFAULT_TICK_MS = 2000;
@@ -661,20 +661,9 @@ function createDeliveryController({
     const preset = pack && plan.presetId ? pack.presets.get(plan.presetId) : null;
     const lean = preset && preset.lean;
     if (!lean) return null;
-    const idsOf = (keys) => plan.stages.filter((stage) => keys.includes(stage.presetStageKey)).map((stage) => stage.stageId);
-    const purposeOverrides = {};
-    plan.stages.forEach((stage) => {
-      const text = lean.purposeOverrides && lean.purposeOverrides[stage.presetStageKey];
-      if (typeof text === 'string') purposeOverrides[stage.stageId] = text;
+    return buildLeanRouting({
+      preset, plan, projectConfig, isWritableRole: (roleId) => stageWritable(pack, roleId),
     });
-    return {
-      effective: 'lean',
-      skipStageIds: idsOf(lean.skip || []),
-      conditionalStageIds: idsOf(lean.conditional || []),
-      gateStageIds: idsOf(['implement']),
-      limits: resolveRouteLimits(projectConfig && projectConfig.routeLimits),
-      purposeOverrides,
-    };
   }
 
   async function startLead(run) {
@@ -951,16 +940,20 @@ function createDeliveryController({
   // ------------------------------------------------------------- candidate
 
   // D-M3-8 gates; the first failing one blocks the ticket (the candidate row is still stored for inspection).
-  function candidateGate({ run, plan, raw, stages, capture }) {
+  function candidateGate({ run, plan, raw, stages, capture, route = null }) {
     const block = (code, message) => ({ code, message });
     const required = Array.isArray(raw && raw.requiredCheckIds) ? raw.requiredCheckIds : null;
     if (!required || canonicalJson([...required].sort()) !== canonicalJson([...plan.checkIds].sort())) {
       return block('check_set_mismatch', 'The accepted check set does not match the saved plan');
     }
-    // A lean lead result carries the effective `required` flag per stage; a skipped stage is satisfied.
+    // A lean lead result carries the effective `required` flag per stage; a skipped stage is satisfied and a
+    // failed stage stays open even when it is not required.
     const open = plan.stages.filter((stage) => stage.required && !stages.some((entry) => entry.stageId === stage.stageId
-      && (entry.status === 'succeeded' || entry.status === 'skipped' || entry.required === false)));
-    if (open.length) return block('stages_incomplete', `Required stages did not succeed: ${open.map((stage) => stage.stageId).join(', ')}`);
+      && (entry.status === 'succeeded' || entry.status === 'skipped' || (entry.required === false && entry.status !== 'failed'))));
+    const incomplete = open.length ? block('stages_incomplete', `Required stages did not succeed: ${open.map((stage) => stage.stageId).join(', ')}`) : null;
+    // A lean run reports the acceptance and snapshot causes first: a promotion at a terminal acceptance also leaves stages open.
+    const leanRun = Boolean(route && route.effective === 'lean');
+    if (incomplete && !leanRun) return incomplete;
     if (run.branchName && capture.branch !== run.branchName) {
       return block('branch_mismatch', 'The checkout is not on the branch prepared for this run');
     }
@@ -979,6 +972,7 @@ function createDeliveryController({
         return block('candidate_changed', 'The checkout changed after acceptance verified it');
       }
     }
+    if (incomplete) return incomplete;
     if (isWritable(run, plan) && capture.manifest.length === 0) return block('empty_candidate', 'The plan is writable but no files changed');
     return null;
   }
@@ -1019,7 +1013,7 @@ function createDeliveryController({
       return true;
     }
     const capture = await gitAdapterFactory().captureCandidate({ baseCommit: run.baseCommit });
-    const gate = candidateGate({ run, plan, raw, stages, capture });
+    const gate = candidateGate({ run, plan, raw, stages, capture, route });
     let diffArtifact = null;
     if (capture.diffText) {
       const stored = artifactStore.store(Buffer.from(capture.diffText, 'utf8'), 'candidate.txt');

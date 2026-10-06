@@ -151,8 +151,9 @@ test('project policy: adaptiveRoute and routeLimits', () => {
     assert.throws(() => load({ adaptiveRoute: true }), /adaptiveRoute/);
     assert.deepEqual(load({ routeLimits: { maxFiles: 2, maxChangedLines: 10, protectedPaths: [' src/x/ ', 'src/x/'] } }).routeLimits,
       { maxFiles: 2, maxChangedLines: 10, protectedPaths: ['src/x/'] });
+    assert.deepEqual(load({ routeLimits: { maxChangedBytes: 5000 } }).routeLimits, { maxChangedBytes: 5000 });
     assert.deepEqual(load({ routeLimits: {} }).routeLimits, {});
-    for (const bad of [{ maxFiles: 0 }, { maxFiles: 1.5 }, { maxChangedLines: '5' }, { protectedPaths: 'x' }, { protectedPaths: [''] }, { protectedPaths: [3] }, { extra: 1 }]) {
+    for (const bad of [{ maxFiles: 0 }, { maxFiles: 1.5 }, { maxChangedLines: '5' }, { maxChangedBytes: 0 }, { maxChangedBytes: 1.5 }, { maxChangedBytes: '9' }, { protectedPaths: 'x' }, { protectedPaths: [''] }, { protectedPaths: [3] }, { extra: 1 }]) {
       assert.throws(() => load({ routeLimits: bad }), /routeLimits/);
     }
     assert.throws(() => load({ routeLimits: [] }), /routeLimits must be an object/);

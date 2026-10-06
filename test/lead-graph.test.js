@@ -68,6 +68,7 @@ const roles = () => new Map([
   ['orch-builder', role('orch-builder', 'workspace-write')],
   ['orch-explorer', role('orch-explorer', 'read-only')],
   ['orch-architect', role('orch-architect', 'read-only')],
+  ['orch-verifier', role('orch-verifier', 'workspace-write')],
 ]);
 
 const textParts = (value) => [{ content: { $case: 'text', value } }];
@@ -1500,7 +1501,7 @@ const leanPlan = (extra = {}) => ({
 });
 const plainPlan = () => leanPlan({ routing: undefined });
 const step = (stageId, roleName) => ({ ...brief(roleName, roleName === 'orch-builder' ? LEAN_FILES : []), stageId });
-const smallLines = async (paths) => paths.map((file) => ({ path: file, addedLines: 2, removedLines: 1 }));
+const smallLines = async (paths) => paths.map((file) => ({ path: file, addedLines: 2, removedLines: 1, bytes: 50 }));
 const leanWorker = ({ delta = { known: true, headChanged: false, changedPaths: LEAN_FILES }, builderReport = {} } = {}) => (roleName) => ({
   state: TaskState.TASK_STATE_COMPLETED,
   artifacts: [{
@@ -1560,7 +1561,7 @@ test('lean run: a stage with an unknown role makes the scripted decision invalid
 test('lean run: a skipped stage dispatched by the LLM after promotion is a plan violation', async () => {
   const { world, result } = await leanRun({
     script: [dispatch(step('reproduce', 'orch-explorer')), dispatch(step('review', 'orch-architect')), dispatch(step('verify', 'orch-explorer')), finish('Done')],
-    deltaLines: async (paths) => paths.map((file) => ({ path: file, addedLines: 40, removedLines: 0 })),
+    deltaLines: async (paths) => paths.map((file) => ({ path: file, addedLines: 40, removedLines: 0, bytes: 50 })),
   });
   assert.equal(result.status, 'completed');
   assert.match(world.prompts[1], /stage reproduce is skipped by the route and must not be dispatched/);
@@ -1572,14 +1573,16 @@ const promotionCases = [
   ['unknown delta', { worker: leanWorker({ delta: { known: false, headChanged: false, changedPaths: [] } }) }, ['delta_unknown']],
   ['HEAD changed', { worker: leanWorker({ delta: { known: true, headChanged: true, changedPaths: LEAN_FILES } }) }, ['delta_unknown']],
   ['empty delta', { worker: leanWorker({ delta: { known: true, headChanged: false, changedPaths: [] } }) }, ['empty_delta']],
-  ['too many changed lines', { deltaLines: async (paths) => paths.map((file) => ({ path: file, addedLines: 20, removedLines: 11 })) }, ['too_many_changed_lines']],
+  ['too many changed lines', { deltaLines: async (paths) => paths.map((file) => ({ path: file, addedLines: 20, removedLines: 11, bytes: 50 })) }, ['too_many_changed_lines']],
+  ['too many changed bytes', { deltaLines: async (paths) => paths.map((file) => ({ path: file, addedLines: 2, removedLines: 1, bytes: 100000 })) }, ['too_many_changed_bytes']],
+  ['mode change', { deltaLines: async (paths) => paths.map((file) => ({ path: file, addedLines: 0, removedLines: 0, bytes: 90, modeChanged: true })) }, ['mode_change']],
   ['missing deltaLines dependency', { deltaLines: null }, ['delta_unknown']],
   ['deltaLines rejects', { deltaLines: async () => { throw new Error('boom'); } }, ['delta_unknown']],
   ['deltaLines returns null', { deltaLines: async () => null }, ['delta_unknown']],
   ['advisory failed check', { worker: leanWorker({ builderReport: { checks: [{ command: 'npm test', result: 'failed', detail: 'x' }] } }) }, ['check_not_passed']],
   ['scope expansion', { worker: leanWorker({ builderReport: { scopeExpansion: [{ path: 'src/b.js', reason: 'needed' }] } }) }, ['scope_expansion']],
-  ['failed implement stage', { worker: leanWorker({ builderReport: { outcome: 'failed' } }) }, ['stage_not_succeeded']],
-  ['change outside allowed files', { worker: leanWorker({ delta: { known: true, headChanged: false, changedPaths: ['src/other.js'] } }) }, ['stage_not_succeeded']],
+  ['failed implement stage', { worker: leanWorker({ builderReport: { outcome: 'failed' } }) }, ['stage_not_succeeded:implement']],
+  ['change outside allowed files', { worker: leanWorker({ delta: { known: true, headChanged: false, changedPaths: ['src/other.js'] } }) }, ['stage_not_succeeded:implement']],
 ];
 for (const [label, options, reasons] of promotionCases) {
   test(`lean run promotes on ${label}; the next decision is an LLM call, review is required and finish is refused`, async () => {
@@ -1596,7 +1599,7 @@ for (const [label, options, reasons] of promotionCases) {
 test('promotion makes review required: finish waits until it succeeded', async () => {
   const { result } = await leanRun({
     script: [finish('Too early'), dispatch(step('review', 'orch-architect')), dispatch(step('verify', 'orch-explorer')), finish('Done')],
-    deltaLines: async (paths) => paths.map((file) => ({ path: file, addedLines: 40, removedLines: 0 })),
+    deltaLines: async (paths) => paths.map((file) => ({ path: file, addedLines: 40, removedLines: 0, bytes: 50 })),
   });
   assert.equal(result.status, 'completed');
   assert.deepEqual(statusMap(result), { reproduce: 'skipped', implement: 'succeeded', review: 'succeeded', verify: 'succeeded' });
@@ -1643,7 +1646,7 @@ test('promotion is monotonic: a later rejection never overwrites it and a resume
     script: [finish('Early'), dispatch(step('review', 'orch-architect')), dispatch(step('verify', 'orch-explorer')), finish('Done'), finish('Done again')],
     workerFinal: leanWorker(),
   });
-  const bigLines = async (paths) => paths.map((file) => ({ path: file, addedLines: 40, removedLines: 0 }));
+  const bigLines = async (paths) => paths.map((file) => ({ path: file, addedLines: 40, removedLines: 0, bytes: 50 }));
   await withSession(world, async (session) => {
     const plan = leanPlan();
     const stopped = await session.orchestrator.run({
@@ -1674,4 +1677,143 @@ test('a plan without routing behaves as before: no route, no required flag, iden
   assert.equal(plain.world.prompts[0], full.world.prompts[0]);
   assert.deepEqual(full.result.stages, plain.result.stages);
   assert.equal('route' in full.result, false);
+});
+
+// ---- lean gate over every writable stage and failed or conditional stages (audit D1, D2)
+
+const QA_STAGES = LEAN_STAGES.map((entry) => (entry.stageId === 'verify' ? { ...entry, roleId: 'orch-verifier', allowedFiles: ['src'] } : entry));
+const QA_ROUTING = { ...LEAN_ROUTING, gateStageIds: ['implement', 'verify'] };
+const qaPlan = () => leanPlan({ stages: QA_STAGES, routing: QA_ROUTING });
+const qaStep = (stageId, roleName) => ({ ...brief(roleName, roleName === 'orch-verifier' ? ['src'] : (roleName === 'orch-builder' ? LEAN_FILES : [])), stageId });
+const qaWorker = ({ qaPaths = [], reports = {} } = {}) => (roleName) => ({
+  state: TaskState.TASK_STATE_COMPLETED,
+  artifacts: [{
+    name: 'report',
+    parts: textParts(report(`${roleName} done`, reports[roleName] || {})),
+    metadata: {
+      writerExecution: {
+        ...releasedWriter(),
+        ...(roleName === 'orch-builder' ? { delta: { known: true, headChanged: false, changedPaths: LEAN_FILES } } : {}),
+        ...(roleName === 'orch-verifier' ? { delta: { known: true, headChanged: false, changedPaths: qaPaths } } : {}),
+      },
+    },
+  }],
+});
+const row = (file, lines, extra = {}) => ({ path: file, addedLines: lines, removedLines: 0, bytes: 50, ...extra });
+
+test('lean gate: a QA writer growing the change past the cumulative line limit promotes; review becomes required', async () => {
+  const calls = [];
+  const deltaLines = async (paths) => { calls.push(paths); return paths.map((file) => row(file, calls.length === 1 ? 5 : 305)); };
+  const { world, result } = await leanRun({
+    script: [finish('Too early'), dispatch(qaStep('review', 'orch-architect')), finish('Reviewed')],
+    plan: qaPlan(),
+    worker: qaWorker({ qaPaths: ['src/example.js'] }),
+    deltaLines,
+  });
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(result.route, { effective: 'lean', promoted: true, reasons: ['too_many_changed_lines'], at: 'implement', scriptedDecisions: 2 });
+  assert.equal(requiredMap(result).review, true);
+  assert.match(world.prompts[0], /are required now: yes, the route was promoted/);
+  assert.match(world.prompts[1], /Prior worker outcomes|Route: lean/);
+  assert.equal(statusMap(result).review, 'succeeded');
+  assert.deepEqual(calls[1], LEAN_FILES);
+});
+
+test('lean gate: finish stays refused until review succeeded after a QA-writer promotion', async () => {
+  const deltaLines = async (paths) => paths.map((file) => row(file, 40));
+  const { world, result } = await leanRun({
+    script: [finish('Too early'), finish('Still too early')],
+    plan: qaPlan(),
+    worker: qaWorker({ qaPaths: ['src/example.js'] }),
+    deltaLines,
+  });
+  assert.equal(result.status, 'plan_violation');
+  assert.match(world.prompts[1], /finish is not allowed until every required stage has succeeded \(open: (implement, )?review/);
+});
+
+test('lean gate: a QA writer touching a protected file under a directory entry promotes with protected_path', async () => {
+  const { result } = await leanRun({
+    script: [finish('Too early'), finish('Still too early')],
+    plan: qaPlan(),
+    worker: qaWorker({ qaPaths: ['src/x.permissions.yml'] }),
+    deltaLines: async (paths) => paths.map((file) => row(file, 1)),
+  });
+  assert.deepEqual(result.route.reasons, ['protected_path:src/x.permissions.yml']);
+  assert.equal(result.route.promoted, true);
+  assert.equal(requiredMap(result).review, true);
+});
+
+test('lean gate: a verify writer with an empty delta does not promote', async () => {
+  const { world, result } = await leanRun({
+    script: [],
+    plan: qaPlan(),
+    worker: qaWorker({ qaPaths: [] }),
+    deltaLines: async (paths) => paths.map((file) => row(file, 2)),
+  });
+  assert.equal(world.leadTurns, 0);
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(result.route, { effective: 'lean', promoted: false, reasons: [], at: null, scriptedDecisions: 3 });
+});
+
+test('lean gate: a failed review dispatched by the LLM after a takeover keeps finish refused', async () => {
+  const world = makeWorld({
+    script: [dispatch(step('review', 'orch-architect')), finish('Reviewed'), finish('Reviewed again')],
+    workerFinal: qaWorker({ reports: { 'orch-architect': { outcome: 'failed' } } }),
+  });
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({
+      goal: 'Fix', runId: RUN_ID, plan: leanPlan(), contract: contractOf(nodeCheck('ok', 'process.exit(0)')), interruptAfter: ['verify'],
+    });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'plan_violation');
+    assert.equal(statusMap(result).review, 'failed');
+    assert.deepEqual(result.route.reasons, ['conditional_stage_dispatched', 'stage_not_succeeded:review']);
+    assert.match(world.prompts[2], /finish is not allowed until every required stage has succeeded \(open: [^)]*review/);
+  }, { workspace: gitRepo(), orchestrator: { deltaLines: smallLines } });
+});
+
+test('lean gate: a failed verify that is re-run and passes still leaves the run promoted', async () => {
+  let verifyRuns = 0;
+  const worker = (roleName) => {
+    const failing = roleName === 'orch-explorer' && (verifyRuns += 1) === 1;
+    return leanWorker({ builderReport: {} })(roleName).artifacts && {
+      state: TaskState.TASK_STATE_COMPLETED,
+      artifacts: [{
+        name: 'report',
+        parts: textParts(report(`${roleName} done`, failing ? { outcome: 'failed' } : {})),
+        metadata: { writerExecution: { ...releasedWriter(), ...(roleName === 'orch-builder' ? { delta: { known: true, headChanged: false, changedPaths: LEAN_FILES } } : {}) } },
+      }],
+    };
+  };
+  const { world, result } = await leanRun({
+    script: [dispatch(step('verify', 'orch-explorer')), dispatch(step('review', 'orch-architect')), finish('Done')],
+    worker,
+  });
+  assert.equal(world.leadTurns, 3);
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(result.route.reasons, ['stage_not_succeeded:verify']);
+  assert.equal(result.route.promoted, true);
+  assert.deepEqual(statusMap(result), { reproduce: 'skipped', implement: 'succeeded', review: 'succeeded', verify: 'succeeded' });
+});
+
+test('lean gate: any dispatch of a conditional stage promotes the run', async () => {
+  const world = makeWorld({
+    script: [dispatch(step('review', 'orch-architect')), dispatch(step('verify', 'orch-explorer')), finish('Done')],
+    workerFinal: leanWorker(),
+  });
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({
+      goal: 'Fix', runId: RUN_ID, plan: leanPlan(), contract: contractOf(nodeCheck('ok', 'process.exit(0)')), interruptAfter: ['verify'],
+    });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(result.route.reasons, ['conditional_stage_dispatched']);
+    assert.equal(result.route.promoted, true);
+    assert.equal(requiredMap(result).review, true);
+    assert.equal(statusMap(result).review, 'succeeded');
+  }, { workspace: gitRepo(), orchestrator: { deltaLines: smallLines } });
 });
