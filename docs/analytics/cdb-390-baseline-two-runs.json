@@ -1,0 +1,1023 @@
+{
+  "scope": {
+    "ticketId": "tkt_L-i3IKBvWtQTLUxtAlxe-Q"
+  },
+  "measured": {
+    "basis": "subscription",
+    "cost": null
+  },
+  "totals": {
+    "rows": 22,
+    "turns": 22,
+    "elapsedMs": 604083,
+    "retries": 0,
+    "turnsKnownRows": 22,
+    "turnsUnknownRows": 0,
+    "turnsPartial": false,
+    "elapsedMsKnownRows": 22,
+    "elapsedMsUnknownRows": 0,
+    "elapsedMsPartial": false,
+    "retriesKnownRows": 8,
+    "retriesUnknownRows": 14,
+    "retriesPartial": true,
+    "tokens": {
+      "inputTokens": 1094876,
+      "cachedInputTokens": 829952,
+      "outputTokens": 33487,
+      "reasoningOutputTokens": 19119,
+      "totalTokens": 1128363
+    },
+    "tokensKnownRows": 22,
+    "tokensUnknownRows": 0,
+    "tokensPartial": false,
+    "models": [
+      "gpt-6-luna"
+    ],
+    "efforts": [
+      "high",
+      "xhigh"
+    ],
+    "outcomes": {
+      "completed": 22
+    },
+    "permissionDenials": {
+      "total": 0,
+      "byType": {}
+    }
+  },
+  "byRole": {
+    "dlv-developer": {
+      "rows": 2,
+      "turns": 2,
+      "elapsedMs": 79544,
+      "retries": 0,
+      "turnsKnownRows": 2,
+      "turnsUnknownRows": 0,
+      "turnsPartial": false,
+      "elapsedMsKnownRows": 2,
+      "elapsedMsUnknownRows": 0,
+      "elapsedMsPartial": false,
+      "retriesKnownRows": 2,
+      "retriesUnknownRows": 0,
+      "retriesPartial": false,
+      "tokens": {
+        "inputTokens": 225810,
+        "cachedInputTokens": 194560,
+        "outputTokens": 4422,
+        "reasoningOutputTokens": 1816,
+        "totalTokens": 230232
+      },
+      "tokensKnownRows": 2,
+      "tokensUnknownRows": 0,
+      "tokensPartial": false,
+      "models": [
+        "gpt-6-luna"
+      ],
+      "efforts": [
+        "high"
+      ],
+      "outcomes": {
+        "completed": 2
+      },
+      "permissionDenials": {
+        "total": 0,
+        "byType": {}
+      }
+    },
+    "dlv-project-manager": {
+      "rows": 14,
+      "turns": 14,
+      "elapsedMs": 357706,
+      "retries": null,
+      "turnsKnownRows": 14,
+      "turnsUnknownRows": 0,
+      "turnsPartial": false,
+      "elapsedMsKnownRows": 14,
+      "elapsedMsUnknownRows": 0,
+      "elapsedMsPartial": false,
+      "retriesKnownRows": 0,
+      "retriesUnknownRows": 14,
+      "retriesPartial": true,
+      "tokens": {
+        "inputTokens": 495301,
+        "cachedInputTokens": 357376,
+        "outputTokens": 21862,
+        "reasoningOutputTokens": 14299,
+        "totalTokens": 517163
+      },
+      "tokensKnownRows": 14,
+      "tokensUnknownRows": 0,
+      "tokensPartial": false,
+      "models": [
+        "gpt-6-luna"
+      ],
+      "efforts": [
+        "xhigh"
+      ],
+      "outcomes": {
+        "completed": 14
+      },
+      "permissionDenials": {
+        "total": 0,
+        "byType": {}
+      }
+    },
+    "dlv-qa": {
+      "rows": 4,
+      "turns": 4,
+      "elapsedMs": 100557,
+      "retries": 0,
+      "turnsKnownRows": 4,
+      "turnsUnknownRows": 0,
+      "turnsPartial": false,
+      "elapsedMsKnownRows": 4,
+      "elapsedMsUnknownRows": 0,
+      "elapsedMsPartial": false,
+      "retriesKnownRows": 4,
+      "retriesUnknownRows": 0,
+      "retriesPartial": false,
+      "tokens": {
+        "inputTokens": 234640,
+        "cachedInputTokens": 185344,
+        "outputTokens": 4597,
+        "reasoningOutputTokens": 1921,
+        "totalTokens": 239237
+      },
+      "tokensKnownRows": 4,
+      "tokensUnknownRows": 0,
+      "tokensPartial": false,
+      "models": [
+        "gpt-6-luna"
+      ],
+      "efforts": [
+        "high"
+      ],
+      "outcomes": {
+        "completed": 4
+      },
+      "permissionDenials": {
+        "total": 0,
+        "byType": {}
+      }
+    },
+    "dlv-reviewer": {
+      "rows": 2,
+      "turns": 2,
+      "elapsedMs": 66276,
+      "retries": 0,
+      "turnsKnownRows": 2,
+      "turnsUnknownRows": 0,
+      "turnsPartial": false,
+      "elapsedMsKnownRows": 2,
+      "elapsedMsUnknownRows": 0,
+      "elapsedMsPartial": false,
+      "retriesKnownRows": 2,
+      "retriesUnknownRows": 0,
+      "retriesPartial": false,
+      "tokens": {
+        "inputTokens": 139125,
+        "cachedInputTokens": 92672,
+        "outputTokens": 2606,
+        "reasoningOutputTokens": 1083,
+        "totalTokens": 141731
+      },
+      "tokensKnownRows": 2,
+      "tokensUnknownRows": 0,
+      "tokensPartial": false,
+      "models": [
+        "gpt-6-luna"
+      ],
+      "efforts": [
+        "high"
+      ],
+      "outcomes": {
+        "completed": 2
+      },
+      "permissionDenials": {
+        "total": 0,
+        "byType": {}
+      }
+    }
+  },
+  "byKind": {
+    "intake_turn": {
+      "rows": 5,
+      "turns": 5,
+      "input": 241073,
+      "cached": 178432,
+      "output": 14189,
+      "elapsedMs": 232315,
+      "tokensPartial": false
+    },
+    "lead_turn": {
+      "rows": 9,
+      "turns": 9,
+      "input": 254228,
+      "cached": 178944,
+      "output": 7673,
+      "elapsedMs": 125391,
+      "tokensPartial": false
+    },
+    "worker_turn": {
+      "rows": 8,
+      "turns": 8,
+      "input": 599575,
+      "cached": 472576,
+      "output": 11625,
+      "elapsedMs": 246377,
+      "tokensPartial": false
+    }
+  },
+  "byRoleKind": {
+    "dlv-developer+worker_turn": {
+      "rows": 2,
+      "turns": 2,
+      "input": 225810,
+      "cached": 194560,
+      "output": 4422,
+      "elapsedMs": 79544,
+      "tokensPartial": false
+    },
+    "dlv-project-manager+intake_turn": {
+      "rows": 5,
+      "turns": 5,
+      "input": 241073,
+      "cached": 178432,
+      "output": 14189,
+      "elapsedMs": 232315,
+      "tokensPartial": false
+    },
+    "dlv-project-manager+lead_turn": {
+      "rows": 9,
+      "turns": 9,
+      "input": 254228,
+      "cached": 178944,
+      "output": 7673,
+      "elapsedMs": 125391,
+      "tokensPartial": false
+    },
+    "dlv-qa+worker_turn": {
+      "rows": 4,
+      "turns": 4,
+      "input": 234640,
+      "cached": 185344,
+      "output": 4597,
+      "elapsedMs": 100557,
+      "tokensPartial": false
+    },
+    "dlv-reviewer+worker_turn": {
+      "rows": 2,
+      "turns": 2,
+      "input": 139125,
+      "cached": 92672,
+      "output": 2606,
+      "elapsedMs": 66276,
+      "tokensPartial": false
+    }
+  },
+  "attempts": [
+    {
+      "entryId": "intake:run_INqaskNN2MxyUMg4HN18HA:t1:a1:2026-10-06T07:44:51.979Z",
+      "kind": "intake_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T07:44:51.979Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 29491,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 57534,
+        "cachedInputTokens": 35328,
+        "outputTokens": 2416,
+        "reasoningOutputTokens": 1553,
+        "totalTokens": 59950
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "low",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "intake:run_INqaskNN2MxyUMg4HN18HA:t1:a2:2026-10-06T07:45:21.474Z",
+      "kind": "intake_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T07:45:21.474Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 29710,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 53332,
+        "cachedInputTokens": 33280,
+        "outputTokens": 2345,
+        "reasoningOutputTokens": 1545,
+        "totalTokens": 55677
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "low",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a1102d-1140-7c93-93f8-6a720dc796b0:01a1102d-12cd-7ca3-a90c-b32b4524ee66",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T07:45:51.408Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 11127,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 35648,
+        "cachedInputTokens": 16128,
+        "outputTokens": 709,
+        "reasoningOutputTokens": 363,
+        "totalTokens": 36357
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "low",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a1102d-1140-7c93-93f8-6a720dc796b0:01a1102d-ae0b-7960-ba99-18cf6a4066aa",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T07:46:31.549Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 6383,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 21131,
+        "cachedInputTokens": 18176,
+        "outputTokens": 424,
+        "reasoningOutputTokens": 186,
+        "totalTokens": 21555
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": null,
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a1102d-1140-7c93-93f8-6a720dc796b0:01a1102e-97ba-70f1-8e65-cc866f864027",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T07:47:31.369Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 9035,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 24313,
+        "cachedInputTokens": 20224,
+        "outputTokens": 774,
+        "reasoningOutputTokens": 516,
+        "totalTokens": 25087
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": null,
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a1102d-1140-7c93-93f8-6a720dc796b0:01a1102f-3115-7432-b61b-bad779511a0d",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T07:48:10.629Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 18101,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 28354,
+        "cachedInputTokens": 23296,
+        "outputTokens": 1465,
+        "reasoningOutputTokens": 1135,
+        "totalTokens": 29819
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": null,
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a1102d-1140-7c93-93f8-6a720dc796b0:01a1102f-d5eb-7b51-9749-018950f9f2fa",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T07:48:52.829Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 19409,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 33705,
+        "cachedInputTokens": 27392,
+        "outputTokens": 1720,
+        "reasoningOutputTokens": 1363,
+        "totalTokens": 35425
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": null,
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-qa:338b8ce6-08d2-40e9-92d1-673bc01c33e8:01a1102d-4086-7e10-a54d-f9306497d0b3",
+      "kind": "worker_turn",
+      "role": "dlv-qa",
+      "taskId": "338b8ce6-08d2-40e9-92d1-673bc01c33e8",
+      "attemptId": "76126bbd-2fa2-44a3-a1f3-0f4e674fe87e:r1:a0:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T07:46:03.113Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 27964,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 67678,
+        "cachedInputTokens": 48384,
+        "outputTokens": 1025,
+        "reasoningOutputTokens": 599,
+        "totalTokens": 68703
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "low",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-developer:7a69ba38-c37b-4ee4-b827-9f908cf3996a:01a1102d-ca0d-7962-b845-d35ac0af3f5a",
+      "kind": "worker_turn",
+      "role": "dlv-developer",
+      "taskId": "7a69ba38-c37b-4ee4-b827-9f908cf3996a",
+      "attemptId": "76126bbd-2fa2-44a3-a1f3-0f4e674fe87e:r2:a0:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T07:46:38.380Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 52534,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 139870,
+        "cachedInputTokens": 129024,
+        "outputTokens": 2157,
+        "reasoningOutputTokens": 738,
+        "totalTokens": 142027
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "low",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-reviewer:819b21b5-60c5-446c-a92a-cad87f0aadc2:01a1102e-bc46-7d33-840c-5c753f66ebc5",
+      "kind": "worker_turn",
+      "role": "dlv-reviewer",
+      "taskId": "819b21b5-60c5-446c-a92a-cad87f0aadc2",
+      "attemptId": "76126bbd-2fa2-44a3-a1f3-0f4e674fe87e:r3:a0:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T07:47:40.411Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 29871,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 69446,
+        "cachedInputTokens": 32256,
+        "outputTokens": 1124,
+        "reasoningOutputTokens": 448,
+        "totalTokens": 70570
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "low",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-qa:ffc65fa0-394f-47fa-8a06-a3d6c5158824:01a1102f-7abf-7970-9b06-5df6c62e2670",
+      "kind": "worker_turn",
+      "role": "dlv-qa",
+      "taskId": "ffc65fa0-394f-47fa-8a06-a3d6c5158824",
+      "attemptId": "76126bbd-2fa2-44a3-a1f3-0f4e674fe87e:r4:a0:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T07:48:29.167Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 23162,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 67612,
+        "cachedInputTokens": 48384,
+        "outputTokens": 1620,
+        "reasoningOutputTokens": 670,
+        "totalTokens": 69232
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "low",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "intake:run_bSFKL-nCqp35GO7xJfUY8g:t1:a1:2026-10-06T07:58:10.187Z",
+      "kind": "intake_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T07:58:10.187Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 22533,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 35221,
+        "cachedInputTokens": 29184,
+        "outputTokens": 1683,
+        "reasoningOutputTokens": 1158,
+        "totalTokens": 36904
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "xhigh",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "intake:run_bSFKL-nCqp35GO7xJfUY8g:t2:a1:2026-10-06T07:59:30.289Z",
+      "kind": "intake_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T07:59:30.289Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 99966,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 59073,
+        "cachedInputTokens": 48384,
+        "outputTokens": 5222,
+        "reasoningOutputTokens": 3801,
+        "totalTokens": 64295
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "xhigh",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "intake:run_bSFKL-nCqp35GO7xJfUY8g:t2:a2:2026-10-06T08:01:10.257Z",
+      "kind": "intake_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T08:01:10.257Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 50615,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 35913,
+        "cachedInputTokens": 32256,
+        "outputTokens": 2523,
+        "reasoningOutputTokens": 1742,
+        "totalTokens": 38436
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "xhigh",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a1103b-dcfc-7d63-bd7c-420a046452a5:01a1103b-de79-7000-9992-0730e2c1e11c",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T08:02:01.070Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 23308,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 35537,
+        "cachedInputTokens": 16128,
+        "outputTokens": 781,
+        "reasoningOutputTokens": 407,
+        "totalTokens": 36318
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "xhigh",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a1103b-dcfc-7d63-bd7c-420a046452a5:01a1103c-9a31-71c0-b6ad-49acff88b160",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T08:02:49.506Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 10213,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 21189,
+        "cachedInputTokens": 13056,
+        "outputTokens": 476,
+        "reasoningOutputTokens": 126,
+        "totalTokens": 21665
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": null,
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a1103b-dcfc-7d63-bd7c-420a046452a5:01a1103d-2ffe-7ed0-980c-dba23fa20e0f",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T08:03:27.857Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 15709,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 24706,
+        "cachedInputTokens": 20224,
+        "outputTokens": 778,
+        "reasoningOutputTokens": 198,
+        "totalTokens": 25484
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": null,
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a1103b-dcfc-7d63-bd7c-420a046452a5:01a1103e-64d4-77b0-bfef-a5e0845fff1e",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T08:04:46.915Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 12106,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 29645,
+        "cachedInputTokens": 24320,
+        "outputTokens": 546,
+        "reasoningOutputTokens": 206,
+        "totalTokens": 30191
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": null,
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-qa:1b17e3f5-1d12-4a22-8aa1-07deb2c122ce:01a1103c-3d38-7e63-bcbb-cb21dd49cb79",
+      "kind": "worker_turn",
+      "role": "dlv-qa",
+      "taskId": "1b17e3f5-1d12-4a22-8aa1-07deb2c122ce",
+      "attemptId": "c99ac624-2f95-410f-b2c0-efe35548b6c8:r1:a0:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T08:02:24.972Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 23957,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 49147,
+        "cachedInputTokens": 44288,
+        "outputTokens": 939,
+        "reasoningOutputTokens": 412,
+        "totalTokens": 50086
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "xhigh",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-developer:5ec87c95-5a04-4014-91b2-27c20a5310d1:01a1103c-c5d2-7482-acef-df05d20b72cb",
+      "kind": "worker_turn",
+      "role": "dlv-developer",
+      "taskId": "5ec87c95-5a04-4014-91b2-27c20a5310d1",
+      "attemptId": "c99ac624-2f95-410f-b2c0-efe35548b6c8:r2:a0:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T08:03:00.279Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 27010,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 85940,
+        "cachedInputTokens": 65536,
+        "outputTokens": 2265,
+        "reasoningOutputTokens": 1078,
+        "totalTokens": 88205
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "xhigh",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-reviewer:b79cda32-1cbb-4e77-af55-0dc96c4dbf92:01a1103d-6eeb-7a91-9265-a96842dc1ae6",
+      "kind": "worker_turn",
+      "role": "dlv-reviewer",
+      "taskId": "b79cda32-1cbb-4e77-af55-0dc96c4dbf92",
+      "attemptId": "c99ac624-2f95-410f-b2c0-efe35548b6c8:r3:a0:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T08:03:43.575Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 36405,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 69679,
+        "cachedInputTokens": 60416,
+        "outputTokens": 1482,
+        "reasoningOutputTokens": 635,
+        "totalTokens": 71161
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "xhigh",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-qa:43361a38-ade3-4459-96b5-b2803b745666:01a1103e-00b8-7382-887a-c6a2aaefea2a",
+      "kind": "worker_turn",
+      "role": "dlv-qa",
+      "taskId": "43361a38-ade3-4459-96b5-b2803b745666",
+      "attemptId": "c99ac624-2f95-410f-b2c0-efe35548b6c8:r3:a1:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T08:04:20.872Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 25474,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 50203,
+        "cachedInputTokens": 44288,
+        "outputTokens": 1013,
+        "reasoningOutputTokens": 240,
+        "totalTokens": 51216
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "xhigh",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    }
+  ],
+  "repeatedAssignments": null,
+  "byRun": {
+    "run_INqaskNN2MxyUMg4HN18HA": {
+      "leadTaskId": "76126bbd-2fa2-44a3-a1f3-0f4e674fe87e",
+      "rows": 11,
+      "turns": 11,
+      "input": 598623,
+      "cached": 431872,
+      "output": 15779,
+      "elapsedMs": 256787,
+      "tokensPartial": false
+    },
+    "run_bSFKL-nCqp35GO7xJfUY8g": {
+      "leadTaskId": "c99ac624-2f95-410f-b2c0-efe35548b6c8",
+      "rows": 11,
+      "turns": 11,
+      "input": 496253,
+      "cached": 398080,
+      "output": 17708,
+      "elapsedMs": 347296,
+      "tokensPartial": false
+    }
+  }
+}

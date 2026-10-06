@@ -1,0 +1,621 @@
+{
+  "scope": {
+    "ticketId": "tkt_nq8JYnoOiol2YX3LDKD4jw"
+  },
+  "measured": {
+    "basis": "subscription",
+    "cost": null
+  },
+  "totals": {
+    "rows": 10,
+    "turns": 10,
+    "elapsedMs": 261346,
+    "retries": 0,
+    "turnsKnownRows": 10,
+    "turnsUnknownRows": 0,
+    "turnsPartial": false,
+    "elapsedMsKnownRows": 10,
+    "elapsedMsUnknownRows": 0,
+    "elapsedMsPartial": false,
+    "retriesKnownRows": 4,
+    "retriesUnknownRows": 6,
+    "retriesPartial": true,
+    "tokens": {
+      "inputTokens": 412239,
+      "cachedInputTokens": 268288,
+      "outputTokens": 11658,
+      "reasoningOutputTokens": 6452,
+      "totalTokens": 423897
+    },
+    "tokensKnownRows": 10,
+    "tokensUnknownRows": 0,
+    "tokensPartial": false,
+    "models": [
+      "gpt-6-luna"
+    ],
+    "efforts": [
+      "high",
+      "xhigh"
+    ],
+    "outcomes": {
+      "completed": 10
+    },
+    "permissionDenials": {
+      "total": 0,
+      "byType": {}
+    }
+  },
+  "byRole": {
+    "dlv-developer": {
+      "rows": 1,
+      "turns": 1,
+      "elapsedMs": 44881,
+      "retries": 0,
+      "turnsKnownRows": 1,
+      "turnsUnknownRows": 0,
+      "turnsPartial": false,
+      "elapsedMsKnownRows": 1,
+      "elapsedMsUnknownRows": 0,
+      "elapsedMsPartial": false,
+      "retriesKnownRows": 1,
+      "retriesUnknownRows": 0,
+      "retriesPartial": false,
+      "tokens": {
+        "inputTokens": 103668,
+        "cachedInputTokens": 81664,
+        "outputTokens": 1560,
+        "reasoningOutputTokens": 679,
+        "totalTokens": 105228
+      },
+      "tokensKnownRows": 1,
+      "tokensUnknownRows": 0,
+      "tokensPartial": false,
+      "models": [
+        "gpt-6-luna"
+      ],
+      "efforts": [
+        "high"
+      ],
+      "outcomes": {
+        "completed": 1
+      },
+      "permissionDenials": {
+        "total": 0,
+        "byType": {}
+      }
+    },
+    "dlv-project-manager": {
+      "rows": 6,
+      "turns": 6,
+      "elapsedMs": 164432,
+      "retries": null,
+      "turnsKnownRows": 6,
+      "turnsUnknownRows": 0,
+      "turnsPartial": false,
+      "elapsedMsKnownRows": 6,
+      "elapsedMsUnknownRows": 0,
+      "elapsedMsPartial": false,
+      "retriesKnownRows": 0,
+      "retriesUnknownRows": 6,
+      "retriesPartial": true,
+      "tokens": {
+        "inputTokens": 178211,
+        "cachedInputTokens": 109056,
+        "outputTokens": 8062,
+        "reasoningOutputTokens": 5197,
+        "totalTokens": 186273
+      },
+      "tokensKnownRows": 6,
+      "tokensUnknownRows": 0,
+      "tokensPartial": false,
+      "models": [
+        "gpt-6-luna"
+      ],
+      "efforts": [
+        "xhigh"
+      ],
+      "outcomes": {
+        "completed": 6
+      },
+      "permissionDenials": {
+        "total": 0,
+        "byType": {}
+      }
+    },
+    "dlv-qa": {
+      "rows": 2,
+      "turns": 2,
+      "elapsedMs": 31004,
+      "retries": 0,
+      "turnsKnownRows": 2,
+      "turnsUnknownRows": 0,
+      "turnsPartial": false,
+      "elapsedMsKnownRows": 2,
+      "elapsedMsUnknownRows": 0,
+      "elapsedMsPartial": false,
+      "retriesKnownRows": 2,
+      "retriesUnknownRows": 0,
+      "retriesPartial": false,
+      "tokens": {
+        "inputTokens": 81409,
+        "cachedInputTokens": 46336,
+        "outputTokens": 1208,
+        "reasoningOutputTokens": 361,
+        "totalTokens": 82617
+      },
+      "tokensKnownRows": 2,
+      "tokensUnknownRows": 0,
+      "tokensPartial": false,
+      "models": [
+        "gpt-6-luna"
+      ],
+      "efforts": [
+        "high"
+      ],
+      "outcomes": {
+        "completed": 2
+      },
+      "permissionDenials": {
+        "total": 0,
+        "byType": {}
+      }
+    },
+    "dlv-reviewer": {
+      "rows": 1,
+      "turns": 1,
+      "elapsedMs": 21029,
+      "retries": 0,
+      "turnsKnownRows": 1,
+      "turnsUnknownRows": 0,
+      "turnsPartial": false,
+      "elapsedMsKnownRows": 1,
+      "elapsedMsUnknownRows": 0,
+      "elapsedMsPartial": false,
+      "retriesKnownRows": 1,
+      "retriesUnknownRows": 0,
+      "retriesPartial": false,
+      "tokens": {
+        "inputTokens": 48951,
+        "cachedInputTokens": 31232,
+        "outputTokens": 828,
+        "reasoningOutputTokens": 215,
+        "totalTokens": 49779
+      },
+      "tokensKnownRows": 1,
+      "tokensUnknownRows": 0,
+      "tokensPartial": false,
+      "models": [
+        "gpt-6-luna"
+      ],
+      "efforts": [
+        "high"
+      ],
+      "outcomes": {
+        "completed": 1
+      },
+      "permissionDenials": {
+        "total": 0,
+        "byType": {}
+      }
+    }
+  },
+  "byKind": {
+    "intake_turn": {
+      "rows": 2,
+      "turns": 2,
+      "input": 69848,
+      "cached": 32256,
+      "output": 5276,
+      "elapsedMs": 103983,
+      "tokensPartial": false
+    },
+    "lead_turn": {
+      "rows": 4,
+      "turns": 4,
+      "input": 108363,
+      "cached": 76800,
+      "output": 2786,
+      "elapsedMs": 60449,
+      "tokensPartial": false
+    },
+    "worker_turn": {
+      "rows": 4,
+      "turns": 4,
+      "input": 234028,
+      "cached": 159232,
+      "output": 3596,
+      "elapsedMs": 96914,
+      "tokensPartial": false
+    }
+  },
+  "byRoleKind": {
+    "dlv-developer+worker_turn": {
+      "rows": 1,
+      "turns": 1,
+      "input": 103668,
+      "cached": 81664,
+      "output": 1560,
+      "elapsedMs": 44881,
+      "tokensPartial": false
+    },
+    "dlv-project-manager+intake_turn": {
+      "rows": 2,
+      "turns": 2,
+      "input": 69848,
+      "cached": 32256,
+      "output": 5276,
+      "elapsedMs": 103983,
+      "tokensPartial": false
+    },
+    "dlv-project-manager+lead_turn": {
+      "rows": 4,
+      "turns": 4,
+      "input": 108363,
+      "cached": 76800,
+      "output": 2786,
+      "elapsedMs": 60449,
+      "tokensPartial": false
+    },
+    "dlv-qa+worker_turn": {
+      "rows": 2,
+      "turns": 2,
+      "input": 81409,
+      "cached": 46336,
+      "output": 1208,
+      "elapsedMs": 31004,
+      "tokensPartial": false
+    },
+    "dlv-reviewer+worker_turn": {
+      "rows": 1,
+      "turns": 1,
+      "input": 48951,
+      "cached": 31232,
+      "output": 828,
+      "elapsedMs": 21029,
+      "tokensPartial": false
+    }
+  },
+  "attempts": [
+    {
+      "entryId": "intake:run_GDPKJ6J0wBUwb5knV31rIg:t1:a1:2026-10-06T09:20:45.719Z",
+      "kind": "intake_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T09:20:45.719Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 49462,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 34291,
+        "cachedInputTokens": 16128,
+        "outputTokens": 2507,
+        "reasoningOutputTokens": 1685,
+        "totalTokens": 36798
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "high",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "intake:run_GDPKJ6J0wBUwb5knV31rIg:t1:a2:2026-10-06T09:21:35.184Z",
+      "kind": "intake_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T09:21:35.184Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 54521,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 35557,
+        "cachedInputTokens": 16128,
+        "outputTokens": 2769,
+        "reasoningOutputTokens": 2176,
+        "totalTokens": 38326
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "high",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a11085-8b8f-7611-ad62-1fc6f1dd3b4e:01a11085-8ccd-7de0-8b9a-4dca072de0f5",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T09:22:29.891Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 17383,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 35234,
+        "cachedInputTokens": 16128,
+        "outputTokens": 683,
+        "reasoningOutputTokens": 385,
+        "totalTokens": 35917
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "high",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a11085-8b8f-7611-ad62-1fc6f1dd3b4e:01a11085-fdae-7003-8f72-a4e1c513023e",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T09:22:59.105Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 10564,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 20759,
+        "cachedInputTokens": 17152,
+        "outputTokens": 436,
+        "reasoningOutputTokens": 154,
+        "totalTokens": 21195
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": null,
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a11085-8b8f-7611-ad62-1fc6f1dd3b4e:01a11086-d9c4-7fd2-b5d5-66b0ed04fdd6",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T09:23:55.444Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 21118,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 23854,
+        "cachedInputTokens": 20224,
+        "outputTokens": 1105,
+        "reasoningOutputTokens": 605,
+        "totalTokens": 24959
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": null,
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "lead:01a11085-8b8f-7611-ad62-1fc6f1dd3b4e:01a11087-d125-7582-832e-e96daab2cfa7",
+      "kind": "lead_turn",
+      "role": "dlv-project-manager",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "startedAt": "2026-10-06T09:24:58.775Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 11384,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 28516,
+        "cachedInputTokens": 23296,
+        "outputTokens": 562,
+        "reasoningOutputTokens": 192,
+        "totalTokens": 29078
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "xhigh",
+        "serviceTier": null
+      },
+      "reported": null,
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-qa:8e4903f4-664b-4360-9290-a3f3fc95d4b3:01a11085-d2a0-7781-b9ff-14da31faa416",
+      "kind": "worker_turn",
+      "role": "dlv-qa",
+      "taskId": "8e4903f4-664b-4360-9290-a3f3fc95d4b3",
+      "attemptId": "1a113b88-4820-4a02-9274-f50a01918ac0:r1:a0:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T09:22:47.759Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 10892,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 32086,
+        "cachedInputTokens": 15104,
+        "outputTokens": 368,
+        "reasoningOutputTokens": 76,
+        "totalTokens": 32454
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "high",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-developer:ddeb5380-749b-4d5d-b563-d95cab04f161:01a11086-29ea-77e2-8d22-4c3351f8da32",
+      "kind": "worker_turn",
+      "role": "dlv-developer",
+      "taskId": "ddeb5380-749b-4d5d-b563-d95cab04f161",
+      "attemptId": "1a113b88-4820-4a02-9274-f50a01918ac0:r2:a0:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T09:23:10.102Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 44881,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 103668,
+        "cachedInputTokens": 81664,
+        "outputTokens": 1560,
+        "reasoningOutputTokens": 679,
+        "totalTokens": 105228
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "high",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-reviewer:5de0578e-5b2e-41fa-89cc-7718ea331939:01a11087-2eab-7a30-b366-6f6a80468f6c",
+      "kind": "worker_turn",
+      "role": "dlv-reviewer",
+      "taskId": "5de0578e-5b2e-41fa-89cc-7718ea331939",
+      "attemptId": "1a113b88-4820-4a02-9274-f50a01918ac0:r3:a0:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T09:24:16.571Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 21029,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 48951,
+        "cachedInputTokens": 31232,
+        "outputTokens": 828,
+        "reasoningOutputTokens": 215,
+        "totalTokens": 49779
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "high",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    },
+    {
+      "entryId": "dlv-qa:71ed2d43-7732-4927-9230-30091fdc1dec:01a11087-8223-7d83-8df0-bce8ae934b42",
+      "kind": "worker_turn",
+      "role": "dlv-qa",
+      "taskId": "71ed2d43-7732-4927-9230-30091fdc1dec",
+      "attemptId": "1a113b88-4820-4a02-9274-f50a01918ac0:r3:a1:t1",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "startedAt": "2026-10-06T09:24:38.212Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 20112,
+      "retries": 0,
+      "tokens": {
+        "inputTokens": 49323,
+        "cachedInputTokens": 31232,
+        "outputTokens": 840,
+        "reasoningOutputTokens": 285,
+        "totalTokens": 50163
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "requested": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "serviceTier": null
+      },
+      "reported": {
+        "model": "gpt-6-luna",
+        "reasoningEffort": "high",
+        "serviceTier": "default"
+      },
+      "permissionDenials": 0
+    }
+  ],
+  "repeatedAssignments": null,
+  "byRun": {
+    "run_GDPKJ6J0wBUwb5knV31rIg": {
+      "leadTaskId": "1a113b88-4820-4a02-9274-f50a01918ac0",
+      "rows": 10,
+      "turns": 10,
+      "input": 412239,
+      "cached": 268288,
+      "output": 11658,
+      "elapsedMs": 261346,
+      "tokensPartial": false
+    }
+  }
+}

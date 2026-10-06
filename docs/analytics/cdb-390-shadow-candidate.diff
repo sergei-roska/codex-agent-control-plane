@@ -1,0 +1,12 @@
+diff --git a/themes/custom/b4main/theme-settings.php b/themes/custom/b4main/theme-settings.php
+index 81855308f..a4c8689e2 100755
+--- a/themes/custom/b4main/theme-settings.php
++++ b/themes/custom/b4main/theme-settings.php
+@@ -96,7 +96,6 @@ function b4main_form_system_theme_settings_alter(&$form, &$form_state) {
+         'bg-danger'   => t('Danger'),
+         'bg-success'  => t('Success'),
+         'bg-info'     => t('Info'),
+-        'bg-danger'   => t('Danger'),
+         '0'           => t('Transparent'),
+       ],
+ 
