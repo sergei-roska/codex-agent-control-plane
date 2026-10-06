@@ -58,7 +58,7 @@ test('evaluateImplementDelta: clean, unknown, headChanged and report-derived inp
   assert.deepEqual(evaluateImplementDelta({ ...clean, delta: { ...delta, known: false } }).reasons, ['delta_unknown']);
   assert.deepEqual(evaluateImplementDelta({ ...clean, delta: { ...delta, headChanged: true } }).reasons, ['delta_unknown']);
   assert.deepEqual(evaluateImplementDelta({ ...clean, delta: null }).reasons, ['delta_unknown']);
-  assert.equal(evaluateImplementDelta({ ...clean, delta: { ...delta, changedPaths: [] }, lines: null }).promote, false);
+  assert.deepEqual(evaluateImplementDelta({ ...clean, delta: { ...delta, changedPaths: [] }, lines: null }), { promote: true, reasons: ['empty_delta'] });
   assert.deepEqual(evaluateImplementDelta({ ...clean, report: { ...clean.report, checks: [{ result: 'failed' }] } }).reasons, ['check_not_passed']);
   assert.deepEqual(evaluateImplementDelta({ ...clean, report: { ...clean.report, scopeExpansion: [{ path: 'x', reason: 'y' }] } }).reasons, ['scope_expansion']);
   assert.deepEqual(evaluateImplementDelta({ ...clean, report: { ...clean.report, outcome: 'needs_decision' } }).reasons, ['needs_decision']);

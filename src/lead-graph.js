@@ -15,6 +15,7 @@ const { runAcceptance, assessWithoutChecks } = require('./acceptance');
 const {
   routingOf, isSatisfied, requiredStageIds, evaluateImplementDelta,
 } = require('./route-runtime');
+const { buildLeanDecision } = require('./lean-dispatch');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
 
 const DEFAULT_RECONCILE_WAIT_MS = 30_000;
@@ -259,6 +260,7 @@ function routeResultOf(state) {
     promoted: Boolean(promotion),
     reasons: promotion ? promotion.reasons : [],
     at: promotion ? promotion.at : null,
+    scriptedDecisions: state.scriptedDecisions || 0,
   };
 }
 
@@ -362,6 +364,8 @@ const LeadState = Annotation.Root({
   acceptanceAttempts: last(() => 0),
   acceptance: last(() => null),
   // Monotonic: once a promotion is recorded it is never cleared or overwritten.
+  // Monotonic count of decisions derived from the plan without a lead model call.
+  scriptedDecisions: last(() => 0),
   routePromotion: Annotation({ reducer: (current, next) => current || next || null, default: () => null }),
   status: last(() => null),
   reason: last(() => null),
@@ -537,6 +541,25 @@ function buildLeadGraph(deps) {
     return { pinned: current };
   }
 
+  // A decision derived from the binding plan for a clean lean run, validated like a model decision; null otherwise.
+  function scriptedDecisionOf(state, notes, roundLimit) {
+    try {
+      const decision = buildLeanDecision(state, { eligible: eligibleStages(state), notes, roundLimit });
+      if (!decision) return null;
+      validateDecision(decision, {
+        roles,
+        attemptedRoles: new Set(state.attemptedRoles),
+        outcomeCount: state.outcomes.length,
+        unresolvedWriterCount: state.unresolvedWriters.length,
+        openDecisionIds: new Set(state.openDecisions.map((entry) => entry.id)),
+        repairChains,
+      });
+      return planViolationsOf(state, decision).length === 0 ? decision : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   async function decide(state, config) {
     const runtime = runtimeOf(config);
     const { signal } = runtime;
@@ -554,16 +577,21 @@ function buildLeadGraph(deps) {
       update.pinned = current;
     }
 
-    let leadResult;
+    const roundLimit = planRoundLimit(state.plan, maxRounds);
+    const scripted = scriptedDecisionOf(state, notes, roundLimit);
+    if (scripted) update.scriptedDecisions = (state.scriptedDecisions || 0) + 1;
+    let leadResult = null;
     try {
-      leadResult = await appServer.run({
-        role: withSettings(leadRole, settingsFor(state, leadRole?.name)),
-        cwd: workspace,
-        input: decisionPrompt(state, { notes }),
-        ...(state.threadId ? { threadId: state.threadId } : {}),
-        outputSchema: DECISION_SCHEMA,
-        signal,
-      });
+      if (!scripted) {
+        leadResult = await appServer.run({
+          role: withSettings(leadRole, settingsFor(state, leadRole?.name)),
+          cwd: workspace,
+          input: decisionPrompt(state, { notes }),
+          ...(state.threadId ? { threadId: state.threadId } : {}),
+          outputSchema: DECISION_SCHEMA,
+          signal,
+        });
+      }
     } catch (error) {
       const kind = error?.name === 'AbortError' && signal?.aborted ? 'aborted' : classifyCodexError(error) === 'usage_limit' ? 'usage_limit' : 'error';
       if (error?.usage || error?.execution) recordLeadTurn(state, error, kind);
@@ -571,13 +599,14 @@ function buildLeadGraph(deps) {
       if (kind === 'usage_limit') return { ...update, budget: { source: 'lead' } };
       throw error;
     }
-    update.threadId = leadResult.threadId || state.threadId;
-    recordLeadTurn(state, leadResult, leadResult.status || 'completed');
+    if (leadResult) {
+      update.threadId = leadResult.threadId || state.threadId;
+      recordLeadTurn(state, leadResult, leadResult.status || 'completed');
+    }
 
-    const roundLimit = planRoundLimit(state.plan, maxRounds);
     let decision;
     try {
-      decision = parseDecision(leadResult.text);
+      decision = scripted || parseDecision(leadResult.text);
       // A closed decision (answered by the human or resolved earlier) must not be resolved again; the earlier closure stays authoritative.
       if (Array.isArray(decision.resolutions)) {
         const closedIds = new Set(state.closedDecisions.map((entry) => entry.id));

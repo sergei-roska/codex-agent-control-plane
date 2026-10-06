@@ -62,7 +62,7 @@ function evaluateImplementDelta({ allowedFiles, delta, lines, report, limits } =
   }
   const reportObj = isObject(report) ? report : {};
   const checks = Array.isArray(reportObj.checks) ? reportObj.checks : [];
-  return evaluateDelta({
+  const verdict = evaluateDelta({
     allowedFiles,
     changed,
     checksPassed: !checks.some((check) => isObject(check) && check.result === 'failed'),
@@ -70,6 +70,11 @@ function evaluateImplementDelta({ allowedFiles, delta, lines, report, limits } =
     needsDecision: reportObj.outcome === 'needs_decision',
     limits,
   });
+  // A bugfix implement stage that changed nothing is an anomaly, not a clean run.
+  if (Array.isArray(changed) && changed.length === 0 && !verdict.reasons.includes('empty_delta')) {
+    return { promote: true, reasons: [...verdict.reasons, 'empty_delta'] };
+  }
+  return verdict;
 }
 
 module.exports = { routingOf, isSatisfied, requiredStageIds, evaluateImplementDelta };

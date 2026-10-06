@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
-const { startServer, makeLeadExecutor, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts, assertOperatorPathsOutsideWorkspace } = require('../src/server');
+const { startServer, makeLeadExecutor, leanRoutingOf, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts, assertOperatorPathsOutsideWorkspace } = require('../src/server');
 const { makeLeadCard } = require('../src/server');
 const fs = require('node:fs');
 const { ResumeInputError } = require('../src/lead-orchestrator');
@@ -1055,4 +1055,26 @@ test('a restart fallback that starts over recovers the contract from the first u
   }), { publish() {} });
   assert.equal(runs[0].goal, 'original goal');
   assert.equal(runs[0].contract.requiredChecks[0].id, 'unit');
+});
+
+test('leanRoutingOf: the server recomputes eligibility instead of trusting the routing claim', () => {
+  const claim = { effective: 'lean', skipStageIds: ['reproduce'], conditionalStageIds: ['review'], gateStageIds: ['implement'] };
+  const planOf = (allowedFiles) => ({
+    checkIds: ['unit'],
+    stages: [
+      { stageId: 'reproduce', allowedFiles: [] },
+      { stageId: 'implement', allowedFiles },
+      { stageId: 'review', allowedFiles: [] },
+    ],
+  });
+  const policy = { adaptiveRoute: 'on' };
+  const ask = (plan, projectConfig, classification = 'bugfix') => leanRoutingOf(claim, plan, { classification, projectConfig });
+  assert.equal(ask(planOf(['src/a.js']), policy).routing.effective, 'lean');
+  assert.deepEqual(ask(planOf(['.github/workflows/ci.yml']), policy), {});
+  assert.deepEqual(ask(planOf(['src/a.js']), null), {});
+  assert.deepEqual(ask(planOf(['src/a.js']), { adaptiveRoute: 'shadow' }), {});
+  assert.deepEqual(ask(planOf(['src/a.js']), { adaptiveRoute: 'off' }), {});
+  assert.deepEqual(ask(planOf(['src/a.js']), policy, 'feature'), {});
+  assert.deepEqual(ask({ ...planOf(['src/a.js']), checkIds: [] }, policy), {});
+  assert.deepEqual(leanRoutingOf({ effective: 'full' }, planOf(['src/a.js']), { classification: 'bugfix', projectConfig: policy }), {});
 });

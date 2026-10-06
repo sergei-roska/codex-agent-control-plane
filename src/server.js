@@ -31,6 +31,7 @@ const { createSettingsStore } = require('./settings-store');
 const { loadProjectConfig, defaultProjectConfigPath } = require('./project-config');
 const { createGitAdapter } = require('./git-adapter');
 const { routingOf } = require('./route-runtime');
+const { evaluatePlanRoute } = require('./route-gate');
 const { countChangedLines } = require('./delta-lines');
 const { createGitDelivery } = require('./git-delivery');
 const {
@@ -316,9 +317,13 @@ function validateDeliveryPlan(plan, pack, projectCheckIds) {
 }
 
 // A lean routing proposed in delivery metadata, normalized against the re-validated plan; empty otherwise.
-function leanRoutingOf(raw, plan) {
+// The claim is never trusted: eligibility is recomputed from the plan and the project policy, so a missing
+// policy or a full verdict runs the full route.
+function leanRoutingOf(raw, plan, { classification = null, projectConfig = null } = {}) {
   const routing = routingOf({ stages: plan.stages, routing: raw });
-  return routing.effective === 'lean' ? { routing } : {};
+  if (routing.effective !== 'lean' || !projectConfig) return {};
+  const verdict = evaluatePlanRoute({ classification, plan: { ...plan, route: 'lean' }, policy: projectConfig });
+  return verdict.effective === 'lean' ? { routing } : {};
 }
 
 function makeLeadExecutor({
@@ -432,7 +437,7 @@ function makeLeadExecutor({
               ...checked.plan,
               planRevisionId: delivery.plan.planRevisionId ?? null,
               classification: delivery.plan.classification ?? null,
-              ...leanRoutingOf(delivery.plan.routing, checked.plan),
+              ...leanRoutingOf(delivery.plan.routing, checked.plan, { classification: delivery.plan.classification ?? null, projectConfig }),
             }
             : checked.plan,
         };
@@ -1079,7 +1084,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  startServer, createLeadClient, createLeadTaskReader, describePause, makeLeadExecutor, extractGoal, makeLeadCard,
+  startServer, createLeadClient, createLeadTaskReader, describePause, makeLeadExecutor, leanRoutingOf, extractGoal, makeLeadCard,
   registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts, assertOperatorPathsOutsideWorkspace,
   assertWorkspaceOutsideApplicationRoot,
 };

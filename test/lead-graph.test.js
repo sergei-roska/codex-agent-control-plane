@@ -120,6 +120,8 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
     script,
     leadTurns: 0,
     prompts: [],
+    runArgs: [],
+    messages: [],
     sends: [],
     polls: new Map(),
     tasks: new Map(),
@@ -144,6 +146,7 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
   world.appServer = {
     async run(args) {
       world.prompts.push(args.input);
+      world.runArgs.push(args);
       const next = world.script[world.leadTurns];
       world.leadTurns += 1;
       if (next === undefined) throw new Error('lead script exhausted');
@@ -160,6 +163,7 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
         async sendMessage(params) {
           const contextId = params.message.contextId;
           world.sends.push(contextId);
+          world.messages.push(JSON.parse(params.message.parts[0].content.value));
           const task = { id: `task-${contextId}`, contextId, role: roleName };
           world.tasks.set(contextId, task);
           return { task: view(task, false) };
@@ -1519,22 +1523,45 @@ async function leanRun({ script, plan = leanPlan(), worker, deltaLines = smallLi
   return { world, result };
 }
 
-test('lean run: reproduce is skipped, implement is eligible at once, finish works without review', async () => {
+test('lean run: a clean run needs no lead model call and carries the plan-derived assignments', async () => {
   const calls = [];
   const deltaLines = async (paths) => { calls.push(paths); return smallLines(paths); };
-  const { world, result } = await leanRun({ script: [dispatch(step('implement', 'orch-builder')), dispatch(step('verify', 'orch-explorer')), finish('Done')], deltaLines });
+  const plan = leanPlan({ routing: { ...LEAN_ROUTING, purposeOverrides: { implement: 'Fix the defect minimally' } } });
+  const { world, result } = await leanRun({ script: [], plan, deltaLines });
+  assert.equal(world.leadTurns, 0);
   assert.equal(result.status, 'completed');
   assert.equal(result.acceptance.disposition, 'accepted');
   assert.deepEqual(statusMap(result), { reproduce: 'skipped', implement: 'succeeded', review: 'pending', verify: 'succeeded' });
   assert.deepEqual(requiredMap(result), { reproduce: false, implement: true, review: false, verify: true });
-  assert.deepEqual(result.route, { effective: 'lean', promoted: false, reasons: [], at: null });
+  assert.deepEqual(result.route, { effective: 'lean', promoted: false, reasons: [], at: null, scriptedDecisions: 3 });
   assert.deepEqual(calls, [LEAN_FILES]);
-  assert.match(world.prompts[0], /Next eligible stages: implement\./);
-  assert.match(world.prompts[0], /Route: lean\. Skipped stages \(do not dispatch\): reproduce\..*\(review\) are required now: no\./);
+  assert.equal(result.rounds, 2);
+  assert.match(result.text, /^Route: lean\.\nSucceeded stages: implement, verify\./);
+  const [implement, verify] = world.messages;
+  assert.equal(implement.objective, 'Fix the defect minimally');
+  assert.deepEqual(implement.allowedFiles, LEAN_FILES);
+  assert.equal(implement.evidence.length, 1);
+  assert.deepEqual(implement.inputs, ['Fix the bug', 'Plan stage objective: Stage implement']);
+  assert.equal(implement.checks.length, 1);
+  assert.match(implement.checks[0], /^ok: .*node.* -e process\.exit\(0\)$/);
+  assert.equal(verify.objective, 'Stage verify');
+  assert.equal(verify.evidence.length, 1);
+  assert.match(verify.evidence[0], /^implement \(orch-builder\): completed - orch-builder done; filesChanged: .*; checks: /);
 });
 
-test('lean run: dispatching the skipped stage is a plan violation', async () => {
-  const { world, result } = await leanRun({ script: [dispatch(step('reproduce', 'orch-explorer')), dispatch(step('implement', 'orch-builder')), dispatch(step('verify', 'orch-explorer')), finish('Done')] });
+test('lean run: a stage with an unknown role makes the scripted decision invalid and the LLM takes over', async () => {
+  const stages = LEAN_STAGES.map((entry) => (entry.stageId === 'implement' ? { ...entry, roleId: 'orch-ghost' } : entry));
+  const { world, result } = await leanRun({ script: [finish('Too early'), finish('Again')], plan: leanPlan({ stages }) });
+  assert.equal(world.leadTurns, 2);
+  assert.equal(result.status, 'plan_violation');
+  assert.equal(world.messages.length, 0);
+});
+
+test('lean run: a skipped stage dispatched by the LLM after promotion is a plan violation', async () => {
+  const { world, result } = await leanRun({
+    script: [dispatch(step('reproduce', 'orch-explorer')), dispatch(step('review', 'orch-architect')), dispatch(step('verify', 'orch-explorer')), finish('Done')],
+    deltaLines: async (paths) => paths.map((file) => ({ path: file, addedLines: 40, removedLines: 0 })),
+  });
   assert.equal(result.status, 'completed');
   assert.match(world.prompts[1], /stage reproduce is skipped by the route and must not be dispatched/);
   assert.equal(statusMap(result).reproduce, 'skipped');
@@ -1544,6 +1571,7 @@ test('lean run: dispatching the skipped stage is a plan violation', async () => 
 const promotionCases = [
   ['unknown delta', { worker: leanWorker({ delta: { known: false, headChanged: false, changedPaths: [] } }) }, ['delta_unknown']],
   ['HEAD changed', { worker: leanWorker({ delta: { known: true, headChanged: true, changedPaths: LEAN_FILES } }) }, ['delta_unknown']],
+  ['empty delta', { worker: leanWorker({ delta: { known: true, headChanged: false, changedPaths: [] } }) }, ['empty_delta']],
   ['too many changed lines', { deltaLines: async (paths) => paths.map((file) => ({ path: file, addedLines: 20, removedLines: 11 })) }, ['too_many_changed_lines']],
   ['missing deltaLines dependency', { deltaLines: null }, ['delta_unknown']],
   ['deltaLines rejects', { deltaLines: async () => { throw new Error('boom'); } }, ['delta_unknown']],
@@ -1554,45 +1582,65 @@ const promotionCases = [
   ['change outside allowed files', { worker: leanWorker({ delta: { known: true, headChanged: false, changedPaths: ['src/other.js'] } }) }, ['stage_not_succeeded']],
 ];
 for (const [label, options, reasons] of promotionCases) {
-  test(`lean run promotes on ${label}; review becomes required and finish is refused`, async () => {
-    const { world, result } = await leanRun({ script: [dispatch(step('implement', 'orch-builder')), finish('Too early'), finish('Still too early')], ...options });
+  test(`lean run promotes on ${label}; the next decision is an LLM call, review is required and finish is refused`, async () => {
+    const { world, result } = await leanRun({ script: [finish('Too early'), finish('Still too early')], ...options });
+    assert.equal(world.leadTurns, 2);
     assert.equal(result.status, 'plan_violation');
-    assert.deepEqual(result.route, { effective: 'lean', promoted: true, reasons, at: 'implement' });
+    assert.deepEqual(result.route, { effective: 'lean', promoted: true, reasons, at: 'implement', scriptedDecisions: 1 });
     assert.equal(requiredMap(result).review, true);
-    assert.match(world.prompts[1], /are required now: yes, the route was promoted/);
-    assert.match(world.prompts[2], /finish is not allowed until every required stage has succeeded \(open: (implement, )?review, verify\)/);
+    assert.match(world.prompts[0], /are required now: yes, the route was promoted/);
+    assert.match(world.prompts[1], /finish is not allowed until every required stage has succeeded \(open: (implement, )?review, verify\)/);
   });
 }
 
 test('promotion makes review required: finish waits until it succeeded', async () => {
   const { result } = await leanRun({
-    script: [dispatch(step('implement', 'orch-builder')), finish('Too early'), dispatch(step('review', 'orch-architect')), dispatch(step('verify', 'orch-explorer')), finish('Done')],
+    script: [finish('Too early'), dispatch(step('review', 'orch-architect')), dispatch(step('verify', 'orch-explorer')), finish('Done')],
     deltaLines: async (paths) => paths.map((file) => ({ path: file, addedLines: 40, removedLines: 0 })),
   });
   assert.equal(result.status, 'completed');
   assert.deepEqual(statusMap(result), { reproduce: 'skipped', implement: 'succeeded', review: 'succeeded', verify: 'succeeded' });
-  assert.deepEqual(result.route, { effective: 'lean', promoted: true, reasons: ['too_many_changed_lines'], at: 'implement' });
+  assert.deepEqual(result.route, { effective: 'lean', promoted: true, reasons: ['too_many_changed_lines'], at: 'implement', scriptedDecisions: 1 });
 });
 
-test('a rejected acceptance promotes a lean run and the repair flow continues', async () => {
+test('a rejected acceptance promotes a lean run; the takeover turn works with no lead thread and the repair flow continues', async () => {
   const { world, result } = await leanRun({
-    script: [
-      dispatch(step('implement', 'orch-builder')), dispatch(step('verify', 'orch-explorer')), finish('Done'),
-      finish('No review yet'), dispatch(step('review', 'orch-architect')), finish('Reviewed'),
-    ],
+    script: [finish('No review yet'), dispatch(step('review', 'orch-architect')), finish('Reviewed')],
     runCheckImpl: failingCheck,
   });
+  assert.equal(world.leadTurns, 3);
+  assert.equal(world.runArgs[0].threadId, undefined);
+  assert.match(world.prompts[0], /Prior worker outcomes[^]*orch-builder done/);
   assert.equal(result.status, 'completed');
   assert.equal(result.acceptance.disposition, 'rejected');
-  assert.deepEqual(result.route, { effective: 'lean', promoted: true, reasons: ['acceptance_rejected'], at: 'accept' });
-  assert.match(world.prompts[3], /are required now: yes, the route was promoted \(acceptance_rejected\)/);
-  assert.match(world.prompts[4], /open: review\)/);
+  assert.deepEqual(result.route, { effective: 'lean', promoted: true, reasons: ['acceptance_rejected'], at: 'accept', scriptedDecisions: 3 });
+  assert.match(world.prompts[0], /are required now: yes, the route was promoted \(acceptance_rejected\)/);
+  assert.match(world.prompts[1], /open: review\)/);
   assert.equal(statusMap(result).review, 'succeeded');
+});
+
+test('resume in the middle of a scripted run: the resume turn is an LLM call and scriptedDecisions is kept', async () => {
+  const world = makeWorld({ script: [dispatch(step('verify', 'orch-explorer'))], workerFinal: leanWorker() });
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({
+      goal: 'Fix', runId: RUN_ID, plan: leanPlan(), contract: contractOf(nodeCheck('ok', 'process.exit(0)')), interruptAfter: ['verify'],
+    });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    assert.equal(world.leadTurns, 0);
+    assert.equal((await session.orchestrator._snapshot(RUN_ID)).values.scriptedDecisions, 1);
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    // The resume note hands the first turn to the LLM; the clean finish after it is scripted again.
+    assert.equal(world.leadTurns, 1);
+    assert.equal(result.route.scriptedDecisions, 2);
+    assert.equal(statusMap(result).verify, 'succeeded');
+  }, { workspace: gitRepo(), orchestrator: { deltaLines: smallLines } });
 });
 
 test('promotion is monotonic: a later rejection never overwrites it and a resume does not re-evaluate', async () => {
   const world = makeWorld({
-    script: [dispatch(step('implement', 'orch-builder')), finish('Early'), dispatch(step('review', 'orch-architect')), dispatch(step('verify', 'orch-explorer')), finish('Done'), finish('Done again')],
+    script: [finish('Early'), dispatch(step('review', 'orch-architect')), dispatch(step('verify', 'orch-explorer')), finish('Done'), finish('Done again')],
     workerFinal: leanWorker(),
   });
   const bigLines = async (paths) => paths.map((file) => ({ path: file, addedLines: 40, removedLines: 0 }));
@@ -1610,7 +1658,7 @@ test('promotion is monotonic: a later rejection never overwrites it and a resume
     const result = await session.orchestrator.resume({ runId: RUN_ID });
     assert.equal(result.status, 'completed');
     assert.equal(result.acceptance.disposition, 'rejected');
-    assert.deepEqual(result.route, { effective: 'lean', promoted: true, reasons: ['too_many_changed_lines'], at: 'implement' });
+    assert.deepEqual(result.route, { effective: 'lean', promoted: true, reasons: ['too_many_changed_lines'], at: 'implement', scriptedDecisions: 1 });
   }, { workspace: gitRepo(), orchestrator: { deltaLines: bigLines } });
 });
 
