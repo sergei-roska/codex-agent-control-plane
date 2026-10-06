@@ -8,6 +8,10 @@ owner decisions.
 
 ## Owner decisions in force
 
+- Current delivery defaults (owner instruction, 2026-10-06): all eleven roles
+  use `gpt-6-luna`; Project Manager and Architect use `xhigh`, all other roles,
+  including both repair executors, use `high`. This supersedes the earlier
+  pilot-only model choice below. Saved operator overrides still take precedence.
 - All Codex roles run on `gpt-6-luna` for pilots to save quota. The owner set the
   five Sol-profile roles to Luna in the pilot state's model settings; shipped
   profiles are unchanged.
@@ -340,3 +344,16 @@ necessary after restarting the launcher. This session could not observe the
 previously running launcher or dashboard process; do not claim a live restart
 or restored connection. Focused launcher runtime/server checks, whitespace and
 protected dashboard reference checks passed.
+
+## Delivery default models checkpoint - 2026-10-06
+
+The owner requested Luna high for workers and Luna xhigh for managing roles in
+Connections & Models. Updated delivery profile defaults: Project Manager and
+Architect are the managing roles; the remaining nine entries, including repair
+executors, use high. The settings API derives unsaved defaults from these profiles.
+Saved overrides retain precedence and active runs retain pinned settings.
+The updated defaults require a server restart to reload the role pack.
+Verification: role-pack, settings-store, dashboard-settings, and delivery-pack
+checks passed with loopback enabled: 71/71, no skips. Updated stale default
+expectations and the removed-model fixture without weakening the checks.
+Whitespace and protected dashboard reference checks passed.

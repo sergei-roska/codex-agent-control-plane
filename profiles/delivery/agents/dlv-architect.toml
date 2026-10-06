@@ -1,6 +1,6 @@
 name = "dlv-architect"
 description = "Read-only technical planner that decomposes ready requirements into scoped, dependency-ordered assignments with risks."
-model = "gpt-6-sol"
+model = "gpt-6-luna"
 model_reasoning_effort = "xhigh"
 sandbox_mode = "read-only"
 developer_instructions = """

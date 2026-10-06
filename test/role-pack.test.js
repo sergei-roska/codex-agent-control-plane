@@ -10,17 +10,17 @@ const { loadLegacyPack, loadRolePack } = require('../src/role-pack');
 const DELIVERY_DIR = path.resolve(__dirname, '..', 'profiles', 'delivery');
 
 const DEFAULTS = {
-  'dlv-project-manager': ['read-only', 'gpt-6-sol', 'high'],
-  'dlv-architect': ['read-only', 'gpt-6-sol', 'xhigh'],
+  'dlv-project-manager': ['read-only', 'gpt-6-luna', 'xhigh'],
+  'dlv-architect': ['read-only', 'gpt-6-luna', 'xhigh'],
   'dlv-developer': ['workspace-write', 'gpt-6-luna', 'high'],
-  'dlv-developer-xhigh': ['workspace-write', 'gpt-6-luna', 'xhigh'],
-  'dlv-developer-sol': ['workspace-write', 'gpt-6-sol', 'medium'],
+  'dlv-developer-xhigh': ['workspace-write', 'gpt-6-luna', 'high'],
+  'dlv-developer-sol': ['workspace-write', 'gpt-6-luna', 'high'],
   'dlv-qa': ['workspace-write', 'gpt-6-luna', 'high'],
-  'dlv-reviewer': ['read-only', 'gpt-6-sol', 'high'],
-  'dlv-security': ['read-only', 'gpt-6-sol', 'high'],
+  'dlv-reviewer': ['read-only', 'gpt-6-luna', 'high'],
+  'dlv-security': ['read-only', 'gpt-6-luna', 'high'],
   'dlv-performance': ['workspace-write', 'gpt-6-luna', 'high'],
-  'dlv-devops': ['workspace-write', 'gpt-6-luna', 'medium'],
-  'dlv-tech-writer': ['workspace-write', 'gpt-6-luna', 'medium'],
+  'dlv-devops': ['workspace-write', 'gpt-6-luna', 'high'],
+  'dlv-tech-writer': ['workspace-write', 'gpt-6-luna', 'high'],
 };
 
 const PRESET_TABLE = {

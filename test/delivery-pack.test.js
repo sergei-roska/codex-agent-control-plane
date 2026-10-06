@@ -385,8 +385,8 @@ test('delivery pack', async (suite) => {
       const view = runtime.productStore.getRunView(run.runId);
       assert.equal(view.stages.find((entry) => entry.stageId === 'implement').attempts.length, 3);
       // Repair executors run with their own pinned settings.
-      assert.deepEqual([appServer.workerCalls[2].model, appServer.workerCalls[2].effort], ['gpt-6-luna', 'xhigh']);
-      assert.deepEqual([appServer.workerCalls[3].model, appServer.workerCalls[3].effort], ['gpt-6-sol', 'medium']);
+      assert.deepEqual([appServer.workerCalls[2].model, appServer.workerCalls[2].effort], ['gpt-6-luna', 'high']);
+      assert.deepEqual([appServer.workerCalls[3].model, appServer.workerCalls[3].effort], ['gpt-6-luna', 'high']);
     });
   });
 
@@ -442,9 +442,9 @@ test('delivery pack', async (suite) => {
       assert.deepEqual(runA.settings, pinnedA);
       assert.equal(appServer.leadCalls.length, 6);
       for (const call of appServer.leadCalls) {
-        assert.deepEqual([call.model, call.effort], ['gpt-6-sol', 'high']);
+        assert.deepEqual([call.model, call.effort], ['gpt-6-luna', 'xhigh']);
       }
-      assert.deepEqual([appServer.intakeCalls[0].model, appServer.intakeCalls[0].effort], ['gpt-6-sol', 'high']);
+      assert.deepEqual([appServer.intakeCalls[0].model, appServer.intakeCalls[0].effort], ['gpt-6-luna', 'xhigh']);
       const workersA = appServer.workerCalls.slice();
       assert.equal(workersA.length, 4);
       const developerA = workersA.find((call) => call.role === 'dlv-developer');
@@ -453,8 +453,8 @@ test('delivery pack', async (suite) => {
       assert.deepEqual(workerRows.map((row) => JSON.parse(row.requested_json)), [{ model: 'gpt-6-luna', effort: 'high', serviceTier: null }]);
       const leadRows = runtime.state.db.prepare("SELECT requested_json, reported_json FROM usage_ledger WHERE kind = 'lead_turn' AND run_id = ?").all(runA.leadTaskId);
       assert.equal(leadRows.length, 6);
-      assert.deepEqual(JSON.parse(leadRows[0].requested_json), { model: 'gpt-6-sol', effort: 'high', serviceTier: null });
-      assert.equal(JSON.parse(leadRows[0].reported_json).model, 'gpt-6-sol');
+      assert.deepEqual(JSON.parse(leadRows[0].requested_json), { model: 'gpt-6-luna', effort: 'xhigh', serviceTier: null });
+      assert.equal(JSON.parse(leadRows[0].reported_json).model, 'gpt-6-luna');
 
       // A new run B on a clean checkout uses the new defaults.
       const cancelled = runtime.productStore.cancelTicket(ticketA.ticketId, { commandId: cmd(), expectedVersion: ticketOf(runtime, ticketA.ticketId).version });
@@ -522,7 +522,7 @@ test('delivery pack', async (suite) => {
       const applied = await ask({ roleRuntimeId: 'dlv-reviewer', model: 'gpt-6.1-sol', effort: 'low', serviceTier: null });
       assert.deepEqual([applied.role, applied.model, applied.effort], ['dlv-reviewer', 'gpt-6.1-sol', 'low']);
       const otherRole = await ask({ roleRuntimeId: 'dlv-developer', model: 'gpt-6.1-sol', effort: 'low', serviceTier: null });
-      assert.deepEqual([otherRole.model, otherRole.effort], ['gpt-6-sol', 'high']);
+      assert.deepEqual([otherRole.model, otherRole.effort], ['gpt-6-luna', 'high']);
       // Malformed or catalog-absent entries naming this role fail the turn; the worker never runs with profile values.
       const refuse = async (effectiveSettings) => {
         n += 1;
@@ -552,7 +552,7 @@ test('delivery pack', async (suite) => {
       await refuse({ roleRuntimeId: 'dlv-reviewer', model: 'gpt-6-luna', effort: 'low', serviceTier: 'Not A Tier' });
       await refuse({ roleRuntimeId: 'dlv-reviewer', model: 'gpt-ghost-9', effort: 'low', serviceTier: null });
       assert.equal(appServer.workerCalls.length, before);
-      assert.equal(runtime.deliveryController.settingsSnapshot().roles['dlv-reviewer'].model, 'gpt-6-sol');
+      assert.equal(runtime.deliveryController.settingsSnapshot().roles['dlv-reviewer'].model, 'gpt-6-luna');
     });
   });
 
@@ -586,7 +586,7 @@ test('delivery pack', async (suite) => {
       const acceptedRun = (await accepted.json()).run.runId;
       // The model disappears upstream; a fresh cache still answers, a stale one refreshes and rejects.
       const { defaultModels } = require('./fixtures/fake-app-server');
-      appServer.listModels = async () => defaultModels().filter((entry) => entry.model !== 'gpt-6-sol');
+      appServer.listModels = async () => defaultModels().filter((entry) => entry.model !== 'gpt-6-luna');
       clock += 10 * 60 * 1000;
       const replay = await api.post(`/tickets/${first.ticketId}/submit`, firstBody);
       assert.equal(replay.status, 200);

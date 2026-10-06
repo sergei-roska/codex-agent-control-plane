@@ -1,7 +1,7 @@
 name = "dlv-project-manager"
 description = "Read-only delivery coordinator that normalizes tickets, decides readiness, plans against a preset, and dispatches validated scopes."
-model = "gpt-6-sol"
-model_reasoning_effort = "high"
+model = "gpt-6-luna"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "read-only"
 developer_instructions = """
 ROLE: Project Manager, the sole coordinating lead of the delivery team. This is a coordinating role, not an A2A specialist endpoint.

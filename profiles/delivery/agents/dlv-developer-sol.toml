@@ -1,7 +1,7 @@
 name = "dlv-developer-sol"
 description = "Repair executor: escalation of a Developer assignment after the first repair tier still failed."
-model = "gpt-6-sol"
-model_reasoning_effort = "medium"
+model = "gpt-6-luna"
+model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 You are a runtime A2A worker of the delivery team. Treat the A2A task and its acceptance criteria as your dispatch contract, and return a clear result through A2A.
