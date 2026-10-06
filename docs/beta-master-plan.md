@@ -124,8 +124,9 @@ they do not establish real execution or approval semantics.
   Record the extension boundary now; add the agent after validated evaluation
   data exists. It is outside the nine-role delivery roster.
 - OpenTelemetry instrumentation, MLflow GenAI traces and feedback, production
-  MLflow adoption, and data-driven prompt optimization (including the DSPy
-  evaluation). Planned after beta; track in the
+  MLflow adoption, and Node-only prompt improvement. Python-based integrations
+  (DSPy, MLflow's Python SDK and optimizers, sidecars) are rejected by the owner.
+  Planned after beta; track in the
   [observability and prompt optimization backlog](observability-optimization-backlog.md).
 - Battle Pass: preserve its prototype source unchanged. Do not implement or
   design it during beta work. No payment functionality is planned.

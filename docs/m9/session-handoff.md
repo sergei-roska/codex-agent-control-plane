@@ -151,10 +151,12 @@ the pilot server is stopped and the task repository is clean.
   [the external integrations backlog](../integrations-backlog.md). These remain
   outside the current CDB live-project pilot and beta scope.
 - OpenTelemetry instrumentation, MLflow GenAI traces/feedback, production MLflow
-  decision, and prompt optimization (MLflow optimizers vs DSPy) are planned in
+  decision, and Node-only prompt improvement are planned in
   [the observability and prompt optimization backlog](../observability-optimization-backlog.md).
   When the CDB pilot and adaptive-route measurement close, start OBS-1 or record
-  an explicit deferral there; do not let it lapse.
+  an explicit deferral there; do not let it lapse. Python-based integrations
+  (DSPy, MLflow Python SDK/optimizers, sidecars) are rejected by the owner; never
+  propose them again.
 - Project-specific, per-role prompt rules (PC-1) are implemented in `8297082`
   (store, API, run-pinned overlay, Add rules modal); status and known limits are in
   the [project configuration backlog](../project-configuration-backlog.md). Browser

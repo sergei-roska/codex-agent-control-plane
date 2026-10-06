@@ -128,9 +128,13 @@ contain the evidence and limits.
 ## Follow-up plan
 
 OpenTelemetry instrumentation, MLflow GenAI traces and feedback, the production
-adoption decision, and the prompt optimization decision (MLflow optimizers vs
-DSPy) are planned as explicit work packages in the
+adoption decision, and a Node-only prompt improvement method are planned as
+explicit work packages in the
 [observability and prompt optimization backlog](observability-optimization-backlog.md).
+
+The MLflow optimization features listed above are Python-only, and the owner has
+rejected Python-based integrations (2026-10-06, reason: overlaps with the Node.js
+stack). Treat those features as unavailable; the backlog records the decision.
 
 ## Background system maintenance proposal
 
