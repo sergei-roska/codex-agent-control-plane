@@ -157,6 +157,9 @@ the pilot server is stopped and the task repository is clean.
   an explicit deferral there; do not let it lapse. Python-based integrations
   (DSPy, MLflow Python SDK/optimizers, sidecars) are rejected by the owner; never
   propose them again.
+- Parallel tickets through a git worktree per ticket are planned, not started, in
+  [the parallel delivery backlog](../parallel-delivery-backlog.md); PAR-1 measures
+  the real lease wait first.
 - Project-specific, per-role prompt rules (PC-1) are implemented in `8297082`
   (store, API, run-pinned overlay, Add rules modal); status and known limits are in
   the [project configuration backlog](../project-configuration-backlog.md). Browser

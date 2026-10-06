@@ -111,7 +111,9 @@ they do not establish real execution or approval semantics.
 - Parallel developers writing to a shared checkout, distributed execution,
   a general visual pipeline or role-policy editor, and project-specific
   per-role system-prompt rules. Track the latter in the
-  [project configuration backlog](project-configuration-backlog.md).
+  [project configuration backlog](project-configuration-backlog.md). Track
+  parallel tickets via a git worktree per ticket in the
+  [parallel delivery backlog](parallel-delivery-backlog.md).
 - Slack, Figma, and Google Tag Manager integrations, OAuth connection management,
   a provider-neutral integration manager with separate adapters, and a dedicated
   Integrations tab. Slack, Jira/Confluence, and Figma are the required integration
