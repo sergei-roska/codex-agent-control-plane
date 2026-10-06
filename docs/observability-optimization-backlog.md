@@ -28,9 +28,8 @@ once, so do not suggest it again.
 - Boundary for MLflow: the MLflow server is itself a Python program, but it is
   treated as an external service. This repository talks to it only over HTTP or
   OTLP from Node.js and never installs, builds, starts or supervises it. The
-  M8 README keeps a disposable-server recipe for verification only. If the owner
-  wants even an external Python service excluded, OBS-3 to OBS-5 change; ask
-  before assuming.
+  M8 README keeps a disposable-server recipe for verification only. The owner
+  confirmed on 2026-10-06 that an external MLflow server is acceptable.
 
 ## Why this file exists
 
@@ -102,5 +101,5 @@ follow the approved "later prompt optimization" step, reshaped to Node-only by D
   after the route measurement closes).
 - Whether any non-MLflow, non-local OTLP backend is ever wanted. Until then the
   scope is local collector and MLflow only.
-- Whether an externally run MLflow server (Python, never touched by this repo) is
-  acceptable under the Python rejection. Assumed yes; confirm.
+- Resolved 2026-10-06: an externally run MLflow server (Python, never touched by
+  this repo) is acceptable under the Python rejection (owner confirmed).
