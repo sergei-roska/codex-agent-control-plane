@@ -160,6 +160,10 @@ the pilot server is stopped and the task repository is clean.
 - Parallel tickets through a git worktree per ticket are planned, not started, in
   [the parallel delivery backlog](../parallel-delivery-backlog.md); PAR-1 measures
   the real lease wait first.
+- A TypeScript migration (compiler-checked JavaScript first, optional real `.ts`
+  later) is planned, not started, in
+  [the TypeScript migration backlog](../ts-migration-backlog.md); it needs the
+  owner's start decision first.
 - Project-specific, per-role prompt rules (PC-1) are implemented in `8297082`
   (store, API, run-pinned overlay, Add rules modal); status and known limits are in
   the [project configuration backlog](../project-configuration-backlog.md). Browser
