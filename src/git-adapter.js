@@ -236,10 +236,20 @@ function createGitAdapter({ workspace, execFile, timeoutMs = DEFAULT_GIT_TIMEOUT
 
   // `branchPrefixes` is the project policy ({ feature, bugfix, docs }, each ending in "/" or "-");
   // the built-in mapping only covers classifications the policy does not name.
-  async function branchName({ classification, title, ticketId, branchPrefixes } = {}) {
+  async function branchName({ classification, title, ticketId, branchPrefixes, sourceKind, sourceDisplayKey } = {}) {
     const key = String(classification || '').toLowerCase();
     const policy = branchPrefixes && typeof branchPrefixes === 'object' ? branchPrefixes[key] : undefined;
-    const prefix = typeof policy === 'string' && policy ? policy : `${BRANCH_PREFIXES[key] || 'task'}/`;
+    const isJira = sourceKind === 'jira';
+    const jiraDefault = isJira && (key === 'feature' || key === 'bugfix') ? key : null;
+    const prefix = typeof policy === 'string' && policy ? policy : `${jiraDefault || BRANCH_PREFIXES[key] || 'task'}/`;
+    if (isJira) {
+      if (typeof sourceDisplayKey !== 'string' || !/^[A-Z][A-Z0-9_]{0,9}-[1-9]\d{0,8}$/.test(sourceDisplayKey)) {
+        throw new Error('invalid Jira issue key for branch name');
+      }
+      const name = `${prefix}${sourceDisplayKey}`;
+      if (!(await validBranchName(name))) throw new Error(`invalid branch name: ${name}`);
+      return name;
+    }
     const suffix = String(ticketId || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(-6) || 'ticket';
     const name = `${prefix}${slugify(title)}-${suffix}`;
     if (!(await validBranchName(name))) throw new Error(`invalid branch name: ${name}`);

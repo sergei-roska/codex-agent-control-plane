@@ -8,6 +8,13 @@ owner decisions.
 
 ## Owner decisions in force
 
+- CDB live pilot authorized (2026-10-06): run the 24 owner-supplied issues in
+  `/home/sr/Projects/dccourtscode`, base `dccr-master`, one local task branch per
+  issue (`feature/CDB-N` or `bugfix/CDB-N`). Execute work, preserve results
+  locally, supervise the orchestrator and fix its bugs. No Jira status/comments
+  or other writes, no push, PR, or merge. All roles must use Luna. Local commits
+  are the preservation strategy discussed before the owner's start instruction.
+  Inspect every candidate before accepting/committing. Never read SQL dumps.
 - Current delivery defaults (owner instruction, 2026-10-06): all eleven roles
   use `gpt-6-luna`; Project Manager and Architect use `xhigh`, all other roles,
   including both repair executors, use `high`. This supersedes the earlier
@@ -394,3 +401,31 @@ checks 7/7 passed, without real credentials or network access. Changed JavaScrip
 syntax and active-field helper links were inspected. Regenerated only
 `web/dashboard/index.html`; whitespace and protected reference checks passed.
 No full suite or live browser run was performed for these changes.
+
+## CDB pilot startup checkpoint - 2026-10-06
+
+Target checkout verified clean on `dccr-master`, baseline
+`9ef992e892e8b550ad8560665be70bf2b711dd95`. Launcher owns the active port-3000
+server and uses `.runtime/launcher/projects/d94a686bc9927c4423122555ec9fd6041e24f83a84fea78da5253204b7ebe450/`.
+Atlassian health is connected/read-only at insomniacdesign; all eleven effective
+role selections are Luna with xhigh for PM/Architect and high otherwise.
+CDB-390 imported as `tkt_J8P1I70Vdl4nokTMWLaWWQ` (backlog, no model run yet),
+title "Fix duplicate array keys in b4main theme settings".
+
+Fixed the first setup incompatibility: Jira branch naming now uses the validated
+source display key rather than a title slug/internal suffix. Direct-ticket naming
+and existing ownership/collision guards remain intact. Git adapter checks 24/24
+and delivery controller checks 53/53 passed with Git/socket permission; no full
+suite. Private project policy now pins feature/ and bugfix/ prefixes and provides
+the minimum whitespace check; this is not a functional Drupal check. Run relevant
+task checks through Lando separately and record their actual results. Do not use
+`run-code-analysis.sh`: it runs phpcbf and composer require, so it mutates files.
+Drupal MCP could not resolve a project root; Lando is installed and reports the
+local dccourts environment. AGENTS.md references missing spec-start-ticket.md and
+spec-model-selection.md; no matching files found. User explicitly authorized
+execution and pinned Luna; use ticket evidence and the orchestrator plan gates.
+
+Queue, in owner order: CDB-390, CDB-389, CDB-388, CDB-387, CDB-386, CDB-384,
+CDB-383, CDB-382, CDB-381, CDB-380, CDB-378, CDB-377, CDB-372, CDB-370,
+CDB-369, CDB-368, CDB-367, CDB-366, CDB-365, CDB-364, CDB-363, CDB-362,
+CDB-360, CDB-359.

@@ -187,6 +187,9 @@ test('delivery controller', async (suite) => {
       workerImpl: builderWorker(workspace),
     }), async ({ runtime, appServer, workspace, base }) => {
       const ticket = makeTicket(runtime);
+      runtime.productStore.getTicketSource = (ticketId) => ticketId === ticket.ticketId
+        ? { sourceKind: 'jira', displayKey: 'CDB-390' }
+        : null;
       const submitted = submit(runtime, ticket);
       assert.equal(submitted.ticket.status, 'pending');
       assert.equal(submitted.run.status, 'queued');
@@ -207,7 +210,7 @@ test('delivery controller', async (suite) => {
       assert.ok(view.leadTaskCardId.startsWith('lr_'));
 
       // Branch created from the base commit; the checkout sits on it with uncommitted changes.
-      assert.match(run.branchName, /^feature\/add-a-farewell-helper-[a-z0-9]{6}$/);
+      assert.equal(run.branchName, 'feature/CDB-390');
       assert.equal(run.baseCommit, base);
       assert.equal(git(workspace, 'rev-parse', '--abbrev-ref', 'HEAD'), run.branchName);
       assertNoCommit(workspace, base, run.branchName);

@@ -481,8 +481,10 @@ function createDeliveryController({
       return true;
     }
     const revision = store.getRevision(run.ticketId, run.revisionId);
+    const source = store.getTicketSource?.(run.ticketId);
     const name = run.branchName || await adapter.branchName({
       classification: plan.classification, title: revision.title, ticketId: run.ticketId, branchPrefixes: projectConfig.branchPrefixes,
+      sourceKind: source?.sourceKind, sourceDisplayKey: source?.displayKey,
     });
     let owned = store.isTicketBranch(name, run.ticketId);
     // Record the intent before creating, so a crash in between leaves the branch recognisably ours.

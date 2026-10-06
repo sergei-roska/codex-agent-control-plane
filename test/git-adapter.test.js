@@ -121,6 +121,10 @@ test('slugify and branchName', async (t) => {
   const policy = { feature: 'feat-', bugfix: 'bug/', docs: 'documents/' };
   assert.equal(await adapter.branchName({ classification: 'feature', title: 'Add Login', ticketId: 'TCK-ABCDEF', branchPrefixes: policy }), 'feat-add-login-abcdef');
   assert.equal(await adapter.branchName({ classification: 'bugfix', title: 'Fix it', ticketId: 'abcdef', branchPrefixes: policy }), 'bug/fix-it-abcdef');
+  assert.equal(await adapter.branchName({ classification: 'feature', title: 'Ignored title', ticketId: 'ticket-1', sourceKind: 'jira', sourceDisplayKey: 'CDB-390' }), 'feature/CDB-390');
+  assert.equal(await adapter.branchName({ classification: 'bugfix', title: 'Ignored title', ticketId: 'ticket-2', sourceKind: 'jira', sourceDisplayKey: 'CDB-389' }), 'bugfix/CDB-389');
+  assert.equal(await adapter.branchName({ classification: 'feature', title: 'Ignored title', branchPrefixes: { feature: 'feat-' }, sourceKind: 'jira', sourceDisplayKey: 'CDB-388' }), 'feat-CDB-388');
+  await assert.rejects(adapter.branchName({ classification: 'feature', title: 'x', sourceKind: 'jira', sourceDisplayKey: 'CDB-390/../../main' }), /invalid Jira issue key/);
   assert.equal(await adapter.branchName({ classification: 'docs', title: 'Doc', ticketId: 'abcdef', branchPrefixes: policy }), 'documents/doc-abcdef');
   // A classification the policy does not name falls back to the built-in mapping.
   assert.equal(await adapter.branchName({ classification: 'audit', title: 'Look', ticketId: 'abcdef', branchPrefixes: policy }), 'task/look-abcdef');
