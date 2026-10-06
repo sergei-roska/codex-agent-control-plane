@@ -1,6 +1,6 @@
 // --- PIPELINES TAB (READ-ONLY: GET /pipelines and GET /presets) ---
 const PIPELINE_ACTIVE_STATUSES = ['queued', 'running', 'paused', 'interrupted'];
-const PIPELINE_STAGE_STATUSES = ['pending', 'eligible', 'running', 'succeeded', 'failed'];
+const PIPELINE_STAGE_STATUSES = ['pending', 'eligible', 'running', 'succeeded', 'failed', 'skipped'];
 
 const pipelinesData = { loaded: false, error: null, runs: [], presets: [], unavailable: [] };
 let pipelinesSignature = null;

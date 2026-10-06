@@ -979,7 +979,7 @@ function renderRunTabs(d, run, data) {
   const activitySig = trr.activity ? [trr.activity.ticketId, trr.activity.state, trr.activity.data && trr.activity.data.available,
     trr.activity.data && trr.activity.data.runLog && trr.activity.data.runLog.entries && trr.activity.data.runLog.entries.length,
     trr.activity.data && trr.activity.data.runLog && trr.activity.data.runLog.hasMore, trr.activity.loadingMore, trr.activity.loadMoreError] : null;
-  const sig = JSON.stringify([trr.tab, run && run.runId, data ? { i: data.intake, p: data.plan, s: data.stages, c: data.candidate, st: data.settings, l: data.leadTaskCardId } : null,
+  const sig = JSON.stringify([trr.tab, run && run.runId, data ? { i: data.intake, p: data.plan, s: data.stages, c: data.candidate, st: data.settings, l: data.leadTaskCardId, r: data.route } : null,
     trr.diff ? [trr.diff.key, trr.diff.state, trr.diff.error] : null, trr.usage ? [trr.usage.key, trr.usage.state, trr.usage.attempts.length] : null, trr.error, activitySig]);
   trrGuard('panel', sig, panel, (el) => {
     const activity = trr.activity;
@@ -1039,6 +1039,27 @@ function trrStageStatusClass(status) {
   return 'tr-stage-' + cssToken(status || 'pending');
 }
 
+// Compact adaptive-route block; renders nothing when the run has no route.
+function trrRouteBlock(route) {
+  if (!route || typeof route !== 'object') return null;
+  const effective = route.effective === 'lean' ? 'lean' : 'full';
+  const shadow = route.mode === 'shadow';
+  const nodes = [
+    h('span', { class: 'tr-route-line', text: 'Route: ' + effective }),
+    h('span', { class: 'badge badge-status', text: shadow ? 'shadow: would be ' + (route.verdict === 'lean' ? 'lean' : 'full') : String(route.mode || 'unknown') })
+  ];
+  (Array.isArray(route.reasons) ? route.reasons : []).forEach(r => nodes.push(h('span', { class: 'badge', text: String(r) })));
+  const box = h('div', { class: 'tr-route' }, nodes);
+  if (route.promoted) {
+    const why = Array.isArray(route.promotionReasons) ? route.promotionReasons.join(', ') : '';
+    box.appendChild(h('div', { class: 'tr-route-line', text: 'Promoted to full: ' + (why || 'unspecified') }));
+    if (route.scriptedDecisions > 0) box.appendChild(h('div', { class: 'tr-route-line', text: 'Lead model calls skipped: ' + route.scriptedDecisions }));
+  } else if (route.scriptedDecisions > 0) {
+    box.appendChild(h('div', { class: 'tr-route-line', text: 'Lead model calls skipped: ' + route.scriptedDecisions }));
+  }
+  return box;
+}
+
 function trrTabPlan(el, data) {
   const plan = data.plan;
   if (!plan) { el.appendChild(h('div', { class: 'detail-empty', text: 'No plan has been saved for this run yet.' })); return; }
@@ -1047,6 +1068,8 @@ function trrTabPlan(el, data) {
     h('span', { class: 'tr-marker', text: 'plan ' + String(plan.planRevisionId).slice(0, 12) + ' - ' + (plan.validatorVersion || 'unknown validator') }),
     h('span', { class: 'tr-marker', text: formatAbsTime(plan.createdAt) })
   ]));
+  const routeBox = trrRouteBlock(data.route);
+  if (routeBox) el.appendChild(routeBox);
   const live = Array.isArray(data.stages) ? data.stages : [];
   const table = h('table', { class: 'attempts-table tr-table' });
   table.appendChild(h('thead', {}, [h('tr', {}, ['Stage', 'Role', 'Required', 'Depends on', 'Allowed files', 'Status', 'Attempts'].map(t => h('th', { text: t })))]));

@@ -86,9 +86,13 @@
 .tr-table td { vertical-align: top; overflow-wrap: anywhere; }
 .tr-stage-obj { font-size: 11px; color: var(--text-muted); margin-top: 2px; max-width: 280px; }
 .tr-stage-pending, .tr-stage-eligible { color: var(--text-muted); }
+.tr-stage-skipped { color: var(--text-muted); font-style: italic; }
 .tr-stage-running { color: var(--accent-blue); }
 .tr-stage-succeeded { color: var(--accent-green); }
 .tr-stage-failed { color: var(--accent-red); }
+.tr-route { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 12px; }
+.tr-route-line { color: var(--text-secondary); }
+.tr-route .badge { font-size: 10px; padding: 2px 6px; font-family: var(--font-mono); overflow-wrap: anywhere; }
 .tr-exit { margin: 0 8px; }
 .tr-exit.ok { color: var(--accent-green); }
 .tr-exit.bad { color: var(--accent-red); }

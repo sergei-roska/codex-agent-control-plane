@@ -145,6 +145,13 @@
   opacity: 0.65;
 }
 
+.pipeline-step.skipped {
+  border-style: dashed;
+  box-shadow: var(--nm-shadow-in-sm);
+  opacity: 0.5;
+}
+
+.badge-status.skipped { color: var(--text-muted); font-style: italic; }
 .badge-status.eligible { color: var(--accent-amber); }
 .badge-status.succeeded { color: var(--accent-green); }
 .badge-status.queued,

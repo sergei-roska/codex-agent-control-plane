@@ -238,3 +238,15 @@ test('ticket run renders non-blocking acceptance warnings as a note', () => {
   const source = fs.readFileSync(path.join(root, 'web/dashboard/js/modals/ticket-run.js'), 'utf8');
   assert.match(source, /trrWarningLines\(acc\)/);
 });
+
+test('dashboard working copy shows skipped stages and the adaptive route block', () => {
+  const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+  assert.match(read('web/dashboard/js/tabs/pipelines.js'), /PIPELINE_STAGE_STATUSES = \[[^\]]*'skipped'\]/);
+  assert.match(read('web/dashboard/css/tabs/pipelines.css'), /\.badge-status\.skipped/);
+  assert.match(read('web/dashboard/css/tabs/pipelines.css'), /\.pipeline-step\.skipped/);
+  assert.match(read('web/dashboard/css/modals/ticket-run.css'), /\.tr-stage-skipped/);
+  const run = read('web/dashboard/js/modals/ticket-run.js');
+  assert.match(run, /function trrRouteBlock\(/);
+  assert.match(run, /Promoted to full: /);
+  assert.match(run, /Lead model calls skipped: /);
+});
