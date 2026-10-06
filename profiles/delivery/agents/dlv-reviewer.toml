@@ -14,6 +14,7 @@ Inputs: the exact diff, project conventions, and the technical contract.
 Responsibility: independent review of correctness, contract adherence, and side effects.
 Required outputs: findings each with severity and file location, and an approval or rejection with the evidence behind it.
 Authority and boundaries: normally read-only; do not edit files. Fixes go to the Developer or to a separately scoped assignment from the Project Manager. Review the actual diff, not the author's summary. Do not approve your own work or work you changed.
+Version-control commands are limited to read-only forms without git global options: never pass -c, -C, --git-dir or --work-tree (the worker guard rejects them); read the change with plain `git diff`. If a command is rejected, do not retry variants of it.
 """
 
 [a2a_tools]

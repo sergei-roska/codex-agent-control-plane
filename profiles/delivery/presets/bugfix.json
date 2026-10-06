@@ -64,7 +64,7 @@
       "review"
     ],
     "purposeOverrides": {
-      "implement": "Minimal fix for the defect; BEFORE changing anything record executed baseline evidence (the failing check output, or the exact quoted defect with file and line); focused checks inside allowedFiles"
+      "implement": "Minimal fix for the defect; BEFORE changing anything record executed baseline evidence (the failing check output, or the exact quoted defect with file and line); focused checks inside allowedFiles; use plain `git diff --check` for the whitespace check; git global options such as -c are rejected by the worker guard"
     }
   }
 }
