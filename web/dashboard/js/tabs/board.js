@@ -19,8 +19,8 @@ const boardData = {
 
 // Drag actions a card may advertise (card.dragActions) and the board column each one is dropped on.
 const BOARD_DROP_TARGETS = {
-  submit: { column: 'pending', path: '/submit', confirm: 'Submit this ticket to Intake?\n\nThe PM will read the ticket and the repository (read-only) and may ask you clarifying questions before planning. While a run is active the ticket cannot be edited.' },
-  return_to_backlog: { column: 'backlog', path: '/return-to-backlog', confirm: 'Return this ticket to Backlog?\n\nAn active run is stopped. File changes already made in the checkout are kept. Revisions, attachments and run history are kept. A staged revision becomes the current requirement.' }
+  submit: { column: 'pending', path: '/submit' },
+  return_to_backlog: { column: 'backlog', path: '/return-to-backlog' }
 };
 
 let boardDrag = null;
@@ -380,7 +380,6 @@ async function boardHandleDrop(drag, column) {
     return;
   }
   const target = BOARD_DROP_TARGETS[action];
-  if (!window.confirm(target.confirm)) { boardRevert(); return; }
   const base = '/tickets/' + encodeURIComponent(drag.ticketId);
   try {
     // Cards carry no ticket version, so read the current one; the server still rejects a stale move.

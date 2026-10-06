@@ -9,7 +9,6 @@ var decisionsView = {
   findingsDrafts: Object.create(null),
   actionErrors: {},
   commandIds: {},
-  confirmImpl: function (message) { return window.confirm(message); }
 };
 var decisionsFieldHelpSequence = 0;
 
@@ -340,7 +339,6 @@ async function handleDecisionsAction(action, itemId) {
   decisionsView.actionErrors[itemId] = '';
   try {
     if (action === 'accept') {
-      if (!decisionsView.confirmImpl('Accept this candidate for ticket ' + item.ticketId + '?')) return;
       await submitReviewDecision(item, 'accept', null);
       delete decisionsView.findingsDrafts[String(itemId)];
     } else if (action === 'corrections') {

@@ -380,7 +380,6 @@ function trrCorrectionsForm(d, run, data) {
 async function trrSubmitReview(d, run, data, verdict, findings) {
   const st = trrReviewState(d, run, data, verdict === 'accept' ? 'accept' : 'corrections');
   if (!st.ok) return;
-  if (verdict === 'accept' && !window.confirm('Accept this result?\n\nThe ticket becomes done. Nothing is committed or pushed yet; you do that from the delivery panel. Accepting is bound to the candidate you are viewing and fails if the checkout changed since.')) return;
   const extra = { runId: run.runId, candidateId: data.candidate.candidateId, integrityHash: data.candidate.integrityHash, verdict };
   if (verdict === 'corrections') extra.findings = findings;
   trText('tr-action-error', '');
@@ -1521,8 +1520,7 @@ function trdBuild(el, d) {
     btn.addEventListener('click', () => {
       const msg = input.value;
       if (!msg.trim() || msg.length > TRD_MESSAGE_MAX || msg.indexOf('\u0000') !== -1) { err.textContent = 'Enter a commit message of 1 to ' + TRD_MESSAGE_MAX + ' characters.'; return; }
-      trdCommand('commit', '/commit', { candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, message: msg },
-        'Commit the accepted changes on branch ' + (plan && plan.branch ? plan.branch : 'the task branch') + '?\n\nThis creates a local commit. Nothing is pushed.');
+      trdCommand('commit', '/commit', { candidateId: candidate.candidateId, integrityHash: candidate.integrityHash, message: msg });
     });
     el.appendChild(h('div', { class: 'tr-decision detail-block' }, [
       h('label', { class: 'form-hint', text: 'Commit message', attrs: { for: 'trd-commit-message-input' } }),

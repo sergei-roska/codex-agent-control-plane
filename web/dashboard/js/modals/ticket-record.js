@@ -735,10 +735,10 @@ async function sendTicketCommand(slot, path, extra, onError) {
 }
 
 const TR_CONTROL_SPECS = {
-  pause: { path: '/pause', run: true, confirm: 'Pause this run?\n\nNew work stops being dispatched. Work already in progress finishes its current step first, so the run pauses only after active work settles. You can resume it later.' },
-  resume: { path: '/resume', run: true, confirm: 'Resume this run?\n\nThe run continues from where it paused.' },
+  pause: { path: '/pause', run: true },
+  resume: { path: '/resume', run: true },
   stop: { path: '/stop', run: true, confirm: 'Stop this run?\n\nActive work is interrupted and the run ends as stopped. File changes already made in the checkout are kept, not reverted, and the run evidence is retained. The ticket becomes blocked; you can submit a new run.' },
-  return_to_backlog: { path: '/return-to-backlog', run: false, confirm: 'Return this ticket to Backlog?\n\nAn active run is stopped. File changes already made in the checkout are kept. Revisions, attachments and run history are kept. A staged revision becomes the current requirement.' }
+  return_to_backlog: { path: '/return-to-backlog', run: false }
 };
 
 // Pause, Resume, Stop and Return to Backlog. Pause/Resume/Stop name the run they act on.
@@ -752,7 +752,7 @@ async function runTicketControl(key) {
     if (!runId) { trText('tr-action-error', 'This ticket has no run to act on.'); return; }
     extra.runId = runId;
   }
-  if (!window.confirm(spec.confirm)) return;
+  if (spec.confirm && !window.confirm(spec.confirm)) return;
   trText('tr-action-error', '');
   await sendTicketCommand(key, spec.path, extra, (m) => trText('tr-action-error', m));
 }
@@ -768,7 +768,6 @@ async function cancelTicketFromRecord() {
 async function submitTicketFromRecord() {
   const d = tr.detail;
   if (!d) return;
-  if (!window.confirm('Submit this ticket to Intake?\n\nThe PM will read the ticket and the repository (read-only) and may ask you clarifying questions before planning. While a run is active the ticket cannot be edited.')) return;
   tr.submitError = '';
   trText('tr-action-error', '');
   await sendTicketCommand('submit', '/submit', {}, (m) => { tr.submitError = m; trText('tr-action-error', m); });
