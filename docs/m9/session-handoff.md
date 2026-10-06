@@ -146,6 +146,19 @@ the pilot server is stopped and the task repository is clean.
 
 ## Deferred follow-ups (not fixed in M9; plan for later)
 
+- Future Slack, Figma, and Google Tag Manager integrations, a shared Integrations
+  tab, and the GitHub/Bitbucket candidate are tracked in
+  [the external integrations backlog](../integrations-backlog.md). These remain
+  outside the current CDB live-project pilot and beta scope.
+- Project-specific, per-role prompt rules (PC-1) are implemented in `8297082`
+  (store, API, run-pinned overlay, Add rules modal); status and known limits are in
+  the [project configuration backlog](../project-configuration-backlog.md). Browser
+  check (real server, fake Codex, desktop 1280 and 390 px): table column, modal
+  states, keyboard and focus, persistence after reload, and a ticket snapshot with
+  `projectRules` for the PM role only all pass; screenshots in
+  `/home/sr/Projects/Workspace/m9-pilot/rules-ui/` (taken before the table padding
+  and focus fixes). The 36 px mobile tap-target rule was not checked in a browser.
+  The running launcher server must be restarted to load schema version 7.
 - `src/server.js` passes a nonexistent `appServer.version`; drop it (the
   controller now reads `appServer.appServerVersion`).
 - `docs/operations/state-upgrade.md` table lacks `CODEX_PROJECT_CONFIG` and
@@ -548,3 +561,33 @@ CDB-389 had already been submitted before the instruction; returned to local
 Backlog and verified run `run_5A8iUmOZgC3H7AqLBdi07w` stopped/settled at Intake,
 with no plan, branch, or candidate. All assistant subagents are completed and
 none remain active. Do not resume the queue without a new owner instruction.
+
+## Adaptive delivery route checkpoint - 2026-10-06
+
+Cause: CDB-390 cost 1,128,363 tokens for a one-line fix. Decision record
+`docs/adr/adaptive-delivery-route.md`, work packages `docs/adaptive-route-backlog.md`
+(status table is live). Implemented and committed locally (`3c6d8b0` .. `bd26784`,
+not pushed): route gate, preset `lean` block, Intake `route` proposal with
+code-computed `routeDecision`, lean runtime (skipped `reproduce`, conditional
+`review`, evidence-based promotion), scripted lead decisions for a clean lean run,
+journal events `route_decided`/`route_promoted`, telemetry and dashboard route
+block, usage report by ticket, and fixes from an independent Opus audit (every
+writer is gated, any failed stage promotes, fail-closed line counting).
+Project policy `adaptiveRoute` is `off` by default; `on` has NOT been enabled for
+real work and needs a separate owner decision (see the backlog for open items).
+
+CDB-390 re-run: the old ticket `tkt_L-i3IKBvWtQTLUxtAlxe-Q` is `done` and cannot be
+re-run; local branch `bugfix/CDB-390` (commit `4d07be648`, local only) was deleted
+at the owner's request. A new direct ticket `tkt_nq8JYnoOiol2YX3LDKD4jw` (run
+`run_GDPKJ6J0wBUwb5knV31rIg`) ran in `shadow` mode: full route, all four stages
+passed, acceptance accepted, correct one-line deletion left uncommitted on branch
+`bugfix/fix-duplicate-array-keys-in-b4main-theme-dkd4jw` in `/home/sr/Projects/cdb`
+(ticket waits for human review; not accepted or committed). Clean full-route cost:
+412,239 input tokens (Intake 70k, lead 108k, workers 234k); the PM proposed `full`
+because the whitespace check cannot detect duplicate array keys, and one Intake
+retry (`presetId`) cost about 35k; both are fixed in code after that run.
+The launcher-owned server runs with `adaptiveRoute: shadow` in the private
+`project.json` (backup `project.json.bak-20261006121928`) on code older than the
+audit fixes; restart it to load the current code.
+Next: restart, re-run shadow or decide `on`, measure with
+`npm run usage -- --task <ticketId> --state <state.sqlite>`.

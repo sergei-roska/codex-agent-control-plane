@@ -71,12 +71,27 @@ function rrUpdateAddControls() {
   add.textContent = rr.busy && !rr.editId && !rr.confirmId ? 'Adding...' : 'Add rule';
 }
 
+// Re-rendering the list destroys the focused button; put focus back on the matching control.
+function rrFocusRule(ruleId, act) {
+  const list = rrEl('rr-list');
+  if (!list || typeof list.querySelector !== 'function') return false;
+  const item = list.querySelector('[data-rule-id="' + ruleId + '"]');
+  const target = item && item.querySelector('[data-rr-act="' + act + '"]');
+  if (target && target.focus) { target.focus(); return true; }
+  return false;
+}
+
+function rrFocusNew() {
+  const ta = rrEl('rr-new-text');
+  if (ta && ta.focus) ta.focus();
+}
+
 function rrRuleItem(rule, index) {
   const canMutate = rrCanMutate();
   const n = index + 1;
   if (rr.editId === rule.ruleId) {
     const lim = rrLimits();
-    const ta = h('textarea', { class: 'form-textarea', attrs: { rows: '4', 'aria-label': 'Edit rule ' + n } });
+    const ta = h('textarea', { class: 'form-textarea', attrs: { rows: '4', 'aria-label': 'Edit rule ' + n, 'data-rr-act': 'textarea' } });
     ta.value = rr.editDraft;
     const counter = h('span', { class: 'rr-counter' });
     const save = h('button', { class: 'btn btn-primary', text: 'Save', attrs: { type: 'button' } });
@@ -90,27 +105,27 @@ function rrRuleItem(rule, index) {
     };
     ta.addEventListener('input', () => { rr.editDraft = ta.value; sync(); });
     save.addEventListener('click', () => rrSaveEdit(rule));
-    cancel.addEventListener('click', () => { rr.editId = null; rr.editError = ''; rrRenderList(); });
+    cancel.addEventListener('click', () => { rr.editId = null; rr.editError = ''; rrRenderList(); rrFocusRule(rule.ruleId, 'edit'); });
     sync();
-    return h('div', { class: 'rr-rule rr-rule-editing' }, [ta, h('div', { class: 'rr-add-row' }, [counter, h('span', { class: 'rr-actions' }, [save, cancel])]), err]);
+    return h('div', { class: 'rr-rule rr-rule-editing', attrs: { 'data-rule-id': rule.ruleId } }, [ta, h('div', { class: 'rr-add-row' }, [counter, h('span', { class: 'rr-actions' }, [save, cancel])]), err]);
   }
   const actions = h('span', { class: 'rr-actions' });
   if (rr.confirmId === rule.ruleId) {
-    const yes = h('button', { class: 'btn btn-secondary', text: 'Confirm remove', attrs: { type: 'button', 'aria-label': 'Confirm remove rule ' + n } });
+    const yes = h('button', { class: 'btn btn-secondary', text: 'Confirm remove', attrs: { type: 'button', 'aria-label': 'Confirm remove rule ' + n, 'data-rr-act': 'confirm' } });
     yes.disabled = !canMutate;
     yes.addEventListener('click', () => rrRemove(rule));
     const no = h('button', { class: 'btn btn-secondary', text: 'Keep', attrs: { type: 'button' } });
-    no.addEventListener('click', () => { rr.confirmId = null; rrRenderList(); });
+    no.addEventListener('click', () => { rr.confirmId = null; rrRenderList(); rrFocusRule(rule.ruleId, 'remove'); });
     actions.appendChild(h('span', { class: 'rr-confirm', text: 'Remove this rule?' }));
     actions.appendChild(yes);
     actions.appendChild(no);
   } else {
-    const edit = h('button', { class: 'btn btn-secondary', text: 'Edit', attrs: { type: 'button', 'aria-label': 'Edit rule ' + n } });
+    const edit = h('button', { class: 'btn btn-secondary', text: 'Edit', attrs: { type: 'button', 'aria-label': 'Edit rule ' + n, 'data-rr-act': 'edit' } });
     edit.disabled = !canMutate;
-    edit.addEventListener('click', () => { rr.editId = rule.ruleId; rr.editDraft = rule.text; rr.editError = ''; rr.confirmId = null; rrRenderList(); });
-    const remove = h('button', { class: 'btn btn-secondary', text: 'Remove', attrs: { type: 'button', 'aria-label': 'Remove rule ' + n } });
+    edit.addEventListener('click', () => { rr.editId = rule.ruleId; rr.editDraft = rule.text; rr.editError = ''; rr.confirmId = null; rrRenderList(); rrFocusRule(rule.ruleId, 'textarea'); });
+    const remove = h('button', { class: 'btn btn-secondary', text: 'Remove', attrs: { type: 'button', 'aria-label': 'Remove rule ' + n, 'data-rr-act': 'remove' } });
     remove.disabled = !canMutate;
-    remove.addEventListener('click', () => { rr.confirmId = rule.ruleId; rr.editId = null; rrRenderList(); });
+    remove.addEventListener('click', () => { rr.confirmId = rule.ruleId; rr.editId = null; rrRenderList(); rrFocusRule(rule.ruleId, 'confirm'); });
     actions.appendChild(edit);
     actions.appendChild(remove);
   }
@@ -241,6 +256,9 @@ async function rrMutate(kind, rule, text, okText) {
   rr.busy = false;
   if (!rr.open) return ok;
   renderRoleRules();
+  if (kind === 'edit') { if (!rrFocusRule(rule.ruleId, ok ? 'edit' : 'textarea')) rrFocusNew(); }
+  else if (kind === 'remove' && !ok && rr.confirmId) rrFocusRule(rule.ruleId, 'confirm');
+  else rrFocusNew();
   if (ok) await rrRefreshTable();
   return ok;
 }

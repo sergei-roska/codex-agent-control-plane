@@ -109,9 +109,17 @@ they do not establish real execution or approval semantics.
   future decision, not an implicit addition.
 - Multi-user/remote hosting and concurrent projects in one server instance.
 - Parallel developers writing to a shared checkout, distributed execution,
-  and a general visual pipeline or role-policy editor.
-- Figma extraction and general third-party administration such as GTM/CAPTCHA.
-  Beta can preserve links without claiming connected integrations.
+  a general visual pipeline or role-policy editor, and project-specific
+  per-role system-prompt rules. Track the latter in the
+  [project configuration backlog](project-configuration-backlog.md).
+- Slack, Figma, and Google Tag Manager integrations, OAuth connection management,
+  a provider-neutral integration manager with separate adapters, and a dedicated
+  Integrations tab. Slack, Jira/Confluence, and Figma are the required integration
+  baseline for work projects. GTM, Salesforce, cookie consent platforms, and
+  hosted Git are situational connectors enabled only where needed. Beta can
+  preserve links without claiming these future connected integrations. Track
+  provider work in the
+  [external integrations backlog](integrations-backlog.md).
 - Automatic production prompt replacement and a background maintenance agent.
   Record the extension boundary now; add the agent after validated evaluation
   data exists. It is outside the nine-role delivery roster.

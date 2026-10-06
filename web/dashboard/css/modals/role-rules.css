@@ -26,4 +26,5 @@
   .rr-box { width: 100%; max-width: 100vw; max-height: 100vh; border-radius: 16px; }
   .rr-box .modal-body { padding: 14px; }
   .rr-box .modal-header { padding: 14px; }
+  .rr-actions .btn, .role-rules-btn { min-height: 36px; }
 }
