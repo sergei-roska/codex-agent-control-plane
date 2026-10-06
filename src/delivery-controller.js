@@ -14,7 +14,7 @@ const {
   validateIntakeOutput, renderRequirementsGoal,
 } = require('./intake');
 const { VALIDATOR_VERSION, WRITABLE_STAGE_ROLES } = require('./plan-validator');
-const { normalizeEffectiveSettings } = require('./contracts');
+const { normalizeEffectiveSettings, classifyCodexError } = require('./contracts');
 const { ProductError, canonicalJson } = require('./product-store');
 const { WriterAdmission } = require('./writer-admission');
 const { takeSnapshot } = require('./workspace-snapshot');
@@ -43,6 +43,7 @@ const TERMINAL_TASK_STATES = Object.freeze([
 const UNRESOLVED_PAUSE_KINDS = Object.freeze(['writer_unresolved', 'restart']);
 const PAUSE_WAIT_REASONS = Object.freeze({
   waiting_for_budget: 'budget',
+  waiting_for_auth: 'auth_required',
   restart: 'restart',
   writer_unresolved: 'writer_unresolved',
   error: 'execution_error',
@@ -381,9 +382,11 @@ function createDeliveryController({
         // Shutdown mid-turn: nothing is persisted, the turn is repeated on the next start (read-only).
         if (stopped || signal.aborted || error?.name === 'AbortError') return false;
         recordIntakeUsage(run, turn, attempt, error, 'error', intakeRole);
+        // A sign-in failure needs the operator (codex login, then Submit again); the app-server recycles itself.
+        const authFailure = classifyCodexError(error) === 'auth';
         settle(run, {
-          status: 'failed', releaseLease: true, ticketStatus: 'blocked', waitReason: 'execution_error',
-          waitDetail: { code: 'intake_error', message: shorten(error?.message || String(error)) },
+          status: 'failed', releaseLease: true, ticketStatus: 'blocked', waitReason: authFailure ? 'auth_required' : 'execution_error',
+          waitDetail: { code: authFailure ? 'auth_required' : 'intake_error', message: shorten(error?.message || String(error)) },
         });
         return true;
       }

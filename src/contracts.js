@@ -414,9 +414,47 @@ function isUsageLimitInfo(info) {
   return Object.values(info).some((variant) => variant && typeof variant === 'object' && variant.httpStatusCode === 429);
 }
 
-/** Classify a Codex failure for budget handling: 'usage_limit' or 'other'. */
+function isAuthInfo(info) {
+  if (info === 'unauthorized') return true;
+  if (!info || typeof info !== 'object') return false;
+  return Object.values(info).some((variant) => variant && typeof variant === 'object' && variant.httpStatusCode === 401);
+}
+
+// Deliberately narrow: auth failures have an observed text and the typed variant may be missing
+// (see docs/resilient-orchestration-spec.md). This is the one place messages are matched.
+const AUTH_MESSAGE_PHRASES = [
+  'access token could not be refreshed',
+  'sign in again',
+  'log in again',
+  'logged out or signed in to another account',
+];
+const AUTH_REFRESH_STATES = ['expired', 'revoked', 'invalid', 'reused'];
+
+function isAuthMessage(text) {
+  if (typeof text !== 'string' || text === '') return false;
+  const lower = text.toLowerCase();
+  if (AUTH_MESSAGE_PHRASES.some((phrase) => lower.includes(phrase))) return true;
+  return lower.includes('refresh token') && AUTH_REFRESH_STATES.some((word) => lower.includes(word));
+}
+
+function hasAuthMessage(error) {
+  const seen = new Set();
+  let current = error;
+  for (let depth = 0; depth <= MAX_CAUSE_DEPTH; depth += 1) {
+    if (!current || typeof current !== 'object' || seen.has(current)) return false;
+    seen.add(current);
+    if ([current.message, current.codexError?.message, current.rpcData?.message].some(isAuthMessage)) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+/** Classify a Codex failure: 'usage_limit', 'auth' (checked after usage_limit) or 'other'. */
 function classifyCodexError(error) {
-  return isUsageLimitInfo(findCodexErrorInfo(error)) ? 'usage_limit' : 'other';
+  const info = findCodexErrorInfo(error);
+  if (isUsageLimitInfo(info)) return 'usage_limit';
+  if (isAuthInfo(info) || hasAuthMessage(error)) return 'auth';
+  return 'other';
 }
 
 module.exports = {

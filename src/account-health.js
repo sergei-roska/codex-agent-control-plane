@@ -90,7 +90,14 @@ function createAccountHealth({ appServer, now, timeoutMs = APP_SERVER_TIMEOUT_MS
     return { ...(await inflight) };
   }
 
-  return { get };
+  // Drops the cached state and the force rate limit so the next read re-asks the (recycled) app server.
+  function invalidate() {
+    cached = null;
+    cachedAtMs = null;
+    lastLoadMs = null;
+  }
+
+  return { get, invalidate };
 }
 
 module.exports = { createAccountHealth };

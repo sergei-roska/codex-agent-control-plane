@@ -98,6 +98,16 @@ with `httpStatusCode: 429`, is found at `error.codexError.codexErrorInfo`,
 `error.rpcData.codexErrorInfo`, or along the `cause` chain. No message regexes. Values come
 from `codex app-server generate-ts` (`v2/CodexErrorInfo.ts`, codex-cli 0.159.0).
 
+`classifyCodexError` also returns `"auth"` (checked after `usage_limit`): the typed variant
+`unauthorized`, or an object variant with `httpStatusCode: 401`. This deviates from "no message
+regexes" on purpose: the observed auth failure ("Your access token could not be refreshed because
+you have since logged out or signed in to another account. Please sign in again.") may arrive
+without a typed variant, so a narrow, case-insensitive phrase list on the error message is also
+accepted ("access token could not be refreshed", "sign in again", "log in again", "logged out or
+signed in to another account", or "refresh token" with expired/revoked/invalid/reused). The list is
+deliberately narrow. An `auth` failure pauses the run (`waiting_for_auth`) and the app-server child
+is recycled lazily on the next idle `run()` so it re-reads the credential.
+
 A specialist that fails with `usage_limit` publishes FAILED with the status message
 `metadata: { failureKind: "usage_limit", codexErrorInfo }` (other failures:
 `failureKind: "other"`). A transport failure or turn timeout during an active Codex turn

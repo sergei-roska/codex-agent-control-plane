@@ -43,7 +43,7 @@ modify the leased checkout while a run is active or awaiting review. A second
 ticket waits (`repository_busy`) for the checkout lease to clear.
 
 The lease follows the ticket, not the run. Accept does not release it; a succeeded
-Commit does. Return to Backlog keeps the lease. Release Repository is available
+Commit does. Return to Backlog releases the lease when no writer is active or unresolved and the ticket has no commit in progress or done; otherwise it keeps it. Release Repository is available
 only for an accepted (done) ticket or a backlog draft. It frees the lease without
 touching files: if an accepted candidate was not committed, its changes stay in the
 checkout, and the next ticket's branch preflight refuses the dirty worktree until
@@ -133,12 +133,13 @@ now includes Intake, lead, and worker rows and a per-run breakdown.
 | Startup rejects account | Run `codex login status`; sign in with ChatGPT OAuth and restart. API-key mode is unsupported. |
 | Startup rejects a path | Move state, attachments, token, or Codex credential/session storage outside the writable task repository; do not weaken the path check. |
 | Dashboard shows unpaired or unauthorized | Use a fresh printed pairing URL on the same loopback host and port. `localhost` and `127.0.0.1` have different cookies. |
-| Ticket waits on a repository lease | Commit the owning ticket's accepted candidate, or Release Repository for an accepted ticket or backlog draft (see the lease note above). Inspect unresolved writer/reconciliation state before retrying. |
+| Ticket waits on a repository lease | Commit the owning ticket's accepted candidate, or Release Repository for an accepted ticket or backlog draft. Return to Backlog also frees it when no writer is active and no commit exists (see the lease note above). Inspect unresolved writer/reconciliation state before retrying. |
 | Branch preflight reports `dirty_worktree` | The checkout holds uncommitted changes, often an accepted candidate released without Commit. Commit or clean them in the task repository, then resubmit. |
 | Resume is unavailable after a restart | The run was cancelled by a clean stop. Return the ticket to Backlog, then Submit. |
 | Check failed or evidence unavailable | Read the recorded command and output; correct the candidate or rerun after the underlying check is available. Do not treat unavailable as pass. |
 | Atlassian reports `reconnect_required` | Reconnect the dedicated app. A failed import/refresh preserves the last valid snapshot and ticket revision. |
 | Model quota or rate limit pauses a run | Wait for capacity, inspect the retained run, then Resume with the same task. |
+| Run paused or ticket blocked with 'Sign in to Codex' | Run `codex login` (ChatGPT), then Resume (or Submit again if it failed at Intake). No server restart is needed: the server refreshes its Codex session on the next run. Do not sign in again in another window while runs are active. |
 | Restore loses later edits | Return to the preserved pre-restore state only if it is still available. A backup intentionally excludes changes made after it. |
 
 ## Current limits

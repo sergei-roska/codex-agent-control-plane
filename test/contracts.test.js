@@ -252,6 +252,36 @@ test('classifyCodexError detects usage limits', () => {
   for (const value of [undefined, null, 'usageLimitExceeded', 5]) assert.equal(classifyCodexError(value), 'other');
 });
 
+test('classifyCodexError detects authentication failures after usage limits', () => {
+  const withInfo = (info, where = 'codexError') => Object.assign(new Error('x'), where === 'codexError' ? { codexError: { codexErrorInfo: info } } : { rpcData: { codexErrorInfo: info } });
+  assert.equal(classifyCodexError(withInfo('unauthorized')), 'auth');
+  assert.equal(classifyCodexError(withInfo('unauthorized', 'rpcData')), 'auth');
+  assert.equal(classifyCodexError(withInfo({ httpConnectionFailed: { httpStatusCode: 401 } })), 'auth');
+  assert.equal(classifyCodexError(new Error('outer', { cause: withInfo('unauthorized') })), 'auth');
+  // usage_limit wins when both signals are present
+  assert.equal(classifyCodexError(Object.assign(new Error('Please sign in again'), { codexError: { codexErrorInfo: 'usageLimitExceeded' } })), 'usage_limit');
+  const messages = [
+    'Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.',
+    'ACCESS TOKEN COULD NOT BE REFRESHED',
+    'Session ended, please Log In Again',
+    'You have logged out or signed in to another account',
+    'The refresh token was revoked',
+    'refresh token is expired',
+    'Refresh token invalid',
+    'refresh token reused',
+  ];
+  for (const message of messages) {
+    assert.equal(classifyCodexError(new Error(message)), 'auth', message);
+    assert.equal(classifyCodexError(Object.assign(new Error('x'), { codexError: { message } })), 'auth', message);
+    assert.equal(classifyCodexError(Object.assign(new Error('x'), { rpcData: { message } })), 'auth', message);
+    assert.equal(classifyCodexError(new Error('outer', { cause: new Error(message) })), 'auth', message);
+  }
+  for (const message of ['The refresh token was rotated', 'access token', 'Please sign in', 'login failed', 'unauthorized access to file', 'HTTP 401', '']) {
+    assert.equal(classifyCodexError(new Error(message)), 'other', message);
+  }
+  assert.equal(classifyCodexError(withInfo({ httpConnectionFailed: { httpStatusCode: 403 } })), 'other');
+});
+
 test('classifyCodexError guards cause cycles and depth', () => {
   const a = new Error('a');
   const b = new Error('b', { cause: a });

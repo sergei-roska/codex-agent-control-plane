@@ -1430,3 +1430,87 @@ test('listModels gives up after 20 pages and propagates RPC errors', async (t) =
   t.after(() => badClient.close());
   await assert.rejects(badClient.listModels(), /nope/);
 });
+
+// ---- auth failure: lazy recycle of the shared child ----
+
+function authHandler() {
+  const base = baseHandler();
+  const hung = [];
+  const handler = (request, send) => {
+    if (request.method === 'turn/start') {
+      const text = request.params.input[0].text;
+      if (text === 'authfail' || text === 'hang') {
+        const turnId = `turn-${text}-${hung.length}`;
+        send({ id: request.id, result: { turn: { id: turnId, status: 'inProgress', items: [] } } });
+        const finish = () => send({
+          method: 'turn/completed',
+          params: { threadId: request.params.threadId, turn: { id: turnId, status: 'failed', error: { message: 'Please sign in again.', codexErrorInfo: 'unauthorized' } } },
+        });
+        if (text === 'authfail') setImmediate(finish); else hung.push(finish);
+        return undefined;
+      }
+    }
+    return base(request, send);
+  };
+  return { handler, hung };
+}
+
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test('an auth failure marks the session stale; the next idle run uses a fresh child and resumes the thread', async (t) => {
+  const { handler } = authHandler();
+  const fake = fakeSpawn(handler);
+  const stale = [];
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, onAuthStale: () => stale.push(client.authStale) });
+  t.after(() => client.close());
+
+  const first = await client.run({ role, cwd: fixtureDirs.project, input: 'one' });
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.project, input: 'authfail', threadId: first.threadId }), /sign in again/);
+  assert.equal(client.authStale, true);
+  assert.equal(fake.getChildren().length, 1);
+  assert.deepEqual(stale, [true]);
+
+  const result = await client.run({ role, cwd: fixtureDirs.project, input: 'two', threadId: first.threadId });
+  assert.equal(result.status, 'completed');
+  assert.equal(client.authStale, false);
+  assert.equal(fake.getChildren().length, 2);
+  assert.equal(fake.getChildren()[0].killed, true);
+  assert.equal(fake.getChildren()[1].sent.some(({ method }) => method === 'thread/resume'), true);
+  assert.equal(stale.length, 2);
+});
+
+test('a stale session is not recycled while a run is in flight; the flag stays until idle', async (t) => {
+  const { handler, hung } = authHandler();
+  const fake = fakeSpawn(handler);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const busy = client.run({ role, cwd: fixtureDirs.one, input: 'hang' });
+  busy.catch(() => {});
+  for (let i = 0; i < 50 && hung.length === 0; i += 1) await settle();
+  assert.equal(hung.length, 1);
+  client.authStale = true;
+  const other = await client.run({ role, cwd: fixtureDirs.two, input: 'other' });
+  assert.equal(other.status, 'completed');
+  assert.equal(fake.getChildren().length, 1);
+  assert.equal(fake.getChildren()[0].killed, false);
+  assert.equal(client.authStale, true);
+
+  hung[0]();
+  await assert.rejects(busy, /sign in again/);
+  await client.run({ role, cwd: fixtureDirs.project, input: 'idle' });
+  assert.equal(client.authStale, false);
+  assert.equal(fake.getChildren().length, 2);
+});
+
+test('without the stale flag the child is never recycled; other failures do not set it', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  await client.run({ role, cwd: fixtureDirs.project, input: 'one' });
+  await assert.rejects(client.run({ role, cwd: fixtureDirs.project, input: 'fail' }), /planned failure/);
+  assert.equal(client.authStale, false);
+  await client.run({ role, cwd: fixtureDirs.project, input: 'two' });
+  assert.equal(fake.getChildren().length, 1);
+});

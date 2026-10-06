@@ -394,6 +394,9 @@ test('failed status messages carry failureKind and codexErrorInfo metadata', asy
     { error: new Error('plain', { cause: { rpcData: { codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 429 } } } } }), kind: 'usage_limit', info: { httpConnectionFailed: { httpStatusCode: 429 } } },
     { error: Object.assign(new Error('turn interrupted'), { outcomeUnknown: true }), kind: 'interrupted', info: null },
     { error: Object.assign(new Error('turn interrupted at quota'), { outcomeUnknown: true, codexError: { codexErrorInfo: 'usageLimitExceeded' } }), kind: 'usage_limit', info: 'usageLimitExceeded' },
+    { error: Object.assign(new Error('unauthorized'), { codexError: { codexErrorInfo: 'unauthorized' } }), kind: 'auth', info: 'unauthorized' },
+    { error: new Error('Please sign in again.'), kind: 'auth', info: null },
+    { error: Object.assign(new Error('Please sign in again.'), { outcomeUnknown: true }), kind: 'auth', info: null },
     { error: new Error('plain'), kind: 'other', info: null },
   ];
   for (const { error, kind, info } of cases) {

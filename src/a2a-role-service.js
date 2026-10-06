@@ -42,7 +42,7 @@ function extractText(message) {
 function failureMetadata(error) {
   const classified = error ? classifyCodexError(error) : 'other';
   return {
-    failureKind: classified === 'usage_limit'
+    failureKind: classified === 'usage_limit' || classified === 'auth'
       ? classified
       : error?.outcomeUnknown === true ? 'interrupted' : classified,
     codexErrorInfo: error ? findCodexErrorInfo(error) : null,

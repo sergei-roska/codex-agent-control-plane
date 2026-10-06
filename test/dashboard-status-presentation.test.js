@@ -267,6 +267,13 @@ test('Board and ticket header tell apart review, answer, paused and blocked atte
   assert.equal(k({ status: 'waiting_human', waitReason: 'human_decision' }), 'answer');
   assert.equal(k({ status: 'waiting_human', phase: 'awaiting_answer' }), 'answer');
   assert.equal(k({ status: 'blocked' }), 'problem');
+  assert.equal(k({ status: 'blocked', waitReason: 'execution_error' }), 'problem');
+  for (const reason of ['budget', 'auth_required', 'restart', 'operator_pause']) {
+    assert.equal(k({ status: 'blocked', waitReason: reason }), 'paused', reason);
+  }
+  assert.equal(k({ status: 'paused', waitReason: 'auth_required' }), 'paused');
+  assert.equal(ctx.attentionPresentation({ status: 'blocked', waitReason: 'auth_required' }).label, 'Paused');
+  assert.match(src, /auth_required: 'Sign in to Codex'/);
   assert.equal(k({ status: 'paused', waitReason: 'budget' }), 'paused');
   assert.equal(k({ status: 'paused', waitReason: 'execution_error' }), 'problem');
   assert.equal(k({ status: 'waiting_human', waitReason: 'something_new' }), null);

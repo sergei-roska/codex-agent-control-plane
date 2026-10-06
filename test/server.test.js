@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
 const { startServer, makeLeadExecutor, leanRoutingOf, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts, assertOperatorPathsOutsideWorkspace } = require('../src/server');
-const { makeLeadCard } = require('../src/server');
+const { makeLeadCard, describePause } = require('../src/server');
 const fs = require('node:fs');
 const { ResumeInputError } = require('../src/lead-orchestrator');
 const os = require('node:os');
@@ -644,6 +644,26 @@ test('restart and budget pauses resume with the plain answer and a completed tas
       handler.sendMessage({ message: userMessage('more', { taskId: paused.id, contextId: paused.contextId }), configuration: {} }, CALL()),
       /terminal state/,
     );
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an auth pause is published as input_required with the sign-in instruction', async () => {
+  const dir = tmpDir();
+  const authPause = { kind: 'waiting_for_auth', source: 'lead', message: 'x' };
+  const runtime = await startLeadServer({
+    async run(args) { return { runId: args.runId, status: 'input_required', text: '', rounds: 0, assignments: [], pause: authPause }; },
+    async getPause() { return authPause; },
+    async resume(args) { return { runId: args.runId, status: 'completed', text: 'ok', rounds: 1, assignments: [] }; },
+  }, dir);
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const paused = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    assert.equal(paused.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.equal(paused.metadata.pause.kind, 'waiting_for_auth');
+    assert.match(describePause('t', authPause), /Run `codex login` \(ChatGPT\), then press Resume/);
   } finally {
     await runtime.close();
     fs.rmSync(dir, { recursive: true, force: true });

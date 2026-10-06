@@ -68,7 +68,7 @@ const TICKET_STATUS_LABELS = {
   waiting_human: 'Needs attention', blocked: 'Needs attention', done: 'Done', cancelled: 'Cancelled'
 };
 const WAIT_REASON_LABELS = {
-  human_decision: 'Waiting for your decision', human_review: 'Waiting for your review', budget: 'Budget limit reached',
+  human_decision: 'Waiting for your decision', human_review: 'Waiting for your review', budget: 'Budget limit reached', auth_required: 'Sign in to Codex',
   restart: 'Interrupted by a restart', dependency: 'Prerequisite not met', execution_error: 'Execution error',
   writer_unresolved: 'Unresolved writer state', operator_pause: 'Paused by operator', run_stopped: 'Run stopped'
 };
@@ -91,7 +91,7 @@ function ticketStatusClass(status) {
 // (a board card passes ticketStatus; a ticket passes status). Returns null for unknown combinations
 // so the caller keeps the generic presentation.
 const ATTENTION_PROBLEM_REASONS = ['execution_error', 'writer_unresolved', 'dependency', 'run_stopped'];
-const ATTENTION_PAUSE_REASONS = ['budget', 'restart', 'operator_pause'];
+const ATTENTION_PAUSE_REASONS = ['budget', 'auth_required', 'restart', 'operator_pause'];
 const ATTENTION_PRESENTATION = {
   review: { label: 'Ready for review', cls: 'attn-review' },
   answer: { label: 'Needs your answer', cls: 'attn-answer' },
@@ -103,7 +103,8 @@ function attentionKind(ticket) {
   const t = ticket || {};
   const status = t.status || t.ticketStatus;
   const reason = t.waitReason || '';
-  if (status === 'blocked') return 'problem';
+  // An interrupted run leaves its ticket blocked; a pause reason still reads as a pause.
+  if (status === 'blocked') return ATTENTION_PAUSE_REASONS.includes(reason) ? 'paused' : 'problem';
   if (status === 'paused') return ATTENTION_PROBLEM_REASONS.includes(reason) ? 'problem' : 'paused';
   if (status === 'waiting_human') {
     if (reason === 'human_review') return 'review';

@@ -84,6 +84,7 @@ test('each pause kind maps to a waitReason; other states have none', async () =>
   const kinds = {
     human_decision: 'human_decision',
     waiting_for_budget: 'budget',
+    waiting_for_auth: 'auth_required',
     restart: 'restart',
     writer_unresolved: 'writer_unresolved',
     error: 'execution_error',

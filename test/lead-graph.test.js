@@ -1817,3 +1817,115 @@ test('lean gate: any dispatch of a conditional stage promotes the run', async ()
     assert.equal(statusMap(result).review, 'succeeded');
   }, { workspace: gitRepo(), orchestrator: { deltaLines: smallLines } });
 });
+
+// ---- authentication pause
+
+const authFailure = () => ({
+  state: TaskState.TASK_STATE_FAILED,
+  message: { messageId: 'm', role: 2, parts: textParts('sign in again'), metadata: { failureKind: 'auth' } },
+});
+const authError = () => Object.assign(new Error('Your access token could not be refreshed. Please sign in again.'), { codexError: { codexErrorInfo: 'unauthorized' } });
+
+test('auth error on the lead turn pauses for sign-in and resumes; old state without authWait reads as null', async () => {
+  const world = makeWorld({ script: [authError(), finish('Done after login')] });
+  const events = [];
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Work', runId: RUN_ID, onEvent: (event) => events.push(event) });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'waiting_for_auth');
+    assert.equal(paused.pause.source, 'lead');
+    assert.match(paused.pause.message, /codex login/);
+    assert.equal(events.at(-1).type, 'pause');
+    assert.deepEqual(await session.orchestrator.getPause(RUN_ID), paused.pause);
+
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Done after login');
+    assert.equal(world.leadTurns, 2);
+    assert.equal(await session.orchestrator.getPause(RUN_ID), null);
+    assert.equal((await session.orchestrator._snapshot(RUN_ID)).values.authWait, null);
+  });
+});
+
+test('a checkpoint written without the authWait channel reads it as null', async () => {
+  const world = makeWorld({ script: [usageLimitError(), finish('Recovered')] });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Work', runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    // Rewrite the latest checkpoint the way an older build would have stored it: no authWait channel.
+    const config = { configurable: { thread_id: RUN_ID } };
+    const tuple = await session.state.checkpointer.getTuple(config);
+    const checkpoint = structuredClone(tuple.checkpoint);
+    delete checkpoint.channel_values.authWait;
+    delete checkpoint.channel_versions.authWait;
+    for (const seen of Object.values(checkpoint.versions_seen || {})) delete seen.authWait;
+    await session.state.checkpointer.put(tuple.config, checkpoint, tuple.metadata, {});
+    await session.restart();
+    const reloaded = await session.state.checkpointer.getTuple(config);
+    assert.equal('authWait' in reloaded.checkpoint.channel_values, false);
+    assert.equal((await session.orchestrator._snapshot(RUN_ID)).values.authWait, null);
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+  });
+});
+
+test('auth failure on a worker turn pauses for sign-in and the stage is dispatched again after resume', async () => {
+  let calls = 0;
+  const world = makeWorld({
+    script: [dispatch(brief('orch-explorer', [])), dispatch(brief('orch-explorer', [])), finish('Handled')],
+    workerFinal: (roleName) => {
+      calls += 1;
+      return calls === 1 ? authFailure() : {
+        state: TaskState.TASK_STATE_COMPLETED,
+        artifacts: [{ name: 'report', parts: textParts(report(`${roleName} done`)), metadata: { writerExecution: releasedWriter() } }],
+      };
+    },
+  });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'waiting_for_auth');
+    assert.equal(paused.pause.source, 'worker');
+    assert.equal(paused.assignments[0].failureKind, 'auth');
+    assert.equal(world.leadTurns, 1);
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.match(world.prompts[1], /"failureKind":\s*"auth"/);
+    assert.equal(world.sends.length, 2);
+  });
+});
+
+for (const kind of ['auth', 'usage_limit']) {
+  test(`lean run: a ${kind} failure on implement pauses, resumes, finishes lean and is not promoted`, async () => {
+    let builderCalls = 0;
+    const good = leanWorker();
+    const worker = (roleName, contextId) => {
+      if (roleName === 'orch-builder') {
+        builderCalls += 1;
+        if (builderCalls === 1) {
+          return {
+            state: TaskState.TASK_STATE_FAILED,
+            message: { messageId: 'm', role: 2, parts: textParts('infra'), metadata: { failureKind: kind } },
+            artifacts: [{ name: 'report', parts: textParts(''), metadata: { writerExecution: releasedWriter() } }],
+          };
+        }
+      }
+      return good(roleName, contextId);
+    };
+    const world = makeWorld({ script: [dispatch(step('implement', 'orch-builder'))], workerFinal: worker });
+    let paused;
+    let result;
+    await withSession(world, async (session) => {
+      paused = await session.orchestrator.run({ goal: 'Fix the bug', runId: RUN_ID, plan: leanPlan(), contract: contractOf(nodeCheck('ok', 'process.exit(0)')) });
+      result = await session.orchestrator.resume({ runId: RUN_ID });
+    }, { workspace: gitRepo(), orchestrator: { deltaLines: smallLines } });
+    assert.equal(paused.pause.kind, kind === 'auth' ? 'waiting_for_auth' : 'waiting_for_budget');
+    assert.equal(paused.pause.source, 'worker');
+    assert.equal(result.status, 'completed');
+    assert.equal(builderCalls, 2);
+    assert.equal(result.route.promoted, false);
+    assert.deepEqual(result.route.reasons, []);
+    assert.equal(statusMap(result).implement, 'succeeded');
+  });
+}

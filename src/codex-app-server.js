@@ -3,6 +3,7 @@ const readline = require('node:readline');
 const { readProcessIdentity, listGroupMembers } = require('./process-quiescence');
 const { createPermissionProfile, assertActivePermissionProfile } = require('./permission-profile');
 const { redactDiagnosticMessage } = require('./event-journal');
+const { classifyCodexError } = require('./contracts');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_TURN_TIMEOUT_MS = 600_000;
@@ -53,6 +54,7 @@ class CodexAppServer {
     killImpl = process.kill.bind(process),
     readProcessIdentityImpl = readProcessIdentity,
     listGroupMembersImpl = listGroupMembers,
+    onAuthStale = null,
   } = {}) {
     this.codexPath = codexPath;
     this.spawnImpl = spawnImpl;
@@ -62,6 +64,9 @@ class CodexAppServer {
     this.killImpl = killImpl;
     this.readProcessIdentityImpl = readProcessIdentityImpl;
     this.listGroupMembersImpl = listGroupMembersImpl;
+    // Set when a turn failed on authentication: the child holds a stale credential until it is recycled while idle.
+    this.authStale = false;
+    this.onAuthStale = onAuthStale;
     this.lastTermination = null;
     this.childIdentity = null;
     this.childExitAt = null;
@@ -326,6 +331,24 @@ class CodexAppServer {
     return Array.isArray(result?.data) ? result.data : [];
   }
 
+  _markAuthStale() {
+    this.authStale = true;
+    try { this.onAuthStale?.(); } catch (_) { /* observer only */ }
+  }
+
+  // Lazy credential refresh: the child reads the credential once, so after an auth failure the next
+  // idle run() terminates it and the normal lazy respawn reads it afresh. Never kills a busy child.
+  async _recycleIfAuthStale() {
+    if (!this.authStale || this.runs.size > 0 || this.pending.size > 0) return;
+    this.authStale = false;
+    if (this.closed || !this.child || this.childExited) return;
+    this._failAll(new CodexAppServerError('Codex App Server recycled to refresh credentials'));
+    this._terminateProcess();
+    await this.childExitPromise;
+    this.loadedThreads.clear();
+    try { this.onAuthStale?.(); } catch (_) { /* observer only */ }
+  }
+
   async readRateLimits() {
     try {
       await this.start();
@@ -369,6 +392,7 @@ class CodexAppServer {
     } catch (error) {
       // Concurrent runs can share one error instance (child failure); give each its own copy.
       const own = cloneError(error);
+      if (classifyCodexError(error) === 'auth') this._markAuthStale();
       own.execution = executionOf(ctx);
       own.usage = this._usageOf(ctx);
       Object.assign(own, permissionOf(ctx));
@@ -389,6 +413,7 @@ class CodexAppServer {
       mcpServers: [...new Set(role.tools?.mcpServers || [])].sort(),
       skills: role.tools?.skills === true,
     });
+    await this._recycleIfAuthStale();
     await this.start();
 
     const developerInstructions = role.instructions || `You are the ${role.name} agent.`;

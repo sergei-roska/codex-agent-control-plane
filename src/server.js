@@ -208,6 +208,8 @@ function describePause(taskId, pause) {
     lines.push(`Waiting for budget (${pause.source || 'unknown source'}): ${pause.message || 'usage limit reached.'}`);
     if (pause.resetsAt) lines.push(`Reported reset hint: ${pause.resetsAt}`);
     lines.push('Send a message to this task to retry once quota is available.');
+  } else if (pause?.kind === 'waiting_for_auth') {
+    lines.push('Codex sign-in expired. Run `codex login` (ChatGPT), then press Resume; the server refreshes its Codex session itself.');
   } else if (pause?.kind === 'writer_unresolved') {
     lines.push('Earlier writer outcome(s) are unresolved: the server could not prove the writer stopped, so writable work is blocked.');
     for (const attempt of pause.attempts || []) lines.push(`  - ${attempt.attemptId} (${attempt.role}): ${attempt.reason}`);
@@ -947,6 +949,8 @@ async function startServer({
     });
     for (const [id, agent] of deliveryAgents) specialistAgents.set(id, agent);
     const accountHealth = createAccountHealth({ appServer });
+    // An auth failure or the recycle that follows it changes the account state the dashboard shows.
+    if (appServer && 'onAuthStale' in appServer) appServer.onAuthStale = () => accountHealth.invalidate();
     const packsById = new Map([[deliveryPack.packId, deliveryPack], [legacyPack.packId, legacyPack]]);
     const settingsStore = createSettingsStore({
       db: state.db,

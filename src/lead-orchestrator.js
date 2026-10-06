@@ -206,7 +206,7 @@ class LeadOrchestrator {
     return Object.keys(snapshot.values || {}).length > 0 || (snapshot.next || []).length > 0;
   }
 
-  /** Pending interrupt value ({ kind: 'human_decision' | 'waiting_for_budget' | 'writer_unresolved', ... }) or null. */
+  /** Pending interrupt value ({ kind: 'human_decision' | 'waiting_for_budget' | 'waiting_for_auth' | 'writer_unresolved', ... }) or null. */
   async getPause(runId) {
     if (!isNonEmptyString(runId)) return null;
     return LeadOrchestrator._pendingInterrupt(await this._snapshot(runId));

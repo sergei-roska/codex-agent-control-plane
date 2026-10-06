@@ -329,6 +329,9 @@ function pauseMessage(value) {
   if (value?.kind === 'operator_pause') {
     return 'Paused by the operator. No new work is dispatched. Send a message to this task (or resume the run) to continue.';
   }
+  if (value?.kind === 'waiting_for_auth') {
+    return 'Codex sign-in expired. Run `codex login` (ChatGPT), then press Resume; the server refreshes its Codex session itself.';
+  }
   const hint = value?.resetsAt ? ` The usage window may reset around ${value.resetsAt} (a hint only).` : '';
   return `Waiting for Codex usage budget (${value?.source || 'unknown'} turn hit a usage limit).${hint} Send a message to this task to resume once budget is available.`;
 }
@@ -353,6 +356,7 @@ const LeadState = Annotation.Root({
   humanAnswers: last(() => []),
   humanCount: last(() => 0),
   budget: last(() => null),
+  authWait: last(() => null),
   unresolvedWriters: last(() => []),
   contract: last(() => ({ requiredChecks: [] })),
   plan: last(() => null),
@@ -593,10 +597,12 @@ function buildLeadGraph(deps) {
         });
       }
     } catch (error) {
-      const kind = error?.name === 'AbortError' && signal?.aborted ? 'aborted' : classifyCodexError(error) === 'usage_limit' ? 'usage_limit' : 'error';
+      const classified = classifyCodexError(error);
+      const kind = error?.name === 'AbortError' && signal?.aborted ? 'aborted' : classified === 'usage_limit' || classified === 'auth' ? classified : 'error';
       if (error?.usage || error?.execution) recordLeadTurn(state, error, kind);
       if (kind === 'aborted') return { ...update, status: 'canceled', text: CANCELED_TEXT };
       if (kind === 'usage_limit') return { ...update, budget: { source: 'lead' } };
+      if (kind === 'auth') return { ...update, authWait: { source: 'lead' } };
       throw error;
     }
     if (leadResult) {
@@ -1057,6 +1063,9 @@ function buildLeadGraph(deps) {
       });
     }
     const limited = summaries.some((outcome) => outcome.failureKind === 'usage_limit');
+    const authFailed = summaries.some((outcome) => outcome.failureKind === 'auth');
+    // An auth or quota failure is infrastructure, not a stage verdict: a lean run neither fails the stage nor promotes.
+    const infraFailed = (index) => ['auth', 'usage_limit'].includes(summaries[index]?.failureKind) && !isStageSuccess(summaries[index]);
     let stageUpdate = {};
     if (state.plan) {
       const stageStatuses = { ...state.stageStatuses };
@@ -1065,6 +1074,7 @@ function buildLeadGraph(deps) {
         if (typeof stageId !== 'string' || !state.plan.stages.some((stage) => stage.stageId === stageId)) return;
         const entry = stageStatuses[stageId] || { status: 'pending', attemptIds: [] };
         if (entry.status === 'skipped') return;
+        if (routingOf(state.plan).effective === 'lean' && infraFailed(index)) return;
         const attemptIds = entry.attemptIds.includes(item.attemptId) ? entry.attemptIds : [...entry.attemptIds, item.attemptId];
         stageStatuses[stageId] = { status: isStageSuccess(summaries[index]) ? 'succeeded' : 'failed', attemptIds };
       });
@@ -1078,6 +1088,7 @@ function buildLeadGraph(deps) {
           const stageId = finished[index].assignment?.stageId;
           const stage = state.plan.stages.find((entry) => entry.stageId === stageId);
           if (!stage) continue;
+          if (infraFailed(index)) continue;
           if (routing.conditionalStageIds.includes(stageId)) reasons.push('conditional_stage_dispatched');
           if (stageStatuses[stageId]?.status !== 'succeeded') reasons.push(`stage_not_succeeded:${stageId}`);
           else if (routing.gateStageIds.includes(stageId) && !skip.has(finished[index].attemptId)) {
@@ -1095,6 +1106,7 @@ function buildLeadGraph(deps) {
       unresolvedWriters,
       batch: null,
       ...(limited ? { budget: { source: 'worker' } } : {}),
+      ...(authFailed && !limited ? { authWait: { source: 'worker' } } : {}),
     };
   }
 
@@ -1219,6 +1231,14 @@ function buildLeadGraph(deps) {
     return { budget: null };
   }
 
+  async function authPause(state) {
+    // Everything before interrupt() re-runs on resume, so it must stay side-effect free.
+    const value = { kind: 'waiting_for_auth', source: state.authWait.source };
+    value.message = pauseMessage(value);
+    interrupt(value);
+    return { authWait: null };
+  }
+
   // One entry per writable attempt; a reconciliation outcome overrides the original delta.
   function acceptanceWriters(state) {
     const reconciled = new Map();
@@ -1341,6 +1361,7 @@ function buildLeadGraph(deps) {
     if (state.status) return 'finish';
     if (state.planRetry) return toDecide(state);
     if (state.budget) return 'budget_pause';
+    if (state.authWait) return 'auth_pause';
     if (state.humanRequest) return 'human_input';
     return 'dispatch';
   };
@@ -1354,11 +1375,13 @@ function buildLeadGraph(deps) {
     if (state.status === 'canceled') return 'finish';
     if (state.unresolvedWriters.length > 0) return 'reconcile';
     if (state.budget) return 'budget_pause';
+    if (state.authWait) return 'auth_pause';
     return toDecide(state);
   };
-  const afterReconcile = (state) => (state.budget ? 'budget_pause' : toDecide(state));
+  const afterReconcile = (state) => (state.budget ? 'budget_pause' : state.authWait ? 'auth_pause' : toDecide(state));
   const afterIntake = (state) => toDecide(state);
   const afterBudgetPause = (state) => toDecide(state);
+  const afterAuthPause = (state) => toDecide(state);
   const afterHumanInput = (state) => toDecide(state);
   // A held dispatch submitted nothing and left pending items behind: park instead of collecting.
   const afterDispatch = (state) => {
@@ -1385,19 +1408,21 @@ function buildLeadGraph(deps) {
     .addNode('reconcile', reconcile)
     .addNode('human_input', humanInput)
     .addNode('budget_pause', budgetPause)
+    .addNode('auth_pause', authPause)
     .addNode('operator_hold', operatorHold)
     .addNode('accept', accept)
     .addNode('finish', finish)
     .addEdge(START, 'intake')
     .addConditionalEdges('intake', afterIntake, ['decide', 'operator_hold'])
-    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'decide', 'operator_hold', 'budget_pause', 'human_input', 'dispatch'])
+    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'decide', 'operator_hold', 'budget_pause', 'auth_pause', 'human_input', 'dispatch'])
     .addConditionalEdges('accept', afterAccept, ['finish', 'decide', 'operator_hold'])
     .addConditionalEdges('dispatch', afterDispatch, ['collect', 'operator_hold'])
     .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify'])
-    .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'decide', 'operator_hold'])
-    .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'decide', 'operator_hold'])
+    .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'auth_pause', 'decide', 'operator_hold'])
+    .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'auth_pause', 'decide', 'operator_hold'])
     .addConditionalEdges('human_input', afterHumanInput, ['decide', 'operator_hold'])
     .addConditionalEdges('budget_pause', afterBudgetPause, ['decide', 'operator_hold'])
+    .addConditionalEdges('auth_pause', afterAuthPause, ['decide', 'operator_hold'])
     .addConditionalEdges('operator_hold', afterOperatorHold, ['finish', 'verify', 'dispatch', 'decide', 'operator_hold', 'accept'])
     .addEdge('finish', END);
 
