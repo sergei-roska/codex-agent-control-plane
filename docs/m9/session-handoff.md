@@ -542,3 +542,9 @@ Lead rechecked the exact single deletion, accepted candidate
 `4d07be648c538fc6b83cd6406eb56875740f3bb4` on `bugfix/CDB-390`.
 Target clean, master unchanged. CDB-389 next ticket
 `tkt_hxQyC7P1V17msdhVKVJXAg` submitted; maintain sequential execution.
+
+Owner then explicitly stopped further tickets and asked to stop subagents.
+CDB-389 had already been submitted before the instruction; returned to local
+Backlog and verified run `run_5A8iUmOZgC3H7AqLBdi07w` stopped/settled at Intake,
+with no plan, branch, or candidate. All assistant subagents are completed and
+none remain active. Do not resume the queue without a new owner instruction.
