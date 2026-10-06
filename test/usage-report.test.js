@@ -141,3 +141,62 @@ test('attemptRow includes requested and reported fields from ledger', async () =
   assert.equal(attemptB.reported, null);
   await state.close();
 });
+
+async function productFixture() {
+  const state = await openStateDatabase({ filePath: ':memory:' });
+  const ledger = new UsageLedger({ db: state.db });
+  state.db.exec(`CREATE TABLE runs (run_id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, lead_task_id TEXT, created_at TEXT NOT NULL)`);
+  const run = (id, lead) => state.db.prepare(`INSERT INTO runs (run_id, ticket_id, lead_task_id, created_at)
+    VALUES (?, 'tkt-1', ?, ?)`)
+    .run(id, lead, `t-${id}`);
+  run('prun-1', 'lead-1');
+  run('prun-2', 'lead-2');
+  const tokens = (i, c, o) => ({ inputTokens: i, cachedInputTokens: c, outputTokens: o, totalTokens: i + o });
+  const row = (entryId, kind, runIdValue, role, taskIdValue, t) => ledger.record({
+    entryId, kind, runId: runIdValue, role, taskId: taskIdValue, turns: 1, elapsedMs: 10, tokens: t, permissionEvents: [],
+  });
+  row('i1', 'intake_turn', 'prun-1', 'dlv-project-manager', null, tokens(100, 40, 5));
+  row('l1', 'lead_turn', 'lead-1', 'dlv-project-manager', 'lead-1', tokens(200, 80, 10));
+  state.db.prepare(`INSERT INTO dispatch_journal (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id,
+    state, created_at, updated_at) VALUES ('a1', 'lead-1', 'asg1', 'dlv-builder', 'workspace-write', 'c', 'w1', 'finished', 'n', 'n')`).run();
+  row('w1', 'worker_turn', 'lead-1', 'dlv-builder', 'w1', tokens(300, 100, 20));
+  row('i2', 'intake_turn', 'prun-2', 'dlv-project-manager', null, tokens(10, 0, 1));
+  row('l2', 'lead_turn', 'lead-2', 'dlv-project-manager', 'lead-2', null);
+  return state;
+}
+
+test('ticket id resolves to all product runs with intake, lead and worker rows', async () => {
+  const state = await productFixture();
+  const report = buildReport(state.db, { taskId: 'tkt-1', strict: true });
+  assert.deepEqual(report.scope, { ticketId: 'tkt-1' });
+  assert.equal(report.totals.rows, 5);
+  assert.equal(report.totals.tokens.inputTokens, 610);
+  assert.equal(report.totals.tokens.cachedInputTokens, 220);
+  assert.equal(report.totals.tokens.outputTokens, 36);
+  assert.equal(report.totals.tokensPartial, true);
+  assert.deepEqual(Object.keys(report.byKind), ['intake_turn', 'lead_turn', 'worker_turn']);
+  assert.equal(report.byKind.intake_turn.input, 110);
+  assert.equal(report.byKind.lead_turn.input, 200);
+  assert.equal(report.byKind.lead_turn.tokensPartial, true);
+  assert.equal(report.byRoleKind['dlv-project-manager+intake_turn'].turns, 2);
+  assert.equal(report.byRoleKind['dlv-builder+worker_turn'].output, 20);
+  assert.equal(report.byRun['prun-1'].input, 600);
+  assert.equal(report.byRun['prun-1'].leadTaskId, 'lead-1');
+  assert.equal(report.byRun['prun-2'].input, 10);
+  assert.equal(report.measured.cost, null);
+  await state.close();
+});
+
+test('product run id resolves to its own rows; lead run id keeps working; unknown ids error in strict mode', async () => {
+  const state = await productFixture();
+  const product = buildReport(state.db, { runId: 'prun-1' });
+  assert.deepEqual(product.scope, { runId: 'prun-1', ticketId: 'tkt-1' });
+  assert.equal(product.totals.rows, 3);
+  const lead = buildReport(state.db, { runId: 'lead-1', strict: true });
+  assert.equal(lead.totals.rows, 2);
+  assert.equal(lead.byRun, undefined);
+  assert.throws(() => buildReport(state.db, { runId: 'nope', strict: true }), /Unknown run id/);
+  assert.throws(() => buildReport(state.db, { taskId: 'nope', strict: true }), /Unknown ticket or task id/);
+  assert.equal(buildReport(state.db, { taskId: 'w1', strict: true }).totals.rows, 1);
+  await state.close();
+});

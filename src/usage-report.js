@@ -159,26 +159,90 @@ function hasTable(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
 }
 
-function buildReport(db, { runId, taskId, priceTable } = {}) {
+function breakdownRow(rows) {
+  const t = summarize(rows);
+  return {
+    rows: t.rows,
+    turns: t.turns,
+    input: t.tokens ? t.tokens.inputTokens : null,
+    cached: t.tokens ? t.tokens.cachedInputTokens : null,
+    output: t.tokens ? t.tokens.outputTokens : null,
+    elapsedMs: t.elapsedMs,
+    tokensPartial: t.tokensPartial,
+  };
+}
+
+function groupRows(rows, keyOf) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  const out = {};
+  for (const key of [...groups.keys()].sort()) out[key] = breakdownRow(groups.get(key));
+  return out;
+}
+
+// Resolve a product run id or a ticket id to product runs; null when the id is not a product id.
+function resolveProductRuns(db, { runId, taskId }) {
+  if (!hasTable(db, 'runs')) return null;
+  const cols = 'run_id AS runId, ticket_id AS ticketId, lead_task_id AS leadTaskId';
+  const rows = runId
+    ? db.prepare(`SELECT ${cols} FROM runs WHERE run_id = ?`).all(runId)
+    : db.prepare(`SELECT ${cols} FROM runs WHERE ticket_id = ? ORDER BY created_at, run_id`).all(taskId);
+  return rows.length ? rows : null;
+}
+
+function buildReport(db, { runId, taskId, priceTable, strict = false } = {}) {
   if (!runId === !taskId) throw new TypeError('Provide exactly one of runId or taskId');
-  const entries = hasTable(db, 'usage_ledger')
-    ? (() => {
-      const ledger = new UsageLedger({ db, readonly: true });
-      return runId ? ledger.listByRun(runId) : ledger.listByTask(taskId);
-    })()
-    : [];
+  const ledger = hasTable(db, 'usage_ledger') ? new UsageLedger({ db, readonly: true }) : null;
+  const productRuns = resolveProductRuns(db, { runId, taskId });
+  let entries = [];
+  let scope = runId ? { runId } : { taskId };
+  let byRun;
+  if (productRuns) {
+    const seen = new Set();
+    byRun = {};
+    scope = runId ? { runId, ticketId: productRuns[0].ticketId } : { ticketId: taskId };
+    for (const run of productRuns) {
+      const own = [];
+      if (ledger) {
+        const rows = [...ledger.listByRecordedRun(run.runId), ...(run.leadTaskId ? ledger.listByRun(run.leadTaskId) : [])];
+        for (const row of rows) {
+          if (seen.has(row.entryId)) continue;
+          seen.add(row.entryId);
+          own.push(row);
+        }
+      }
+      byRun[run.runId] = { leadTaskId: run.leadTaskId, ...breakdownRow(own) };
+      entries = entries.concat(own);
+    }
+  } else if (ledger) {
+    entries = runId ? ledger.listByRun(runId) : ledger.listByTask(taskId);
+    if (runId && !entries.length) entries = ledger.listByRecordedRun(runId);
+  }
+  const knownLegacy = !productRuns && (entries.length > 0
+    || (runId && hasTable(db, 'dispatch_journal')
+      && db.prepare('SELECT 1 FROM dispatch_journal WHERE run_id = ? LIMIT 1').get(runId)));
+  if (strict && !productRuns && !knownLegacy) {
+    throw new Error(`Unknown ${runId ? 'run' : 'ticket or task'} id "${runId || taskId}": no product run, ticket or usage rows found`);
+  }
   const byRole = {};
   for (const role of [...new Set(entries.map((row) => row.role))].sort()) {
     byRole[role] = summarize(entries.filter((row) => row.role === role));
   }
   const report = {
-    scope: runId ? { runId } : { taskId },
+    scope,
     measured: { basis: 'subscription', cost: null },
     totals: summarize(entries),
     byRole,
+    byKind: groupRows(entries, (row) => row.kind),
+    byRoleKind: groupRows(entries, (row) => `${row.role}+${row.kind}`),
     attempts: entries.map(attemptRow),
-    repeatedAssignments: runId && hasTable(db, 'dispatch_journal') ? repeatedAssignments(db, runId) : null,
+    repeatedAssignments: runId && !productRuns && hasTable(db, 'dispatch_journal') ? repeatedAssignments(db, runId) : null,
   };
+  if (byRun) report.byRun = byRun;
   if (priceTable) report.hypotheticalApiCost = hypotheticalCost(entries, priceTable);
   return report;
 }
@@ -202,7 +266,7 @@ function main(argv = process.argv.slice(2), stdout = process.stdout) {
   const file = stateDbPath(args.state || process.env.CODEX_A2A_STATE_DB || DEFAULT_STATE_DB);
   const db = new Database(file, { readonly: true, fileMustExist: true });
   try {
-    stdout.write(`${JSON.stringify(buildReport(db, { runId: args.runId, taskId: args.taskId, priceTable }), null, 2)}\n`);
+    stdout.write(`${JSON.stringify(buildReport(db, { runId: args.runId, taskId: args.taskId, priceTable, strict: true }), null, 2)}\n`);
   } finally {
     db.close();
   }
