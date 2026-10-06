@@ -85,6 +85,42 @@ Resume is then unavailable, and Return to Backlog followed by Submit starts a ne
 run on the same ticket branch with the history retained. A crash leaves the run
 `interrupted`, and Resume continues it after restart.
 
+## Adaptive bugfix route
+
+A `bugfix` ticket always has the same four stages (reproduce, implement, review,
+verify). The route decides how many of them execute. Decision record:
+`docs/adr/adaptive-delivery-route.md`.
+
+- **full**: all four stages, as before. This is the default.
+- **lean**: implement (the Developer also records the failing baseline evidence
+  first) and an independent QA verify. `reproduce` is skipped and `review` runs
+  only after a promotion. A clean lean run needs no lead model calls: the lead's
+  decisions are derived from the plan.
+
+Policy key `adaptiveRoute` in `project.json`:
+
+| Value | Behavior |
+| --- | --- |
+| `off` (default) | Nothing changes: same Intake prompt, same plan, full route. |
+| `shadow` | The PM proposes a route and code computes the verdict, both recorded, but the full route executes. Use it first to see what would have been lean. |
+| `on` | A ticket runs lean when code accepts it. |
+
+Code decides, the PM only proposes: lean needs the PM to propose it AND all of
+these: classification `bugfix`, at most `maxFiles` allowed files, no protected path
+(auth and permissions, config, migrations and install hooks, dependency manifests,
+environment and CI files, database schema, routing and permission definitions), at
+least one approved check, and policy `on`. The server re-checks this itself.
+
+A lean run is promoted to full, never back, when the attested change is unknown,
+leaves the allowed files, touches a protected path, exceeds `maxChangedLines`,
+is empty, a stage fails or reports scope expansion or a needed decision, or the
+acceptance gate does not accept. A promoted run cannot finish before the Reviewer
+has approved. The route, its reasons, and any promotion are shown in the ticket
+run details and the Monitor events `route_decided` and `route_promoted`.
+
+Measure cost with `npm run usage -- --task <ticketId> --state <state.sqlite>`; it
+now includes Intake, lead, and worker rows and a per-run breakdown.
+
 ## Troubleshooting
 
 | Symptom | Operator action |

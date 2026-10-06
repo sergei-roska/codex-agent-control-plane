@@ -101,6 +101,11 @@ Other fields: `branchPrefixes` (`feature`, `bugfix`, `docs`), `delivery.remotes`
 (allowed push remotes), and `rolePack` (`delivery` or `legacy-orch`). Checks run
 as argv (no shell) in the task repository. Unknown fields are rejected.
 
+`adaptiveRoute` (`off`, `shadow`, `on`; default `off`) controls the lean bugfix
+route, see [Adaptive bugfix route](docs/m9/operator-guide.md#adaptive-bugfix-route).
+Optional `routeLimits` takes `maxFiles` (default 3), `maxChangedLines` (default
+30), and extra `protectedPaths` patterns that extend the built-in list.
+
 ## Using the dashboard
 
 Tabs:

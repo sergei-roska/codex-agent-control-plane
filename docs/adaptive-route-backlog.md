@@ -10,14 +10,20 @@ without a concrete need.
 | ID | Package | Owner tier | Depends on | Status |
 | --- | --- | --- | --- | --- |
 | AR-0a | Baseline measurement of the two CDB-390 runs | auditor-sonnet | - | done (numbers in the ADR) |
-| AR-0b | Why Intake and lead made 2-5 calls per run | auditor-sonnet | - | dispatched |
+| AR-0b | Why Intake and lead made 2-5 calls per run | auditor-sonnet | - | done: 2 of the Intake calls were corrective retries (89,245 input, 18% of Intake+lead; cause lost because attempt-1 errors are not persisted, see AR-8); every lead turn was fully determined by the binding plan (only `decide` calls a model), which supports D8; the Intake prompt text is about 1.5k tokens yet each call bills 35-59k input, so the fixed per-call prefix dominates and call count is the lever |
+| AR-8 | Persist attempt-1 Intake validation errors (observability only) | worker-sonnet | - | done (`b5f03af`, `retryErrors` in the `intake_completed` event; lost if attempt 2 throws a transport error) |
+| AR-10 | Check that the pinned reasoning effort is applied (ledger shows reported "low" vs requested xhigh on Intake and lead turn 1) | auditor-sonnet | - | done: reporting artifact, not a defect. `turn/start` carries the pinned effort on every turn and the Codex rollout `turn_context.effort` shows xhigh for PM/lead and high for workers on every turn of both runs. The ledger `reported` value is the thread default at `thread/start` (the server does not take effort there), so it follows the global Codex config at that moment. Optional later: label the column and record the turn-level effort. |
+| AR-2b | Wire `intakeSchemaFor` into the Intake call, fix the preset version expectation in `test/delivery-pack.test.js`, omit `adaptiveRoute` from the normalized config when `off` | worker-sonnet | AR-2, AR-8 | done (in `38654a0`; an outdated test expectation was fixed separately) |
 | AR-0c | `npm run usage` covers ticket/product run, Intake and lead rows | worker-sonnet | - | done (`fe290c7`, totals match the baseline) |
 | AR-1 | `src/route-gate.js` pure module and tests | worker-sonnet | - | done (`f576ec5`) |
-| AR-2 | Preset `lean` block, Intake `route` field and `routeDecision`, project policy, Drupal protected-path additions | worker-sonnet | AR-1 | dispatched |
-| AR-3a | Derived required-ness and promotion in the lead runtime and candidate gate | worker-sonnet, then auditor-opus review | AR-2 | planned |
-| AR-3b | Deterministic `decide` for a clean lean run | worker-sonnet | AR-3a | planned |
-| AR-4a | Resubmit of a blocked ticket reuses the ready Intake and plan | worker-sonnet | AR-3 (same files) | planned |
-| AR-5 | Shadow-mode recording, telemetry fields, TEAM.md and operator guide | worker-sonnet | AR-3a | planned |
+| AR-2 | Preset `lean` block, Intake `route` field and `routeDecision`, project policy, Drupal protected-path additions | worker-sonnet | AR-1 | done (`b47f92d`) |
+| AR-3a | Derived required-ness and promotion in the lead runtime and candidate gate | worker-sonnet, then auditor-opus review | AR-2 | done (`38654a0`); known gap: an attested out-of-scope path fails the stage first, so it promotes as `stage_not_succeeded` |
+| AR-3b | Deterministic `decide` for a clean lean run, server re-verifies eligibility, `empty_delta` promotion | worker-sonnet | AR-3a | done (`eaee808`); graph-level tests for an open worker decision and an unresolved writer are covered only by `canScript` unit tests |
+| AR-4a | Resubmit of a blocked ticket reuses the ready Intake and plan | worker-sonnet | AR-3 (same files) | deferred: saves about 11% only in the rare platform-failure case; do it if such failures recur |
+| AR-5a | Journal events `route_decided` and `route_promoted`, telemetry and API `route` field, skipped stage in live views | worker-sonnet | AR-3a | dispatched |
+| AR-5b | Route badge and skipped-stage rendering in `web/dashboard` (depends on the AR-5a UI findings) | worker-sonnet | AR-5a | planned |
+| AR-5c | Docs: README policy key, operator guide section | lead | - | done |
+| AR-9 | Independent Opus review of the lead runtime changes (resume safety, promotion idempotence, scripted-decision fallback) before `on` is used for real tickets | auditor-opus | AR-5a | planned |
 | AR-6 | Live acceptance: new direct ticket with the CDB-390 text, `adaptiveRoute: on` | lead | AR-3b, AR-5 | planned |
 | AR-D5b | Candidate-level re-attest run | auditor-opus design first | AR-6 | deferred |
 | AR-7 | Context trimming for read-only roles | tbd | AR-0b, AR-6 | conditional |
@@ -78,6 +84,7 @@ without a concrete need.
 | AR-0c | `src/usage-report.js`, `test/usage-report.test.js`, minimal `src/usage-ledger.js` |
 | AR-1 | `src/route-gate.js`, `test/route-gate.test.js` |
 | AR-2 | `profiles/delivery/presets/bugfix.json`, `profiles/delivery/pack.json` if needed, `src/plan-validator.js`, `src/intake.js`, `src/project-config.js`, `src/route-gate.js`, their tests |
+| AR-8 | `src/delivery-controller.js` (intake retry section only), `src/event-journal.js`, their tests |
 | AR-3a/b | `src/lead-orchestrator.js`, `src/lead-graph.js`, `src/delivery-controller.js` (candidateGate only), `src/event-journal.js`, their tests |
 | AR-4a | `src/delivery-controller.js`, `src/product-store.js`, their tests |
 | AR-5 | `src/ticket-telemetry.js`, `profiles/delivery/TEAM.md`, `docs/m9/operator-guide.md`, tests |
