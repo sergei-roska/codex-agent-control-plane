@@ -737,7 +737,7 @@ async function sendTicketCommand(slot, path, extra, onError) {
 const TR_CONTROL_SPECS = {
   pause: { path: '/pause', run: true },
   resume: { path: '/resume', run: true },
-  stop: { path: '/stop', run: true, confirm: 'Stop this run?\n\nActive work is interrupted and the run ends as stopped. File changes already made in the checkout are kept, not reverted, and the run evidence is retained. The ticket becomes blocked; you can submit a new run.' },
+  stop: { path: '/stop', run: true },
   return_to_backlog: { path: '/return-to-backlog', run: false }
 };
 
@@ -752,7 +752,6 @@ async function runTicketControl(key) {
     if (!runId) { trText('tr-action-error', 'This ticket has no run to act on.'); return; }
     extra.runId = runId;
   }
-  if (spec.confirm && !window.confirm(spec.confirm)) return;
   trText('tr-action-error', '');
   await sendTicketCommand(key, spec.path, extra, (m) => trText('tr-action-error', m));
 }
@@ -760,7 +759,6 @@ async function runTicketControl(key) {
 async function cancelTicketFromRecord() {
   const d = tr.detail;
   if (!d) return;
-  if (!window.confirm('Cancel this ticket? An active run is stopped. File changes already made in the checkout are kept. Revisions, attachments and run history are kept, but the ticket cannot be edited or run afterwards.')) return;
   trText('tr-action-error', '');
   await sendTicketCommand('cancel', '/cancel', {}, (m) => trText('tr-action-error', m));
 }

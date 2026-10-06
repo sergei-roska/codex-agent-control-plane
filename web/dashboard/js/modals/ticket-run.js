@@ -1433,8 +1433,7 @@ function renderDeliveryPanel(d) {
   trrGuard('delivery', trdOwnSig(d), el, (box) => trdBuild(box, d));
 }
 
-function trdCommand(slot, path, extra, confirmText) {
-  if (confirmText && !window.confirm(confirmText)) return;
+function trdCommand(slot, path, extra) {
   trText('tr-action-error', '');
   trd.key = null;
   sendTicketCommand(slot, path, extra, (m) => trText('tr-action-error', m));
@@ -1456,8 +1455,7 @@ function trdAppendReleaseAction(el, d) {
   if (!trdAvailable(d, 'release_repository')) return;
   const btn = h('button', { class: 'btn btn-secondary', attrs: { type: 'button', 'data-action': 'release_repository' } }, [h('span', { text: 'Release repository' })]);
   if (tr.busy) btn.disabled = true;
-  btn.addEventListener('click', () => trdCommand('release_repository', '/release-repository', {},
-    'Release the repository without committing?\n\nThe changes stay in the checkout, uncommitted. The repository becomes available to other tickets, which will see those changes as a dirty checkout.'));
+  btn.addEventListener('click', () => trdCommand('release_repository', '/release-repository', {}));
   el.appendChild(h('div', { class: 'tr-answer-foot' }, [btn,
     h('span', { class: 'form-hint', text: 'Gives up the repository without committing. Changes stay in the checkout.' })]));
 }
@@ -1545,8 +1543,7 @@ function trdBuild(el, d) {
     btn.addEventListener('click', () => {
       const remote = select.value;
       if (!remote) return;
-      trdCommand('push', '/push', { deliveryId: commit.deliveryId, commitSha: commit.commitSha, remote },
-        'Push commit ' + shortSha(commit.commitSha) + ' to remote "' + remote + '"?\n\nThis is a normal push, never forced.');
+      trdCommand('push', '/push', { deliveryId: commit.deliveryId, commitSha: commit.commitSha, remote });
     });
     const pushBlock = h('div', { class: 'tr-decision detail-block' }, [
       h('div', { class: 'form-hint', text: 'Committed ' + shortSha(commit.commitSha) + ' on ' + (commit.branch || 'the task branch') + '. Push to a remote:' })
