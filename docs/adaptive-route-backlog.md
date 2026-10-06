@@ -20,11 +20,14 @@ Run only the named test files, never the full suite.
 | AR-3a | Derived required-ness and promotion in the lead runtime and candidate gate | worker-sonnet, then auditor-opus review | AR-2 | done (`38654a0`); known gap: an attested out-of-scope path fails the stage first, so it promotes as `stage_not_succeeded` |
 | AR-3b | Deterministic `decide` for a clean lean run, server re-verifies eligibility, `empty_delta` promotion | worker-sonnet | AR-3a | done (`eaee808`); graph-level tests for an open worker decision and an unresolved writer are covered only by `canScript` unit tests |
 | AR-4a | Resubmit of a blocked ticket reuses the ready Intake and plan | worker-sonnet | AR-3 (same files) | deferred: saves about 11% only in the rare platform-failure case; do it if such failures recur |
-| AR-5a | Journal events `route_decided` and `route_promoted`, telemetry and API `route` field, skipped stage in live views | worker-sonnet | AR-3a | dispatched |
-| AR-5b | Route badge and skipped-stage rendering in `web/dashboard` (depends on the AR-5a UI findings) | worker-sonnet | AR-5a | planned |
+| AR-5a | Journal events `route_decided` and `route_promoted`, telemetry and API `route` field, skipped stage in live views | worker-sonnet | AR-3a | done (`a4667e8`) |
+| AR-5b | Route badge and skipped-stage rendering in `web/dashboard` | worker-sonnet | AR-5a | done (`e799b35`; board column badges `fe843bd`) |
 | AR-5c | Docs: README policy key, operator guide section | lead | - | done |
-| AR-9 | Independent Opus review of the lead runtime changes (resume safety, promotion idempotence, scripted-decision fallback) before `on` is used for real tickets | auditor-opus | AR-5a | planned |
-| AR-6 | Live acceptance: new direct ticket with the CDB-390 text, `adaptiveRoute: on` | lead | AR-3b, AR-5 | planned |
+| AR-9 | Independent Opus review of the lead runtime changes (resume safety, promotion idempotence, scripted-decision fallback) before `on` is used for real tickets | auditor-opus | AR-5a | done: verdict "enable after fixes D1, D2, D3"; D1-D6 fixed in AR-3c (`659bbec`) |
+| AR-3c | Audit fixes: gate after every writer, cumulative size, any failed stage or conditional dispatch promotes, `numstat -z` fail-closed counting, server builds routing itself, bytes cap and mode change, terminal-acceptance reason order | worker-sonnet | AR-9 | done (`659bbec`) |
+| AR-11 | `presetId` derived from the classification, lean proposal wording aligned with the ADR, PM route reason shown | worker-sonnet | AR-6 shadow run | done (`bd26784`) |
+| AR-12 | Worker roles told to use plain read-only git forms (the Codex worker guard rejects global options such as `-c`; the first lean run was promoted because of it) | worker-sonnet | AR-6 first `on` run | done (`78dcf13`) |
+| AR-6 | Live acceptance on CDB-390 (Jira ticket, `adaptiveRoute: on`) | lead | AR-3b, AR-5 | done: all 9 criteria passed on the second `on` run, 236,180 input tokens, see `docs/analytics/cdb-390-comparison.md` |
 | AR-D5b | Candidate-level re-attest run | auditor-opus design first | AR-6 | deferred |
 | AR-7 | Context trimming for read-only roles | tbd | AR-0b, AR-6 | conditional |
 
