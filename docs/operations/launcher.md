@@ -21,6 +21,10 @@ dashboard opens after startup with a fresh browser session. Use **Open dashboard
 to open it again or pair another browser. There is no terminal pairing command
 in this flow.
 
+The project field starts empty. Enter a path or explicitly choose a recent
+project; remembered projects do not fill the field automatically. Each form
+field has visible guidance describing the expected value and its effect.
+
 **Stop server** stops the launcher-owned orchestrator. Stop active model work
 through the dashboard first if you intend to preserve it for continuation: a
 clean server stop cancels executing runs. Closing a browser tab does not stop the

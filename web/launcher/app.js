@@ -41,7 +41,6 @@
   let currentSession = null;
   let feedbackSource = '';
   let lastOperationalFeedback = { message: '', isError: false };
-  let restoredRecentProject = false;
   let polling = false;
 
   function setFeedback(message = '', isError = false, source = 'operation') {
@@ -149,13 +148,6 @@
     elements.recentRow.hidden = elements.recentProjects.options.length <= 1;
     if ([...elements.recentProjects.options].some((option) => option.value === currentValue)) {
       elements.recentProjects.value = currentValue;
-    }
-
-    if (!restoredRecentProject) {
-      restoredRecentProject = true;
-      if (!elements.projectPath.value.trim() && projects[0]?.path) {
-        elements.projectPath.value = projects[0].path;
-      }
     }
   }
 

@@ -35,23 +35,24 @@
       <form id="start-form" novalidate>
         <label for="project-path">Project folder</label>
         <input id="project-path" name="projectPath" type="text" inputmode="text"
-          autocomplete="off" spellcheck="false" placeholder="/home/you/Projects/my-project"
+          autocomplete="off" spellcheck="false" placeholder="/path/to/project"
           aria-describedby="project-help">
-        <p class="field-help" id="project-help">Enter the full path to a local project folder.</p>
+        <p class="field-help" id="project-help">Enter the absolute path to an existing Git repository on this computer, outside the orchestrator folder.</p>
 
         <div class="recent-row" id="recent-row" hidden>
           <label for="recent-projects">Recent projects</label>
-          <select id="recent-projects" name="recentProject">
+          <select id="recent-projects" name="recentProject" aria-describedby="recent-projects-help">
             <option value="">Choose a recent project</option>
           </select>
+          <p class="field-help" id="recent-projects-help">Choose a saved project to fill the path above. This does not start the server.</p>
         </div>
 
         <details class="advanced">
           <summary>Advanced settings</summary>
           <div class="advanced-content">
             <label for="port">Port</label>
-            <input id="port" name="port" type="number" min="1" max="65535" step="1" value="3000">
-            <p class="field-help">Dashboard address for this local server.</p>
+            <input id="port" name="port" type="number" min="1" max="65535" step="1" value="3000" aria-describedby="port-help">
+            <p class="field-help" id="port-help">Choose an unused port from 1 to 65535. Default: 3000 (http://127.0.0.1:3000). For Atlassian, use the port registered for its OAuth callback.</p>
           </div>
         </details>
 

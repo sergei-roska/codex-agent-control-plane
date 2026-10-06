@@ -345,6 +345,19 @@ previously running launcher or dashboard process; do not claim a live restart
 or restored connection. Focused launcher runtime/server checks, whitespace and
 protected dashboard reference checks passed.
 
+## Launcher field guidance checkpoint - 2026-10-06
+
+The owner requested an empty initial project path and self-contained guidance
+for every launcher field. Removed automatic recent-project prefill; explicit
+recent selection still fills the path and polling preserves user input. The path
+placeholder is `/path/to/project`. Project path, recent projects, and port now
+have visible descriptions connected through `aria-describedby`, including local
+Git repository requirements, explicit selection behavior, allowed ports, the
+default dashboard URL, and Atlassian callback port requirements.
+Verification: JavaScript syntax, bounded inspection of all three field helper
+associations and the remaining path assignment, whitespace, and protected
+dashboard reference checks passed. No live browser check was performed.
+
 ## Delivery default models checkpoint - 2026-10-06
 
 The owner requested Luna high for workers and Luna xhigh for managing roles in
