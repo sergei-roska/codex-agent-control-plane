@@ -128,7 +128,7 @@ class PinnedSettingsError extends Error {
 }
 
 function createDeliveryController({
-  store, artifactStore, gitAdapterFactory, projectConfig, appServer, leadRole, roles, leadClient, taskReader,
+  store, artifactStore, gitAdapterFactory, projectConfig, appServer, leadRole, roles, leadClient, taskReader, snapshotter = takeSnapshot,
   usageLedger, events, now, workspace, writerAdmission, tickMs = DEFAULT_TICK_MS, rolePackHash = null, appServerVersion = null, logger,
   deliveryPack = null, legacyPack = null, settingsStore = null, modelCatalog = null, gitDeliveryFactory = null,
 } = {}) {
@@ -925,8 +925,15 @@ function createDeliveryController({
     if (capture.headMoved) return block('head_moved', 'HEAD moved from the base commit; agents must not commit');
     const expected = raw && raw.candidate ? raw.candidate.fingerprint : null;
     if (isWritable(run, plan) || expected) {
-      const fresh = takeSnapshot(workspace);
-      if (!expected || fresh.kind !== 'git' || fresh.fingerprint !== expected) {
+      const fresh = snapshotter(workspace);
+      if (!expected) {
+        return block('snapshot_unavailable', 'The accepted candidate snapshot is missing');
+      }
+      if (fresh.kind !== 'git') {
+        const reason = /^[a-z0-9_]{1,64}$/.test(String(fresh.reason || '')) ? fresh.reason : 'snapshot_unavailable';
+        return block('snapshot_unavailable', `The checkout snapshot is unavailable (${reason})`);
+      }
+      if (fresh.fingerprint !== expected) {
         return block('candidate_changed', 'The checkout changed after acceptance verified it');
       }
     }

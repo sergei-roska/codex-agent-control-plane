@@ -97,6 +97,27 @@ test('nested environment discovery skips node_modules and .git trees', () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('nested environment discovery scales with configured bounds and preserves limit failures', () => {
+  const dir = makeRepo();
+  try {
+    const vendor = path.join(dir, 'vendor');
+    fs.mkdirSync(path.join(vendor, 'package', 'config'), { recursive: true });
+    for (let index = 0; index < 12; index += 1) {
+      fs.writeFileSync(path.join(vendor, `file-${index}.txt`), 'ordinary dependency metadata');
+    }
+    fs.writeFileSync(path.join(vendor, 'package', 'config', '.env.local'), 'MUST_NOT_APPEAR');
+
+    const bounded = takeSnapshot(dir, { discoveryEntryLimit: 8 });
+    assert.equal(bounded.kind, 'unavailable');
+    assert.equal(bounded.reason, 'sensitive_snapshot_limit_exceeded');
+
+    const scaled = takeSnapshot(dir, { discoveryEntryLimit: 64 });
+    assert.equal(scaled.kind, 'git');
+    assert.ok(scaled.protectedEntries.some((entry) => entry.path === 'vendor/package/config/.env.local'));
+    assert.equal(JSON.stringify(scaled).includes('MUST_NOT_APPEAR'), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('snapshot covers runtime, data, and the named Codex credential and session paths', () => {
   const dir = makeRepo();
   try {

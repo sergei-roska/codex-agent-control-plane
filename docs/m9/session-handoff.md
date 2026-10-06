@@ -520,3 +520,14 @@ only root model/effort in `/home/sr/.codex/config.toml`; verified TOML parse.
 Current chat model does not automatically switch; owner was told to use model
 selector for this session. Keep lead work and monitoring compact, delegate
 bounded implementation to Luna, and avoid unnecessary repeated model runs.
+
+Snapshot defect confirmed and fixed: metadata-only discovery sees 69,826 entries
+in cdb (old bound 65,536), vendor contributes 21,404; protected/depth bounds were
+not exceeded. Raised finite discovery bound to 262,144 without excluding vendor
+or nested .env protections. Preserved enumeration limit errors and distinguished
+missing/unavailable snapshots from actual fingerprint changes in candidate gate.
+Scoped worker changes reviewed by lead. Snapshot tests17/17 and focused controller
+regressions passed; real-cdb helper now returns kind=git, one dirty entry, in about
+0.5 seconds. No full suite. Original unknown writer deltas cannot be retroactively
+attested; resubmit CDB-390 on its owned branch with the existing correct fix
+preserved, then inspect the newly attested candidate before local delivery.

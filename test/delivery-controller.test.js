@@ -938,7 +938,7 @@ const { createGitDelivery } = require('../src/git-delivery');
 const RESUME_TEXT = 'Resumed by the operator from the dashboard.';
 const MANIFEST = [{ path: 'src/greet.js', status: 'M', sha256: 'f'.repeat(64), size: 10 }];
 
-async function ctlHarness({ intakeScript = [], workspace = null, gitDelivery = null, adapter = null } = {}) {
+async function ctlHarness({ intakeScript = [], workspace = null, gitDelivery = null, adapter = null, snapshotter = takeSnapshot } = {}) {
   const root = tempDir('ctl');
   let ws = workspace;
   if (!ws) {
@@ -1015,6 +1015,7 @@ async function ctlHarness({ intakeScript = [], workspace = null, gitDelivery = n
     writerAdmission: h.admission,
     events,
     workspace: ws,
+    snapshotter,
     tickMs: 3600000,
     logger: () => {},
     ...(gitDelivery ? { gitDeliveryFactory: () => gitDelivery } : {}),
@@ -1430,6 +1431,39 @@ test('accept verifies the checkout; a mismatch records nothing, a stale hash is 
     assert.equal(verifyCalls.length, 2);
     assert.equal((await h.controller.review(ticket.ticketId, accept)).replayed, true);
     assert.equal(verifyCalls.length, 2, 'a replay does not touch the checkout');
+  } finally { await h.close(); }
+});
+
+test('candidate gate reports unavailable snapshots separately from changed candidates', async () => {
+  const h = await ctlHarness({
+    intakeScript: [readyScript()],
+    snapshotter: () => ({ kind: 'unavailable', reason: 'sensitive_snapshot_limit_exceeded' }),
+  });
+  try {
+    const base = await toEngineering(h);
+    taskDone(h, base.leadTaskId);
+    await h.pass();
+    const run = h.store.getRun(base.runId);
+    assert.equal(run.phase, 'settled');
+    assert.equal(run.waitReason, 'execution_error');
+    assert.equal(run.waitDetail.code, 'snapshot_unavailable');
+    assert.match(run.waitDetail.message, /sensitive_snapshot_limit_exceeded/);
+  } finally { await h.close(); }
+});
+
+test('candidate gate reports a missing accepted snapshot as unavailable', async () => {
+  const h = await ctlHarness({ intakeScript: [readyScript()] });
+  try {
+    const base = await toEngineering(h);
+    taskDone(h, base.leadTaskId);
+    const leadTask = h.tasks.get(base.leadTaskId);
+    const metadata = leadTask.artifacts[0].metadata;
+    delete metadata.acceptance.candidate;
+    h.setTask(base.leadTaskId, TaskState.TASK_STATE_COMPLETED, { artifacts: leadTask.artifacts });
+    await h.pass();
+    const run = h.store.getRun(base.runId);
+    assert.equal(run.waitDetail.code, 'snapshot_unavailable');
+    assert.match(run.waitDetail.message, /snapshot is missing/);
   } finally { await h.close(); }
 });
 

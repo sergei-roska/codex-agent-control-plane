@@ -13,7 +13,9 @@ delete SNAPSHOT_GIT_ENV.SSH_ASKPASS;
 delete SNAPSHOT_GIT_ENV.SSH_ASKPASS_REQUIRE;
 const SENSITIVE_ENTRY_LIMIT = 8192;
 const SENSITIVE_DEPTH_LIMIT = 32;
-const DISCOVERY_ENTRY_LIMIT = 65536;
+// Large Drupal checkouts often contain a sizeable `vendor` tree. Keep discovery
+// bounded, but leave headroom above the ordinary source-tree size.
+const DISCOVERY_ENTRY_LIMIT = 262144;
 const DISCOVERY_DEPTH_LIMIT = 48;
 
 // Sensitive ignored paths are represented only by names and filesystem metadata.
@@ -110,10 +112,12 @@ function compare(a, b) {
   return (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || (a.status < b.status ? -1 : a.status > b.status ? 1 : 0);
 }
 
-function sensitiveEntries(workspace) {
+function sensitiveEntries(workspace, limits = {}) {
+  const sensitiveEntryLimit = limits.sensitiveEntryLimit ?? SENSITIVE_ENTRY_LIMIT;
+  const discoveryEntryLimit = limits.discoveryEntryLimit ?? DISCOVERY_ENTRY_LIMIT;
   const entries = new Map();
   const addTree = (absolute, relative, depth = 0) => {
-    if (entries.size >= SENSITIVE_ENTRY_LIMIT || depth > SENSITIVE_DEPTH_LIMIT) {
+    if (entries.size >= sensitiveEntryLimit || depth > SENSITIVE_DEPTH_LIMIT) {
       throw new Error('sensitive_snapshot_limit_exceeded');
     }
     let stat;
@@ -126,14 +130,15 @@ function sensitiveEntries(workspace) {
     // Never follow symlinks. Their own metadata remains part of the snapshot.
     if (kind !== 'directory') return;
     let children;
-    try { children = readDirectory(absolute, SENSITIVE_ENTRY_LIMIT - entries.size); } catch (_) {
+    try { children = readDirectory(absolute, sensitiveEntryLimit - entries.size); } catch (error) {
+      if (error?.message === 'sensitive_snapshot_limit_exceeded') throw error;
       throw new Error('sensitive_snapshot_unavailable');
     }
-    if (entries.size + children.length > SENSITIVE_ENTRY_LIMIT) throw new Error('sensitive_snapshot_limit_exceeded');
+    if (entries.size + children.length > sensitiveEntryLimit) throw new Error('sensitive_snapshot_limit_exceeded');
     for (const name of children) addTree(path.join(absolute, name), `${relative}/${name}`, depth + 1);
   };
 
-  const rootNames = readDirectory(workspace, DISCOVERY_ENTRY_LIMIT);
+  const rootNames = readDirectory(workspace, discoveryEntryLimit);
   for (const name of rootNames) {
     if (name === '.env' || name.startsWith('.env.') || ['.runtime', 'runtime', 'data'].includes(name)) {
       addTree(path.join(workspace, name), name);
@@ -158,12 +163,13 @@ function sensitiveEntries(workspace) {
   const discoverNestedEnv = (absolute, relative, depth) => {
     if (depth > DISCOVERY_DEPTH_LIMIT) throw new Error('sensitive_snapshot_limit_exceeded');
     let children;
-    try { children = readDirectory(absolute, DISCOVERY_ENTRY_LIMIT - visited, true); } catch (_) {
+    try { children = readDirectory(absolute, discoveryEntryLimit - visited, true); } catch (error) {
+      if (error?.message === 'sensitive_snapshot_limit_exceeded') throw error;
       throw new Error('sensitive_snapshot_unavailable');
     }
     for (const child of children) {
       visited += 1;
-      if (visited > DISCOVERY_ENTRY_LIMIT) throw new Error('sensitive_snapshot_limit_exceeded');
+      if (visited > discoveryEntryLimit) throw new Error('sensitive_snapshot_limit_exceeded');
       const childPath = relative ? `${relative}/${child.name}` : child.name;
       if (child.name === '.git' || child.name === 'node_modules' || skipSensitiveSubtree(childPath)) continue;
       const childAbsolute = path.join(absolute, child.name);
@@ -185,11 +191,11 @@ function sensitiveEntries(workspace) {
     }
   };
   discoverNestedEnv(workspace, '', 0);
-  if (entries.size > SENSITIVE_ENTRY_LIMIT) throw new Error('sensitive_snapshot_limit_exceeded');
+  if (entries.size > sensitiveEntryLimit) throw new Error('sensitive_snapshot_limit_exceeded');
   return [...entries.values()].sort(compare);
 }
 
-function takeSnapshot(workspace) {
+function takeSnapshot(workspace, limits) {
   try {
     if (runGit(workspace, ['rev-parse', '--is-inside-work-tree']).trim() !== 'true') {
       return { kind: 'unavailable', reason: 'not_a_git_work_tree' };
@@ -204,7 +210,7 @@ function takeSnapshot(workspace) {
         return { path: rel, status, sha256: isSensitivePath(rel) ? null : hashPath(path.join(workspace, rel)) };
       })
       .sort(compare);
-    const protectedEntries = sensitiveEntries(workspace);
+    const protectedEntries = sensitiveEntries(workspace, limits);
     const fingerprint = sha256(JSON.stringify({ head, entries, protectedEntries }));
     return { kind: 'git', head, entries, protectedEntries, fingerprint };
   } catch (error) {
