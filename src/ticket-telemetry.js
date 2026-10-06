@@ -177,6 +177,38 @@ function collectUsageRows(db, fullRuns) {
   return all;
 }
 
+// Route view of a run: the Intake route decision (latest ready intake of the run or its rework parents) plus the lead
+// result route metadata kept with the candidate acceptance. Null for runs without a decision (policy off, pre-feature).
+function routeViewOf(productStore, run) {
+  try {
+    let decision = null;
+    const seen = new Set();
+    for (let cur = run; cur && !decision && !seen.has(cur.runId); cur = cur.parentRunId ? productStore.getRun(cur.parentRunId) : null) {
+      seen.add(cur.runId);
+      const records = productStore.listIntakeRecords(cur.runId).filter((r) => r.valid && r.output && r.output.readiness === 'ready');
+      const plan = records.length ? records[records.length - 1].output.plan : null;
+      if (plan && plan.routeDecision && typeof plan.routeDecision === 'object') decision = plan.routeDecision;
+    }
+    if (!decision) return null;
+    const candidate = run.candidateId ? productStore.getCandidate(run.candidateId) : null;
+    const lead = candidate && candidate.acceptance && candidate.acceptance.route && typeof candidate.acceptance.route === 'object'
+      ? candidate.acceptance.route : null;
+    return {
+      mode: decision.mode,
+      requested: decision.requested,
+      verdict: decision.verdict,
+      effective: decision.effective,
+      reasons: Array.isArray(decision.reasons) ? decision.reasons : [],
+      promoted: Boolean(lead && lead.promoted),
+      promotionReasons: lead && Array.isArray(lead.reasons) ? lead.reasons : [],
+      promotedAt: lead && lead.at ? lead.at : null,
+      scriptedDecisions: lead && isNum(lead.scriptedDecisions) ? lead.scriptedDecisions : 0,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 function unavailableActivity(error) {
   const reason = error && error.message
     ? redactDiagnosticMessage(String(error.message))
@@ -381,10 +413,11 @@ function buildTicketActivity({ productStore, events, ticketId, priceTable, after
       review,
       acceptance,
       rework,
+      route: routeViewOf(productStore, run),
     });
   }
 
   return result;
 }
 
-module.exports = { cachedInputShare, monetaryCost, buildTicketActivity, unavailableActivity };
+module.exports = { routeViewOf, cachedInputShare, monetaryCost, buildTicketActivity, unavailableActivity };

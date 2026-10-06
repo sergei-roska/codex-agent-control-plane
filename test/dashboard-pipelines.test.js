@@ -12,9 +12,10 @@ const { execFileSync } = require('node:child_process');
 const { ClientFactory } = require('@a2a-js/sdk/client');
 const { TaskState } = require('@a2a-js/sdk');
 const { startServer } = require('../src/server');
+const { INTAKE_SCHEMA_V2 } = require('../src/intake');
 const { LeadOrchestrator } = require('../src/lead-orchestrator');
 const {
-  decision, assignment, humanDecision, workerReport, makeFakeAppServer, planStage, readyIntake, needsInputIntake,
+  decision, assignment, humanDecision, workerReport, makeFakeAppServer, planStage, readyIntake, needsInputIntake, planStageV2, readyIntakeV2,
 } = require('./fixtures/fake-app-server');
 
 process.env.CODEX_A2A_WORKSPACE_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-ws-lock-'));
@@ -90,9 +91,9 @@ function builderWorker(workspace, source = GOOD_SOURCE) {
 }
 
 // Boots the stack, pairs a dashboard session and runs fn({ runtime, api, client, requestOptions, workspace, appServer }).
-async function withStack(appServerFactory, fn, { rolePack } = {}) {
+async function withStack(appServerFactory, fn, { rolePack, projectExtra = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-dash-delivery-'));
-  fs.writeFileSync(path.join(root, 'project.json'), JSON.stringify({ baseRef: 'main', checks: [CHECK], ...(rolePack ? { rolePack } : {}) }));
+  fs.writeFileSync(path.join(root, 'project.json'), JSON.stringify({ baseRef: 'main', checks: [CHECK], ...(rolePack ? { rolePack } : {}), ...projectExtra }));
   const workspace = path.join(root, 'workspace');
   makeWorkspace(workspace);
   const appServer = appServerFactory(workspace);
@@ -278,5 +279,51 @@ test('dashboard pipelines api', async (suite) => {
       assert.equal((await api.json('/roles')).roles.find((role) => role.runtimeId === 'orch-builder').activeAttempts, 0);
       assert.equal((await api.json('/pipelines?limit=1')).runs.length, 1);
     }, { rolePack: 'legacy-orch' });
+  });
+
+  await suite.test('run and ticket detail carry route; a lean run lists its skipped stage as skipped', async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const intake = readyIntakeV2({
+      classification: 'bugfix',
+      stages: [
+        planStageV2('repro', 'qa', 'reproduce', { allowedFiles: ['test/tiny.test.js'] }),
+        planStageV2('impl', 'developer', 'implement', { dependencies: ['repro'], allowedFiles: ['src/greet.js'] }),
+        planStageV2('rev', 'reviewer', 'review', { dependencies: ['impl'] }),
+        planStageV2('ver', 'qa', 'verify', { dependencies: ['impl'], allowedFiles: ['test/tiny.test.js'] }),
+      ],
+    });
+    intake.plan.route = 'lean';
+    await withStack((workspace) => {
+      const server = makeFakeAppServer({
+        intakeScript: [intake],
+        leadScript: [decision({ final: 'Delivered.' })],
+        workerImpl: async (call) => {
+          if (call.role.includes('developer')) await gate;
+          return builderWorker(workspace)({ role: 'orch-builder', ...call });
+        },
+      });
+      const run = server.run.bind(server);
+      server.run = (args) => run(args.outputSchema && args.outputSchema.properties && args.outputSchema.properties.plan && args.outputSchema.properties.plan.properties
+        && args.outputSchema.properties.plan.properties.presetId ? { ...args, outputSchema: INTAKE_SCHEMA_V2 } : args);
+      return server;
+    }, async ({ api }) => {
+      const ticket = await api.create();
+      await api.submit(ticket);
+      let live;
+      await until(async () => {
+        const { runs } = await api.json('/pipelines');
+        live = runs.find((entry) => entry.ticketId === ticket.ticketId);
+        return live && live.stages.some((stage) => stage.stageId === 'impl' && stage.status === 'running');
+      }, 'impl stage running');
+      assert.equal(live.stages.find((stage) => stage.stageId === 'repro').status, 'skipped');
+      const detail = await api.json(`/runs/${live.runId}`);
+      assert.equal(detail.stages.find((stage) => stage.stageId === 'repro').status, 'skipped');
+      assert.equal(detail.route.mode, 'on');
+      assert.equal(detail.route.effective, 'lean');
+      assert.equal(detail.route.promoted, false);
+      assert.deepEqual((await api.ticket(ticket.ticketId)).route, detail.route);
+      release();
+    }, { rolePack: 'delivery', projectExtra: { adaptiveRoute: 'on' } });
   });
 });

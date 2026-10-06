@@ -17,7 +17,7 @@ const { createSettingsRouter, makeSettingsResolver } = require('./dashboard-sett
 const { loadLegacyPack, loadRolePack } = require('./role-pack');
 const { createAtlassianDashboardApi } = require('./dashboard-atlassian-api');
 const { redactDiagnosticMessage } = require('./event-journal');
-const { buildTicketActivity, unavailableActivity } = require('./ticket-telemetry');
+const { buildTicketActivity, unavailableActivity, routeViewOf } = require('./ticket-telemetry');
 
 const MAX_EVENTS_LIMIT = 500;
 const DEFAULT_EVENTS_LIMIT = 100;
@@ -275,7 +275,15 @@ function publicDelivery(delivery) {
 }
 
 // Stage list for a run whose candidate does not exist yet: plan stages with journal attempts matched by stageId.
-function liveStages(db, run, plan) {
+// Plan stage ids a lean run skips (preset lean.skip keys mapped through presetStageKey); empty unless the route is effective lean.
+function leanSkipStageIds(pack, plan, route) {
+  if (!route || route.effective !== 'lean' || !pack || !pack.presets || !plan || !plan.presetId) return [];
+  const preset = pack.presets.get(plan.presetId);
+  const keys = preset && preset.lean && Array.isArray(preset.lean.skip) ? preset.lean.skip : [];
+  return plan.stages.filter((stage) => keys.includes(stage.presetStageKey)).map((stage) => stage.stageId);
+}
+
+function liveStages(db, run, plan, skipStageIds = []) {
   let rows = [];
   try {
     rows = db.prepare('SELECT attempt_id, role, state, result_json, stage_id FROM dispatch_journal WHERE run_id = ? ORDER BY created_at, rowid')
@@ -289,8 +297,10 @@ function liveStages(db, run, plan) {
     byStage.get(row.stage_id).push(row);
   }
   const stageRows = plan.stages.map((stage) => ({ stage, mine: byStage.get(stage.stageId) || [] }));
+  const skipped = new Set(skipStageIds);
   const succeeded = new Set();
-  const statusOf = ({ mine }) => {
+  const statusOf = ({ stage, mine }) => {
+    if (mine.length === 0 && skipped.has(stage.stageId)) return 'skipped';
     if (mine.length === 0) return null;
     const last = mine[mine.length - 1];
     if (last.state !== 'finished') return 'running';
@@ -302,7 +312,7 @@ function liveStages(db, run, plan) {
     return report && report.outcome === 'completed' ? 'succeeded' : 'failed';
   };
   const statuses = stageRows.map((entry) => statusOf(entry));
-  stageRows.forEach((entry, index) => { if (statuses[index] === 'succeeded') succeeded.add(entry.stage.stageId); });
+  stageRows.forEach((entry, index) => { if (statuses[index] === 'succeeded' || statuses[index] === 'skipped') succeeded.add(entry.stage.stageId); });
   return stageRows.map((entry, index) => {
     const { stage, mine } = entry;
     let status = statuses[index];
@@ -561,6 +571,7 @@ function createDashboardApi({
         stagedRevision: staged,
         review: publicReview(evidence.review),
         runs,
+        route: latestRun ? routeViewOf(productStore, latestRun) : null,
         activeRun: activeRun ? runs.find((entry) => entry.runId === activeRun.runId) : null,
         ...ticketActions(ticket, {
           latestRun,
@@ -612,9 +623,12 @@ function createDashboardApi({
       let stages;
       if (run.leadTaskId && !run.candidateId && run.planRevisionId) {
         const plan = productStore.getPlanRevision(run.planRevisionId);
-        if (plan) stages = liveStages(productStore.db, run, plan);
+        if (plan) {
+          const skip = leanSkipStageIds(pack, plan, routeViewOf(productStore, run));
+          stages = liveStages(productStore.db, run, plan, skip);
+        }
       }
-      return productStore.getRunView(run.runId, { stages });
+      return { ...productStore.getRunView(run.runId, { stages }), route: routeViewOf(productStore, run) };
     }));
 
     router.get('/runs/:runId/candidate/diff', (req, res, next) => {
@@ -771,4 +785,4 @@ function createDashboardApi({
   return router;
 }
 
-module.exports = { collectStaleStagedArtifacts, createDashboardApi, liveStages, computeProjectId, sendError, newRequestId };
+module.exports = { collectStaleStagedArtifacts, createDashboardApi, leanSkipStageIds, liveStages, computeProjectId, sendError, newRequestId };

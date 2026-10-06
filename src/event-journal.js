@@ -17,7 +17,7 @@ const EVENT_TYPES = Object.freeze([
   'control_requested', 'run_stopped', 'ticket_returned_to_backlog', 'review_recorded', 'rework_started',
   'delivery_commit_intended', 'delivery_commit_succeeded', 'delivery_commit_failed', 'delivery_commit_unknown',
   'delivery_push_intended', 'delivery_push_succeeded', 'delivery_push_failed', 'delivery_push_unknown',
-  'repository_released', 'atlassian_egress',
+  'repository_released', 'atlassian_egress', 'route_decided', 'route_promoted',
 ]);
 
 const MAX_STRING = 500;
@@ -37,6 +37,7 @@ const PAYLOAD_FIELDS = Object.freeze([
   'waitReason', 'kind', 'truncated', 'fileCount', 'created',
   'control', 'deliveryId', 'verdict', 'parentRunId', 'reviewId',
   'method', 'host', 'path', 'durationMs', 'retryErrors',
+  'mode', 'requested', 'effective', 'reasons', 'at', 'scriptedDecisions',
 ]);
 
 function sanitizeValue(value, depth = 0) {

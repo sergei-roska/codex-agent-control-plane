@@ -363,9 +363,9 @@ const LeadState = Annotation.Root({
   planRetry: last(() => false),
   acceptanceAttempts: last(() => 0),
   acceptance: last(() => null),
-  // Monotonic: once a promotion is recorded it is never cleared or overwritten.
   // Monotonic count of decisions derived from the plan without a lead model call.
   scriptedDecisions: last(() => 0),
+  // Monotonic: once a promotion is recorded it is never cleared or overwritten.
   routePromotion: Annotation({ reducer: (current, next) => current || next || null, default: () => null }),
   status: last(() => null),
   reason: last(() => null),

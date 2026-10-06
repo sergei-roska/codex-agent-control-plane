@@ -173,3 +173,15 @@ test('listRecent returns the newest window oldest-first and fails closed without
   assert.doesNotThrow(() => { closed = journal.listRecent({ limit: 3 }); });
   assert.deepEqual(closed, { ok: false, events: [] });
 });
+
+test('route events keep their payload fields and bound the reason strings', () => {
+  const { journal } = makeJournal();
+  const reasons = ['protected_path:' + 'x'.repeat(600), 'too_many_files'];
+  journal.record('route_decided', { runId: 'r1', payload: { mode: 'on', requested: 'lean', verdict: 'full', effective: 'full', reasons, goal: 'secret' } });
+  journal.record('route_promoted', { runId: 'r1', payload: { reasons: ['delta_unknown'], at: 'implement', scriptedDecisions: 2 } });
+  const [decided, promoted] = journal.listByRun('r1');
+  assert.deepEqual(Object.keys(decided.payload).sort(), ['effective', 'mode', 'reasons', 'requested', 'verdict']);
+  assert.equal(decided.payload.reasons[0].length, 500);
+  assert.equal(decided.payload.reasons[1], 'too_many_files');
+  assert.deepEqual(promoted.payload, { reasons: ['delta_unknown'], at: 'implement', scriptedDecisions: 2 });
+});

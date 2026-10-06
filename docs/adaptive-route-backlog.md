@@ -2,8 +2,8 @@
 
 Decision record: `docs/adr/adaptive-delivery-route.md`. Branch:
 `feature/dashboard-integration`. Workers do not commit; the lead verifies each
-package and commits it. Run only the named test files, never the full suite
-without a concrete need.
+package and commits it locally (not pushed; push, merge, and tag need the owner).
+Run only the named test files, never the full suite.
 
 ## Status
 

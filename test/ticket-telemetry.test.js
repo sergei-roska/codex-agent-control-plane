@@ -476,3 +476,10 @@ test('GET /tickets/unknown/activity returns 404', async (t) => {
   const res = await fetch(`${origin}/tickets/tkt_nonexistent/activity`);
   assert.equal(res.status, 404);
 });
+
+test('routeViewOf is null-safe for runs without a route decision', () => {
+  const { routeViewOf } = require('../src/ticket-telemetry');
+  const store = { listIntakeRecords: () => [], getRun: () => null, getCandidate: () => null };
+  assert.equal(routeViewOf(store, { runId: 'r1' }), null);
+  assert.equal(routeViewOf({ listIntakeRecords: () => { throw new Error('x'); } }, { runId: 'r1' }), null);
+});

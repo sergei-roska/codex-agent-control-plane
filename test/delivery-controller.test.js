@@ -18,6 +18,7 @@ const { createDeliveryController, planHashOf } = require('../src/delivery-contro
 const { createProjection } = require('../src/dashboard-projection');
 const { INTAKE_SCHEMA, INTAKE_SCHEMA_V2 } = require('../src/intake');
 const { loadRolePack } = require('../src/role-pack');
+const { routeViewOf } = require('../src/ticket-telemetry');
 const {
   decision, assignment, humanDecision, workerReport, makeFakeAppServer, planStage, readyIntake, needsInputIntake, planStageV2, readyIntakeV2,
 } = require('./fixtures/fake-app-server');
@@ -2047,4 +2048,77 @@ test('candidate gate accepts skipped and effectively optional stages and still b
   assert.equal(accepted.waitReason, 'human_review');
   const blocked = await run([done('explore'), done('build'), done('verify'), { stageId: 'audit', status: 'pending', attemptIds: [] }]);
   assert.equal(blocked.waitDetail.code, 'stages_incomplete');
+});
+
+// ---- route observability (journal events and telemetry route view)
+
+async function bugfixRun(policy, route = 'lean') {
+  const pack = loadRolePack({ packDir: DELIVERY_PACK_DIR });
+  const intake = readyIntakeV2({ classification: 'bugfix', stages: BUGFIX_STAGES });
+  intake.plan.route = route;
+  const h = await ctlHarness({
+    intakeScript: [intake],
+    projectConfigExtra: { rolePack: pack.packId, ...policy },
+    controllerExtra: { deliveryPack: pack },
+  });
+  const run = h.appServer.run.bind(h.appServer);
+  h.appServer.run = (args) => run(args.outputSchema && args.outputSchema.properties && args.outputSchema.properties.plan && args.outputSchema.properties.plan.properties
+    && args.outputSchema.properties.plan.properties.presetId ? { ...args, outputSchema: INTAKE_SCHEMA_V2 } : args);
+  const ticket = newTicket(h);
+  const { run: started } = submitIt(h, ticket);
+  await h.pass();
+  assert.equal(h.sends.length, 1);
+  return { h, runId: started.runId };
+}
+
+const countOf = (h, type) => h.eventLog.filter((e) => e.type === type).length;
+
+test('route_decided is journaled once for shadow and on and never for off; telemetry route follows', async () => {
+  for (const [mode, effective] of [['on', 'lean'], ['shadow', 'full']]) {
+    const { h, runId } = await bugfixRun({ adaptiveRoute: mode });
+    try {
+      await h.pass();
+      assert.equal(countOf(h, 'route_decided'), 1, mode);
+      const event = h.eventLog.find((e) => e.type === 'route_decided');
+      assert.deepEqual(event.payload, { mode, requested: 'lean', verdict: 'lean', effective, reasons: [] });
+      assert.deepEqual(routeViewOf(h.store, h.store.getRun(runId)), {
+        mode, requested: 'lean', verdict: 'lean', effective, reasons: [], promoted: false, promotionReasons: [], promotedAt: null, scriptedDecisions: 0,
+      });
+    } finally { await h.close(); }
+  }
+  const off = await bugfixRun({ adaptiveRoute: 'off' });
+  try {
+    assert.equal(countOf(off.h, 'route_decided'), 0);
+    assert.equal(routeViewOf(off.h.store, off.h.store.getRun(off.runId)), null);
+  } finally { await off.h.close(); }
+});
+
+test('route_promoted is journaled once with the lead route metadata and not repeated; telemetry shows the promotion', async () => {
+  const { h, runId } = await bugfixRun({ adaptiveRoute: 'on' });
+  try {
+    const run = h.store.getRun(runId);
+    const { fingerprint } = takeSnapshot(h.ws);
+    h.setTask(run.leadTaskId, TaskState.TASK_STATE_COMPLETED, {
+      artifacts: [{
+        artifactId: `${run.leadTaskId}-result`,
+        metadata: {
+          acceptance: { disposition: 'accepted', requiredCheckIds: ['unit'], reasons: [], checks: [{ id: 'unit', exitCode: 0 }], candidate: { fingerprint } },
+          stages: BUGFIX_STAGES.map((stage) => ({ stageId: stage.stageId, status: 'succeeded', attemptIds: [] })),
+          route: { effective: 'lean', promoted: true, reasons: ['protected_path:src/auth.js', 'too_many_changed_lines'], at: 'implement', scriptedDecisions: 2 },
+        },
+      }],
+    });
+    await h.pass();
+    await h.pass();
+    await h.pass();
+    assert.equal(countOf(h, 'route_promoted'), 1);
+    assert.deepEqual(h.eventLog.find((e) => e.type === 'route_promoted').payload, {
+      reasons: ['protected_path:src/auth.js', 'too_many_changed_lines'], at: 'implement', scriptedDecisions: 2,
+    });
+    assert.equal(countOf(h, 'route_decided'), 1);
+    assert.deepEqual(routeViewOf(h.store, h.store.getRun(runId)), {
+      mode: 'on', requested: 'lean', verdict: 'lean', effective: 'lean', reasons: [],
+      promoted: true, promotionReasons: ['protected_path:src/auth.js', 'too_many_changed_lines'], promotedAt: 'implement', scriptedDecisions: 2,
+    });
+  } finally { await h.close(); }
 });

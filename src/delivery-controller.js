@@ -439,6 +439,12 @@ function createDeliveryController({
       });
       if (!saved) return false;
       emit('plan_saved', run, { stageCount: value.plan.stages.length, classification: value.classification });
+      const decided = value.plan.routeDecision;
+      if (decided) {
+        emit('route_decided', run, {
+          mode: decided.mode, requested: decided.requested, verdict: decided.verdict, effective: decided.effective, reasons: decided.reasons,
+        });
+      }
       return true;
     }
     if (value.readiness === 'needs_input') {
@@ -985,6 +991,7 @@ function createDeliveryController({
     const meta = (resultArtifact && resultArtifact.metadata) || {};
     const raw = meta.acceptance && typeof meta.acceptance === 'object' ? meta.acceptance : null;
     const stages = Array.isArray(meta.stages) ? meta.stages : [];
+    const route = meta.route && typeof meta.route === 'object' ? meta.route : null;
     const acceptance = raw
       ? {
         disposition: String(raw.disposition),
@@ -992,12 +999,14 @@ function createDeliveryController({
         warnings: Array.isArray(raw.warnings) ? raw.warnings : [],
         checks: (Array.isArray(raw.checks) ? raw.checks : []).map(checkView),
         stages,
+        ...(route ? { route } : {}),
       }
       : {
         disposition: 'unverifiable',
         reasons: [{ code: 'acceptance_missing', detail: 'The lead result carried no acceptance record.' }],
         checks: [],
         stages,
+        ...(route ? { route } : {}),
       };
 
     const holder = writerHolder();
@@ -1041,6 +1050,9 @@ function createDeliveryController({
     if (!candidate) {
       if (diffArtifact) { try { artifactStore.remove(diffArtifact.storageRef); } catch (_) { /* swept later */ } }
       return false;
+    }
+    if (route && route.promoted === true) {
+      emit('route_promoted', run, { reasons: route.reasons, at: route.at, scriptedDecisions: route.scriptedDecisions });
     }
     emit('candidate_captured', run, { fileCount: capture.manifest.length, truncated: capture.truncated, disposition: acceptance.disposition });
     emit('run_settled', run, { status: 'completed', phase: 'settled', waitReason: accepted ? 'human_review' : 'execution_error', code: accepted ? 'human_review' : (gate ? gate.code : 'acceptance_not_accepted') });

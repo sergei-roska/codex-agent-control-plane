@@ -3,6 +3,7 @@
 // Read-only role, preset and pipeline views (D-M4-4). Mounted by createDashboardApi; never mutates state.
 
 const express = require('express');
+const { routeViewOf } = require('./ticket-telemetry');
 
 const ACTIVE_STATUSES = ['queued', 'running', 'paused', 'interrupted'];
 const DEFAULT_SETTLED_LIMIT = 20;
@@ -109,13 +110,13 @@ function createPipelinesRouter({ activePack, legacyPack, productStore, db, setti
   };
 
   function pipelineRun(run) {
-    const { liveStages } = require('./dashboard-api');
+    const { liveStages, leanSkipStageIds } = require('./dashboard-api');
     const plan = run.planRevisionId ? productStore.getPlanRevision(run.planRevisionId) : null;
     const pack = packOf(run.settings && run.settings.rolePack);
     let base = [];
     if (plan) {
       const view = run.leadTaskId && !run.candidateId
-        ? { stages: liveStages(database, run, plan) }
+        ? { stages: liveStages(database, run, plan, leanSkipStageIds(pack, plan, routeViewOf(productStore, run))) }
         : productStore.getRunView(run.runId);
       base = view.stages || [];
     }
