@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { execFile } = require('node:child_process');
@@ -27,6 +28,21 @@ function validatePort(value, fallback = 3000) {
   const port = value === undefined || value === null || value === '' ? fallback : Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new TypeError('Dashboard port must be a number from 1 to 65535.');
   return port;
+}
+
+function atlassianConfigPath(env = process.env, homeDirectory = os.homedir()) {
+  if (Object.prototype.hasOwnProperty.call(env, 'CODEX_ATLASSIAN_CONFIG')) return env.CODEX_ATLASSIAN_CONFIG;
+  const xdgConfigHome = env.XDG_CONFIG_HOME;
+  const configHome = typeof xdgConfigHome === 'string' && path.isAbsolute(xdgConfigHome)
+    ? xdgConfigHome
+    : path.join(homeDirectory, '.config');
+  return path.join(configHome, 'orchestrator-atlassian', 'config.json');
+}
+
+function discoverAtlassianConfigPath(env = process.env, homeDirectory = os.homedir()) {
+  const candidate = atlassianConfigPath(env, homeDirectory);
+  try { return fs.statSync(candidate).isFile() ? candidate : null; }
+  catch (_) { return null; }
 }
 
 class LauncherRuntime {
@@ -212,6 +228,10 @@ class LauncherRuntime {
         CODEX_A2A_ARTIFACT_DIR: paths.artifacts,
         PORT: String(targetPort),
       };
+      if (!Object.prototype.hasOwnProperty.call(env, 'CODEX_ATLASSIAN_CONFIG')) {
+        const discoveredConfigPath = discoverAtlassianConfigPath(env);
+        if (discoveredConfigPath) env.CODEX_ATLASSIAN_CONFIG = discoveredConfigPath;
+      }
       delete env.CODEX_A2A_WORKSPACE_LOCK_DIR;
       const child = this.spawnImpl(process.execPath, [path.join(this.appRoot, 'src', 'launcher-runtime.js'), '--dashboard-child'], {
         cwd: this.appRoot,
@@ -420,4 +440,4 @@ if (require.main === module && process.argv[2] === '--dashboard-child') {
   runDashboardChild().then((code) => { process.exitCode = code; });
 }
 
-module.exports = { LauncherRuntime, DEFAULT_LAUNCHER_PORT, validatePort, runDashboardChild };
+module.exports = { LauncherRuntime, DEFAULT_LAUNCHER_PORT, validatePort, atlassianConfigPath, discoverAtlassianConfigPath, runDashboardChild };

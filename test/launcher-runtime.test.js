@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
-const { LauncherRuntime, runDashboardChild } = require('../src/launcher-runtime');
+const { LauncherRuntime, atlassianConfigPath, discoverAtlassianConfigPath, runDashboardChild } = require('../src/launcher-runtime');
 
 function temporary() { return fs.mkdtempSync(path.join(os.tmpdir(), 'orchestrator-launcher-')); }
 function fakeChild({ ready = true, autoExit = true } = {}) {
@@ -78,6 +78,13 @@ test('launch uses isolated paths, creates policy once, and stops only its owned 
   assert.equal(children[0].spawnOptions.cwd, path.resolve(__dirname, '..'));
   assert.equal(children[0].spawnOptions.detached, true);
   assert.equal(paths.CODEX_WORKSPACE, project);
+  if (Object.prototype.hasOwnProperty.call(process.env, 'CODEX_ATLASSIAN_CONFIG')) {
+    assert.equal(paths.CODEX_ATLASSIAN_CONFIG, process.env.CODEX_ATLASSIAN_CONFIG);
+  } else {
+    const discovered = discoverAtlassianConfigPath(process.env);
+    if (discovered) assert.equal(paths.CODEX_ATLASSIAN_CONFIG, discovered);
+    else assert.equal(Object.hasOwn(paths, 'CODEX_ATLASSIAN_CONFIG'), false);
+  }
   assert.equal(Object.hasOwn(paths, 'CODEX_A2A_WORKSPACE_LOCK_DIR'), false);
   assert.match(paths.CODEX_A2A_STATE_DB, /runtime\/projects\/[a-f0-9]{64}\/state\.sqlite$/);
   assert.equal(JSON.parse(fs.readFileSync(paths.CODEX_PROJECT_CONFIG, 'utf8')).baseRef, 'main');
@@ -85,6 +92,29 @@ test('launch uses isolated paths, creates policy once, and stops only its owned 
   assert.equal(stopped.status, 'stopped');
   assert.equal(children[0].child.signalCode, 'SIGTERM');
   await fs.promises.rm(root, { recursive: true, force: true });
+});
+
+test('Atlassian config discovery honors explicit overrides and XDG or home defaults', () => {
+  const home = path.join(path.sep, 'home', 'operator');
+  const xdg = path.join(path.sep, 'custom', 'config');
+  assert.equal(atlassianConfigPath({}, home), path.join(home, '.config', 'orchestrator-atlassian', 'config.json'));
+  assert.equal(atlassianConfigPath({ XDG_CONFIG_HOME: xdg }, home), path.join(xdg, 'orchestrator-atlassian', 'config.json'));
+  assert.equal(atlassianConfigPath({ CODEX_ATLASSIAN_CONFIG: '/explicit/config.json', XDG_CONFIG_HOME: xdg }, home), '/explicit/config.json');
+  assert.equal(atlassianConfigPath({ CODEX_ATLASSIAN_CONFIG: '' }, home), '');
+});
+
+test('launcher only discovers an existing regular Atlassian config file', () => {
+  const home = temporary();
+  const env = {};
+  const config = path.join(home, '.config', 'orchestrator-atlassian', 'config.json');
+  assert.equal(discoverAtlassianConfigPath(env, home), null);
+  fs.mkdirSync(path.dirname(config), { recursive: true });
+  fs.writeFileSync(config, '{}\n');
+  assert.equal(discoverAtlassianConfigPath(env, home), config);
+  fs.rmSync(config);
+  fs.rmdirSync(path.dirname(config));
+  fs.rmdirSync(path.dirname(path.dirname(config)));
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test('existing operator policy is preserved and its baseRef is reported', async () => {

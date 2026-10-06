@@ -48,6 +48,15 @@ Stop such an instance before starting the project through the launcher.
 
 ## Requirements and errors
 
+For Atlassian, the launcher inherits `CODEX_ATLASSIAN_CONFIG` when explicitly
+set, including an empty value that disables the connector. Otherwise it uses an
+existing `orchestrator-atlassian/config.json` under an absolute `XDG_CONFIG_HOME`
+or `~/.config`. Missing default configuration leaves Atlassian optional.
+The server still validates the configuration and private credential files.
+Saved credentials are bound to the task repository; a different repository may
+require **Connect** again. Selected sites live in each project's state database,
+so a fresh launcher state may also require site selection.
+
 - Dependencies must be installed (`npm ci` after a fresh checkout).
 - Codex must be signed in with ChatGPT (`codex login status`).
 - The task repository must exist outside the application checkout.

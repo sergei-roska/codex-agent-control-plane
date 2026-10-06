@@ -320,3 +320,23 @@ Current local state: launcher on port 3100 and its dccourtscode child on port
 3000. The earlier manual dccourtscode process was stopped to free port 3000;
 its `.runtime/dccourtscode/` data remains intact. Operator instructions are in
 `docs/operations/launcher.md` and the README. No push or publication is authorized.
+
+## Atlassian launcher configuration checkpoint - 2026-10-06
+
+The owner reported that the previously tested Confluence connection was missing.
+The launcher inherited `CODEX_ATLASSIAN_CONFIG` only; plain startup therefore
+omitted the existing configuration when that variable was absent. It now discovers
+an existing standard user configuration under absolute `XDG_CONFIG_HOME` or
+`~/.config/orchestrator-atlassian/config.json`. Explicit overrides, including
+empty disable, retain precedence; absent defaults leave the connector optional.
+
+Read-only diagnosis found the existing configuration valid for dccourtscode on
+port 3000, but the saved token store read returned `credential_store_failed` for
+that workspace. Tokens are workspace-bound; a different prior workspace is a
+possible cause, not a proven diagnosis of this generic error. No credential
+write, OAuth handoff, or external request was performed. Fresh launcher state
+also has independent site selection. Owner reconnect/site selection may remain
+necessary after restarting the launcher. This session could not observe the
+previously running launcher or dashboard process; do not claim a live restart
+or restored connection. Focused launcher runtime/server checks, whitespace and
+protected dashboard reference checks passed.
