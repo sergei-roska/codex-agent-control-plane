@@ -833,50 +833,233 @@
       return '(' + hours + 'h ' + minutes + 'm)';
     }
 
-    async function fetchLimits(force = false) {
-      try {
-        const res = await fetch('/api/limits' + (force ? '?force=1' : ''));
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!data.success) return;
+    // ---- Accounts card
+    let accountLoginTimer = null;
+    let accountLoginId = null;
 
-        if (data.email) {
-          document.getElementById('accountEmail').innerText = data.email;
-        }
-        if (data.planType) {
-          document.getElementById('planTypeBadge').innerText = data.planType;
-          document.getElementById('accountType').innerText = data.planType;
-        }
-
-        if (data.primary) {
-          const used = data.primary.usedPercent !== undefined ? data.primary.usedPercent : 0;
-          const bar = document.getElementById('fiveHourBar');
-          const remaining = Math.max(0, Math.min(100, 100 - used));
-          bar.style.width = remaining + '%';
-          bar.className = 'progress-bar-fill' + (remaining < 15 ? ' danger' : remaining < 40 ? ' warning' : '');
-          document.getElementById('fiveHourVal').innerText = remaining + '% left';
-
-          if (data.primary.resetsAt) {
-            const date = new Date(data.primary.resetsAt * 1000);
-            document.getElementById('fiveHourReset').innerText = 'Resets at ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + formatResetCountdown(data.primary.resetsAt);
-          }
-        }
-
-        if (data.secondary) {
-          const used = data.secondary.usedPercent !== undefined ? data.secondary.usedPercent : 0;
-          const bar = document.getElementById('weeklyBar');
-          const remaining = Math.max(0, Math.min(100, 100 - used));
-          bar.style.width = remaining + '%';
-          bar.className = 'progress-bar-fill' + (remaining < 15 ? ' danger' : remaining < 40 ? ' warning' : '');
-          document.getElementById('weeklyVal').innerText = remaining + '% left';
-
-          if (data.secondary.resetsAt) {
-            const date = new Date(data.secondary.resetsAt * 1000);
-            document.getElementById('weeklyReset').innerText = 'Resets: ' + date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + formatResetCountdown(data.secondary.resetsAt);
-          }
-        }
-      } catch (_) {}
+    function accountsApi(method, url, body) {
+      return fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body)
+      }).then(async function (res) {
+        let data = {};
+        try { data = await res.json(); } catch (_) {}
+        if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        return data;
+      });
     }
+
+    function showAccountsError(message) {
+      const el = document.getElementById('accountsError');
+      el.textContent = message || '';
+      el.classList.toggle('hidden', !message);
+    }
+
+    function limitBlock(name, windowData, isWeekly) {
+      const item = document.createElement('div');
+      item.className = 'limit-item';
+      const info = document.createElement('div');
+      info.className = 'limit-info';
+      info.appendChild(textEl('span', 'limit-name', name));
+      const value = textEl('span', 'limit-value', '--');
+      info.appendChild(value);
+      item.appendChild(info);
+      const bg = document.createElement('div');
+      bg.className = 'progress-bar-bg';
+      const fill = document.createElement('div');
+      fill.className = 'progress-bar-fill';
+      fill.style.width = '0%';
+      bg.appendChild(fill);
+      item.appendChild(bg);
+      const reset = textEl('div', 'limit-reset', 'Reset: n/a');
+      item.appendChild(reset);
+      if (windowData) {
+        const used = windowData.usedPercent !== undefined ? windowData.usedPercent : 0;
+        const remaining = Math.max(0, Math.min(100, 100 - used));
+        fill.style.width = remaining + '%';
+        fill.className = 'progress-bar-fill' + (remaining < 15 ? ' danger' : remaining < 40 ? ' warning' : '');
+        value.textContent = remaining + '% left';
+        if (windowData.resetsAt) {
+          const date = new Date(windowData.resetsAt * 1000);
+          reset.textContent = isWeekly
+            ? 'Resets: ' + date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + formatResetCountdown(windowData.resetsAt)
+            : 'Resets at ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + formatResetCountdown(windowData.resetsAt);
+        }
+      }
+      return item;
+    }
+
+    function accountBlock(account, isSystem) {
+      const block = document.createElement('div');
+      block.className = 'account-block' + (account.active ? ' active' : '');
+      const head = document.createElement('div');
+      head.className = 'account-head';
+      const title = isSystem ? 'System account' : account.name;
+      head.appendChild(textEl('span', 'account-name', title + (account.email ? ' - ' + account.email : '')));
+      if (account.planType) head.appendChild(textEl('span', 'account-plan', account.planType));
+      if (account.active) head.appendChild(textEl('span', 'account-active', 'active'));
+      block.appendChild(head);
+      if (account.error) block.appendChild(textEl('div', 'limit-reset', 'Limits unavailable: ' + account.error));
+      block.appendChild(limitBlock('5-hour limit (5h)', account.primary, false));
+      block.appendChild(limitBlock('Weekly limit (Weekly)', account.secondary, true));
+
+      const actions = document.createElement('div');
+      actions.className = 'account-actions';
+      if (!account.active) {
+        const activate = textEl('button', 'terminal-btn', 'Activate');
+        activate.addEventListener('click', function () {
+          accountsApi('POST', '/api/accounts/' + (isSystem ? 'system' : encodeURIComponent(account.name)) + '/activate')
+            .then(function () { fetchAccounts(false); })
+            .catch(function (e) { showAccountsError(e.message); });
+        });
+        actions.appendChild(activate);
+      }
+      if (!isSystem && !account.active) {
+        const remove = textEl('button', 'terminal-btn', 'Remove');
+        remove.addEventListener('click', function () {
+          actions.textContent = '';
+          actions.appendChild(textEl('span', 'limit-reset', 'Remove?'));
+          const yes = textEl('button', 'terminal-btn', 'Yes');
+          yes.addEventListener('click', function () {
+            yes.disabled = true;
+            accountsApi('DELETE', '/api/accounts/' + encodeURIComponent(account.name))
+              .then(function () { fetchAccounts(false); })
+              .catch(function (e) { showAccountsError(e.message); fetchAccounts(false); });
+          });
+          const no = textEl('button', 'terminal-btn', 'No');
+          no.addEventListener('click', function () { fetchAccounts(false); });
+          actions.appendChild(yes);
+          actions.appendChild(no);
+        });
+        actions.appendChild(remove);
+      }
+      block.appendChild(actions);
+      return block;
+    }
+
+    function renderAccounts(data) {
+      const list = document.getElementById('accountsList');
+      list.textContent = '';
+      list.appendChild(accountBlock(data.system, true));
+      data.profiles.forEach(function (p) { list.appendChild(accountBlock(p, false)); });
+      document.getElementById('autoSwitchToggle').checked = !!data.autoSwitch;
+    }
+
+    async function fetchAccounts(force = false) {
+      try {
+        const data = await accountsApi('GET', '/api/accounts' + (force ? '?force=1' : ''));
+        showAccountsError('');
+        renderAccounts(data);
+      } catch (e) {
+        showAccountsError('Failed to load accounts: ' + e.message);
+      }
+    }
+
+    function stopAccountLoginPolling() {
+      if (accountLoginTimer) clearInterval(accountLoginTimer);
+      accountLoginTimer = null;
+      accountLoginId = null;
+    }
+
+    function resetAddArea() {
+      stopAccountLoginPolling();
+      const area = document.getElementById('accountAddArea');
+      area.textContent = '';
+      const btn = textEl('button', 'terminal-btn', 'Add account');
+      btn.id = 'accountAddBtn';
+      btn.addEventListener('click', openAddRow);
+      area.appendChild(btn);
+    }
+
+    function openAddRow() {
+      const area = document.getElementById('accountAddArea');
+      area.textContent = '';
+      const row = document.createElement('div');
+      row.className = 'account-add-row';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.id = 'accountNameInput';
+      input.placeholder = 'name (a-z, 0-9, -)';
+      input.maxLength = 32;
+      input.spellcheck = false;
+      input.setAttribute('aria-label', 'Account name');
+      row.appendChild(input);
+      const browser = textEl('button', 'terminal-btn', 'Sign in with browser');
+      const device = textEl('button', 'terminal-btn', 'Use device code');
+      const cancel = textEl('button', 'terminal-btn', 'Cancel');
+      browser.addEventListener('click', function () { startAccountLogin(input.value.trim(), 'browser'); });
+      device.addEventListener('click', function () { startAccountLogin(input.value.trim(), 'device'); });
+      cancel.addEventListener('click', resetAddArea);
+      row.appendChild(browser);
+      row.appendChild(device);
+      row.appendChild(cancel);
+      area.appendChild(row);
+      input.focus();
+    }
+
+    async function startAccountLogin(name, method) {
+      const area = document.getElementById('accountAddArea');
+      let started;
+      try {
+        started = await accountsApi('POST', '/api/accounts', { name: name, method: method });
+      } catch (e) {
+        showAccountsError(e.message);
+        return;
+      }
+      showAccountsError('');
+      area.textContent = '';
+      const box = document.createElement('div');
+      box.className = 'account-login';
+      if (started.authUrl) {
+        const link = textEl('a', 'account-link', 'Open login page');
+        link.href = started.authUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        box.appendChild(link);
+      } else {
+        const link = textEl('a', 'account-link', started.verificationUrl || '');
+        link.href = started.verificationUrl || '#';
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        box.appendChild(link);
+        box.appendChild(textEl('span', 'account-code', 'Code: ' + (started.userCode || '')));
+      }
+      const state = textEl('span', 'limit-reset', 'Waiting for sign-in...');
+      box.appendChild(state);
+      const cancel = textEl('button', 'terminal-btn', 'Cancel');
+      cancel.addEventListener('click', function () {
+        const id = accountLoginId;
+        resetAddArea();
+        if (id) accountsApi('POST', '/api/accounts/login/' + encodeURIComponent(id) + '/cancel').catch(function () {});
+      });
+      box.appendChild(cancel);
+      area.appendChild(box);
+
+      accountLoginId = started.loginId;
+      accountLoginTimer = setInterval(async function () {
+        const id = accountLoginId;
+        if (!id) return;
+        try {
+          const st = await accountsApi('GET', '/api/accounts/login/' + encodeURIComponent(id));
+          if (id !== accountLoginId || st.status === 'pending') return;
+          resetAddArea();
+          if (st.status === 'completed') fetchAccounts(true);
+          else showAccountsError('Login ' + st.status + (st.error ? ': ' + st.error : ''));
+        } catch (e) {
+          state.textContent = 'Status check failed: ' + e.message;
+        }
+      }, 2000);
+    }
+
+    document.getElementById('accountsRefreshBtn').addEventListener('click', function () { fetchAccounts(true); });
+    document.getElementById('accountAddBtn').addEventListener('click', openAddRow);
+    document.getElementById('autoSwitchToggle').addEventListener('change', function (ev) {
+      const box = ev.target;
+      accountsApi('POST', '/api/accounts/auto-switch', { enabled: box.checked })
+        .then(function () { showAccountsError(''); })
+        .catch(function (e) { box.checked = !box.checked; showAccountsError(e.message); });
+    });
 
     setInterval(updateStatus, 1000);
     setInterval(refreshProjects, 3000);
@@ -984,6 +1167,6 @@
     }
     loadTeam();
 
-    setInterval(fetchLimits, 30000);
-    fetchLimits();
+    setInterval(function () { if (!accountLoginId) fetchAccounts(false); }, 30000);
+    fetchAccounts();
   

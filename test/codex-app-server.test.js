@@ -1959,3 +1959,48 @@ test('codexHome sets CODEX_HOME in the spawn env; without it the options are unc
   assert.equal(seen[1].env.PATH, process.env.PATH);
   assert.equal(homed.getCodexHome(), '/tmp/a2a-profile-x');
 });
+
+test('loginStart, loginCancel and logout send the account RPCs', async (t) => {
+  const base = baseHandler();
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'account/login/start') {
+      return send({ id: request.id, result: { type: 'chatgpt', loginId: 'login-1', authUrl: 'https://example.com/auth' } });
+    }
+    return base(request, send);
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const started = await client.loginStart({ type: 'chatgpt' });
+  assert.equal(started.loginId, 'login-1');
+  assert.deepEqual(await client.loginCancel('login-1'), {});
+  assert.deepEqual(await client.logout(), {});
+  const sent = fake.getChild().sent;
+  assert.deepEqual(sent.find(({ method }) => method === 'account/login/start').params, { type: 'chatgpt' });
+  assert.deepEqual(sent.find(({ method }) => method === 'account/login/cancel').params, { loginId: 'login-1' });
+  assert.deepEqual(sent.find(({ method }) => method === 'account/logout').params, {});
+});
+
+test('onNotification receives unclaimed notifications, survives handler errors and unsubscribes', async (t) => {
+  let emit;
+  const base = baseHandler();
+  const fake = fakeSpawn((request, send) => {
+    emit = send;
+    return base(request, send);
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const seen = [];
+  client.onNotification('account/login/completed', () => { throw new Error('observer failure'); });
+  const off = client.onNotification('account/login/completed', (params) => seen.push(params));
+  await client.start();
+
+  emit({ method: 'account/login/completed', params: { loginId: 'login-1', success: true } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(seen, [{ loginId: 'login-1', success: true }]);
+
+  off();
+  emit({ method: 'account/login/completed', params: { loginId: 'login-2', success: false } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(seen.length, 1);
+});

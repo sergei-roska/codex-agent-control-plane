@@ -8,6 +8,7 @@ const Database = require('better-sqlite3');
 const { ClientFactory } = require('@a2a-js/sdk/client');
 const { parseCheckCommand } = require('./acceptance');
 const { CodexAppServer } = require('./codex-app-server');
+const { createAccountProfiles } = require('./account-profiles');
 const { loadRoles, createLeadRole } = require('./role-catalog');
 const { ProjectError } = require('./launcher-projects');
 const {
@@ -29,6 +30,10 @@ const ERROR_STATUS = {
   not_managed: 409,
   no_port: 503,
 };
+const LIMITS_TTL_MS = 30_000;
+const LOGIN_TIMEOUT_MS = 10 * 60_000;
+const SYSTEM_KEY = '__system__';
+const RESERVED_NAMES = new Set(['system']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function escapeHtml(s) {
@@ -49,10 +54,14 @@ function createLauncherApp({
   readAuthToken,
   createClient = (baseUrl) => new ClientFactory().createFromUrl(baseUrl, '/orchestrator/agent-card.json'),
   openTasksDb = (file, options) => new Database(file, options),
+  createAppServer = (options) => new CodexAppServer(options),
+  accountProfiles = createAccountProfiles(),
+  loginTimeoutMs = LOGIN_TIMEOUT_MS,
+  limitsTtlMs = LIMITS_TTL_MS,
 }) {
   const app = express();
-  let cachedLimits = null;
-  let lastLimitsFetch = 0;
+  const limitsCache = new Map();
+  const logins = new Map();
 
   app.use(express.json());
 
@@ -290,43 +299,231 @@ function createLauncherApp({
     }
   });
 
-  // API: Fetch 5h and weekly account limits via Codex App Server
+  // Reads email, plan and both limit windows with a short-lived App Server for one Codex home.
+  async function readLimits(home) {
+    const server = createAppServer({ cwd: process.cwd(), codexHome: home });
+    try {
+      const [data, accountData] = await Promise.all([
+        server.readRateLimits(),
+        server.getAccount().catch(() => null),
+      ]);
+      const r = data?.rateLimits;
+      if (!r) throw new Error('Rate limits unavailable');
+      return {
+        email: accountData?.account?.email || null,
+        planType: accountData?.account?.planType || r.planType || null,
+        primary: r.primary || null,    // 5h
+        secondary: r.secondary || null, // weekly
+      };
+    } finally {
+      await server.close().catch(() => {});
+    }
+  }
+
+  async function cachedLimits(key, home, force) {
+    const hit = limitsCache.get(key);
+    const now = Date.now();
+    if (!force && hit && now - hit.at < limitsTtlMs) return hit.value;
+    const value = await readLimits(home);
+    limitsCache.set(key, { at: now, value });
+    return value;
+  }
+
+  function activeKeyAndHome() {
+    const state = accountProfiles.read();
+    const profile = state.active ? state.profiles.find((p) => p.name === state.active) : null;
+    return profile ? { key: profile.name, home: profile.home } : { key: SYSTEM_KEY, home: null };
+  }
+
+  // API: Fetch 5h and weekly limits of the active account (system or active profile)
   app.get('/api/limits', async (req, res) => {
     const force = req.query.force === '1';
-    const now = Date.now();
-    if (!force && cachedLimits && (now - lastLimitsFetch < 30_000)) {
-      return res.json(cachedLimits);
-    }
-
+    const { key, home } = activeKeyAndHome();
     try {
-      const server = new CodexAppServer({ cwd: process.cwd() });
-      try {
-        const [data, accountData] = await Promise.all([
-          server.readRateLimits(),
-          server.getAccount().catch(() => null)
-        ]);
-        const r = data?.rateLimits;
-        if (r) {
-          cachedLimits = {
-            success: true,
-            email: accountData?.account?.email || null,
-            planType: accountData?.account?.planType || r.planType || 'plus',
-            primary: r.primary || null,    // 5h
-            secondary: r.secondary || null // weekly
-          };
-          lastLimitsFetch = now;
-          return res.json(cachedLimits);
-        }
-      } finally {
-        await server.close();
-      }
+      const v = await cachedLimits(key, home, force);
+      res.json({ success: true, email: v.email, planType: v.planType || 'plus', primary: v.primary, secondary: v.secondary });
     } catch (err) {
-      if (cachedLimits) return res.json(cachedLimits);
-      return res.status(500).json({ success: false, error: err.message });
+      const stale = limitsCache.get(key);
+      if (stale) {
+        const v = stale.value;
+        return res.json({ success: true, email: v.email, planType: v.planType || 'plus', primary: v.primary, secondary: v.secondary });
+      }
+      res.json({ success: false, primary: null, secondary: null });
     }
-
-    res.json({ success: false, primary: null, secondary: null });
   });
+
+  // API: Codex accounts (system account plus named profiles)
+  async function accountView(key, home, fallback, force) {
+    const view = { email: fallback.email || null, planType: fallback.planType || null, primary: null, secondary: null, error: null };
+    try {
+      const v = await cachedLimits(key, home, force);
+      view.email = v.email || view.email;
+      view.planType = v.planType || view.planType;
+      view.primary = v.primary;
+      view.secondary = v.secondary;
+    } catch (err) {
+      view.error = err.message || String(err);
+    }
+    return view;
+  }
+
+  app.get('/api/accounts', async (req, res) => {
+    try {
+      const force = req.query.force === '1';
+      const state = accountProfiles.read();
+      const [system, ...profiles] = await Promise.all([
+        accountView(SYSTEM_KEY, null, {}, force),
+        ...state.profiles.map((p) => accountView(p.name, p.home, p, force)),
+      ]);
+      res.json({
+        autoSwitch: state.autoSwitch,
+        system: { active: !state.active, ...system },
+        profiles: state.profiles.map((p, i) => ({ name: p.name, active: p.name === state.active, ...profiles[i] })),
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message || String(err) });
+    }
+  });
+
+  function removeUnfinishedHome(name) {
+    try { fs.rmSync(path.join(accountProfiles.accountsDir, name), { recursive: true, force: true }); } catch (_) { /* best effort */ }
+  }
+
+  // Ends a pending login: stops the timer and observer, closes the server. Returns false if already ended.
+  async function endLogin(entry, status, error, { cancel = false } = {}) {
+    if (entry.status !== 'pending' || entry.ending) return false;
+    entry.ending = true;
+    clearTimeout(entry.timer);
+    entry.unsubscribe?.();
+    if (status === 'completed') {
+      try {
+        const info = await entry.server.getAccount().catch(() => null);
+        accountProfiles.addProfile({ name: entry.name, email: info?.account?.email || null, planType: info?.account?.planType || null });
+      } catch (err) {
+        status = 'failed';
+        error = err.message || String(err);
+        removeUnfinishedHome(entry.name);
+      }
+    } else {
+      if (cancel && entry.loginId) await entry.server.loginCancel(entry.loginId).catch(() => {});
+      removeUnfinishedHome(entry.name);
+    }
+    await entry.server.close().catch(() => {});
+    entry.status = status;
+    if (error) entry.error = error;
+    return true;
+  }
+
+  function handleLoginCompleted(entry, params) {
+    if (params.success) endLogin(entry, 'completed');
+    else endLogin(entry, 'failed', params.error || 'Login failed');
+  }
+
+  app.post('/api/accounts', async (req, res) => {
+    const name = req.body && req.body.name;
+    const method = req.body && req.body.method;
+    if (!accountProfiles.validateName(name) || RESERVED_NAMES.has(name)) {
+      return res.status(400).json({ success: false, error: 'Name must match [a-z0-9-]{1,32} and not be reserved' });
+    }
+    if (method !== 'browser' && method !== 'device') {
+      return res.status(400).json({ success: false, error: 'method must be browser or device' });
+    }
+    if (accountProfiles.read().profiles.some((p) => p.name === name)
+      || [...logins.values()].some((l) => l.name === name && l.status === 'pending')) {
+      return res.status(409).json({ success: false, error: 'Account already exists: ' + name });
+    }
+    const entry = { name, status: 'pending', loginId: null, early: null, server: null, timer: null, unsubscribe: null };
+    let home;
+    try {
+      home = accountProfiles.ensureProfileHome(name);
+      entry.server = createAppServer({ cwd: process.cwd(), codexHome: home });
+      entry.unsubscribe = entry.server.onNotification('account/login/completed', (params) => {
+        if (!entry.loginId) entry.early = params;
+        else if (params.loginId === entry.loginId) handleLoginCompleted(entry, params);
+      });
+      const result = await entry.server.loginStart(method === 'device' ? { type: 'chatgptDeviceCode' } : { type: 'chatgpt' });
+      entry.loginId = result.loginId;
+      logins.set(entry.loginId, entry);
+      entry.timer = setTimeout(() => { endLogin(entry, 'expired', 'Login timed out', { cancel: true }); }, loginTimeoutMs);
+      entry.timer.unref?.();
+      if (entry.early && entry.early.loginId === entry.loginId) handleLoginCompleted(entry, entry.early);
+      const body = { success: true, loginId: entry.loginId };
+      if (method === 'device') {
+        body.verificationUrl = result.verificationUrl;
+        body.userCode = result.userCode;
+      } else body.authUrl = result.authUrl;
+      res.json(body);
+    } catch (err) {
+      entry.unsubscribe?.();
+      removeUnfinishedHome(name);
+      try { await entry.server?.close(); } catch (_) { /* best effort */ }
+      res.status(500).json({ success: false, error: err.message || String(err) });
+    }
+  });
+
+  app.get('/api/accounts/login/:loginId', (req, res) => {
+    const entry = logins.get(req.params.loginId);
+    if (!entry) return res.status(404).json({ success: false, error: 'Unknown login' });
+    const body = { status: entry.status };
+    if (entry.error) body.error = entry.error;
+    if (entry.status === 'completed') body.name = entry.name;
+    res.json(body);
+  });
+
+  app.post('/api/accounts/login/:loginId/cancel', async (req, res) => {
+    const entry = logins.get(req.params.loginId);
+    if (!entry) return res.status(404).json({ success: false, error: 'Unknown login' });
+    await endLogin(entry, 'failed', 'Cancelled', { cancel: true });
+    const body = { status: entry.status };
+    if (entry.error) body.error = entry.error;
+    res.json(body);
+  });
+
+  app.post('/api/accounts/auto-switch', (req, res) => {
+    const enabled = req.body && req.body.enabled;
+    if (typeof enabled !== 'boolean') return res.status(400).json({ success: false, error: 'enabled must be a boolean' });
+    res.json({ success: true, autoSwitch: accountProfiles.setAutoSwitch(enabled).autoSwitch });
+  });
+
+  app.post('/api/accounts/system/activate', (req, res) => {
+    accountProfiles.setActive(null);
+    res.json({ success: true, active: null });
+  });
+
+  app.post('/api/accounts/:name/activate', (req, res) => {
+    const name = req.params.name;
+    if (!accountProfiles.read().profiles.some((p) => p.name === name)) {
+      return res.status(404).json({ success: false, error: 'Unknown account: ' + name });
+    }
+    accountProfiles.setActive(name);
+    res.json({ success: true, active: name });
+  });
+
+  app.delete('/api/accounts/:name', async (req, res) => {
+    const name = req.params.name;
+    const state = accountProfiles.read();
+    const profile = state.profiles.find((p) => p.name === name);
+    if (!profile) return res.status(404).json({ success: false, error: 'Unknown account: ' + name });
+    if (state.active === name) return res.status(409).json({ success: false, error: 'Cannot remove the active account' });
+    try {
+      const server = createAppServer({ cwd: process.cwd(), codexHome: profile.home });
+      try {
+        await server.logout();
+      } catch (_) { /* best effort: the profile is removed anyway */ } finally {
+        await server.close().catch(() => {});
+      }
+      accountProfiles.removeProfile(name);
+      limitsCache.delete(name);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message || String(err) });
+    }
+  });
+
+  // Closes every pending login server; called by the launcher on shutdown.
+  app.closeAccountLogins = async () => {
+    await Promise.all([...logins.values()].filter((l) => l.status === 'pending').map((l) => endLogin(l, 'failed', 'Launcher stopped')));
+  };
 
   return app;
 }

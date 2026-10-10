@@ -74,47 +74,21 @@
         <div class="terminal-body" id="serverLogsBody">Orchestrator is not running.</div>
       </div>
 
-      <!-- Usage limits widget (5h and weekly) -->
-      <div class="limits-card">
+      <!-- Accounts card: one block per Codex account with 5h and weekly limits -->
+      <div class="limits-card" id="accountsCard">
         <div class="limits-header">
-          <div class="limits-title">
-            <span>📊</span> Account Limits (<span id="planTypeBadge" style="text-transform: capitalize; color: var(--primary);">ChatGPT</span>)
-          </div>
-          <button class="terminal-btn" onclick="fetchLimits(true)" title="Refresh limits">↻ Refresh</button>
+          <div class="limits-title">Accounts</div>
+          <button class="terminal-btn" id="accountsRefreshBtn" title="Refresh limits">Refresh</button>
         </div>
-
-        <!-- Active account information -->
-        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; padding: 6px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-family: 'JetBrains Mono', monospace;">
-          <div style="display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            <span>👤</span>
-            <span id="accountEmail" style="color: var(--text-main);">loading...</span>
-          </div>
-          <span id="accountType" style="color: var(--primary); text-transform: uppercase; font-size: 10px; font-weight: 600;">OAuth</span>
+        <div id="accountsList" class="accounts-list">Loading...</div>
+        <div class="limit-reset hidden" id="accountsError"></div>
+        <div id="accountAddArea" class="account-add">
+          <button class="terminal-btn" id="accountAddBtn">Add account</button>
         </div>
-
-        <!-- 5h limit -->
-        <div class="limit-item">
-          <div class="limit-info">
-            <span class="limit-name">5-hour limit (5h)</span>
-            <span class="limit-value" id="fiveHourVal">--</span>
-          </div>
-          <div class="progress-bar-bg">
-            <div class="progress-bar-fill" id="fiveHourBar" style="width: 0%;"></div>
-          </div>
-          <div class="limit-reset" id="fiveHourReset">Reset: loading...</div>
-        </div>
-
-        <!-- Weekly limit -->
-        <div class="limit-item">
-          <div class="limit-info">
-            <span class="limit-name">Weekly limit (Weekly)</span>
-            <span class="limit-value" id="weeklyVal">--</span>
-          </div>
-          <div class="progress-bar-bg">
-            <div class="progress-bar-fill" id="weeklyBar" style="width: 0%;"></div>
-          </div>
-          <div class="limit-reset" id="weeklyReset">Reset: loading...</div>
-        </div>
+        <label class="account-toggle">
+          <input type="checkbox" id="autoSwitchToggle">
+          <span>Auto-switch when a limit is reached</span>
+        </label>
       </div>
       <div class="about-card">
         <div class="limits-title">

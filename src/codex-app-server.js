@@ -133,6 +133,7 @@ class CodexAppServer {
   } = {}) {
     this.codexPath = codexPath;
     this.codexHome = codexHome || null;
+    this.notificationHandlers = new Map();
     this.spawnImpl = spawnImpl;
     this.requestTimeoutMs = requestTimeoutMs;
     this.turnTimeoutMs = resolveTurnTimeoutMs(turnTimeoutMs);
@@ -533,6 +534,37 @@ class CodexAppServer {
       account: sanitizeAccount(result.account),
       requiresOpenaiAuth: Boolean(result.requiresOpenaiAuth),
     };
+  }
+
+  async loginStart(params) {
+    await this.start();
+    return this._request('account/login/start', params);
+  }
+
+  async loginCancel(loginId) {
+    await this.start();
+    return this._request('account/login/cancel', { loginId });
+  }
+
+  async logout() {
+    await this.start();
+    return this._request('account/logout', {});
+  }
+
+  // Observes notifications that no run claims (for example account/login/completed).
+  onNotification(method, handler) {
+    let handlers = this.notificationHandlers.get(method);
+    if (!handlers) this.notificationHandlers.set(method, handlers = new Set());
+    handlers.add(handler);
+    return () => { handlers.delete(handler); };
+  }
+
+  _dispatchNotification(message) {
+    const handlers = this.notificationHandlers.get(message.method);
+    if (!handlers) return;
+    for (const handler of [...handlers]) {
+      try { handler(message.params || {}, message); } catch (_) { /* Observers must not disturb the protocol loop. */ }
+    }
   }
 
   async listHooks(cwd) {
@@ -1057,7 +1089,9 @@ class CodexAppServer {
       if (message.method === 'item/agentMessage/delta') run.text += params.delta || '';
       try { recordPermissionEvent(run.ctx, message.method, params); } catch (_) { /* Provenance capture is best effort. */ }
       this._emit(run, message);
+      return;
     }
+    this._dispatchNotification(message);
   }
 
   _declineServerRequest(message) {
