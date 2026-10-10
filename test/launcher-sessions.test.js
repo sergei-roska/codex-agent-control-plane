@@ -220,3 +220,59 @@ test('deleteLeadTask removes the run evidence and keeps another run', async (t) 
   assert.equal(store.listByRun('t2').length, 0);
   assert.deepEqual(store.listByRun('t1').map((r) => r.id), [keep.id]);
 });
+
+const LIVE_ACTIVITY_DDL = `CREATE TABLE IF NOT EXISTS live_activity (
+  key TEXT PRIMARY KEY, run_id TEXT, role TEXT NOT NULL, started_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL, ended_at TEXT, phase TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
+  commands INTEGER NOT NULL DEFAULT 0, file_changes INTEGER NOT NULL DEFAULT 0)`;
+
+test('activity is null and nothing fails when live_activity is absent', async (t) => {
+  const db = await fixture(t, CHAIN);
+  journal(db, 't1', 'att-1', 'w1');
+  const view = getSession(db, 'ctx-a').turns[0];
+  assert.equal(view.workers[0].activity, null);
+  assert.equal(view.workers[0].created_at, '2026-01-01');
+  assert.equal(view.leadActivity, null);
+  deleteSession(db, 'ctx-a');
+});
+
+test('worker activity and leadActivity are mapped from live_activity; delete removes rows', async (t) => {
+  const db = await fixture(t, CHAIN);
+  db.exec(LIVE_ACTIVITY_DDL);
+  journal(db, 't1', 'att-1', 'w1');
+  journal(db, 't1', 'att-2', 'w2');
+  const ins = db.prepare(`INSERT INTO live_activity
+    (key, run_id, role, started_at, updated_at, ended_at, phase, summary, commands, file_changes)
+    VALUES (?, 't1', ?, 's', 'u', ?, ?, ?, ?, ?)`);
+  ins.run('w1', 'reviewer', null, 'command', 'npm test', 3, 1);
+  ins.run('lead:t1', 'coordinator', null, 'thinking', '', 0, 0);
+  ins.run('lead:t2', 'coordinator', 'e', 'done', '', 0, 0);
+  const view = getSession(db, 'ctx-a').turns[0];
+  assert.deepEqual(view.workers[0].activity, {
+    phase: 'command', summary: 'npm test', startedAt: 's', updatedAt: 'u', endedAt: null, commands: 3, fileChanges: 1,
+  });
+  assert.equal(view.workers[1].activity, null);
+  assert.equal(view.leadActivity.phase, 'thinking');
+  assert.equal(getSession(db, 'ctx-a').turns[1].leadActivity.endedAt, 'e');
+  deleteSession(db, 'ctx-a');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM live_activity').get().n, 0);
+});
+
+test('worker objective is extracted from the worker task first user message', async (t) => {
+  const json = JSON.stringify({ role: 'explorer', objective: 'Map the exit gate', allowedFiles: [] });
+  const db = await fixture(t, CHAIN, [
+    lead('w1', 'wc-1', DONE, json, '2026-01-01T00:00:00.000Z'),
+    lead('w2', 'wc-2', DONE, 'plain text assignment', '2026-01-01T00:00:00.000Z'),
+  ]);
+  journal(db, 't1', 'att-1', 'w1');
+  journal(db, 't1', 'att-2', 'w2');
+  journal(db, 't1', 'att-3', 'missing');
+  journal(db, 't1', 'att-4', 'w1');
+  db.prepare("UPDATE dispatch_journal SET state = 'submitted' WHERE attempt_id IN ('att-1','att-2','att-3')").run();
+  const all = getSession(db, 'ctx-a').turns[0].workers;
+  assert.equal(all[3].objective, null);
+  const workers = all;
+  assert.equal(workers[0].objective, 'Map the exit gate');
+  assert.equal(workers[1].objective, 'plain text assignment');
+  assert.equal(workers[2].objective, null);
+});

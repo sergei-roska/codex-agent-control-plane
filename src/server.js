@@ -12,6 +12,7 @@ const { LeadOrchestrator, ResumeInputError } = require('./lead-orchestrator');
 const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
 const { WriterAdmission } = require('./writer-admission');
 const { UsageLedger } = require('./usage-ledger');
+const { createActivityStore } = require('./activity-store');
 const { createEvidenceStore } = require('./evidence-store');
 const { validateAcceptanceContract, formatAcceptance, invalidAcceptanceContract } = require('./acceptance');
 const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
@@ -610,13 +611,14 @@ async function startServer({
     const leadRole = createLeadRole(profilesDir ? { profilesDir } : undefined);
     const usageLedger = new UsageLedger({ db: state.db });
     const evidenceStore = createEvidenceStore(state.db);
+    const activityStore = createActivityStore(state.db);
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog,
-      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, evidenceStore,
+      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, activityStore, evidenceStore,
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
-      roles, appServer, workspace, baseUrl, admission, usageLedger, skillCatalog,
+      roles, appServer, workspace, baseUrl, admission, usageLedger, activityStore, skillCatalog,
       taskStoreFactory: (roleId) => createTaskStore(state, roleId),
     });
     const leadAgent = registerLead(app, {

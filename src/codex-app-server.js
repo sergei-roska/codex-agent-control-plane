@@ -8,7 +8,7 @@ const { classifyCodexError } = require('./contracts');
 const { DEFAULT_SKILLS_ROOT } = require('./skill-catalog');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
-const DEFAULT_TURN_TIMEOUT_MS = 600_000;
+const DEFAULT_TURN_TIMEOUT_MS = 3_600_000;
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 10_000;
 const MCP_ENUMERATION_TIMEOUT_MS = 15_000;
 const TOKEN_FIELDS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens', 'totalTokens'];

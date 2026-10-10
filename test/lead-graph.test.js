@@ -13,6 +13,7 @@ const { UsageLedger } = require('../src/usage-ledger');
 const { loadSkillCatalog } = require('../src/skill-catalog');
 const { invalidAcceptanceContract } = require('../src/acceptance');
 const { createEvidenceStore } = require('../src/evidence-store');
+const { createActivityStore } = require('../src/activity-store');
 const { boundedOutcomes } = require('../src/lead-graph');
 const {
   DispatchJournal, openStateDatabase, assignmentId, attemptId, deterministicContextId,
@@ -220,6 +221,7 @@ class Session {
       reconcileWaitMs: 20,
       ...(this.options.withEvidence ? { evidenceStore: this.evidenceStore = createEvidenceStore(this.state.db) } : {}),
       ...(this.options.withLedger ? { usageLedger: new UsageLedger({ db: this.state.db }) } : {}),
+      ...(this.options.withActivity ? { activityStore: createActivityStore(this.state.db) } : {}),
       ...(this.options.orchestrator || {}),
     });
     return this;
@@ -1260,6 +1262,16 @@ test('a lead turn that throws with usage is recorded and a ledger failure never 
   }, { orchestrator: { usageLedger: broken } });
 });
 
+test('the lead turn records live activity under lead:<runId> and ends it', async () => {
+  const world = makeWorld({ script: [finish('Done')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const row = session.state.db.prepare('SELECT * FROM live_activity WHERE key = ?').get(`lead:${RUN_ID}`);
+    assert.deepEqual([row.run_id, row.role, row.phase, row.ended_at !== null], [RUN_ID, 'coordinator', 'done', true]);
+  }, { withActivity: true });
+});
+
 // ----------------------------------------------------- serial batch gap
 
 test('an unsettled writer in a serial batch skips the remaining writers and reconcile runs', async () => {
@@ -1384,7 +1396,7 @@ test('a bare dot in allowedFiles of a read-only role is normalized away and does
   });
 });
 
-test('a rejected decision is fed back to the lead, keeps the thread, and is not an outcome', async () => {
+test('a rejected decision is fed back to the lead, keeps the thread for the retry, and is not an outcome', async () => {
   const threads = [];
   const lead = (text) => (args) => { threads.push(args.threadId); return text; };
   const world = makeWorld({
@@ -1402,7 +1414,34 @@ test('a rejected decision is fed back to the lead, keeps the thread, and is not 
     assert.match(world.prompts[1], /assignment\.paths path_glob_unsupported/);
     assert.match(world.prompts[1], /without '\.', '\.\.', globs/);
     assert.doesNotMatch(world.prompts[2], /Rejected decision:/);
-    assert.deepEqual(threads, [undefined, 'lead-thread', 'lead-thread']);
+    assert.deepEqual(threads, [undefined, 'lead-thread', undefined]);
+  });
+});
+
+test('a normal second round starts a fresh lead thread and a rejection emits decision_rejected', async () => {
+  const threads = [];
+  const events = [];
+  const lead = (text) => (args) => { threads.push(args.threadId); return text; };
+  const world = makeWorld({
+    script: [lead(dispatch(brief('orch-builder', ['src/*']))), lead(dispatch(brief('orch-builder'))), lead(finish('Fixed'))],
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, onEvent: (event) => events.push(event) });
+    assert.equal(result.status, 'completed');
+    const rejected = events.filter((event) => event.type === 'decision_rejected');
+    assert.equal(rejected.length, 1);
+    assert.equal(rejected[0].round, 1);
+    assert.ok(rejected[0].violations.some((violation) => violation.code === 'path_glob_unsupported'));
+    assert.deepEqual(Object.keys(rejected[0].violations[0]).sort(), ['code', 'detail', 'predicate']);
+  });
+  const plain = [];
+  const world2 = makeWorld({
+    script: [(args) => { plain.push(args.threadId); return dispatch(brief('orch-builder')); }, (args) => { plain.push(args.threadId); return finish('Done'); }],
+  });
+  await withSession(world2, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(plain, [undefined, undefined]);
   });
 });
 

@@ -227,8 +227,21 @@ function preTurnUsageEntry({ roleId, taskId, contextId, outcome, retries, elapse
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Best-effort lead run id for the activity row: message metadata, else a top-level JSON field.
+function activityRunId(requestContext, input) {
+  const direct = requestContext?.userMessage?.metadata?.runId;
+  if (typeof direct === 'string' && direct) return direct;
+  try {
+    const value = typeof input === 'string' && input.trimStart().startsWith('{') ? JSON.parse(input) : null;
+    const runId = value?.runId ?? value?.assignment?.runId;
+    return typeof runId === 'string' && runId ? runId : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function makeExecutor({
-  roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, skillCatalog,
+  roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, activityStore = null, skillCatalog,
 }) {
   const writable = role.sandbox !== 'read-only';
   const reservations = new Map();
@@ -490,6 +503,9 @@ function makeExecutor({
         }
         let result;
         let runError = null;
+        const activity = activityStore?.begin({
+          key: taskId, runId: activityRunId(requestContext, input), role: canonicalRoleId(roleId),
+        });
         try {
           result = await appServer.run({
             role: { id: roleId, ...role },
@@ -499,9 +515,14 @@ function makeExecutor({
             outputSchema: WORKER_REPORT_SCHEMA,
             signal: controller.signal,
             ...(execution ? { onTurnStart: (info) => admission.recordTurnStart(execution.executionId, info) } : {}),
+            ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
           });
         } catch (error) {
           runError = error;
+        } finally {
+          activity?.end(runError
+            ? (controller.signal.aborted ? 'canceled' : 'failed')
+            : controller.signal.aborted ? 'canceled' : String(result?.status ?? 'unknown'));
         }
         recordUsage(runError || result, runError
           ? (controller.signal.aborted ? 'canceled' : runError.outcomeUnknown === true ? 'interrupted' : 'failed')
@@ -654,7 +675,7 @@ function rejectOverlappingTask(executor) {
 
 /** Mount one independently stored A2A JSON-RPC agent per role. */
 function registerRoleAgents(app, {
-  roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger,
+  roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger, activityStore,
   skillCatalog = loadSkillCatalog(),
 }) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
@@ -678,7 +699,9 @@ function registerRoleAgents(app, {
     const route = `/agents/${roleId}`;
     const endpoint = new URL(route, `${origin.origin}/`).toString();
     const card = makeRoleCard({ roleId, role, endpoint });
-    const executor = makeExecutor({ roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, skillCatalog });
+    const executor = makeExecutor({
+      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog,
+    });
     const handler = new DefaultRequestHandler(
       card,
       taskStoreFactory(legacyRoleId(roleId)),

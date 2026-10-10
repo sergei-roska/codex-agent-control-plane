@@ -1006,3 +1006,60 @@ test('legacy plain text keeps running with boundary legacy and no predicate reco
   assert.equal(meta.contract, null);
   assert.ok(meta.reportError);
 });
+
+test('records live activity for a worker turn and ends it on success and error', async () => {
+  const { createActivityStore } = require('../src/activity-store');
+  const db = new Database(':memory:');
+  const activityStore = createActivityStore(db);
+  const rows = () => db.prepare('SELECT * FROM live_activity').all();
+  let mode = 'ok';
+  const { agents, context } = makeService({
+    async run({ onEvent }) {
+      assert.equal(rows()[rows().length - 1].phase, 'starting');
+      onEvent({ method: 'item/completed', params: { item: { type: 'commandExecution', command: 'ls', exitCode: 0 } } });
+      if (mode === 'error') throw new Error('boom');
+      return { threadId: 't', turnId: 'u', status: 'completed', text: 'done' };
+    },
+  }, { activityStore });
+  const handler = agents.get('orch-planner').handler;
+  const ok = taskResult(await handler.sendMessage(sendParams(message('work')), context));
+  let row = db.prepare('SELECT * FROM live_activity WHERE key = ?').get(ok.id);
+  assert.deepEqual([row.role, row.phase, row.summary, row.ended_at !== null], ['orch-planner', 'done', 'completed', true]);
+
+  mode = 'error';
+  const failed = taskResult(await handler.sendMessage(sendParams(message('work')), context));
+  row = db.prepare('SELECT * FROM live_activity WHERE key = ?').get(failed.id);
+  assert.deepEqual([row.phase, row.summary, row.ended_at !== null], ['done', 'failed', true]);
+});
+
+test('ends the live activity of a canceled worker turn', async () => {
+  const { createActivityStore } = require('../src/activity-store');
+  const db = new Database(':memory:');
+  const activityStore = createActivityStore(db);
+  let started;
+  const runStarted = new Promise((resolve) => { started = resolve; });
+  const { agents, context } = makeService({
+    run({ signal }) {
+      started();
+      return new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      });
+    },
+  }, { activityStore });
+  const handler = agents.get('orch-planner').handler;
+  const created = taskResult(await handler.sendMessage(sendParams(message('wait'), { returnImmediately: true }), context));
+  await runStarted;
+  assert.equal(db.prepare('SELECT ended_at FROM live_activity WHERE key = ?').get(created.id).ended_at, null);
+  await handler.cancelTask({ id: created.id }, context);
+  let row;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    row = db.prepare('SELECT * FROM live_activity WHERE key = ?').get(created.id);
+    if (row.phase === 'done') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual([row.phase, row.summary, row.ended_at !== null], ['done', 'canceled', true]);
+});

@@ -529,7 +529,7 @@ const LeadState = Annotation.Root({
  *   cancelUntilConfirmed(client, taskId, contextId) -> terminal task,
  *   emit(onEvent, event), checkpointer?,
  *   admission?: WriterAdmission, reconcileWaitMs?: number,
- *   usageLedger?: UsageLedger, evidenceStore?: EvidenceStore, runCheckImpl?, snapshot?,
+ *   usageLedger?: UsageLedger, activityStore?: ActivityStore, evidenceStore?: EvidenceStore, runCheckImpl?, snapshot?,
  * }
  * Returns the compiled graph when deps.checkpointer is given, else the StateGraph.
  */
@@ -792,21 +792,30 @@ function buildLeadGraph(deps) {
     const skillNames = [...skillCatalog.values()].map(({ id, name }) => ({ id, name }));
     const candidateIds = skillNames.map(({ id }) => id);
     let leadResult;
+    const activity = deps.activityStore?.begin({ key: `lead:${state.runId}`, runId: state.runId, role: 'coordinator' });
+    let activityOutcome = 'failed';
     try {
       leadResult = await appServer.run({
         role: leadRole,
         cwd: workspace,
         input: decisionPrompt(state, { notes, skillCandidates, skillNames }),
-        ...(state.threadId ? { threadId: state.threadId } : {}),
+        // Each round's prompt is self-contained; resuming the thread duplicated it and grew the
+        // context every round. Only a retry after a rejected decision continues the same thread.
+        ...(state.retryDecide && state.threadId ? { threadId: state.threadId } : {}),
         outputSchema: DECISION_SCHEMA,
         signal,
+        ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
       });
+      activityOutcome = String(leadResult?.status ?? 'completed');
     } catch (error) {
+      activityOutcome = signal?.aborted ? 'canceled' : 'failed';
       const kind = error?.name === 'AbortError' && signal?.aborted ? 'aborted' : classifyCodexError(error) === 'usage_limit' ? 'usage_limit' : 'error';
       if (error?.usage || error?.execution) recordLeadTurn(state, error, kind);
       if (kind === 'aborted') return { ...update, status: 'canceled', text: CANCELED_TEXT };
       if (kind === 'usage_limit') return { ...update, budget: { source: 'lead' } };
       throw error;
+    } finally {
+      activity?.end(activityOutcome);
     }
     update.threadId = leadResult.threadId || state.threadId;
     recordLeadTurn(state, leadResult, leadResult.status || 'completed');
@@ -843,6 +852,11 @@ function buildLeadGraph(deps) {
     } catch (error) {
       if (!(error instanceof BoundaryViolation)) throw error;
       const consecutive = priorRejections + 1;
+      deps.emit(runtime.onEvent, {
+        type: 'decision_rejected',
+        round: state.round + 1,
+        violations: error.violations.map(({ predicate, code, detail }) => ({ predicate, code, detail })),
+      });
       if (consecutive > MAX_AUTO_REJECTIONS) {
         const codes = [...new Set([...(state.retryDecide ? (state.rejections.at(-1)?.violations || []) : []), ...error.violations].map((entry) => entry.code))];
         throw new Error(`Lead decision rejected ${consecutive} times in a row (${codes.join(', ')}): ${error.message}`, { cause: error });

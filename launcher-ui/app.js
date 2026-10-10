@@ -105,6 +105,7 @@
       renderSignature = '';
       setSessionParam(id);
       renderTranscript();
+      updateTeamLeds();
     }
 
     function resetSessionView() {
@@ -357,10 +358,65 @@
       return 'Acceptance: ' + (disposition || 'n/a');
     }
 
+    const PHASE_LABELS = {
+      starting: 'starting', thinking: 'thinking', command: 'running', editing: 'editing',
+      tool: 'tool call', reporting: 'writing report', done: 'done'
+    };
+
+    function phaseLabel(phase) {
+      return PHASE_LABELS[phase] || String(phase || '');
+    }
+
+    function fmtSpan(ms) {
+      const total = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      if (h > 0) return h + 'h ' + String(m).padStart(2, '0') + 'm';
+      if (m > 0) return m + 'm ' + s + 's';
+      return s + 's';
+    }
+
+    function spanBetween(from, to) {
+      const a = typeof from === 'number' ? from : Date.parse(from);
+      const b = typeof to === 'number' ? to : Date.parse(to);
+      return fmtSpan(b - a);
+    }
+
+    function isActiveWorker(w) {
+      return w.state === 'submitting' || w.state === 'submitted';
+    }
+
+    function activityDetail(a) {
+      let text = phaseLabel(a.phase);
+      if (a.summary) text += ': ' + a.summary;
+      return text;
+    }
+
+    function workerLines(w, now) {
+      const a = w.activity || null;
+      const startedAt = (a && a.startedAt) || w.created_at;
+      const lines = [];
+      const duration = isActiveWorker(w)
+        ? spanBetween(startedAt, now)
+        : spanBetween(startedAt, (a && a.endedAt) || w.updated_at);
+      lines.push('  [' + w.state + '] ' + roleDisplayName(w.role) + ' - ' + duration);
+      if (w.objective && isActiveWorker(w)) {
+        const obj = String(w.objective);
+        lines.push('      task: ' + (obj.length > 160 ? obj.slice(0, 157) + '...' : obj));
+      }
+      if (a && isActiveWorker(w)) {
+        lines.push('      ' + activityDetail(a) + ' | ' + (a.commands || 0) + ' commands, '
+          + (a.fileChanges || 0) + ' file edits | last event ' + spanBetween(a.updatedAt, now) + ' ago');
+      }
+      return lines;
+    }
+
     function leadBubble(turn) {
       const t = turn.leadTask;
       const workers = turn.workers || [];
       const state = t.state;
+      const now = Date.now();
       const bubble = document.createElement('div');
       bubble.className = 'bubble bubble-lead';
       const head = document.createElement('div');
@@ -372,7 +428,12 @@
         head.appendChild(textEl('span', '', 'working'));
         body = 'Lead analyzes the goal, creates assignments, and coordinates specialists...';
         if (workers.length) {
-          body += '\n\nRound specialists:\n' + workers.map(w => '  [' + w.state + '] ' + roleDisplayName(w.role)).join('\n');
+          body += '\n\nRound specialists:\n' + workers.flatMap(w => workerLines(w, now)).join('\n');
+        }
+        const la = turn.leadActivity;
+        if (la && !la.endedAt && !workers.some(isActiveWorker)) {
+          body += '\n\nLead: ' + activityDetail(la) + ' - ' + spanBetween(la.startedAt, now)
+            + ' | last event ' + spanBetween(la.updatedAt, now) + ' ago';
         }
       } else if (isPausedState(state)) {
         head.appendChild(textEl('span', '', 'paused'));
@@ -444,7 +505,11 @@
     function renderTranscript() {
       const transcript = document.getElementById('transcript');
       const turns = (sessionData && sessionData.turns) || [];
-      const signature = JSON.stringify([currentSessionId, sessionData, pendingTurn && pendingTurn.goal]);
+      const lastTurnRow = turns[turns.length - 1];
+      const working = Boolean(lastTurnRow)
+        && (lastTurnRow.leadTask.state === 'TASK_STATE_WORKING' || lastTurnRow.leadTask.state === 2);
+      const tick = working ? Math.floor(Date.now() / 5000) : 0;
+      const signature = JSON.stringify([currentSessionId, sessionData, pendingTurn && pendingTurn.goal, tick]);
       updateStatusBar();
       updateDecisionCard();
       updateComposer();
@@ -492,6 +557,7 @@
         sessionData = data;
         if (pendingTurn && data.turns.length > pendingTurn.baseTurns) pendingTurn = null;
         renderTranscript();
+        updateTeamLeds();
       } catch (_) {}
     }
 
@@ -817,8 +883,15 @@
     function addAboutRow(list, agent, isLead) {
       const row = document.createElement('div');
       row.className = 'about-role';
+      row.dataset.role = canonicalRoleId(agent.name);
       const head = document.createElement('div');
       head.className = 'about-role-head';
+      const led = document.createElement('span');
+      led.className = 'agent-led';
+      led.setAttribute('role', 'img');
+      led.title = 'idle';
+      led.setAttribute('aria-label', 'idle');
+      head.appendChild(led);
       const name = document.createElement('span');
       name.className = 'about-role-name';
       name.textContent = agent.displayName || roleDisplayName(agent.name);
@@ -860,6 +933,36 @@
       list.appendChild(row);
     }
 
+    // Light the LED of each agent that is active in the latest turn of the shown session.
+    function updateTeamLeds() {
+      const list = document.getElementById('aboutTeamList');
+      if (!list) return;
+      const turns = (sessionData && sessionData.turns) || [];
+      const turn = currentSessionId && turns.length ? turns[turns.length - 1] : null;
+      const state = turn && turn.leadTask && turn.leadTask.state;
+      const working = state === 'TASK_STATE_WORKING' || state === 2;
+      const activeRoles = new Set();
+      let anyWorker = false;
+      if (working) {
+        (turn.workers || []).forEach(function (w) {
+          if (w.state === 'submitting' || w.state === 'submitted') {
+            anyWorker = true;
+            activeRoles.add(canonicalRoleId(w.role));
+          }
+        });
+        if (!anyWorker) activeRoles.add('coordinator');
+      }
+      list.querySelectorAll('.about-role').forEach(function (row) {
+        const led = row.querySelector('.agent-led');
+        if (!led) return;
+        const on = activeRoles.has(row.dataset.role);
+        led.classList.toggle('is-active', on);
+        const label = on ? 'active' : 'idle';
+        led.title = label;
+        led.setAttribute('aria-label', label);
+      });
+    }
+
     async function loadTeam() {
       const errEl = document.getElementById('aboutTeamError');
       try {
@@ -870,6 +973,7 @@
         list.textContent = '';
         addAboutRow(list, data.lead, true);
         data.roles.forEach(function (r) { addAboutRow(list, r, false); });
+        updateTeamLeds();
         document.getElementById('aboutTeamSummary').textContent = 'Team (' + (data.roles.length + 1) + ' agents)';
       } catch (e) {
         errEl.textContent = 'Failed to load team: ' + e.message;

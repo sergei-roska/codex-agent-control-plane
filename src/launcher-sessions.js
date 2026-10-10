@@ -21,6 +21,69 @@ function firstText(message) {
   return '';
 }
 
+function hasLiveActivity(db) {
+  try {
+    return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'live_activity'").get());
+  } catch (_) {
+    return false;
+  }
+}
+
+// Returns key => null | { phase, summary, startedAt, updatedAt, endedAt, commands, fileChanges }.
+// Never throws: a missing table (older DB, server not restarted) yields null.
+function activityReader(db) {
+  if (!hasLiveActivity(db)) return () => null;
+  let stmt;
+  try {
+    stmt = db.prepare('SELECT phase, summary, started_at, updated_at, ended_at, commands, file_changes FROM live_activity WHERE key = ?');
+  } catch (_) {
+    return () => null;
+  }
+  return (key) => {
+    if (!key) return null;
+    try {
+      const r = stmt.get(key);
+      if (!r) return null;
+      return {
+        phase: r.phase,
+        summary: r.summary || '',
+        startedAt: r.started_at,
+        updatedAt: r.updated_at,
+        endedAt: r.ended_at || null,
+        commands: r.commands || 0,
+        fileChanges: r.file_changes || 0
+      };
+    } catch (_) {
+      return null;
+    }
+  };
+}
+
+// Assignment objective of a worker: the lead sends the assignment as a JSON text part of the
+// worker task's first user message. Falls back to the first 160 chars of the text. Never throws.
+function workerObjective(db, taskId) {
+  if (!taskId) return null;
+  try {
+    const row = db.prepare('SELECT history FROM tasks WHERE id = ?').get(taskId);
+    if (!row || !row.history) return null;
+    const msgs = JSON.parse(row.history);
+    const first = msgs.find(m => m.role === 'ROLE_USER' || m.role === 1 || m.role === 'user');
+    const text = firstText(first);
+    if (!text) return null;
+    if (text.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed.objective === 'string' && parsed.objective.trim()) {
+          return parsed.objective.trim().slice(0, 300);
+        }
+      } catch (_) {}
+    }
+    return text.slice(0, 160);
+  } catch (_) {
+    return null;
+  }
+}
+
 function formatLeadTask(db, lead) {
   let goal = '';
   let lastInstruction = '';
@@ -42,7 +105,9 @@ function formatLeadTask(db, lead) {
     } catch (_) {}
   }
 
-  const workers = db.prepare("SELECT role, state, task_id, updated_at FROM dispatch_journal WHERE run_id = ? ORDER BY created_at ASC").all(lead.id);
+  const rows = db.prepare("SELECT role, state, task_id, created_at, updated_at FROM dispatch_journal WHERE run_id = ? ORDER BY created_at ASC").all(lead.id);
+  const activity = activityReader(db);
+  const workers = rows.map(w => ({ ...w, objective: (w.state === 'submitting' || w.state === 'submitted') ? workerObjective(db, w.task_id) : null, activity: activity(w.task_id) }));
 
   return {
     leadTask: {
@@ -56,7 +121,8 @@ function formatLeadTask(db, lead) {
       metadata: lead.metadata ? JSON.parse(lead.metadata) : {},
       updatedAt: lead.status_last_updated
     },
-    workers
+    workers,
+    leadActivity: activity('lead:' + lead.id)
   };
 }
 
@@ -137,6 +203,10 @@ function deleteLeadTask(db, taskId) {
       db.prepare(
         `DELETE FROM writer_executions WHERE task_id IN (${placeholders}) AND state IN ('released', 'reconciled')`
       ).run(...relatedTaskIds);
+    }
+    if (hasLiveActivity(db)) {
+      const keys = [...workers.filter(Boolean), 'lead:' + taskId];
+      db.prepare(`DELETE FROM live_activity WHERE key IN (${keys.map(() => '?').join(',')})`).run(...keys);
     }
     if (workers.length > 0) {
       const placeholders = workers.map(() => '?').join(',');

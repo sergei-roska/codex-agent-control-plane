@@ -40,7 +40,7 @@ two arms (baseline and candidate) on the same fixtures. Each trial records:
 | Acceptance checks | exact argv list sent with `--check` |
 | Permissions | role sandbox values; approvals are always declined (`approvalsReviewer: "user"`) |
 | Skills | pins recorded in the lead checkpoint |
-| Timeouts | `CODEX_A2A_TURN_TIMEOUT_MS` (default 600000) |
+| Timeouts | `CODEX_A2A_TURN_TIMEOUT_MS` (default 3600000) |
 
 Model and effort are pinned through the profile files. A candidate arm that changes
 profiles uses its own orchestrator checkout, since `npm start` always loads the

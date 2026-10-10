@@ -121,7 +121,7 @@ function completedTask(roleName) {
   };
 }
 
-test('dispatches an authenticated A2A assignment and finishes on the same read-only lead thread', async () => {
+test('dispatches an authenticated A2A assignment and finishes with a fresh read-only lead turn', async () => {
   const h = makeHarness({ decisions: [decision('dispatch', [brief('orch-builder')]), decision('finish', [], 'Implemented successfully')] });
   const result = await h.orchestrator.run({ goal: 'Implement feature' });
 
@@ -134,7 +134,7 @@ test('dispatches an authenticated A2A assignment and finishes on the same read-o
   const leadCalls = h.calls.filter((call) => call.type === 'lead');
   assert.equal(leadCalls.length, 2);
   assert.equal(leadCalls[0].role.sandbox, 'read-only');
-  assert.equal(leadCalls[1].threadId, 'lead-thread');
+  assert.equal(leadCalls[1].threadId, undefined);
   assert.match(leadCalls[1].input, /orch-builder done/);
   const sent = h.calls.find((call) => call.type === 'send');
   assert.equal(sent.params.configuration.returnImmediately, true);
