@@ -160,6 +160,23 @@ does not mark the separate full M2 routing-shadow criterion complete.
 | Verification | done | `env -u NODE_TEST_CONTEXT npm test`: 548 passed, 13 suites, 0 failed/cancelled/skipped, 35,867.805797 ms; full log `/tmp/phase-c-full-test.log`. This verifies the current runtime, not unselected Phase C implementations or resource savings. |
 | Integration | direct main | Accepted decision records are included in this documentation change on main under explicit user authorization; no separate branch or runtime activation is required. |
 
+## Throughput and quality queue (2026-10-10)
+
+Opened after a latency audit of a live run (5 of 15 worker turns cut by the 600 s
+turn timeout, lead context growing every round, writers strictly serial). Items run
+in the listed order unless marked independent.
+
+| Item | State | Scope |
+| --- | --- | --- |
+| LAT-01 | done `fb7eac1` | Turn timeout 3600 s; fresh lead thread per round; `decision_rejected` event; live activity in the dashboard chat; team LEDs. |
+| PW-1 | done `d4cf38e` | Worktree git mechanics ([design](parallel-writers-design.md)). |
+| PW-2 | done `8551390` | Assignment `wave`, group dispatch behind `parallelWriters` (off until PW-3). |
+| PW-3 | next | Lane execution, integration under admission, `writer_lanes`, restart recovery, server wiring; starts after the independent design review. |
+| BUD-1 | done `ddd0f4b` | Automatic resume of budget-paused runs ([design](budget-auto-resume-design.md)). |
+| BUD-2 | queued after PW-3 | Continue a worker cut off by a usage limit in its own thread and lane instead of re-planning. |
+| CA-01 | queued after PW-3 | Competing approaches: the lead may give one assignment to N writers in separate lanes; the winner is chosen by executed checks, only the winner is integrated (PRD section 9.1 analogue). |
+| EP-01 | queued after CA-01 | Execution Paths (owner product decision, 2026-10-10): at intake the lead selects one path from a closed catalog (for example iterative, distributed, review) and records it with the run; decisions are validated against the path's role and cardinality rules; changing the path goes back through planning. Compare paths with [the benchmark plan](orchestration-benchmark-plan.md). |
+
 ## Phase A: baseline, compact evidence, executable contracts
 
 ### MEA: resource comparisons are reproducible
