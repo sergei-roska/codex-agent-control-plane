@@ -47,6 +47,44 @@ about five hours and use almost the whole window; the team also uses Sol.
    still pauses the whole run; dispatching around the exhausted model is a later
    option.
 
+## BUD-2 detailed design (2026-10-10)
+
+BUD-1 is done (`ddd0f4b`). BUD-2 continues usage-limited attempts before the lead
+re-plans.
+
+1. Specialist: when a turn ends with `failureKind: 'usage_limit'`, its failure metadata
+   gains `continuation: { threadId, laneId, codexHome }` (`laneId` only for a lane
+   writer; `codexHome` is the App Server home the thread lives in, null for the
+   default). A usage-limited lane ends `not_integrated`, reason `turn_failed`, lane
+   kept (already so).
+2. Lead graph: after `budget_pause` resumes, a new node `continue_limited` runs before
+   `decide`. It collects outcomes of the latest batch with `failureKind: 'usage_limit'`
+   and a `continuation`, at most 2 continuations per original assignment, and
+   dispatches them as one continuation batch without a lead turn: all of them
+   concurrently when `parallelWriters` is on (they were already scheduled together),
+   else serially. Continuation attempts get `assignmentId = <original>:c<n>`, a fresh
+   attemptId and deterministic contextId, are journaled like any attempt (never
+   re-sent), carry the original assignment unchanged plus `continuation` (new optional
+   specialist key), and do not consume a lead round. Their outcomes are appended like
+   any outcome; then `verify`, and on to `decide` (or `budget_pause` again).
+3. Specialist with `continuation`:
+   - Lane writer: adopt the lane only if its `writer_lanes` row is `not_integrated`
+     with reason `turn_failed` or `outcome_unknown` and belongs to the attempt named by
+     the lead (`continuation.ofAttemptId` / context). The old row becomes terminal
+     `continued`; a new row (new lane id) records the same path and base with
+     `continued_from = <old lane id>`. Retention never removes a path referenced by a
+     non-terminal or newer row.
+   - Thread: resume `threadId` only when the current App Server home equals
+     `continuation.codexHome`; input "The usage limit has reset. Continue the
+     assignment from where you stopped." If resume is impossible or rejected, start a
+     fresh thread in the same lane (or workspace) with the original assignment plus a
+     note that a previous attempt was cut off and its partial changes are already in
+     the working directory.
+   - Then the normal path: integrate a completed lane, settle a shared writer.
+4. Non-lane writers in shared mode continue in the shared workspace (their partial
+   edits are already there and attested by their settled row); read-only roles just
+   resume their thread.
+
 ## Open for the detailed design
 
 - Attempt identity and exactly-once rules for a continuation attempt (intent
