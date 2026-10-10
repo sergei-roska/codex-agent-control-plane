@@ -345,7 +345,7 @@ class LaneManager {
   }
 
   laneInput(lane, input) {
-    return `Your isolated working directory is ${lane.workspacePath}; all paths are relative to it and you edit files only there. The server integrates your changes into the shared workspace after your turn.\n${input}`;
+    return `You work in an isolated copy of the workspace, and it is already your current working directory (${lane.workspacePath}). Run commands without a workdir argument and use relative paths; never type this directory path yourself. Edit files only here. The server integrates your changes into the shared workspace after your turn.\n${input}`;
   }
 
   sandboxPolicy(lane) {

@@ -92,7 +92,9 @@ test('an integrated lane: lane cwd and policy, attested delta, removed lane, liv
 
   assert.ok(seen.cwd.startsWith(`${env.lanesRoot}${path.sep}`));
   assert.deepEqual(seen.sandboxPolicy, { type: 'workspaceWrite', writableRoots: [seen.cwd], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false });
-  assert.match(seen.input.split('\n')[0], new RegExp(`isolated working directory is ${seen.cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.match(seen.input.split('\n')[0], new RegExp(`already your current working directory \\(${seen.cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
+  assert.match(seen.input, /Run commands without a workdir argument/);
+  assert.ok(seen.input.endsWith('\n' + request(['a.txt'])), 'original input follows the prefix');
 
   const writer = writerOf(task);
   assert.equal(writer.executionId, `orch-writer-a:${task.id}`);
