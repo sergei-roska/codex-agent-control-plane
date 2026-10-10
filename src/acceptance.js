@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { takeSnapshot } = require('./workspace-snapshot');
@@ -40,6 +41,17 @@ function invalidAcceptanceContract(detail) {
   return { id: CONTRACT_ID, requiredChecks: [], invalid: { code: 'contract_invalid', detail: String(detail).slice(0, 500) } };
 }
 
+function validatePins(pins, at) {
+  if (!Array.isArray(pins) || pins.length > MAX_ARGV) throw new TypeError(`${at}.pins must be an array of at most ${MAX_ARGV} entries`);
+  return pins.map((pin) => {
+    if (!pin || typeof pin !== 'object' || typeof pin.path !== 'string' || !pin.path || pin.path.length > MAX_ARG
+      || typeof pin.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(pin.sha256)) {
+      throw new TypeError(`${at}.pins entries must be { path, sha256 }`);
+    }
+    return { path: pin.path, sha256: pin.sha256 };
+  });
+}
+
 function validateAcceptanceContract(value) {
   if (value === undefined || value === null) return { requiredChecks: [] };
   if (typeof value !== 'object' || Array.isArray(value)) throw new TypeError('acceptance must be an object');
@@ -59,7 +71,7 @@ function validateAcceptanceContract(value) {
     const at = `acceptance.requiredChecks[${index}]`;
     if (!check || typeof check !== 'object' || Array.isArray(check)) throw new TypeError(`${at} must be an object`);
     for (const key of Object.keys(check)) {
-      if (!['id', 'argv', 'timeoutMs'].includes(key)) throw new TypeError(`${at} has unknown field "${key}"`);
+      if (!['id', 'argv', 'timeoutMs'].includes(key) && !(key === 'pins' && value.source === AGENT_SOURCE)) throw new TypeError(`${at} has unknown field "${key}"`);
     }
     const { id, argv } = check;
     if (typeof id !== 'string' || !id || id.length > MAX_ID || !/^[A-Za-z0-9._-]+$/.test(id)) {
@@ -82,7 +94,10 @@ function validateAcceptanceContract(value) {
       }
       timeoutMs = check.timeoutMs;
     }
-    return { id, argv: [...argv], timeoutMs };
+    const out = { id, argv: [...argv], timeoutMs };
+    // Pins of an agent check survive re-validation (stored contracts are validated again on every run).
+    if (check.pins !== undefined) out.pins = validatePins(check.pins, at);
+    return out;
   });
   // The agent source survives every re-validation, so an agent check can never run as an owner check.
   return { id: CONTRACT_ID, requiredChecks, ...(value.source === AGENT_SOURCE ? { source: AGENT_SOURCE } : {}) };
@@ -157,7 +172,43 @@ function validateAgentChecks(checks, { workspace }) {
       if (flag) throw new TypeError(`${at}: inline code (${flag}) after ${token} is refused; put the check in a script inside the workspace`);
     }
   }
-  return { ...contract, source: AGENT_SOURCE };
+  return pinAgentChecks({ ...contract, source: AGENT_SOURCE }, workspace);
+}
+
+// sha256 of a regular file inside the workspace, or null when it is missing, not a file, or outside.
+function hashWorkspaceFile(file, workspace) {
+  try {
+    if (!insideWorkspace(file, workspace)) return null;
+    const full = path.resolve(workspace, file);
+    if (!insideWorkspace(fs.realpathSync(full), fs.realpathSync(workspace)) || !fs.statSync(full).isFile()) return null;
+    return crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pin the content of every workspace file named in a check's argv (argv[0] and script arguments) so a later
+ * rewrite of a validator is detected: each check of an agent contract gets pins [{ path, sha256 }].
+ */
+function pinAgentChecks(contract, workspace) {
+  const root = path.resolve(workspace);
+  const requiredChecks = contract.requiredChecks.map((check) => {
+    const pins = [];
+    for (const arg of check.argv) {
+      const sha256 = hashWorkspaceFile(arg, workspace);
+      if (sha256 === null) continue;
+      const rel = path.relative(root, path.resolve(root, arg));
+      if (!pins.some((pin) => pin.path === rel)) pins.push({ path: rel, sha256 });
+    }
+    return pins.length > 0 ? { ...check, pins } : check;
+  });
+  return { ...contract, requiredChecks };
+}
+
+// Pinned paths of an agent check whose content changed or which are gone.
+function changedPins(check, workspace) {
+  return (check.pins || []).filter((pin) => hashWorkspaceFile(pin.path, workspace) !== pin.sha256).map((pin) => pin.path);
 }
 
 function parseCheckCommand(text, index) {
@@ -380,6 +431,8 @@ const ISSUE_META = {
   acceptance_not_run: ['accept.run', 'UNKNOWN', false],
   // The required checks cannot be known, so this is UNKNOWN and yields unverifiable by the normal rule.
   contract_invalid: ['accept.contract_valid', 'UNKNOWN', false],
+  // A pinned script of an agent check was edited or removed: the check is not run, the owner decides.
+  check_changed: ['accept.checks', 'UNKNOWN', false],
 };
 
 /** An acceptance issue as a violation record; keeps `code` and `detail` for existing consumers. */
@@ -397,6 +450,7 @@ function computeDisposition({
   for (const check of requiredChecks) {
     const result = results.get(check.id);
     if (!result) add('check_missing', `Required check "${check.id}" has no result.`);
+    else if (result.result === 'error' && result.error === 'check_changed') add('check_changed', result.detail);
     else if (result.result === 'error') add('check_error', `Required check "${check.id}" could not run in the sandbox (${result.error || 'error'}); it is unverified.`);
     else if (result.result !== 'passed') {
       const ids = [result.stdoutEvidence?.id, result.stderrEvidence?.id].filter(Boolean);
@@ -539,7 +593,13 @@ async function runAcceptance({
       if (held && !sandboxed) admission.recordTurnStart(held.executionId, { processIdentity: null, pending: true, threadId: null });
       let captured = null;
       const onCapture = (value) => { captured = value; };
-      const result = sandboxed
+      const changed = sandboxed ? changedPins(check, workspace) : [];
+      const result = changed.length > 0
+        ? {
+          id: check.id, argv: check.argv, result: 'error', error: 'check_changed', exitCode: null, sandboxed: true,
+          detail: `Pinned acceptance check "${check.id}" was not run: ${changed.join(', ')} changed since it was pinned. Changing a pinned acceptance check needs the owner's decision.`,
+        }
+        : sandboxed
         ? await runSandboxedCheck(check, { appServer, cwd: workspace, signal, onCapture })
         : await runCheckImpl(check, { cwd: workspace, onSpawn, signal, onCapture });
       if (captured && result && typeof result === 'object') {
@@ -615,5 +675,5 @@ function verifyCandidate(workspace, acceptance, snapshot = takeSnapshot) {
 module.exports = {
   validateAcceptanceContract, parseCheckCommand, runCheck, computeDisposition, runAcceptance, verifyCandidate,
   assessWithoutChecks, formatAcceptance, acceptanceIssue, unrunAcceptance, invalidAcceptanceContract,
-  validateAgentChecks, runSandboxedCheck, AGENT_CHECK_SANDBOX_POLICY, AGENT_CHECK_TOOLS,
+  validateAgentChecks, pinAgentChecks, runSandboxedCheck, AGENT_CHECK_SANDBOX_POLICY, AGENT_CHECK_TOOLS,
 };

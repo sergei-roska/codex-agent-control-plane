@@ -13,7 +13,7 @@ const { WriterAdmission } = require('../src/writer-admission');
 const { takeSnapshot } = require('../src/workspace-snapshot');
 const {
   validateAcceptanceContract, parseCheckCommand, runCheck, computeDisposition, runAcceptance, verifyCandidate, assessWithoutChecks, formatAcceptance,
-  acceptanceIssue, invalidAcceptanceContract, unrunAcceptance, validateAgentChecks, runSandboxedCheck,
+  acceptanceIssue, invalidAcceptanceContract, unrunAcceptance, validateAgentChecks, pinAgentChecks, runSandboxedCheck,
 } = require('../src/acceptance');
 
 const vcs = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' });
@@ -653,4 +653,57 @@ test('agent checks hold admission without a host process turn start; owner check
   assert.deepEqual(hostRuns, ['unit']);
   assert.equal(exec.calls.length, 1);
   assert.equal(turnStarts.length, 1);
+});
+
+// ------------------------------------------------- pinned scripts of agent checks
+const sha = (text) => crypto.createHash('sha256').update(text).digest('hex');
+
+function pinWorkspace() {
+  const dir = repo();
+  fs.mkdirSync(path.join(dir, 'tools'));
+  fs.writeFileSync(path.join(dir, 'tools', 'validate.py'), 'print(1)\n');
+  fs.writeFileSync(path.join(dir, 'tools', 'check.sh'), 'exit 0\n');
+  return dir;
+}
+
+test('pins cover argv[0] and script arguments and ignore non-files and outside paths', () => {
+  const dir = pinWorkspace();
+  const outside = path.join(os.tmpdir(), 'outside-pin.txt');
+  fs.writeFileSync(outside, 'x');
+  const contract = validateAgentChecks([
+    { id: 'py', argv: ['python', 'tools/validate.py', '--strict', 'tools', 'missing.txt', outside, '../outside-pin.txt'], timeoutMs: null },
+    { id: 'self', argv: [path.join(dir, 'tools', 'check.sh')], timeoutMs: null },
+    { id: 'plain', argv: ['npm', 'test'], timeoutMs: null },
+  ], { workspace: dir });
+  assert.deepEqual(contract.requiredChecks[0].pins, [{ path: 'tools/validate.py', sha256: sha('print(1)\n') }]);
+  assert.deepEqual(contract.requiredChecks[1].pins, [{ path: 'tools/check.sh', sha256: sha('exit 0\n') }]);
+  assert.equal('pins' in contract.requiredChecks[2], false);
+  assert.deepEqual(validateAcceptanceContract(contract), contract);
+  assert.equal(pinAgentChecks(contract, dir).requiredChecks[0].pins.length, 1);
+});
+
+test('an unchanged pinned script lets the check run', async () => {
+  const dir = pinWorkspace();
+  const contract = validateAgentChecks([{ id: 'py', argv: ['python', 'tools/validate.py'], timeoutMs: null }], { workspace: dir });
+  const exec = fakeExec({ exitCode: 0, stdout: '', stderr: '' });
+  const result = await runAcceptance({ workspace: dir, runId: 'r', attempt: 1, contract, appServer: exec, runCheckImpl: noHostRun });
+  assert.equal(result.disposition, 'accepted');
+  assert.equal(exec.calls.length, 1);
+});
+
+test('a modified or deleted pinned script gives check_changed and the check is not run', async () => {
+  const dir = pinWorkspace();
+  const contract = validateAgentChecks([{ id: 'py', argv: ['python', 'tools/validate.py'], timeoutMs: null }], { workspace: dir });
+  const exec = fakeExec({ exitCode: 0, stdout: '', stderr: '' });
+  fs.writeFileSync(path.join(dir, 'tools', 'validate.py'), 'print(2)\n');
+  const modified = await runAcceptance({ workspace: dir, runId: 'r', attempt: 1, contract, appServer: exec, runCheckImpl: noHostRun });
+  assert.equal(exec.calls.length, 0);
+  assert.equal(modified.disposition, 'unverifiable');
+  assert.deepEqual(codes(modified), ['check_changed']);
+  assert.match(modified.issues[0].detail, /tools\/validate\.py.*owner's decision/);
+  assert.equal(modified.issues[0].result, 'UNKNOWN');
+  fs.rmSync(path.join(dir, 'tools', 'validate.py'));
+  const deleted = await runAcceptance({ workspace: dir, runId: 'r', attempt: 2, contract, appServer: exec, runCheckImpl: noHostRun });
+  assert.equal(exec.calls.length, 0);
+  assert.deepEqual(codes(deleted), ['check_changed']);
 });
