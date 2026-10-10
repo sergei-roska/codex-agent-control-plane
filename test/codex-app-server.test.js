@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
-const { CodexAppServer } = require('../src/codex-app-server');
+const { CodexAppServer, laneSandboxPolicy } = require('../src/codex-app-server');
 const { loadSkillCatalog, resolveSkillSelection } = require('../src/skill-catalog');
 
 class FakeProcess extends EventEmitter {
@@ -1901,4 +1901,39 @@ test('classifyFailure assigns one class per failure shape', () => {
   assert.equal(classifyFailure(Object.assign(new Error('x'), { status: 'failed' })), 'domain_failure');
   assert.equal(classifyFailure(Object.assign(new Error('x'), { rpcResponse: true })), 'request_rejected');
   assert.equal(classifyFailure(Object.assign(new Error('x'), { name: 'AbortError' })), null);
+});
+
+test('execCommand sends command/exec with the given sandbox policy and returns the buffered result', async (t) => {
+  const handler = baseHandler();
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'command/exec') return send({ id: request.id, result: { exitCode: 0, stdout: 'out', stderr: '' } });
+    return handler(request, send);
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const policy = laneSandboxPolicy({ workspacePath: '/tmp/lane', networkAccess: true });
+  const result = await client.execCommand({ command: ['sh', '-c', 'true'], cwd: '/tmp/lane', sandboxPolicy: policy, timeoutMs: 1234 });
+  assert.deepEqual(result, { exitCode: 0, stdout: 'out', stderr: '' });
+  const sent = fake.getChild().sent.find(({ method }) => method === 'command/exec');
+  assert.deepEqual(sent.params, { command: ['sh', '-c', 'true'], cwd: '/tmp/lane', sandboxPolicy: policy, timeoutMs: 1234 });
+  assert.equal(client.getVersion(), 'fake');
+  await assert.rejects(client.execCommand({ command: [] }), TypeError);
+});
+
+test('laneSandboxPolicy makes every field explicit', () => {
+  assert.deepEqual(laneSandboxPolicy({ workspacePath: '/w' }), {
+    type: 'workspaceWrite', writableRoots: ['/w'], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false,
+  });
+  assert.equal(laneSandboxPolicy({ workspacePath: '/w', networkAccess: true }).networkAccess, true);
+  assert.throws(() => laneSandboxPolicy(), TypeError);
+});
+
+test('run() sends a supplied sandboxPolicy instead of the role default', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const policy = laneSandboxPolicy({ workspacePath: '/tmp/project' });
+  await client.run({ role, cwd: '/tmp/project', input: 'hello', sandboxPolicy: policy });
+  const turnStart = fake.getChild().sent.find(({ method }) => method === 'turn/start');
+  assert.deepEqual(turnStart.params.sandboxPolicy, policy);
 });

@@ -634,7 +634,7 @@ class CodexAppServer {
     }
   }
 
-  async run({ role, cwd, input, onEvent, signal, threadId: existingThreadId, outputSchema, onTurnStart, selectedSkills = [] } = {}) {
+  async run({ role, cwd, input, onEvent, signal, threadId: existingThreadId, outputSchema, onTurnStart, selectedSkills = [], sandboxPolicy: sandboxPolicyOverride = null } = {}) {
     if (!role || !role.name) throw new TypeError('role.name is required');
     if (!cwd) throw new TypeError('cwd is required');
     if (typeof input !== 'string' || !input.trim()) throw new TypeError('input must be a non-empty string');
@@ -669,7 +669,7 @@ class CodexAppServer {
       ctx.permissionConfig.selectedSkills = validatedSkills.map(({ id, sha256 }) => ({ id, sha256 }));
     }
     try {
-      const result = await this._run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills: validatedSkills });
+      const result = await this._run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills: validatedSkills, sandboxPolicyOverride });
       return { ...result, execution: executionOf(ctx), usage: this._usageOf(ctx), ...permissionOf(ctx) };
     } catch (error) {
       // Concurrent runs can share one error instance (child failure); give each its own copy.
@@ -686,7 +686,7 @@ class CodexAppServer {
     }
   }
 
-  async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills }) {
+  async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills, sandboxPolicyOverride }) {
     await this.start();
     ctx.generation = this.generation;
     const startup = this.startupInfo;
@@ -775,7 +775,7 @@ class CodexAppServer {
         ...(role.model ? { model: role.model } : {}),
         ...(role.effort ? { effort: role.effort } : {}),
         cwd,
-        sandboxPolicy: sandboxPolicy(role.sandbox),
+        sandboxPolicy: sandboxPolicyOverride || sandboxPolicy(role.sandbox),
         approvalPolicy: 'on-request',
         approvalsReviewer: APPROVALS_REVIEWER,
         ...(outputSchema ? { outputSchema } : {}),
@@ -894,6 +894,23 @@ class CodexAppServer {
     }
     this._terminateProcess();
     this.child = null;
+  }
+
+  getVersion() {
+    return this.appServerVersion;
+  }
+
+  // Runs one standalone command in the server sandbox (no thread, no turn); buffered result.
+  async execCommand({ command, cwd, sandboxPolicy: policy, env = null, timeoutMs = 30000 } = {}) {
+    if (!Array.isArray(command) || !command.length) throw new TypeError('command must be a non-empty array');
+    await this.start();
+    return this._request('command/exec', {
+      command,
+      ...(cwd ? { cwd } : {}),
+      ...(env ? { env } : {}),
+      ...(policy ? { sandboxPolicy: policy } : {}),
+      timeoutMs,
+    }, { timeoutMs: timeoutMs + 5000 });
   }
 
   _request(method, params, { signal, timeoutMs = this.requestTimeoutMs, onSending, onWriteError } = {}) {
@@ -1403,6 +1420,11 @@ function sandboxPolicy(sandbox) {
   return { type: 'workspaceWrite' };
 }
 
+function laneSandboxPolicy({ workspacePath, networkAccess = false } = {}) {
+  if (!workspacePath) throw new TypeError('workspacePath is required');
+  return { type: 'workspaceWrite', writableRoots: [workspacePath], networkAccess: Boolean(networkAccess), excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+}
+
 function sanitizeAccount(account) {
   if (!account || typeof account !== 'object') return null;
   const safe = {};
@@ -1412,4 +1434,4 @@ function sanitizeAccount(account) {
   return safe;
 }
 
-module.exports = { CodexAppServer, CodexAppServerError, classifyFailure };
+module.exports = { CodexAppServer, CodexAppServerError, classifyFailure, laneSandboxPolicy };
