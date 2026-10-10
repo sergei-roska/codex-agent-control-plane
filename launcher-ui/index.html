@@ -95,7 +95,7 @@
         <div class="limits-title">
           <span>🧭</span> About Orchestrator
         </div>
-        <p class="about-text">Local A2A server that executes tasks using a team of Codex agents. The lead operates in read-only mode: analyzes the goal, breaks down work into bounded assignments, and delegates them to roles over the A2A protocol. Each role is an independent Codex invocation with its own model, reasoning effort, and sandbox. Writer roles work on the workspace one at a time, and the server tracks which files were actually modified. At the end, results undergo acceptance checks if specified. State is persisted in SQLite, allowing tasks to pause for human decisions or rate limits and resume after restart.</p>
+        <p class="about-text">Local A2A server that executes tasks using a team of Codex agents. The lead operates in read-only mode: analyzes the goal, breaks down work into bounded assignments, and delegates them to roles over the A2A protocol. Each role is an independent Codex invocation with its own model, reasoning effort, and sandbox. Writer roles that the lead groups into one wave run in parallel, each in its own isolated git worktree; the server applies each writer's changes to the workspace when it finishes and tracks which files were actually modified. At the end, results undergo acceptance checks if specified. State is persisted in SQLite, so tasks survive restarts; a task paused by a usage limit resumes automatically when budget returns, optionally on another connected account.</p>
         <details class="about-team" open>
           <summary id="aboutTeamSummary">Team</summary>
           <div class="about-list" id="aboutTeamList"></div>
