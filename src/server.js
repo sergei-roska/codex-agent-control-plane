@@ -13,6 +13,7 @@ const { LeadOrchestrator, ResumeInputError } = require('./lead-orchestrator');
 const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
 const { createBudgetWatcher } = require('./budget-watcher');
 const { WriterAdmission } = require('./writer-admission');
+const { LaneManager, selectWriterIsolation, laneRetentionHours } = require('./writer-lanes');
 const { UsageLedger } = require('./usage-ledger');
 const { createActivityStore } = require('./activity-store');
 const { createEvidenceStore } = require('./evidence-store');
@@ -636,6 +637,11 @@ async function startServer({
     await reconcileInterruptedTasks(state, { leadNamespace: 'orchestrator' });
     const admission = new WriterAdmission({ db: state.db, workspace });
     await admission.reconcileStale();
+    // Writer isolation (docs/parallel-writers-design.md): mode selection with the confinement probe, then lane recovery.
+    const isolation = await selectWriterIsolation({ env: process.env, appServer, workspace, db: state.db, stateFile: state.filePath });
+    const lanes = new LaneManager({ db: state.db, workspace, admission, appServer, ...isolation });
+    const laneRecovery = lanes.recover({ retentionHours: laneRetentionHours(process.env.CODEX_A2A_LANE_RETENTION_HOURS) });
+    const worktreeMode = isolation.mode === 'worktree';
     const actualPort = httpServer?.address()?.port ?? port;
     const baseUrl = `http://${HOST}:${actualPort}`;
     const leadRole = createLeadRole(profilesDir ? { profilesDir } : undefined);
@@ -645,10 +651,12 @@ async function startServer({
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog,
       checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, activityStore, evidenceStore,
+      parallelWriters: worktreeMode,
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
       roles, appServer, workspace, baseUrl, admission, usageLedger, activityStore, skillCatalog,
+      lanes: worktreeMode ? lanes : null,
       taskStoreFactory: (roleId) => createTaskStore(state, roleId),
     });
     const leadTaskStore = createTaskStore(state, 'orchestrator');
@@ -679,6 +687,9 @@ async function startServer({
       specialistAgents,
       leadAgent,
       budgetWatcher,
+      // Effective writer mode and why; `lanes.status()` reflects later re-probes.
+      writerIsolation: { ...lanes.status(), recovery: laneRecovery },
+      lanes,
       host: HOST,
       port: actualPort,
       async close() {

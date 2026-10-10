@@ -115,6 +115,11 @@ class WriterAdmission {
     ).get(contextId));
   }
 
+  // Read-only fence check (lane prepare refuses early, R10); acquire re-checks inside its transaction.
+  isFenced(contextId) {
+    return Boolean(this.db.prepare('SELECT 1 FROM writer_fences WHERE context_id = ? AND workspace = ?').get(contextId, this.workspace));
+  }
+
   // `inserted` is true only when this call created the fence.
   fence(contextId, reason) {
     return this.db.transaction(() => {

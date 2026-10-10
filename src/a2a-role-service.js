@@ -90,8 +90,8 @@ function parseStructuredRequest(text) {
   return Object.hasOwn(value, 'objective') && Object.hasOwn(value, 'allowedFiles') ? value : null;
 }
 
-function boundaryRecord(predicate, result, code, boundary, detail, advisory = false) {
-  return { predicate, result, code, boundary, detail: String(detail).slice(0, 500), evidence: [], advisory };
+function boundaryRecord(predicate, result, code, boundary, detail, advisory = false, evidence = []) {
+  return { predicate, result, code, boundary, detail: String(detail).slice(0, 500), evidence, advisory };
 }
 
 function isSupervisorExhausted(error) {
@@ -242,6 +242,7 @@ function activityRunId(requestContext, input) {
 
 function makeExecutor({
   roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, activityStore = null, skillCatalog,
+  lanes = null,
 }) {
   const writable = role.sandbox !== 'read-only';
   const reservations = new Map();
@@ -320,6 +321,9 @@ function makeExecutor({
       let execution = null;
       let writer = null;
       let settled = false;
+      // Worktree mode (docs/parallel-writers-design.md): the prepared lane, and whether its outcome is recorded.
+      let lane = null;
+      let laneDone = false;
       // Set once appServer.run was reached: { usage, permissionEvents, provenance }.
       let telemetry = null;
       let selectedSkills = [];
@@ -365,6 +369,7 @@ function makeExecutor({
             taskId,
             contextId,
             workspace,
+            ...(lane ? { laneId: lane.id } : {}),
             permissionConfig: source?.permissionConfig ?? null,
             ...(selectedSkills.length ? { selectedSkills: selectedSkills.map(({ id, sha256 }) => ({ id, sha256 })) } : {}),
           },
@@ -439,7 +444,45 @@ function makeExecutor({
           return;
         }
 
-        if (writable) {
+        // A lane only for a structured workspace-write request while the lane probe holds (R11).
+        const useLane = writable && Boolean(lanes) && role.sandbox === 'workspace-write'
+          && Array.isArray(structured?.allowedFiles) && structured.allowedFiles.length > 0 && await lanes.available();
+        if (useLane) {
+          let prepared;
+          try {
+            prepared = await lanes.prepare({ contextId, taskId });
+          } catch (error) {
+            recordPreTurn('failed');
+            publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
+              messageId: `${taskId}-error`,
+              contextId,
+              taskId,
+              role: 2,
+              parts: [{ content: { $case: 'text', value: `Writer lane could not be prepared: ${error?.message || String(error)}` } }],
+              metadata: { ...failureMetadata(error), effects: 'none' },
+            });
+            return;
+          }
+          if (prepared.refused) {
+            // Fenced at prepare (R10): the same outcome as a fenced admission, nothing created.
+            recordPreTurn('refused');
+            publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
+              messageId: `${taskId}-error`,
+              contextId,
+              taskId,
+              role: 2,
+              parts: [{ content: { $case: 'text', value: prepared.refused.message } }],
+              metadata: {
+                failureKind: prepared.refused.code,
+                codexErrorInfo: null,
+                effects: 'none',
+                admission: { code: prepared.refused.code, holder: null },
+              },
+            });
+            return;
+          }
+          lane = prepared.lane;
+        } else if (writable) {
           if (admission.holder()) {
             eventBus.publish(AgentEvent.statusUpdate({
               taskId,
@@ -497,6 +540,10 @@ function makeExecutor({
             await settleWriter(execution.executionId, true);
             settled = true;
           }
+          if (lane) {
+            await lanes.complete({ lane, integrate: false, reason: 'canceled' });
+            laneDone = true;
+          }
           recordPreTurn('canceled');
           publishTerminalStatus(TaskState.TASK_STATE_CANCELED);
           return;
@@ -507,14 +554,16 @@ function makeExecutor({
           key: taskId, runId: activityRunId(requestContext, input), role: canonicalRoleId(roleId),
         });
         try {
+          if (lane) lanes.markRunning(lane);
           result = await appServer.run({
             role: { id: roleId, ...role },
-            cwd: workspace,
-            input,
+            cwd: lane ? lane.workspacePath : workspace,
+            input: lane ? lanes.laneInput(lane, input) : input,
             selectedSkills,
             outputSchema: WORKER_REPORT_SCHEMA,
             signal: controller.signal,
             ...(execution ? { onTurnStart: (info) => admission.recordTurnStart(execution.executionId, info) } : {}),
+            ...(lane ? { sandboxPolicy: lanes.sandboxPolicy(lane), onTurnStart: (info) => lanes.recordTurnStart(lane, info) } : {}),
             ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
           });
         } catch (error) {
@@ -536,9 +585,30 @@ function makeExecutor({
           writer = await settleWriter(execution.executionId, known, runError?.outcomeUnknown === true ? 'outcome_unknown' : 'turn_not_terminal');
           settled = true;
         }
+        let laneCanceled = false;
+        if (lane) {
+          // R6: integrate only a turn that completed and was not aborted; any other turn keeps its lane.
+          const integrate = !runError && !controller.signal.aborted && result?.status === 'completed';
+          const laneOutcome = await lanes.complete({
+            lane,
+            integrate,
+            reason: integrate ? null
+              : controller.signal.aborted ? 'canceled' : runError?.outcomeUnknown === true ? 'outcome_unknown' : 'turn_failed',
+            allowedFiles: structured.allowedFiles,
+            role: roleId,
+            taskId,
+            contextId,
+            signal: controller.signal,
+            settle: settleWriter,
+          });
+          laneDone = true;
+          writer = laneOutcome.writerExecution;
+          laneCanceled = laneOutcome.canceled;
+        }
         if (runError) throw runError;
         const resultText = typeof result?.text === 'string' ? result.text : '';
-        const canceled = controller.signal.aborted;
+        // A lane that went through integration reports that outcome even if a cancel arrived meanwhile.
+        const canceled = lane ? laneCanceled : controller.signal.aborted;
         const completed = result?.status === 'completed';
         if (!canceled && completed) {
           const parsedReport = parseWorkerReport(resultText);
@@ -548,7 +618,18 @@ function makeExecutor({
             if (parsedReport.error) {
               results.push(boundaryRecord('settle.report_valid', 'FAIL', 'report_invalid', 'settlement', parsedReport.error, !writable));
             }
-            if (writable && writer) {
+            if (writable && writer?.lane && !writer.executionId) {
+              // Nothing reached the shared tree: attested scope holds; a refused patch fails only this attempt (R7).
+              const laneRef = writer.lane;
+              if (laneRef.reason === 'lane_scope_refused') {
+                results.push(boundaryRecord('settle.lane_scope', 'FAIL', 'lane_scope_refused', 'settlement',
+                  `Lane patch refused, nothing integrated; paths outside allowedFiles: ${(laneRef.scopeViolations || []).join(', ')}`,
+                  false, [`writer_lanes:${laneRef.id}`]));
+              }
+              results.push(boundaryRecord('settle.attested_scope', 'PASS', null, 'settlement',
+                `Lane ${laneRef.id} not integrated (${laneRef.reason}): nothing integrated into the shared workspace`,
+                false, [`writer_lanes:${laneRef.id}`]));
+            } else if (writable && writer) {
               const delta = writer.delta;
               if (!delta || delta.known !== true) {
                 results.push(boundaryRecord('settle.attested_scope', 'UNKNOWN', 'delta_unknown', 'settlement',
@@ -603,6 +684,10 @@ function makeExecutor({
           // Never leave the workspace held by a writer that fell out of the normal flow.
           settled = true;
           try { writer = await settleWriter(execution.executionId, false, 'executor_error'); } catch (_) { /* keep the original error */ }
+        }
+        if (lane && !laneDone) {
+          laneDone = true;
+          try { writer = lanes.abandon(lane); } catch (_) { /* keep the original error */ }
         }
         const canceled = controller.signal.aborted;
         publishTerminalStatus(
@@ -676,7 +761,7 @@ function rejectOverlappingTask(executor) {
 /** Mount one independently stored A2A JSON-RPC agent per role. */
 function registerRoleAgents(app, {
   roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger, activityStore,
-  skillCatalog = loadSkillCatalog(),
+  skillCatalog = loadSkillCatalog(), lanes = null,
 }) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
     throw new TypeError('app must be an Express application');
@@ -700,7 +785,7 @@ function registerRoleAgents(app, {
     const endpoint = new URL(route, `${origin.origin}/`).toString();
     const card = makeRoleCard({ roleId, role, endpoint });
     const executor = makeExecutor({
-      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog,
+      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, lanes,
     });
     const handler = new DefaultRequestHandler(
       card,

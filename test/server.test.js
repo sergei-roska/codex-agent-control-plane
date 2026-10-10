@@ -1340,3 +1340,124 @@ test('startup registers INPUT_REQUIRED lead tasks paused for budget and skips ot
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------- writer isolation (parallel writers)
+
+async function withIsolationEnv(value, fn) {
+  const prior = process.env.CODEX_A2A_WRITER_ISOLATION;
+  if (value === undefined) delete process.env.CODEX_A2A_WRITER_ISOLATION;
+  else process.env.CODEX_A2A_WRITER_ISOLATION = value;
+  try {
+    return await fn();
+  } finally {
+    if (prior === undefined) delete process.env.CODEX_A2A_WRITER_ISOLATION;
+    else process.env.CODEX_A2A_WRITER_ISOLATION = prior;
+  }
+}
+
+function isolationServer(repo, dir, exec, captured) {
+  return startServer({
+    listen: false,
+    workspace: repo,
+    stateFile: path.join(dir, 'state.sqlite'),
+    tokenFile: path.join(dir, 'token'),
+    appServer: { ...CHATGPT_APP_SERVER(), getVersion: () => 'v-test', execCommand: exec.execCommand },
+    orchestratorFactory: (options) => { captured.options = options; return { async run() {} }; },
+  });
+}
+
+test('worktree mode: a passing startup probe turns on lanes and parallel writers; the stored probe is reused', async () => {
+  const { makeRepo, probeExec } = require('./helpers/lane-fixtures');
+  const repo = makeRepo();
+  const dir = tmpDir();
+  const exec = probeExec();
+  try {
+    await withIsolationEnv(undefined, async () => {
+      const first = {};
+      let runtime = await isolationServer(repo, dir, exec, first);
+      try {
+        assert.deepEqual([runtime.writerIsolation.mode, runtime.writerIsolation.reason], ['worktree', null]);
+        assert.equal(runtime.writerIsolation.lanesRoot, path.join(fs.realpathSync(dir), 'lanes'));
+        assert.equal(runtime.writerIsolation.probe.version, 'v-test');
+        assert.equal(first.options.parallelWriters, true);
+      } finally {
+        await runtime.close();
+      }
+      const calls = exec.calls.length;
+      assert.ok(calls > 0);
+      const second = {};
+      runtime = await isolationServer(repo, dir, exec, second);
+      try {
+        assert.equal(runtime.writerIsolation.mode, 'worktree');
+        assert.equal(exec.calls.length, calls);
+        assert.equal(second.options.parallelWriters, true);
+      } finally {
+        await runtime.close();
+      }
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('shared mode by setting or after a failing probe: no parallel writers', async () => {
+  const { makeRepo, probeExec } = require('./helpers/lane-fixtures');
+  const repo = makeRepo();
+  const dir = tmpDir();
+  try {
+    const exec = probeExec();
+    await withIsolationEnv('shared', async () => {
+      const captured = {};
+      const runtime = await isolationServer(repo, dir, exec, captured);
+      try {
+        assert.deepEqual([runtime.writerIsolation.mode, runtime.writerIsolation.reason], ['shared', 'isolation_shared']);
+        assert.equal(captured.options.parallelWriters, false);
+        assert.equal(exec.calls.length, 0);
+      } finally {
+        await runtime.close();
+      }
+    });
+    const leaky = probeExec({ leak: true });
+    await withIsolationEnv('worktree', async () => {
+      const captured = {};
+      const runtime = await isolationServer(repo, dir, leaky, captured);
+      try {
+        assert.equal(runtime.writerIsolation.mode, 'shared');
+        assert.match(runtime.writerIsolation.reason, /^probe_failed: escaped: /);
+        assert.equal(captured.options.parallelWriters, false);
+      } finally {
+        await runtime.close();
+      }
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('startup recovery orphans a lane row left running by a previous process', async () => {
+  const { makeRepo, probeExec } = require('./helpers/lane-fixtures');
+  const { createLaneStore } = require('../src/writer-lanes');
+  const repo = makeRepo();
+  const dir = tmpDir();
+  try {
+    const seed = await openStateDatabase({ filePath: path.join(dir, 'state.sqlite') });
+    const store = createLaneStore(seed.db);
+    store.insert({ laneId: 'L-old', contextId: 'c', taskId: 't', workspace: repo, path: path.join(dir, 'lanes', 'L-old') });
+    store.update('L-old', { state: 'running', turnStart: { processIdentity: null, threadId: 'thr' } });
+    await seed.close();
+    await withIsolationEnv('shared', async () => {
+      const runtime = await isolationServer(repo, dir, probeExec(), {});
+      try {
+        assert.deepEqual(runtime.writerIsolation.recovery.orphaned, ['L-old']);
+        assert.equal(runtime.lanes.store.get('L-old').state, 'orphaned');
+      } finally {
+        await runtime.close();
+      }
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
