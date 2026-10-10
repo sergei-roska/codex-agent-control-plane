@@ -49,6 +49,21 @@ function isBudgetAvailable(response, models) {
   return snapshots.length > 0;
 }
 
+/** Earliest future reset (epoch ms) found anywhere in a rate-limit response, or null. */
+function earliestResetMs(response, now) {
+  let best = null;
+  const walk = (value, depth) => {
+    if (!value || typeof value !== 'object' || depth > 6) return;
+    const ms = parseResetsAt(value.resetsAt);
+    if (ms !== null && ms > now && (best === null || ms < best)) best = ms;
+    for (const child of Object.values(value)) walk(child, depth + 1);
+  };
+  walk(response, 0);
+  return best;
+}
+
+const PROFILE_CACHE_MS = 60_000;
+
 function createBudgetWatcher({
   listPausedRuns,
   readRateLimits,
@@ -60,6 +75,8 @@ function createBudgetWatcher({
   minRetryMs = 600_000,
   maxBackoffMs = 3_600_000,
   onState,
+  // Optional automatic account switching: { profiles, switchTo(name|null), readProfileLimits(home|null), canSwitch?(runId) }.
+  accounts = null,
 } = {}) {
   const c = { ...REAL_CLOCK, ...clock };
   const entries = new Map();
@@ -92,6 +109,56 @@ function createBudgetWatcher({
     return Math.max(intervalMs, history.get(runId)?.backoffMs || 0);
   }
 
+  // Short-lived per-account limit cache: several paused runs must not spawn a server each per check.
+  const profileCache = new Map();
+
+  async function readProfile(home) {
+    const key = home || '';
+    const cached = profileCache.get(key);
+    if (cached && c.now() - cached.at < PROFILE_CACHE_MS) return cached.response;
+    let response = null;
+    try { response = await accounts.readProfileLimits(home); } catch (_) { response = null; }
+    profileCache.set(key, { at: c.now(), response });
+    return response;
+  }
+
+  /**
+   * Looks for another account with budget (profiles in order, then the system account) and switches to
+   * the first one. Returns { switched, earliestReset } where earliestReset is the soonest known reset.
+   */
+  async function switchToAvailable(runId, entry) {
+    const result = { switched: false, earliestReset: null };
+    let state;
+    try { state = accounts.profiles.read(); } catch (_) { return result; }
+    if (!state?.autoSwitch) return result;
+    if (accounts.canSwitch && !(await accounts.canSwitch(runId))) return result;
+    if (stopped || entries.get(runId) !== entry) return result;
+    const from = state.active;
+    const candidates = state.profiles.filter((profile) => profile.name !== from)
+      .map((profile) => ({ name: profile.name, home: profile.home }));
+    if (from !== null) candidates.push({ name: null, home: null });
+    for (const candidate of candidates) {
+      const response = await readProfile(candidate.home);
+      if (stopped || entries.get(runId) !== entry) return result;
+      if (isBudgetAvailable(response, models)) {
+        try {
+          accounts.profiles.setActive(candidate.name);
+          await accounts.switchTo(candidate.name);
+        } catch (_) {
+          return result;
+        }
+        const record = history.get(runId) || { backoffMs: 0 };
+        record.lastSwitch = { from, to: candidate.name, at: c.now() };
+        history.set(runId, record);
+        result.switched = true;
+        return result;
+      }
+      const reset = earliestResetMs(response, c.now());
+      if (reset !== null && (result.earliestReset === null || reset < result.earliestReset)) result.earliestReset = reset;
+    }
+    return result;
+  }
+
   async function check(runId, entry) {
     if (stopped || entries.get(runId) !== entry) return;
     entry.lastCheckAt = c.now();
@@ -99,8 +166,21 @@ function createBudgetWatcher({
     try { response = await readRateLimits(); } catch (_) { response = null; }
     if (stopped || entries.get(runId) !== entry) return;
     if (!isBudgetAvailable(response, models)) {
-      schedule(runId, entry, recheckDelay(runId));
-      return;
+      let delay = recheckDelay(runId);
+      if (accounts) {
+        const outcome = await switchToAvailable(runId, entry);
+        if (stopped || entries.get(runId) !== entry) return;
+        if (!outcome.switched) {
+          let reset = earliestResetMs(response, c.now());
+          if (outcome.earliestReset !== null && (reset === null || outcome.earliestReset < reset)) reset = outcome.earliestReset;
+          if (reset !== null) delay = Math.min(delay, reset + marginMs - c.now());
+          schedule(runId, entry, delay);
+          return;
+        }
+      } else {
+        schedule(runId, entry, delay);
+        return;
+      }
     }
     // Recorded before the send: the resume itself makes the server call forget(runId).
     const record = history.get(runId) || { backoffMs: 0 };
@@ -169,6 +249,11 @@ function createBudgetWatcher({
     entries.clear();
   }
 
+  function accountsAutoSwitch() {
+    if (!accounts) return false;
+    try { return accounts.profiles.read().autoSwitch === true; } catch (_) { return false; }
+  }
+
   function status(runId) {
     const entry = entries.get(runId);
     if (!entry) return null;
@@ -177,6 +262,8 @@ function createBudgetWatcher({
       nextCheckAt: entry.nextCheckAt,
       lastCheckAt: entry.lastCheckAt,
       backoffMs: history.get(runId)?.backoffMs || 0,
+      autoSwitch: accountsAutoSwitch(),
+      lastSwitch: history.get(runId)?.lastSwitch || null,
     };
   }
 

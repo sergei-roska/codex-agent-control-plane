@@ -8,6 +8,7 @@ const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/s
 const { ClientFactory } = require('@a2a-js/sdk/client');
 const { createAccountProfiles } = require('./account-profiles');
 const { createSwitchingAppServer } = require('./app-server-switch');
+const { CodexAppServer } = require('./codex-app-server');
 const { loadRoles, createLeadRole } = require('./role-catalog');
 const { registerRoleAgents } = require('./a2a-role-service');
 const { LeadOrchestrator, ResumeInputError } = require('./lead-orchestrator');
@@ -73,7 +74,7 @@ function answerCommand(taskId, pause) {
 }
 
 /** Human-readable INPUT_REQUIRED text for a pause, including how to answer. */
-function describePause(taskId, pause, { autoResume = false, nextCheckAt = null } = {}) {
+function describePause(taskId, pause, { autoResume = false, nextCheckAt = null, autoSwitch = false } = {}) {
   const lines = [];
   if (pause?.kind === 'human_decision') {
     lines.push(`Decision required: ${pause.question || '(no question given)'}`);
@@ -89,6 +90,7 @@ function describePause(taskId, pause, { autoResume = false, nextCheckAt = null }
     if (pause.resetsAt) lines.push(`Reported reset hint: ${pause.resetsAt}`);
     if (autoResume) {
       lines.push('The server resumes this task automatically once Codex budget is available.');
+      if (autoSwitch) lines.push('Auto-switch is on: the server switches to another account with available budget.');
       if (nextCheckAt) lines.push(`Next budget check: ${new Date(nextCheckAt).toISOString()}`);
       lines.push('Send a message to this task to resume it immediately.');
     } else {
@@ -234,7 +236,8 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
     if (!budgetWatcher) return describePause(taskId, pause);
     if (pause?.kind === 'waiting_for_budget') {
       budgetWatcher.notePause(taskId, pause);
-      return describePause(taskId, pause, { autoResume: true, nextCheckAt: budgetWatcher.status(taskId)?.nextCheckAt ?? null });
+      const watched = budgetWatcher.status(taskId);
+      return describePause(taskId, pause, { autoResume: true, nextCheckAt: watched?.nextCheckAt ?? null, autoSwitch: watched?.autoSwitch === true });
     }
     return describePause(taskId, pause);
   }
@@ -586,6 +589,7 @@ async function startServer({
   workspace = process.env.CODEX_WORKSPACE || process.cwd(),
   appServer: injectedAppServer = null,
   accountsDir,
+  readProfileLimits = readLimitsOfHome,
   appServerFactory,
   listen = true,
   listenImpl = (application, listenPort, host, callback) => application.listen(listenPort, host, callback),
@@ -680,6 +684,13 @@ async function startServer({
         readRateLimits: async () => (typeof appServer.readRateLimits === 'function' ? appServer.readRateLimits() : null),
         listPausedRuns: () => listBudgetPausedRuns({ state, taskStore: leadTaskStore, orchestrator }),
         resumeRun: (taskId) => resumeBudgetRun({ taskId, baseUrl, authToken, taskStore: leadTaskStore, orchestrator, executor: () => leadAgent.executor, loopback }),
+        // Automatic account switching needs the wrapper; an injected App Server stays on its account.
+        accounts: switching ? {
+          profiles: accountProfiles,
+          switchTo: (name) => switching.switchTo(name),
+          readProfileLimits,
+          canSwitch: (taskId) => budgetRunResumable({ taskId, taskStore: leadTaskStore, orchestrator, executor: () => leadAgent.executor }),
+        } : null,
         ...budgetWatcherOptions,
       });
     }
@@ -754,17 +765,34 @@ async function listBudgetPausedRuns({ state, taskStore, orchestrator }) {
   return paused;
 }
 
+/** The task when it is INPUT_REQUIRED on a budget pause and not executing; otherwise null. */
+async function budgetRunResumable({ taskId, taskStore, orchestrator, executor }) {
+  const task = await taskStore.load(taskId, {});
+  if (!task || task.status?.state !== TaskState.TASK_STATE_INPUT_REQUIRED) return null;
+  const pause = (await orchestrator.getPause?.(taskId)) || null;
+  if (pause?.kind !== 'waiting_for_budget') return null;
+  if (executor().isTaskActive(taskId)) return null;
+  return task;
+}
+
+/** Reads the rate limits of one account home through a short-lived App Server (null home: the system account). */
+async function readLimitsOfHome(home) {
+  const server = new CodexAppServer(home ? { codexHome: home } : {});
+  try {
+    return await server.readRateLimits();
+  } finally {
+    try { await server.close(); } catch (_) { /* best effort */ }
+  }
+}
+
 /**
  * Resumes a budget-paused lead task through the same A2A message/send a human uses (loopback, bearer token).
  * Returns false when the task is no longer waiting for budget; a message to a task that is already
  * executing is also rejected server-side by rejectOverlappingLeadTask.
  */
 async function resumeBudgetRun({ taskId, baseUrl, authToken, taskStore, orchestrator, executor, loopback }) {
-  const task = await taskStore.load(taskId, {});
-  if (!task || task.status?.state !== TaskState.TASK_STATE_INPUT_REQUIRED) return false;
-  const pause = (await orchestrator.getPause?.(taskId)) || null;
-  if (pause?.kind !== 'waiting_for_budget') return false;
-  if (executor().isTaskActive(taskId)) return false;
+  const task = await budgetRunResumable({ taskId, taskStore, orchestrator, executor });
+  if (!task) return false;
   if (!loopback.client) loopback.client = await new ClientFactory().createFromUrl(baseUrl, '/orchestrator/agent-card.json');
   await loopback.client.sendMessage({
     tenant: '',

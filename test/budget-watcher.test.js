@@ -234,3 +234,133 @@ test('start() registers the budget-paused runs listed by listPausedRuns', async 
   await clock.advance(1000);
   assert.deepEqual(calls.resumes.sort(), ['a', 'b']);
 });
+
+// ------------------------------------------------ automatic account switching
+
+function accountsSetup({ autoSwitch = true, active = null, names = ['a', 'b'], limits = {}, switchResult = 'switched', canSwitch } = {}) {
+  const log = { read: [], setActive: [], switchTo: [] };
+  const state = { active, autoSwitch, profiles: names.map((name) => ({ name, home: `/h/${name}` })) };
+  const accounts = {
+    profiles: {
+      read: () => state,
+      setActive: (name) => { log.setActive.push(name); state.active = name; },
+    },
+    switchTo: async (name) => { log.switchTo.push(name); return switchResult; },
+    readProfileLimits: async (home) => { log.read.push(home); return limits[home === null ? 'system' : home] ?? BLOCKED; },
+    ...(canSwitch ? { canSwitch } : {}),
+  };
+  return { accounts, log, state };
+}
+
+test('auto-switch off: no other account is read and the run keeps waiting', async () => {
+  const { accounts, log } = accountsSetup({ autoSwitch: false, limits: { '/h/a': OK } });
+  const { clock, calls, watcher } = setup({ accounts });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  await clock.advance(1000);
+  assert.deepEqual(log.read, []);
+  assert.deepEqual(calls.resumes, []);
+  assert.equal(watcher.status('r1').autoSwitch, false);
+  watcher.stop();
+});
+
+test('auto-switch on: the first available profile is chosen, set active, switched to and resumed at once', async () => {
+  const { accounts, log } = accountsSetup({ active: 'a', names: ['a', 'b', 'c'], limits: { '/h/b': OK, '/h/c': OK } });
+  const { clock, calls, watcher } = setup({ accounts });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  await clock.advance(1000);
+  assert.deepEqual(log.read, ['/h/b']);
+  assert.deepEqual(log.setActive, ['b']);
+  assert.deepEqual(log.switchTo, ['b']);
+  assert.deepEqual(calls.resumes, ['r1']);
+  watcher.stop();
+});
+
+test('status reports autoSwitch and the last switch', async () => {
+  const { accounts } = accountsSetup({ limits: { '/h/a': OK } });
+  const { clock, watcher } = setup({ accounts, resumeRun: async () => false });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  assert.equal(watcher.status('r1').autoSwitch, true);
+  assert.equal(watcher.status('r1').lastSwitch, null);
+  await clock.advance(1000);
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  const status = watcher.status('r1');
+  assert.deepEqual({ from: status.lastSwitch.from, to: status.lastSwitch.to }, { from: null, to: 'a' });
+  assert.equal(status.lastSwitch.at, T0 + 1000);
+  watcher.stop();
+});
+
+test('the system account is the fallback after all profiles, and only when it is not active', async () => {
+  const first = accountsSetup({ active: 'a', limits: { system: OK } });
+  const one = setup({ accounts: first.accounts });
+  one.watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  await one.clock.advance(1000);
+  assert.deepEqual(first.log.read, ['/h/b', null]);
+  assert.deepEqual(first.log.switchTo, [null]);
+  assert.deepEqual(one.calls.resumes, ['r1']);
+  one.watcher.stop();
+
+  const second = accountsSetup({ active: null, limits: {} });
+  const two = setup({ accounts: second.accounts });
+  two.watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  await two.clock.advance(1000);
+  assert.deepEqual(second.log.read, ['/h/a', '/h/b']);
+  assert.deepEqual(two.calls.resumes, []);
+  two.watcher.stop();
+});
+
+test('no account available: the next check lands at the earliest reset across accounts', async () => {
+  const limits = {
+    '/h/a': { ...BLOCKED, rateLimits: { rateLimitReachedType: 'x', primary: { resetsAt: (T0 + 1000 + 3_000_000) / 1000 } } },
+    '/h/b': { ...BLOCKED, rateLimits: { rateLimitReachedType: 'x', primary: { resetsAt: (T0 + 1000 + 450) / 1000 } } },
+  };
+  const { accounts } = accountsSetup({ limits });
+  const { clock, watcher } = setup({ accounts, intervalMs: 1000, marginMs: 100 });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  await clock.advance(1000);
+  // Reset at +450 ms after the check, plus the 100 ms margin, beats the 1000 ms interval.
+  assert.equal(watcher.status('r1').nextCheckAt, T0 + 1000 + 550);
+  watcher.stop();
+});
+
+test('no known reset falls back to the regular interval', async () => {
+  const { accounts } = accountsSetup({});
+  const { clock, watcher } = setup({ accounts, intervalMs: 1000 });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  await clock.advance(1000);
+  assert.equal(watcher.status('r1').nextCheckAt, T0 + 2000);
+  watcher.stop();
+});
+
+test('profile limits are cached for 60 s across runs and checks', async () => {
+  const { accounts, log } = accountsSetup({ names: ['a'] });
+  const { clock, watcher } = setup({ accounts, intervalMs: 1000 });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  watcher.notePause('r2', { kind: 'waiting_for_budget' });
+  await clock.advance(1000);
+  await clock.advance(1000);
+  assert.deepEqual(log.read, ['/h/a']);
+  await clock.advance(60_000);
+  assert.equal(log.read.length >= 2, true);
+  watcher.stop();
+});
+
+test('switchTo busy still resumes the run', async () => {
+  const { accounts, log } = accountsSetup({ limits: { '/h/a': OK }, switchResult: 'busy' });
+  const { clock, calls, watcher } = setup({ accounts });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  await clock.advance(1000);
+  assert.deepEqual(log.switchTo, ['a']);
+  assert.deepEqual(calls.resumes, ['r1']);
+  watcher.stop();
+});
+
+test('no switch happens while the run reports as active', async () => {
+  const { accounts, log } = accountsSetup({ limits: { '/h/a': OK }, canSwitch: async () => false });
+  const { clock, calls, watcher } = setup({ accounts });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  await clock.advance(1000);
+  assert.deepEqual(log.read, []);
+  assert.deepEqual(log.switchTo, []);
+  assert.deepEqual(calls.resumes, []);
+  watcher.stop();
+});

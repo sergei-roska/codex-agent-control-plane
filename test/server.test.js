@@ -1496,3 +1496,77 @@ test('server wiring follows the active account profile and works without a profi
   }
   assert.equal(made[1].closed, true);
 });
+
+test('describePause adds the auto-switch line only for a budget pause with auto-switch on', () => {
+  const line = /Auto-switch is on: the server switches to another account with available budget\./;
+  assert.match(describePause('t1', BUDGET_PAUSE, { autoResume: true, autoSwitch: true }), line);
+  assert.doesNotMatch(describePause('t1', BUDGET_PAUSE, { autoResume: true }), line);
+  assert.doesNotMatch(describePause('t1', BUDGET_PAUSE), line);
+});
+
+test('a budget pause with auto-switch on switches to another account and resumes at once', async () => {
+  const dir = tmpDir();
+  const accountsDir = path.join(dir, 'accounts');
+  fs.mkdirSync(accountsDir);
+  const homeA = path.join(accountsDir, 'a');
+  const homeB = path.join(accountsDir, 'b');
+  fs.writeFileSync(path.join(accountsDir, 'profiles.json'), JSON.stringify({
+    version: 1,
+    active: 'a',
+    autoSwitch: true,
+    profiles: [{ name: 'a', home: homeA }, { name: 'b', home: homeB }],
+  }));
+  const created = [];
+  const appServerFactory = (home) => {
+    created.push(home);
+    return {
+      async start() {},
+      async getAccount() { return { account: { type: 'chatgpt' } }; },
+      async readRateLimits() { return { ordinaryUsageAllowed: false, rateLimits: { rateLimitReachedType: 'rate_limit_reached' }, rateLimitsByLimitId: null }; },
+      async run() {},
+      async close() {},
+      async getVersion() { return null; },
+      async supervisorState() { return null; },
+      async processIdentity() { return null; },
+      async listHooks() { return []; },
+      async hookInventory() { return []; },
+      async listMcpServerNames() { return []; },
+      async mcpInventory() { return []; },
+    };
+  };
+  const limitReads = [];
+  const resumes = [];
+  let paused = true;
+  const orchestrator = {
+    async run(args) { return { runId: args.runId, status: 'waiting_for_budget', text: '', rounds: 0, assignments: [], pause: BUDGET_PAUSE }; },
+    async getPause() { return paused ? BUDGET_PAUSE : null; },
+    async resume(args) { paused = false; resumes.push(args); return { runId: args.runId, status: 'completed', text: 'ok', rounds: 1, assignments: [] }; },
+  };
+  const runtime = await startServer({
+    listen: true,
+    port: 0,
+    stateFile: ':memory:',
+    tokenFile: path.join(dir, 'token'),
+    accountsDir,
+    workspace: dir,
+    appServerFactory,
+    readProfileLimits: async (home) => { limitReads.push(home); return RATE_LIMITS_OK; },
+    orchestratorFactory: () => orchestrator,
+    budgetWatcherOptions: { intervalMs: 40, marginMs: 0 },
+  });
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const first = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    assert.equal(first.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.match(statusText(first), /Auto-switch is on: the server switches to another account with available budget\./);
+    for (let i = 0; i < 100 && resumes.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(resumes.length, 1);
+    assert.deepEqual(limitReads, [homeB]);
+    assert.equal(runtime.accountProfiles.read().active, 'b');
+    assert.equal(runtime.switchingAppServer.getCodexHome(), homeB);
+    assert.deepEqual(created, [homeA, homeB]);
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
