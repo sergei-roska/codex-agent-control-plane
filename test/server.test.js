@@ -1621,3 +1621,24 @@ test('server wires a watch on the profiles file and closes it with the server', 
   }
   assert.deepEqual(unwatched, [watched[0].listener]);
 });
+
+test('a follow-up goal carries the previous run digest and works without one', async () => {
+  const runs = [];
+  const digest = { goal: 'Old', text: 'Done', rounds: 3, status: 'completed', outcomes: [], openDecisions: [], changedFiles: ['src/a.js'], inspectedDocs: [], nextWork: '' };
+  const withDigest = {
+    async getRunGoal() { return 'Checkpoint goal'; },
+    async getRunDigest(id) { return id === 'old-1' ? digest : null; },
+    async run(args) { runs.push(args); return { status: 'completed', text: 'ok' }; },
+  };
+  await runFollowUp({ orchestrator: withDigest, referenceTasks: [refTask()] });
+  assert.match(runs[0].goal, /Previous run in this session \(digest; do not re-explore what it established, dispatch explorers only for gaps it names\):\nRun status: completed; dispatch rounds: 3/);
+  assert.match(runs[0].goal, /Changed files: src\/a\.js/);
+  assert.match(runs[0].goal, /Now do more$/);
+  runs.length = 0;
+  await runFollowUp({ orchestrator: { ...withDigest, async getRunDigest() { throw new Error('boom'); } }, referenceTasks: [refTask()] });
+  assert.doesNotMatch(runs[0].goal, /Previous run in this session/);
+  assert.match(runs[0].goal, /Earlier goal:\nCheckpoint goal/);
+  runs.length = 0;
+  await runFollowUp({ orchestrator: { async getRunGoal() { return null; }, async run(args) { runs.push(args); return { status: 'completed', text: 'ok' }; } }, referenceTasks: [refTask()] });
+  assert.doesNotMatch(runs[0].goal, /Previous run in this session/);
+});

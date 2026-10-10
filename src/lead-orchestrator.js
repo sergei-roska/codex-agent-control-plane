@@ -60,6 +60,94 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+const DIGEST_MAX_CHARS = 12000;
+const digestClip = (value, max) => {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+};
+
+/** Bounded plain-object digest of a finished run's checkpoint state. */
+function buildRunDigest(values) {
+  const outcomes = (Array.isArray(values.outcomes) ? values.outcomes : []).filter((entry) => entry && entry.kind !== 'reconciliation');
+  const changed = new Set();
+  const inspected = new Map();
+  const digestOutcomes = outcomes.map((outcome) => {
+    const report = outcome.report || null;
+    for (const file of outcome.writerExecution?.delta?.changedPaths || []) if (typeof file === 'string' && file) changed.add(file);
+    for (const file of report?.filesInspected || []) if (typeof file === 'string' && file) inspected.set(file, (inspected.get(file) || 0) + 1);
+    const entry = { role: outcome.role || null };
+    const objective = digestClip(outcome.objective ?? outcome.assignment?.objective, 300);
+    if (objective) entry.objective = objective;
+    entry.status = outcome.status || null;
+    if (report?.outcome) entry.outcome = report.outcome;
+    entry.summary = digestClip(report?.summary, 400);
+    const question = digestClip(report?.decisionRequest?.question, 300);
+    if (question) entry.decisionQuestion = question;
+    return entry;
+  });
+  const text = typeof values.text === 'string' ? values.text : '';
+  const nextParagraph = text.split(/\n\s*\n/).map((part) => part.trim())
+    .find((part) => /^\W*(next work|next steps?|remaining work|follow-?ups?)\b/i.test(part));
+  return {
+    goal: digestClip(values.goal, 2000),
+    text: digestClip(text, 4000),
+    rounds: Number.isInteger(values.round) ? values.round : 0,
+    status: values.status || null,
+    outcomes: digestOutcomes,
+    openDecisions: (values.openDecisions || []).map((entry) => ({
+      id: entry.id ?? null,
+      role: entry.role ?? null,
+      question: digestClip(entry.request?.question, 300),
+    })),
+    changedFiles: [...changed].sort().slice(0, 100),
+    inspectedDocs: [...inspected.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 30)
+      .map(([file, count]) => ({ file, count })),
+    nextWork: nextParagraph ? digestClip(nextParagraph, 1500) : '',
+  };
+}
+
+/** Compact text block (at most 12000 chars) for a digest; trims outcome summaries, then inspectedDocs, then changedFiles. */
+function renderRunDigest(digest, maxChars = DIGEST_MAX_CHARS) {
+  if (!digest || typeof digest !== 'object') return '';
+  const build = ({ summaries, docs, files }) => {
+    const lines = [`Run status: ${digest.status || 'unknown'}; dispatch rounds: ${digest.rounds ?? 0}`];
+    if (digest.goal) lines.push(`Goal: ${digest.goal}`);
+    if (digest.text) lines.push(`Final text: ${digest.text}`);
+    if (digest.nextWork) lines.push(`Next work: ${digest.nextWork}`);
+    const outcomes = digest.outcomes || [];
+    if (outcomes.length > 0) {
+      lines.push('Worker outcomes:');
+      for (const outcome of outcomes) {
+        const head = `- ${outcome.role || 'role'} [${outcome.outcome || outcome.status || 'unknown'}]${outcome.objective ? ` ${outcome.objective}` : ''}`;
+        lines.push(head);
+        if (summaries && outcome.summary) lines.push(`  summary: ${summaries === 'short' ? digestClip(outcome.summary, 120) : outcome.summary}`);
+        if (outcome.decisionQuestion) lines.push(`  decision question: ${outcome.decisionQuestion}`);
+      }
+    }
+    const open = digest.openDecisions || [];
+    if (open.length > 0) {
+      lines.push('Open decisions:');
+      for (const entry of open) lines.push(`- ${entry.id} (${entry.role}): ${entry.question}`);
+    }
+    if (files && (digest.changedFiles || []).length > 0) lines.push(`Changed files: ${digest.changedFiles.join(', ')}`);
+    if (docs && (digest.inspectedDocs || []).length > 0) lines.push(`Most inspected files: ${digest.inspectedDocs.map((entry) => `${entry.file} (${entry.count})`).join(', ')}`);
+    return lines.join('\n');
+  };
+  const stages = [
+    { summaries: 'full', docs: true, files: true },
+    { summaries: 'short', docs: true, files: true },
+    { summaries: false, docs: true, files: true },
+    { summaries: false, docs: false, files: true },
+    { summaries: false, docs: false, files: false },
+  ];
+  let rendered = '';
+  for (const stage of stages) {
+    rendered = build(stage);
+    if (rendered.length <= maxChars) return rendered;
+  }
+  return `${rendered.slice(0, maxChars - 3)}...`;
+}
+
 class LeadOrchestrator {
   constructor({
     appServer,
@@ -173,6 +261,14 @@ class LeadOrchestrator {
     if (!isNonEmptyString(runId)) return null;
     const goal = (await this._snapshot(runId)).values?.goal;
     return isNonEmptyString(goal) ? goal : null;
+  }
+
+  /** Bounded digest of a run's checkpointed state for follow-up runs, or null when there is no checkpoint. */
+  async getRunDigest(runId) {
+    if (!isNonEmptyString(runId)) return null;
+    const snapshot = await this._snapshot(runId);
+    if (!LeadOrchestrator._exists(snapshot) || !snapshot.values?.goal) return null;
+    return buildRunDigest(snapshot.values);
   }
 
   /** True when a checkpoint exists and the graph still has nodes to run (e.g. after a crashed step). */
@@ -325,6 +421,7 @@ class LeadOrchestrator {
 
 module.exports = {
   LeadOrchestrator,
+  renderRunDigest,
   DECISION_SCHEMA,
   safeRelativePath,
   RunNotFoundError,

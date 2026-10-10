@@ -11,7 +11,7 @@ const { createSwitchingAppServer } = require('./app-server-switch');
 const { CodexAppServer } = require('./codex-app-server');
 const { loadRoles, createLeadRole } = require('./role-catalog');
 const { registerRoleAgents } = require('./a2a-role-service');
-const { LeadOrchestrator, ResumeInputError } = require('./lead-orchestrator');
+const { LeadOrchestrator, ResumeInputError, renderRunDigest } = require('./lead-orchestrator');
 const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
 const { createBudgetWatcher } = require('./budget-watcher');
 const { WriterAdmission } = require('./writer-admission');
@@ -195,20 +195,26 @@ function priorResultText(refTask) {
 }
 
 /** Goal for a new run that continues a finished task; priorGoal falls back to the referenced task's first user message. */
-function composeFollowUpGoal({ refTask, priorGoal, newRequest }) {
+function composeFollowUpGoal({ refTask, priorGoal, digest = null, newRequest }) {
   const artifacts = refTask.artifacts || [];
   const disposition = artifacts[artifacts.length - 1]?.metadata?.acceptance?.disposition || 'n/a';
   let earlier = `Earlier goal:\n${priorGoal || firstUserGoal(refTask)}\nEarlier result:\n${priorResultText(refTask)}`;
   if (earlier.length > MAX_EARLIER_CONTEXT_CHARS) {
     earlier = TRUNCATION_PREFIX + earlier.slice(earlier.length - (MAX_EARLIER_CONTEXT_CHARS - TRUNCATION_PREFIX.length));
   }
+  const renderedDigest = digest ? renderRunDigest(digest) : '';
   return [
     'This is a follow-up to an earlier orchestrator task in the same conversation.',
     `Earlier task ${refTask.id} ended as ${TaskState[refTask.status?.state] || 'UNKNOWN'} (acceptance: ${disposition}).`,
     earlier,
+    ...(renderedDigest ? ['Previous run in this session (digest; do not re-explore what it established, dispatch explorers only for gaps it names):', renderedDigest] : []),
     'New request (authoritative; the earlier context is background only):',
     newRequest,
   ].join('\n');
+}
+
+async function loadRunDigest(orchestrator, runId) {
+  try { return (await orchestrator.getRunDigest?.(runId)) || null; } catch (_) { return null; }
 }
 
 /** Reference task ids of the first non-empty user message in a task history, or []. */
@@ -332,7 +338,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
         }
         let priorGoal = null;
         try { priorGoal = (await orchestrator.getRunGoal?.(refId)) || null; } catch (_) { priorGoal = null; }
-        goal = composeFollowUpGoal({ refTask, priorGoal, newRequest: goal });
+        goal = composeFollowUpGoal({ refTask, priorGoal, digest: await loadRunDigest(orchestrator, refId), newRequest: goal });
       }
 
       let resumeInput;
@@ -397,7 +403,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
             if (!refTask) throw new Error(`Reference task ${refId} could not be loaded to recover the original goal.`);
             let priorGoal = null;
             try { priorGoal = (await orchestrator.getRunGoal?.(refId)) || null; } catch (_) { priorGoal = null; }
-            original = composeFollowUpGoal({ refTask, priorGoal, newRequest: original });
+            original = composeFollowUpGoal({ refTask, priorGoal, digest: await loadRunDigest(orchestrator, refId), newRequest: original });
           }
           if (!original) throw new Error('The run has no checkpoint and the original goal could not be recovered from the task history.');
           let originalContract;

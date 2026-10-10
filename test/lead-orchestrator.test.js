@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { LeadOrchestrator } = require('../src/lead-orchestrator');
+const { LeadOrchestrator, renderRunDigest } = require('../src/lead-orchestrator');
 const { TaskState } = require('@a2a-js/sdk');
 
 const brief = (role, allowedFiles = ['src/example.js']) => ({
@@ -107,15 +107,15 @@ function role(name, sandbox) {
   return { name, description: `${name} agent`, model: 'gpt-test', effort: 'high', sandbox, instructions: 'Test agent' };
 }
 
-function completedTask(roleName) {
+function completedTask(roleName, reportText = workerReport(`${roleName} done`), changedPaths = []) {
   return {
     id: `${roleName}-task`,
     contextId: `${roleName}-context`,
     status: { state: TaskState.TASK_STATE_COMPLETED },
     artifacts: [{
       name: 'result',
-      parts: [{ content: { $case: 'text', value: workerReport(`${roleName} done`) } }],
-      metadata: { writerExecution: { executionId: `${roleName}-exec`, state: 'released', delta: { known: true, headChanged: false, changedPaths: [] }, reason: null } },
+      parts: [{ content: { $case: 'text', value: reportText } }],
+      metadata: { writerExecution: { executionId: `${roleName}-exec`, state: 'released', delta: { known: true, headChanged: false, changedPaths }, reason: null } },
     }],
     history: [],
   };
@@ -370,4 +370,52 @@ test('rejects a human choice outside pending options and preserves free-text res
   const resumedLead = h.calls.filter((call) => call.type === 'lead')[1];
   assert.match(resumedLead.input, /"answer":"Proceed with a text-only answer"/);
   assert.equal(resumedLead.input.includes('"choice"'), false);
+});
+
+test('getRunDigest summarizes a finished run checkpoint and is null without one', async () => {
+  const report = workerReport('S'.repeat(600), { filesInspected: ['docs/a.md', 'docs/b.md', 'docs/a.md'], filesChanged: ['src/example.js'] });
+  const h = makeHarness({
+    decisions: [decision('dispatch', [brief('orch-builder')]), decision('finish', [], `Done.\n\nNext work: fix the matrix ${'x'.repeat(2000)}`)],
+    taskSequence: [completedTask('orch-builder', report, ['src/z.js', 'src/example.js'])],
+  });
+  const result = await h.orchestrator.run({ goal: 'G'.repeat(3000), runId: 'run-digest' });
+  const digest = await h.orchestrator.getRunDigest(result.runId || 'run-digest');
+  assert.equal(digest.status, 'completed');
+  assert.equal(digest.rounds, 1);
+  assert.equal(digest.goal.length, 2000);
+  assert.equal(digest.outcomes.length, 1);
+  assert.equal(digest.outcomes[0].summary.length, 400);
+  assert.ok(digest.text.length <= 4000);
+  assert.ok(digest.nextWork.startsWith('Next work: fix the matrix'));
+  assert.ok(digest.nextWork.length <= 1500);
+  assert.deepEqual(digest.inspectedDocs, [{ file: 'docs/a.md', count: 2 }, { file: 'docs/b.md', count: 1 }]);
+  assert.deepEqual(digest.changedFiles, ['src/example.js', 'src/z.js']);
+  assert.equal(await h.orchestrator.getRunDigest('no-such-run'), null);
+  assert.equal(await h.orchestrator.getRunDigest(''), null);
+});
+
+test('renderRunDigest trims summaries, then inspected docs, then changed files within 12000 chars', () => {
+  const outcomes = Array.from({ length: 60 }, (_, i) => ({ role: `r${i}`, objective: 'o', status: 'TASK_STATE_COMPLETED', outcome: 'completed', summary: 'x'.repeat(400) }));
+  const base = {
+    goal: 'goal', text: 'final', rounds: 2, status: 'completed', outcomes, openDecisions: [], nextWork: '',
+    inspectedDocs: Array.from({ length: 30 }, (_, i) => ({ file: `docs/${'d'.repeat(60)}${i}.md`, count: 30 - i })),
+    changedFiles: Array.from({ length: 100 }, (_, i) => `src/${'f'.repeat(50)}${i}.js`),
+  };
+  const full = renderRunDigest({ ...base, outcomes: outcomes.slice(0, 2), inspectedDocs: [], changedFiles: ['src/a.js'] });
+  assert.match(full, /summary: x{400}/);
+  assert.match(full, /Changed files: src\/a\.js/);
+  const trimmed = renderRunDigest(base);
+  assert.ok(trimmed.length <= 12000);
+  assert.doesNotMatch(trimmed, /summary: /);
+  assert.match(trimmed, /Most inspected files/);
+  assert.match(trimmed, /Changed files/);
+  const heavy = { ...base, outcomes: Array.from({ length: 25 }, (_, i) => ({ role: `r${i}`, objective: 'o'.repeat(200), status: 'x', summary: 's' })) };
+  const noDocs = renderRunDigest(heavy);
+  assert.ok(noDocs.length <= 12000);
+  assert.doesNotMatch(noDocs, /Most inspected files/);
+  assert.match(noDocs, /Changed files/);
+  const huge = renderRunDigest({ ...heavy, outcomes: Array.from({ length: 200 }, (_, i) => ({ role: `r${i}`, objective: 'o'.repeat(300), status: 'x' })) });
+  assert.ok(huge.length <= 12000);
+  assert.doesNotMatch(huge, /Changed files/);
+  assert.equal(renderRunDigest(null), '');
 });
