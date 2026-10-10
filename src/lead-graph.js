@@ -27,7 +27,7 @@ const MAX_PROMPT_OUTCOMES_CHARS = 60_000;
 // SES-01: context size (input of the last model request) above which the session starts a new lead thread.
 const DEFAULT_LEAD_ROLLOVER_TOKENS = 150_000;
 const ROLLOVER_WINDOW_FRACTION = 0.6;
-const DELTA_REMINDER = 'The rules, roles, and output format from the start of this thread still apply. Return only one JSON object matching the supplied schema.';
+const DELTA_REMINDER = 'The rules, roles, and output format from the start of this thread still apply. Return only one JSON object matching the supplied schema. Give workers exact paths with line ranges and established facts in inputs/evidence; do not read large files yourself, dispatch an explorer for broad reading.';
 const TEXT_PROJECTION_HEAD = 6000;
 const TEXT_PROJECTION_TAIL = 2000;
 const TEXT_EVIDENCE_THRESHOLD = TEXT_PROJECTION_HEAD + TEXT_PROJECTION_TAIL;
@@ -1010,6 +1010,7 @@ function buildLeadGraph(deps) {
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(outcomesForPrompt(state.outcomes)));
     sections.push([
       'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, and continueFrom (null unless continuing a worker). Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles; read-only roles may use allowedFiles []. allowedFiles entries are exact paths or directory prefixes; globs are not supported. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
+      'Briefing rules: in each assignment inputs and evidence, give exact file paths with line ranges and the facts already established, so workers do not re-explore; reuse explorer findings by quoting the relevant paths and ranges. Do not read large files yourself: read at most a few narrow ranges and dispatch an explorer for broad reading.',
       deps.parallelWriters
         ? 'Waves: assignment.wave is an integer >= 1 or null. Consecutive assignments sharing the same wave run concurrently. Writers in one wave each work in an isolated copy of the workspace made from the same starting state and do not see each other\'s changes; their changes are integrated into the shared workspace as each finishes. A later wave (or a null-wave assignment after them), for example a verifier, sees the integrated result. Writers in one wave must own disjoint allowedFiles. Use null for strictly sequential steps.'
         : 'Waves: assignment.wave may be used to group read-only work that runs concurrently. Writers always run one at a time in array order regardless of wave. Use null otherwise.',

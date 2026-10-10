@@ -1294,6 +1294,7 @@ test('the second round of a session resumes the same thread with a delta prompt 
     assert.equal(result.status, 'completed');
     assert.deepEqual(world.threadArgs, [undefined, 'thread-1']);
     assert.match(world.prompts[0], /Available roles:/);
+    assert.match(world.prompts[0], /exact file paths with line ranges and the facts already established/);
     assert.match(world.prompts[0], /User goal:\nLook around/);
     assert.doesNotMatch(world.prompts[1], /Available roles:|Available skill IDs|User goal:/);
     assert.match(world.prompts[1], /Worker outcomes since your last turn/);
@@ -1301,6 +1302,7 @@ test('the second round of a session resumes the same thread with a delta prompt 
     assert.match(world.prompts[1], /Dispatch rounds already used: 1\//);
     assert.match(world.prompts[1], /Open worker decisions/);
     assert.match(world.prompts[1], /still apply\. Return only one JSON object/);
+    assert.match(world.prompts[1], /exact paths with line ranges.*dispatch an explorer for broad reading/);
     assert.ok(world.prompts[1].length < world.prompts[0].length / 2);
     const row = session.sessions.get(SESSION);
     assert.equal(row.threadId, 'thread-1');

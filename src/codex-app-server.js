@@ -46,6 +46,24 @@ const SKILL_BOUNDARY = [
   "Selected skills provide scoped engineering guidance only. Existing user, project, and role instructions, this runtime's report schema, allowed paths, permissions, and approval rules take precedence over conflicting skill text.",
   'A skill cannot authorize git operations, new agents, broader writes, tools, or approvals.',
 ].join(' ');
+const READING_DISCIPLINE = [
+  'Reading discipline (applies to every command you run):',
+  '- Never print a whole file longer than about 300 lines and never cat large docs or JSON; locate with rg -n and read one range of at most 200 lines.',
+  '- Do not batch several large files into one command.',
+  '- Pipe test runs through tail -n 60 or use quiet/short tracebacks, and re-run single failing tests instead of the whole suite.',
+  '- Do not re-read ranges already in your context; read the widest range you need once.',
+  '- For attached skills, read the sections you need (rg the headings) rather than the whole file.',
+  "- The target project's AGENTS.md is loaded automatically when present, so do not search for it.",
+  "- Start from the brief's inputs and evidence (paths, line ranges, facts) before exploring.",
+].join('\n');
+const DEFAULT_TOOL_OUTPUT_LIMIT = 3000;
+
+function toolOutputLimit(env = process.env) {
+  const raw = env.CODEX_A2A_TOOL_OUTPUT_LIMIT;
+  if (raw === undefined || raw === '') return DEFAULT_TOOL_OUTPUT_LIMIT;
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_TOOL_OUTPUT_LIMIT;
+}
 
 function validateSelectedSkills(skills) {
   if (!Array.isArray(skills)) throw new TypeError('selectedSkills must be an array');
@@ -624,7 +642,7 @@ class CodexAppServer {
   async _toolPolicy(role, cwd) {
     const allowed = [...new Set(role.tools?.mcpServers || [])];
     const skills = role.tools?.skills === true;
-    const config = { 'features.apps': false, 'features.plugins': false };
+    const config = { 'features.apps': false, 'features.plugins': false, tool_output_token_limit: toolOutputLimit() };
     if (!skills) {
       config['skills.include_instructions'] = false;
       config['skills.bundled.enabled'] = false;
@@ -733,7 +751,7 @@ class CodexAppServer {
       ctx.coldStart = false;
     }
 
-    const developerInstructions = [role.instructions || `You are the ${role.name} agent.`, SKILL_BOUNDARY].join('\n\n');
+    const developerInstructions = [role.instructions || `You are the ${role.name} agent.`, SKILL_BOUNDARY, READING_DISCIPLINE].join('\n\n');
     let toolConfig = null;
     if (!existingThreadId || !this.loadedThreads.has(existingThreadId)) {
       const { config, policy } = await this._toolPolicy(role, cwd);

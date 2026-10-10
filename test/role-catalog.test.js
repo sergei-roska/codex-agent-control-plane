@@ -40,7 +40,17 @@ test('resolved role instructions define A2A runtime behavior and an absolute loc
   for (const role of loadRoles().values()) {
     assert.match(role.instructions, /runtime A2A worker/i, role.name);
     assert.doesNotMatch(role.instructions, /\{\{[^}]+\}\}/, role.name);
-    assert.match(role.instructions, /team rules at \/[^\n]+\/profiles\/TEAM\.md/, role.name);
+    assert.doesNotMatch(role.instructions, /Read the team rules at/, role.name);
+    assert.match(role.instructions, /do not re-read profiles\/TEAM\.md/, role.name);
+    assert.ok(role.instructions.includes('# Universal Orchestrator Development Team'), role.name);
+  }
+});
+
+test('profile model and effort values are unchanged by inlining the team rules', () => {
+  for (const role of loadRoles().values()) {
+    const toml = fs.readFileSync(path.join(PROFILES_DIR, 'agents', `${role.name}.toml`), 'utf8');
+    assert.ok(toml.includes(`model = "${role.model}"`), role.name);
+    assert.ok(toml.includes(`model_reasoning_effort = "${role.effort}"`), role.name);
   }
 });
 
@@ -53,7 +63,7 @@ test('profiles work from a copied directory without the original source pack', (
   const roles = loadRoles({ profilesDir: copiedProfiles });
   assert.equal(roles.size, 8);
   for (const role of roles.values()) {
-    assert.ok(role.instructions.includes(path.join(copiedProfiles, 'TEAM.md')));
+    assert.ok(role.instructions.includes(path.join(copiedProfiles, 'skills')));
     assert.doesNotMatch(role.instructions, /orchestrator-agent-pack/);
   }
 

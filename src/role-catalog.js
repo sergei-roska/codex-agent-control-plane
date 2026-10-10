@@ -128,8 +128,14 @@ function parseProfile(source, filePath) {
   };
 }
 
-function runtimeInstructions(instructions, teamPath) {
-  const resolved = instructions.replaceAll('{{TEAM_RULES}}', teamPath);
+function runtimeInstructions(instructions, teamPath, teamRules, skillPath) {
+  const sentence = /Read the team rules at \{\{TEAM_RULES\}\} and applicable target-project instructions( before acting)?\./g;
+  let resolved = instructions.replace(sentence, (_m, before) => `Follow the team rules below and applicable target-project instructions${before || ''}.`);
+  if (resolved !== instructions) {
+    const inline = teamRules.replaceAll('profiles/skills/', skillPath).trim();
+    resolved += `\n\nTeam rules (already provided here; do not re-read profiles/TEAM.md):\n\n${inline}`;
+  }
+  resolved = resolved.replaceAll('{{TEAM_RULES}}', teamPath);
   if (resolved.includes('{{') || resolved.includes('}}')) {
     throw new Error('Role instructions contain an unresolved template placeholder');
   }
@@ -147,6 +153,8 @@ function loadRoles({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
     throw new Error(`Team rules file is missing: ${teamPath}`);
   }
 
+  const teamRules = fs.readFileSync(teamPath, 'utf8');
+  const skillPath = path.join(root, 'skills') + path.sep;
   const roles = new Map();
   for (const fileName of fs.readdirSync(agentsDir).filter((name) => name.endsWith('.toml')).sort()) {
     const filePath = path.join(agentsDir, fileName);
@@ -156,7 +164,7 @@ function loadRoles({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
     }
     delete role.sourceName;
     if (roles.has(role.name)) throw new Error(`${filePath}: duplicate role name ${role.name}`);
-    role.instructions = runtimeInstructions(role.instructions, teamPath);
+    role.instructions = runtimeInstructions(role.instructions, teamPath, teamRules, skillPath);
     roles.set(role.name, role);
   }
   if (roles.size === 0) throw new Error(`No role profiles found in ${agentsDir}`);
