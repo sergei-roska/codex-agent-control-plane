@@ -297,6 +297,40 @@ test('a new App Server version is re-probed once; a failing probe sends the atte
   assert.equal(createLaneProbeStore(env.db).get('v2').ok, false);
 });
 
+test('a stored failed probe is not reused: the next process re-probes and a pass replaces it', async (t) => {
+  const repo = makeRepo();
+  const stateDir = tmp('lane-state-');
+  t.after(() => { fs.rmSync(repo, { recursive: true, force: true }); fs.rmSync(stateDir, { recursive: true, force: true }); });
+  const stateFile = path.join(stateDir, 'state.sqlite');
+  const db = new Database(':memory:');
+  const leaky = probeExec({ leak: true });
+  let mode = await selectWriterIsolation({ env: {}, appServer: { getVersion: () => 'v1', execCommand: leaky.execCommand }, workspace: repo, db, stateFile });
+  assert.equal(mode.mode, 'shared');
+  assert.equal(createLaneProbeStore(db).get('v1').ok, false);
+  const exec = probeExec();
+  mode = await selectWriterIsolation({ env: {}, appServer: { getVersion: () => 'v1', execCommand: exec.execCommand }, workspace: repo, db, stateFile });
+  assert.deepEqual([mode.mode, mode.probe.stored], ['worktree', false]);
+  assert.ok(exec.calls.length > 0);
+  assert.equal(createLaneProbeStore(db).get('v1').ok, true);
+});
+
+test('after a failed re-probe a version is not probed again within the process', async (t) => {
+  let probes = 0;
+  let version = 'v2';
+  const env = setup(t, async () => ok(), {
+    manager: { runProbe: async () => { probes += 1; return { ok: false, version, reason: 'escaped: shared_workspace_write', checks: [] }; } },
+  });
+  env.lanes.appServer.getVersion = () => version;
+  assert.equal(await env.lanes.available(), false);
+  version = 'v3';
+  assert.equal(await env.lanes.available(), false);
+  version = 'v2';
+  assert.equal(await env.lanes.available(), false);
+  version = 'v3';
+  assert.equal(await env.lanes.available(), false);
+  assert.equal(probes, 2);
+});
+
 test('the integration records a pending turn start before spawn and the real apply identity on spawn', async (t) => {
   const atSpawn = [];
   let childPid = null;

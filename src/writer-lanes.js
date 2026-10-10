@@ -160,12 +160,14 @@ function versionKey(version) {
   return version || 'unknown';
 }
 
-// Stored probe result for the running App Server version, else a fresh probe that is stored (R1).
+// Stored passing result for the running App Server version, else a fresh probe that is stored (R1).
+// A stored failure is kept for diagnosis but never reused: it may be a false failure (for example
+// the shared tree edited during the probe), so the probe runs again.
 async function probeVersion({ appServer, db, workspace, lanesRoot, links, networkAccess, runProbe = runConfinementProbe }) {
   const store = createLaneProbeStore(db);
   const version = versionKey(appServer.getVersion());
   const stored = store.get(version);
-  if (stored) return { version: stored.version, ok: stored.ok, reason: stored.reason ?? null, stored: true };
+  if (stored?.ok === true) return { version: stored.version, ok: stored.ok, reason: stored.reason ?? null, stored: true };
   let result;
   try {
     fs.mkdirSync(lanesRoot, { recursive: true });
@@ -251,6 +253,7 @@ class LaneManager {
     this.quiescenceOverride = quiescence;
     this.mutex = workspaceMutex(this.workspace);
     this.reprobing = null;
+    this.failedProbes = new Map();
   }
 
   get quiescence() {
@@ -270,11 +273,16 @@ class LaneManager {
     if (this.mode !== 'worktree') return false;
     const version = versionKey(this.appServer?.getVersion?.());
     if (this.probe?.version === version) return this.probe.ok === true;
+    // After a failure in this process, a version is not probed again (no probing on every attempt).
+    if (this.failedProbes.has(version)) return false;
     if (!this.reprobing) {
       this.reprobing = probeVersion({
         appServer: this.appServer, db: this.db, workspace: this.workspace, lanesRoot: this.lanesRoot,
         links: this.links, networkAccess: this.networkAccess, runProbe: this.runProbe,
-      }).then((probe) => { this.probe = probe; }, () => {}).finally(() => { this.reprobing = null; });
+      }).then((probe) => {
+        this.probe = probe;
+        if (!probe.ok) this.failedProbes.set(version, probe);
+      }, () => { this.failedProbes.set(version, null); }).finally(() => { this.reprobing = null; });
     }
     await this.reprobing;
     return this.probe?.version === version && this.probe.ok === true;
