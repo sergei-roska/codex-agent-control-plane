@@ -81,6 +81,7 @@ evaluated. Ids and codes are part of the contract.
 | `assignment.continue_from` | `continue_from_unknown`, `continue_from_role`, `continue_from_duplicate` | finished outcomes of the run (LL-5) | gate |
 | `decision.goal` | `goal_unstated` | decision JSON: `finish` needs `goalAchieved` true or false (LL-1) | gate |
 | `decision.acceptance_checks` | proposal refusals (vacuous or unsafe argv, invalid check) | decision JSON, `validateAgentChecks` in `src/acceptance.js` (LL-4) | safety-critical |
+| `decision.investigate_first` | `investigation_missing` | `request_human_input` (owner-only reasons: `paid_resources`, `credentials_or_access`, `external_write`, `irreversible_operation`, `prd_requirement_change`) or a repeated unmet-goal finish must cite a read-only investigation finished after the blocker appeared (LL-6) | gate |
 
 Lead loop fixes (2026-10-10, [design](lead-loop-fixes-design.md)): `finish` with
 `goalAchieved: false` and reaching the round limit no longer end the run; they pause
@@ -138,7 +139,7 @@ report of an out-of-scope change is the only signal for those cases. (Corrected
 | Id | Codes | Source | Safety |
 | --- | --- | --- | --- |
 | `accept.contract_valid` | `contract_invalid` | pinned acceptance contract (`src/acceptance.js:16-56`) | safety-critical (UNKNOWN: the required checks cannot be known) |
-| `accept.checks` | `check_missing`, `check_failed`, `check_error`, `check_changed` | host runs for owner checks; Codex sandbox runs (`command/exec`, read-only workspace, no network) for agent-proposed checks. `check_error` (UNKNOWN): the sandbox was unavailable or failed. `check_changed` (UNKNOWN): a workspace script named in a pinned agent check changed after pinning; the owner decides | safety-critical |
+| `accept.checks` | `check_missing`, `check_failed`, `check_error`, `check_changed` | host runs for owner checks; Codex sandbox runs (`command/exec`, read-only workspace, no network) for agent-proposed checks. `check_error` (UNKNOWN): the sandbox was unavailable or failed. `check_changed` (UNKNOWN): a workspace script named in a pinned agent check changed after pinning; an independent auditor reviews it (preserve: re-pin; weaken: `check_weakened`, FAIL); only a required PRD change reaches the owner (LL-6) | safety-critical |
 | `accept.snapshot` | `snapshot_unavailable` | `takeSnapshot` (`src/workspace-snapshot.js:345-363`) | safety-critical (UNKNOWN) |
 | `accept.candidate_stable` | `candidate_changed` | fingerprints around checks (`src/acceptance.js:165-170`) | safety-critical |
 | `accept.writers` | aggregates `settle.writer_settled`, `settle.attested_scope`, `settle.report_valid` over all writers of the run | outcomes | safety-critical |

@@ -97,6 +97,10 @@ as `node --version` are not refused.
 
 ## LL-6 investigate before asking (owner correction, 2026-10-10)
 
+Implemented in `9de69a1`. Deviation accepted: a dispatch that contains only read-only
+roles may leave worker decisions open, so they can be investigated before being
+resolved or escalated; writer dispatches and finish still resolve them.
+
 The owner rejected LL-1's eager escalation: "if the answer is reachable with a couple
 of logical questions and a wider search, the lead must not ask me." The owner is the
 senior engineer and has no one to ask; the lead must behave the same way. In M3 the
