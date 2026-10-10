@@ -63,6 +63,7 @@ function earliestResetMs(response, now) {
 }
 
 const PROFILE_CACHE_MS = 60_000;
+const PROFILE_CHANGE_DEBOUNCE_MS = 500;
 
 function createBudgetWatcher({
   listPausedRuns,
@@ -74,8 +75,11 @@ function createBudgetWatcher({
   marginMs = 60_000,
   minRetryMs = 600_000,
   maxBackoffMs = 3_600_000,
+  // First check after a pause when automatic account switching is on, whatever the reset hint says.
+  switchDelayMs = 3000,
   onState,
-  // Optional automatic account switching: { profiles, switchTo(name|null), readProfileLimits(home|null), canSwitch?(runId) }.
+  // Optional automatic account switching: { profiles, switchTo(name|null), readProfileLimits(home|null),
+  // canSwitch?(runId), watch?(onChange) -> unsubscribe }.
   accounts = null,
 } = {}) {
   const c = { ...REAL_CLOCK, ...clock };
@@ -98,7 +102,9 @@ function createBudgetWatcher({
 
   function schedule(runId, entry, delayMs) {
     clearEntryTimer(entry);
-    const delay = Math.min(Math.max(0, delayMs), MAX_TIMER_MS);
+    // With accounts, a later auto-switch toggle is picked up within one interval, however far the reset is.
+    const capped = accounts ? Math.min(delayMs, intervalMs) : delayMs;
+    const delay = Math.min(Math.max(0, capped), MAX_TIMER_MS);
     entry.nextCheckAt = c.now() + delay;
     entry.timer = c.setTimeout(() => { entry.timer = null; check(runId, entry); }, delay);
     entry.timer?.unref?.();
@@ -159,7 +165,14 @@ function createBudgetWatcher({
     return result;
   }
 
+  // One check per entry at a time: a profile-change check must not race a timer check into a double resume.
   async function check(runId, entry) {
+    if (entry.checking) return;
+    entry.checking = true;
+    try { await runCheck(runId, entry); } finally { entry.checking = false; }
+  }
+
+  async function runCheck(runId, entry) {
     if (stopped || entries.get(runId) !== entry) return;
     entry.lastCheckAt = c.now();
     let response = null;
@@ -218,7 +231,8 @@ function createBudgetWatcher({
     const entry = { pause: pause || null, timer: null, nextCheckAt: null, lastCheckAt: null };
     entries.set(runId, entry);
     const resetsAtMs = parseResetsAt(pause?.resetsAt);
-    const base = resetsAtMs !== null && resetsAtMs > now ? resetsAtMs + marginMs - now : intervalMs;
+    let base = resetsAtMs !== null && resetsAtMs > now ? resetsAtMs + marginMs - now : intervalMs;
+    if (accountsAutoSwitch()) base = switchDelayMs;
     schedule(runId, entry, Math.max(base, record?.backoffMs || 0));
   }
 
@@ -232,10 +246,30 @@ function createBudgetWatcher({
     if (dropHistory) history.delete(runId);
   }
 
+  // A profiles file change (manual Activate, auto-switch toggled) re-checks every paused run at once.
+  let unwatch = null;
+  let changeTimer = null;
+  function onProfilesChanged() {
+    if (stopped) return;
+    if (changeTimer) c.clearTimeout(changeTimer);
+    changeTimer = c.setTimeout(() => {
+      changeTimer = null;
+      if (stopped) return;
+      for (const [runId, entry] of [...entries]) {
+        clearEntryTimer(entry);
+        check(runId, entry);
+      }
+    }, PROFILE_CHANGE_DEBOUNCE_MS);
+    changeTimer?.unref?.();
+  }
+
   async function start() {
     if (started) return;
     started = true;
     stopped = false;
+    if (typeof accounts?.watch === 'function') {
+      try { unwatch = accounts.watch(onProfilesChanged); } catch (_) { unwatch = null; }
+    }
     let paused = [];
     try { paused = (await listPausedRuns?.()) || []; } catch (_) { paused = []; }
     if (stopped) return;
@@ -245,6 +279,11 @@ function createBudgetWatcher({
   function stop() {
     stopped = true;
     started = false;
+    if (changeTimer) { c.clearTimeout(changeTimer); changeTimer = null; }
+    if (unwatch) {
+      try { unwatch(); } catch (_) { /* best effort */ }
+      unwatch = null;
+    }
     for (const entry of entries.values()) clearEntryTimer(entry);
     entries.clear();
   }

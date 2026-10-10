@@ -689,6 +689,10 @@ async function startServer({
           profiles: accountProfiles,
           switchTo: (name) => switching.switchTo(name),
           readProfileLimits,
+          watch: (onChange) => {
+            fs.watchFile(accountProfiles.filePath, { interval: 2000, persistent: false }, onChange);
+            return () => fs.unwatchFile(accountProfiles.filePath, onChange);
+          },
           canSwitch: (taskId) => budgetRunResumable({ taskId, taskStore: leadTaskStore, orchestrator, executor: () => leadAgent.executor }),
         } : null,
         ...budgetWatcherOptions,

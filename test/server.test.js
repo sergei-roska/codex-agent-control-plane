@@ -1570,3 +1570,54 @@ test('a budget pause with auto-switch on switches to another account and resumes
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('server wires a watch on the profiles file and closes it with the server', async () => {
+  const dir = tmpDir();
+  const accountsDir = path.join(dir, 'accounts');
+  fs.mkdirSync(accountsDir);
+  const profilesFile = path.join(accountsDir, 'profiles.json');
+  fs.writeFileSync(profilesFile, JSON.stringify({ version: 1, active: null, autoSwitch: true, profiles: [] }));
+  const realWatch = fs.watchFile;
+  const realUnwatch = fs.unwatchFile;
+  const watched = [];
+  const unwatched = [];
+  fs.watchFile = (file, options, listener) => { if (file === profilesFile) watched.push({ options, listener }); return realWatch.call(fs, file, options, listener); };
+  fs.unwatchFile = (file, listener) => { if (file === profilesFile) unwatched.push(listener); return realUnwatch.call(fs, file, listener); };
+  let runtime;
+  try {
+    runtime = await startServer({
+      listen: true,
+      port: 0,
+      stateFile: ':memory:',
+      tokenFile: path.join(dir, 'token'),
+      accountsDir,
+      workspace: dir,
+      appServerFactory: () => ({
+        async start() {},
+        async getAccount() { return { account: { type: 'chatgpt' } }; },
+        async readRateLimits() { return null; },
+        async run() {},
+        async close() {},
+        async getVersion() { return null; },
+        async supervisorState() { return null; },
+        async processIdentity() { return null; },
+        async listHooks() { return []; },
+        async hookInventory() { return []; },
+        async listMcpServerNames() { return []; },
+        async mcpInventory() { return []; },
+      }),
+      readProfileLimits: async () => null,
+      orchestratorFactory: () => ({ async run() {}, async getPause() { return null; }, async resume() {} }),
+    });
+    for (let i = 0; i < 50 && watched.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(watched.length, 1);
+    assert.deepEqual(watched[0].options, { interval: 2000, persistent: false });
+    assert.deepEqual(unwatched, []);
+  } finally {
+    await runtime?.close();
+    fs.watchFile = realWatch;
+    fs.unwatchFile = realUnwatch;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  assert.deepEqual(unwatched, [watched[0].listener]);
+});

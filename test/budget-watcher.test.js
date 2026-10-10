@@ -239,6 +239,7 @@ test('start() registers the budget-paused runs listed by listPausedRuns', async 
 
 function accountsSetup({ autoSwitch = true, active = null, names = ['a', 'b'], limits = {}, switchResult = 'switched', canSwitch } = {}) {
   const log = { read: [], setActive: [], switchTo: [] };
+  const listeners = new Set();
   const state = { active, autoSwitch, profiles: names.map((name) => ({ name, home: `/h/${name}` })) };
   const accounts = {
     profiles: {
@@ -248,8 +249,12 @@ function accountsSetup({ autoSwitch = true, active = null, names = ['a', 'b'], l
     switchTo: async (name) => { log.switchTo.push(name); return switchResult; },
     readProfileLimits: async (home) => { log.read.push(home); return limits[home === null ? 'system' : home] ?? BLOCKED; },
     ...(canSwitch ? { canSwitch } : {}),
+    watch: (onChange) => {
+      listeners.add(onChange);
+      return () => { listeners.delete(onChange); };
+    },
   };
-  return { accounts, log, state };
+  return { accounts, log, state, listeners, notify: () => { for (const fn of [...listeners]) fn(); } };
 }
 
 test('auto-switch off: no other account is read and the run keeps waiting', async () => {
@@ -363,4 +368,89 @@ test('no switch happens while the run reports as active', async () => {
   assert.deepEqual(log.switchTo, []);
   assert.deepEqual(calls.resumes, []);
   watcher.stop();
+});
+
+test('auto-switch on: a pause with a distant reset still switches within switchDelayMs', async () => {
+  const { accounts, log } = accountsSetup({ active: 'a', limits: { '/h/b': OK } });
+  const { clock, calls, watcher } = setup({ accounts, intervalMs: 5000, switchDelayMs: 300 });
+  watcher.notePause('r1', { kind: 'waiting_for_budget', resetsAt: (T0 + 4 * 86_400_000) / 1000 });
+  assert.equal(watcher.status('r1').nextCheckAt, T0 + 300);
+  await clock.advance(300);
+  assert.deepEqual(log.switchTo, ['b']);
+  assert.deepEqual(calls.resumes, ['r1']);
+  watcher.stop();
+});
+
+test('auto-switch off: the first check still follows resetsAt and nothing switches', async () => {
+  const { accounts, log } = accountsSetup({ autoSwitch: false, limits: { '/h/a': OK } });
+  const { clock, calls, watcher } = setup({ accounts, intervalMs: 100_000, switchDelayMs: 300 });
+  watcher.notePause('r1', { kind: 'waiting_for_budget', resetsAt: (T0 + 50_000) / 1000 });
+  assert.equal(watcher.status('r1').nextCheckAt, T0 + 50_100);
+  await clock.advance(50_100);
+  assert.deepEqual(log.switchTo, []);
+  assert.deepEqual(calls.resumes, []);
+  watcher.stop();
+});
+
+test('with accounts no scheduled delay exceeds intervalMs', async () => {
+  const { accounts } = accountsSetup({ autoSwitch: false });
+  const { watcher } = setup({ accounts, intervalMs: 1000 });
+  watcher.notePause('r1', { kind: 'waiting_for_budget', resetsAt: (T0 + 4 * 86_400_000) / 1000 });
+  assert.equal(watcher.status('r1').nextCheckAt, T0 + 1000);
+  watcher.stop();
+});
+
+test('a profile change checks at once and resumes when the newly active account has budget', async () => {
+  const { accounts, notify } = accountsSetup({ autoSwitch: false });
+  const { clock, calls, watcher, setResponse } = setup({ accounts, intervalMs: 100_000 });
+  await watcher.start();
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  setResponse(OK);
+  notify();
+  await clock.advance(499);
+  assert.deepEqual(calls.resumes, []);
+  await clock.advance(1);
+  assert.deepEqual(calls.resumes, ['r1']);
+  watcher.stop();
+});
+
+test('turning auto-switch on triggers a switch at once', async () => {
+  const { accounts, log, state, notify } = accountsSetup({ autoSwitch: false, active: 'a', limits: { '/h/b': OK } });
+  const { clock, calls, watcher } = setup({ accounts, intervalMs: 100_000 });
+  await watcher.start();
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  state.autoSwitch = true;
+  notify();
+  await clock.advance(500);
+  assert.deepEqual(log.switchTo, ['b']);
+  assert.deepEqual(calls.resumes, ['r1']);
+  watcher.stop();
+});
+
+test('several change events within the debounce window cause one check', async () => {
+  const { accounts, notify } = accountsSetup({ autoSwitch: false });
+  const { clock, calls, watcher } = setup({ accounts, intervalMs: 100_000 });
+  await watcher.start();
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  notify();
+  await clock.advance(200);
+  notify();
+  await clock.advance(200);
+  notify();
+  await clock.advance(500);
+  assert.equal(calls.reads, 1);
+  watcher.stop();
+});
+
+test('stop() unsubscribes from profile changes', async () => {
+  const { accounts, listeners, notify } = accountsSetup({ autoSwitch: false });
+  const { clock, calls, watcher } = setup({ accounts });
+  await watcher.start();
+  assert.equal(listeners.size, 1);
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  notify();
+  watcher.stop();
+  assert.equal(listeners.size, 0);
+  await clock.advance(1000);
+  assert.equal(calls.reads, 0);
 });
