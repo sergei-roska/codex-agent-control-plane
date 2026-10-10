@@ -174,6 +174,7 @@ in the listed order unless marked independent.
 | PW-3 | next | Lane execution, integration under admission, `writer_lanes`, restart recovery, server wiring; starts after the independent design review. |
 | BUD-1 | done `ddd0f4b` | Automatic resume of budget-paused runs ([design](budget-auto-resume-design.md)). |
 | BUD-2 | queued after PW-3 | Continue a worker cut off by a usage limit in its own thread and lane instead of re-planning. |
+| ACC-01 | queued after PW-3, with BUD-2 | Several Codex accounts as profiles, login and switching from the web UI, automatic switch to an account with budget when a run pauses for a limit ([design](codex-accounts-design.md)). |
 | CA-01 | queued after PW-3 | Competing approaches: the lead may give one assignment to N writers in separate lanes; the winner is chosen by executed checks, only the winner is integrated (PRD section 9.1 analogue). |
 | EP-01 | queued after CA-01 | Execution Paths (owner product decision, 2026-10-10): at intake the lead selects one path from a closed catalog (for example iterative, distributed, review) and records it with the run; decisions are validated against the path's role and cardinality rules; changing the path goes back through planning. Compare paths with [the benchmark plan](orchestration-benchmark-plan.md). |
 
