@@ -276,3 +276,46 @@ test('worker objective is extracted from the worker task first user message', as
   assert.equal(workers[1].objective, 'plain text assignment');
   assert.equal(workers[2].objective, null);
 });
+
+const LANES_DDL = `CREATE TABLE writer_lanes (
+  lane_id TEXT PRIMARY KEY, context_id TEXT, task_id TEXT, workspace TEXT, path TEXT, base_commit TEXT,
+  state TEXT, reason TEXT, turn_start_json TEXT, execution_id TEXT, created_at TEXT, updated_at TEXT)`;
+const laneRow = (db, id, taskId, state) => db.prepare(
+  `INSERT INTO writer_lanes (lane_id, context_id, task_id, workspace, path, state, created_at, updated_at)
+   VALUES (?, 'worker-context', ?, '/workspace', '/lanes/x', ?, '2026-01-01', '2026-01-01')`,
+).run(id, taskId, state);
+
+test('deleteLeadTask refuses while a writer lane of the run is not terminal', async (t) => {
+  for (const state of ['preparing', 'prepared', 'running', 'integrating']) {
+    await t.test(state, async (t) => {
+      const db = await fixture(t, CHAIN, [lead('w1', 'worker-context', DONE, 'worker result', '2026-01-01T00:00:00.000Z')]);
+      journal(db, 't1', 'att-1', 'w1');
+      db.exec(LANES_DDL);
+      laneRow(db, 'lane-1', 'w1', state);
+      assert.throws(() => deleteLeadTask(db, 't1'), (err) => err instanceof SessionError && err.code === 'writer_lane_active');
+      assert.ok(db.prepare("SELECT id FROM tasks WHERE id = 't1'").get());
+      assert.ok(db.prepare("SELECT id FROM tasks WHERE id = 'w1'").get());
+      assert.equal(db.prepare('SELECT count(*) AS c FROM dispatch_journal').get().c, 1);
+    });
+  }
+});
+
+test('deleteLeadTask ignores terminal lane rows and other runs lanes', async (t) => {
+  const db = await fixture(t, CHAIN, [lead('w1', 'worker-context', DONE, 'worker result', '2026-01-01T00:00:00.000Z')]);
+  journal(db, 't1', 'att-1', 'w1');
+  db.exec(LANES_DDL);
+  laneRow(db, 'lane-1', 'w1', 'integrated');
+  laneRow(db, 'lane-2', 'w1', 'not_integrated');
+  laneRow(db, 'lane-3', 'w1', 'orphaned');
+  laneRow(db, 'lane-4', 'other-task', 'running');
+  deleteLeadTask(db, 't1');
+  assert.equal(db.prepare("SELECT count(*) AS c FROM tasks WHERE id = 't1'").get().c, 0);
+});
+
+test('deleteLeadTask without a writer_lanes table behaves as before', async (t) => {
+  const db = await fixture(t, CHAIN, [lead('w1', 'worker-context', DONE, 'worker result', '2026-01-01T00:00:00.000Z')]);
+  journal(db, 't1', 'att-1', 'w1');
+  assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'writer_lanes'").get(), undefined);
+  deleteLeadTask(db, 't1');
+  assert.equal(db.prepare("SELECT count(*) AS c FROM tasks WHERE id = 't1'").get().c, 0);
+});

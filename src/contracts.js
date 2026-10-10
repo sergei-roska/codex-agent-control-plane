@@ -28,6 +28,7 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'dispatch.skill_pins': Object.freeze(['skill_pin_drift']),
   'dispatch.writer_admission': Object.freeze(['fenced', 'admission_blocked']),
   'assignment.role_ladder': Object.freeze(['role_ladder_violation', 'architect_constraint']),
+  'settle.lane_scope': Object.freeze(['lane_scope_refused']),
   'dispatch.writer_unresolved': Object.freeze(['writer_unresolved']),
   'dispatch.request_input': Object.freeze(['request_invalid', 'guarantee_unavailable']),
 });

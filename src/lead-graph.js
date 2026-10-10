@@ -154,7 +154,7 @@ function assignmentResult(task, { onOversize } = {}) {
   const effects = status?.message?.metadata?.effects;
   const stateName = taskStateName(status?.state);
   const extras = typeof onOversize === 'function' && (artifactTexts.some((value) => value.length > MAX_REPORT_CHARS) || text.length > MAX_REPORT_CHARS)
-    ? onOversize({ artifactTexts, joined: text, parseText: artifactTexts[0] || text, completed: stateName === 'TASK_STATE_COMPLETED' })
+    ? onOversize({ artifactTexts, joined: text, parseText: artifactTexts[0] || text, completed: stateName === 'TASK_STATE_COMPLETED', lanePath: lanePathOf(writerExecution) })
     : null;
   return {
     taskId: task?.id || null,
@@ -240,25 +240,37 @@ function instructionChanges(previous, current) {
   return notes;
 }
 
-function normalizeRel(file, workspace) {
+// A writer lane that never reached the shared workspace: no execution row and not integrated.
+function isUnintegratedLane(writerExecution) {
+  return Boolean(writerExecution) && !writerExecution.executionId && writerExecution.lane?.state === 'not_integrated';
+}
+
+function lanePathOf(writerExecution) {
+  const value = writerExecution?.lane?.workspacePath;
+  return typeof value === 'string' && value ? value.replace(/\/+$/, '') : null;
+}
+
+// lanePath: worker-reported paths may be prefixed with the lane's workspace path instead of the shared one.
+function normalizeRel(file, workspace, lanePath = null) {
   let value = String(file).replace(/\\/g, '/');
-  if (workspace && value.startsWith(`${workspace}/`)) value = value.slice(workspace.length + 1);
+  if (lanePath && value.startsWith(`${lanePath}/`)) value = value.slice(lanePath.length + 1);
+  else if (workspace && value.startsWith(`${workspace}/`)) value = value.slice(workspace.length + 1);
   return path.posix.normalize(value).replace(/^\.\//, '');
 }
 
 // Paths outside allowedFiles (exact file or directory prefix).
-function outsideAllowed(files, allowedFiles, workspace) {
+function outsideAllowed(files, allowedFiles, workspace, lanePath = null) {
   const allowed = allowedFiles.map((file) => normalizeRel(file, workspace).replace(/\/+$/, ''));
   return files.filter((file) => {
-    const rel = normalizeRel(file, workspace);
+    const rel = normalizeRel(file, workspace, lanePath);
     return !allowed.some((entry) => rel === entry || rel.startsWith(`${entry}/`));
   });
 }
 
 // Reported filesChanged outside allowedFiles.
-function scopeViolations(report, allowedFiles, workspace) {
+function scopeViolations(report, allowedFiles, workspace, lanePath = null) {
   if (!report) return [];
-  return outsideAllowed(report.filesChanged, allowedFiles, workspace);
+  return outsideAllowed(report.filesChanged, allowedFiles, workspace, lanePath);
 }
 
 // Caps a path list; reports the cut through `omitted` and returns the total as `count`.
@@ -318,7 +330,7 @@ function analyzeWorker(parsed, ctx) {
   let violations = { paths: [], count: 0 };
   let text;
   if (parsed.report) {
-    const full = scopeViolations(parsed.report, ctx.allowedFiles, ctx.workspace);
+    const full = scopeViolations(parsed.report, ctx.allowedFiles, ctx.workspace, ctx.lanePath || null);
     violations = capPaths(full, 'scopeViolations', omitted);
     report = projectReport(parsed.report, omitted);
     if (omitted.length > 0 && !ctx.textRef) {
@@ -345,6 +357,19 @@ function analyzeWorker(parsed, ctx) {
 }
 
 // Diagnostics that no projection or digest may drop (contract rule 5).
+// Compact lane view for the lead: why changes were not integrated and where the lane is kept.
+function laneSummary(lane) {
+  const cap = (list) => (Array.isArray(list) ? list.slice(0, MAX_VIOLATION_PATHS) : []);
+  return {
+    state: lane.state ?? null,
+    reason: lane.reason ?? null,
+    conflicts: cap(lane.conflicts),
+    scopeViolations: cap(lane.scopeViolations),
+    unsafePaths: cap(lane.unsafePaths),
+    path: lane.path ?? null,
+  };
+}
+
 function outcomeDiagnostics(outcome) {
   const changed = Array.isArray(outcome.writerExecution?.delta?.changedPaths) ? outcome.writerExecution.delta.changedPaths : [];
   return {
@@ -361,6 +386,7 @@ function outcomeDiagnostics(outcome) {
     changedPathCount: outcome.writerExecution?.delta?.changedPathCount ?? changed.length,
     changedPaths: changed.slice(0, MAX_VIOLATION_PATHS),
     effects: outcome.effects ?? null,
+    ...(outcome.lane ? { lane: outcome.lane } : {}),
     failure: outcome.failure ?? null,
   };
 }
@@ -370,6 +396,10 @@ function outcomeDigest(outcome, { compact = false } = {}) {
   if (compact) {
     // Last resort: paths shrink to a handful, every status field and count stays.
     for (const field of ['scopeViolations', 'attestedScopeViolations', 'changedPaths']) diagnostics[field] = diagnostics[field].slice(0, 5);
+    if (diagnostics.lane) {
+      diagnostics.lane = { ...diagnostics.lane };
+      for (const field of ['conflicts', 'scopeViolations', 'unsafePaths']) diagnostics.lane[field] = diagnostics.lane[field].slice(0, 5);
+    }
     if (typeof diagnostics.reportError === 'string') diagnostics.reportError = diagnostics.reportError.slice(0, 300);
   }
   return {
@@ -431,7 +461,8 @@ function boundedOutcomes(outcomes, limit = MAX_PROMPT_OUTCOMES_CHARS) {
 // A writer outcome is settled when the server proved the execution ended or nothing ran.
 function isSettledWriter(result) {
   const state = result?.writerExecution?.state;
-  return state === 'released' || state === 'reconciled' || result?.effects === 'none';
+  // The lane comes from the artifact's writerExecution, so a COMPLETED task (no status message) counts too.
+  return state === 'released' || state === 'reconciled' || result?.effects === 'none' || isUnintegratedLane(result?.writerExecution);
 }
 
 function resetsAtHint(limits) {
@@ -572,7 +603,7 @@ function buildLeadGraph(deps) {
 
   // Rule 1: an oversize artifact is stored uncut and parsed whole before the result is cut for the journal.
   function oversizeHook(item) {
-    return ({ artifactTexts, joined, parseText, completed }) => {
+    return ({ artifactTexts, joined, parseText, completed, lanePath = null }) => {
       const store = workerStore(item);
       const refs = [];
       const errors = [];
@@ -587,7 +618,7 @@ function buildLeadGraph(deps) {
       }
       const parsed = completed ? parseWorkerReport(parseText) : { report: null, error: null };
       const reportAnalysis = analyzeWorker(parsed, {
-        fullText: joined, allowedFiles: allowedFilesOf(item), workspace, store, textRef: stored.get(parseText) || stored.get(joined) || null,
+        fullText: joined, allowedFiles: allowedFilesOf(item), workspace, store, textRef: stored.get(parseText) || stored.get(joined) || null, lanePath,
       });
       // The refs (including the parse source) already live on the analysis or the result; keep one list.
       const evidence = [...refs, ...reportAnalysis.evidence.filter((ref) => !refs.some((known) => known.id === ref.id))];
@@ -616,7 +647,7 @@ function buildLeadGraph(deps) {
       analysis = { ...analysis, omitted: [...(analysis.omitted || [])] };
     } else {
       const parsed = completed ? parseWorkerReport(result.artifacts?.[0]?.text || result.text) : { report: null, error: null };
-      analysis = analyzeWorker(parsed, { fullText: result.text || '', allowedFiles, workspace, textRef: null, store: workerStore(item) });
+      analysis = analyzeWorker(parsed, { fullText: result.text || '', allowedFiles, workspace, textRef: null, store: workerStore(item), lanePath: lanePathOf(result.writerExecution) });
       evidence = analysis.evidence;
       evidenceError = analysis.evidenceError || evidenceError;
     }
@@ -633,13 +664,19 @@ function buildLeadGraph(deps) {
       writerExecution = { ...writerExecution, delta: { ...attestedDelta, changedPaths: attestedPaths.slice(0, MAX_VIOLATION_PATHS), changedPathCount: attestedPaths.length } };
     }
     const writer = item.sandbox !== 'read-only';
-    const ran = writerExecution != null && result.effects !== 'none';
+    const lane = writerExecution?.lane || null;
+    const unintegrated = isUnintegratedLane(writerExecution);
+    const ran = writerExecution != null && result.effects !== 'none' && !unintegrated;
     const results = [];
     if (completed && !analysis.report) {
       results.push(settlementRecord('settle.report_valid', 'FAIL', 'report_invalid', analysis.reportError || 'The worker did not return a valid report.', { advisory: !writer }));
     }
     if (violationCount > 0) {
-      results.push(settlementRecord('settle.reported_scope', 'FAIL', 'reported_scope_violation', `Reported files outside allowedFiles: ${violations.join(', ')}`, { advisory: !writer }));
+      results.push(settlementRecord('settle.reported_scope', 'FAIL', 'reported_scope_violation', `Reported files outside allowedFiles: ${violations.join(', ')}`, { advisory: !writer || lane?.state === 'not_integrated' }));
+    }
+    if (lane?.reason === 'lane_scope_refused') {
+      const refused = Array.isArray(lane.scopeViolations) ? lane.scopeViolations.slice(0, MAX_VIOLATION_PATHS) : [];
+      results.push(settlementRecord('settle.lane_scope', 'FAIL', 'lane_scope_refused', `The lane patch was refused and nothing was integrated${refused.length > 0 ? `; paths outside allowedFiles: ${refused.join(', ')}` : ''}.`));
     }
     if (attested.count > 0) {
       results.push(settlementRecord('settle.attested_scope', 'FAIL', 'attested_scope_violation', `Changed files outside allowedFiles: ${attestedViolations.join(', ')}`));
@@ -670,6 +707,7 @@ function buildLeadGraph(deps) {
       scopeViolations: violations,
       ...(violationCount > violations.length ? { scopeViolationCount: violationCount } : {}),
       writerExecution,
+      ...(lane ? { lane: laneSummary(lane) } : {}),
       effects: result.effects || null,
       attestedScopeViolations: attestedViolations,
       ...(attested.count > attestedViolations.length ? { attestedScopeViolationCount: attested.count } : {}),
@@ -718,6 +756,7 @@ function buildLeadGraph(deps) {
       'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, and humanInput. Use empty arrays, an empty string, or null for unused fields.',
       'Worker decision requests: resolve them yourself (resolutions: decisionId, choice, rationale) whenever the evidence supports a choice. Worker reports are self-reported; check scopeViolations and reportError.',
       'Use request_human_input only for missing_authority, irreversible_or_external, or product_choice, and only after investigating: give options, a recommendation, the evidence checked, and the independent work that can proceed.',
+      ...(deps.parallelWriters ? ['A writer outcome can be not_integrated (the lane field gives the reason and the lane path, which is kept): its changes never reached the shared workspace. You may re-dispatch with corrected allowedFiles, or resolve a conflict with a follow-up assignment.'] : []),
       'Writer reconciliation is mechanical: before you decide, the server reconciles every writable outcome whose effects were unknown and lists the result as an outcome of kind reconciliation, with the attested changedPaths. attestedScopeViolations are changes the server observed outside allowedFiles; a report filesChanged list is self-reported and advisory. A writable dispatch is refused while any writer outcome is unresolved. For a read-only role, dispatch_error means the submission could not be matched to a task at lookup time; such a role cannot have workspace write effects.',
     ].join('\n'));
     return sections.join('\n\n');
@@ -1357,16 +1396,18 @@ function buildLeadGraph(deps) {
     for (const outcome of state.outcomes) if (outcome.kind === 'reconciliation') reconciled.set(outcome.attemptId, outcome);
     return state.outcomes.filter((outcome) => outcome.kind !== 'reconciliation' && outcome.sandbox !== 'read-only').map((outcome) => {
       const later = reconciled.get(outcome.attemptId);
+      // A lane that never reached the shared workspace cannot have attested or reported scope violations.
+      const unintegrated = !later && isUnintegratedLane(outcome.writerExecution);
       return {
         attemptId: outcome.attemptId,
         role: outcome.role,
         // A reconciled execution row proves the writer ran even when its task carried no writerExecution.
-        ran: (outcome.writerExecution != null && outcome.effects !== 'none') || later?.state === 'reconciled' || later?.state === 'legacy_unverified',
+        ran: (outcome.writerExecution != null && outcome.effects !== 'none' && !unintegrated) || later?.state === 'reconciled' || later?.state === 'legacy_unverified',
         completed: outcome.status === 'TASK_STATE_COMPLETED',
         reportValid: outcome.report != null,
         reportOutcome: outcome.report?.outcome || null,
-        reportedScopeViolations: outcome.scopeViolations || [],
-        attestedScopeViolations: later ? (later.attestedScopeViolations || []) : (outcome.attestedScopeViolations || []),
+        reportedScopeViolations: outcome.writerExecution?.lane?.state === 'not_integrated' ? [] : (outcome.scopeViolations || []),
+        attestedScopeViolations: unintegrated ? [] : later ? (later.attestedScopeViolations || []) : (outcome.attestedScopeViolations || []),
         deltaKnown: later ? later.deltaKnown === true : outcome.attestedDeltaKnown === true,
       };
     });

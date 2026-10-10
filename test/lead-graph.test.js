@@ -1951,3 +1951,149 @@ test('the decision prompt describes waves according to parallelWriters', async (
     }, options);
   }
 });
+
+// ----------------------------------------------------- writer lanes (parallelWriters)
+
+const laneOf = (overrides = {}) => ({
+  id: 'lane-1', path: '/lanes/lane-1', workspacePath: '/lanes/lane-1/ws', base: 'abc123', state: 'not_integrated', reason: 'no_changes', ...overrides,
+});
+const lanePlain = { executionId: null, state: null, delta: null, reason: null, effects: 'none' };
+const laneFinal = (writerExecution, { state = TaskState.TASK_STATE_COMPLETED, text = report('done'), status } = {}) => () => ({
+  state,
+  ...(status ? { message: status } : {}),
+  artifacts: [{ name: 'report', parts: textParts(text), metadata: { writerExecution } }],
+});
+const laneCodes = (outcome) => outcome.boundary.results.map((entry) => `${entry.predicate}:${entry.result}:${entry.code}`);
+
+test('a not_integrated COMPLETED writer of wave 1 settles and wave 2 runs without reconcile or fence', async () => {
+  const world = makeWorld({
+    script: [dispatch(waveBrief('orch-builder', ['src/a.js'], 1), waveBrief('orch-builder', ['src/b.js'], 2)), finish('Done')],
+    workerFinal: (roleName, contextId) => (world.sends.length === 1
+      ? laneFinal({ ...lanePlain, lane: laneOf() })()
+      : okWriterFinal()(roleName, contextId)),
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 2);
+    assert.deepEqual(world.admission.fences, []);
+    assert.deepEqual(world.admission.reconciles, []);
+    assert.equal(result.assignments.filter((entry) => entry.kind === 'reconciliation').length, 0);
+    const first = result.assignments[0];
+    assert.equal(first.status, 'TASK_STATE_COMPLETED');
+    assert.equal(first.lane.reason, 'no_changes');
+    assert.ok(!laneCodes(first).includes('settle.writer_settled:UNKNOWN:writer_unresolved'));
+    const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.deepEqual(snapshot.values.unresolvedWriters, []);
+  }, withWriters);
+});
+
+test('a not_integrated FAILED writer without effects metadata is settled and not reconciled', async () => {
+  const world = makeWorld({
+    script: [dispatch(waveBrief('orch-builder', ['src/a.js'], 1), waveBrief('orch-builder', ['src/b.js'], 2)), finish('Done')],
+    workerFinal: (roleName, contextId) => (world.sends.length === 1
+      ? laneFinal({ ...lanePlain, lane: laneOf({ reason: 'turn_failed' }) }, { state: TaskState.TASK_STATE_FAILED, text: 'turn failed' })()
+      : okWriterFinal()(roleName, contextId)),
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(world.sends.length, 2);
+    assert.deepEqual(world.admission.reconciles, []);
+    assert.equal(result.assignments[0].lane.reason, 'turn_failed');
+    const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.deepEqual(snapshot.values.unresolvedWriters, []);
+  }, withWriters);
+});
+
+test('an integrated lane with a released row behaves like a released writer', async () => {
+  const world = makeWorld({
+    script: [dispatch(waveBrief('orch-builder', ['src/a.js'], 1), waveBrief('orch-builder', ['src/b.js'], 2)), finish('Done')],
+    workerFinal: laneFinal({ ...releasedWriter(['src/a.js']), lane: laneOf({ state: 'integrated', reason: null }) }),
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(world.sends.length, 2);
+    const first = result.assignments[0];
+    assert.deepEqual(laneCodes(first), []);
+    assert.equal(first.lane.state, 'integrated');
+    assert.deepEqual(first.attestedScopeViolations, []);
+  }, withWriters);
+});
+
+test('lane workspace paths are stripped from reported files and not_integrated makes reported scope advisory', async () => {
+  const lane = laneOf({ workspacePath: '/lanes/lane-1/ws' });
+  const inScope = report('done', { filesChanged: ['/lanes/lane-1/ws/src/example.js'] });
+  const world = makeWorld({ script: [dispatch(brief('orch-builder')), finish('a')], workerFinal: laneFinal({ ...releasedWriter(), lane: { ...lane, state: 'integrated', reason: null } }, { text: inScope }) });
+  await withSession(world, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(outcome.scopeViolations, []);
+  });
+  const outside = report('done', { filesChanged: ['/lanes/lane-1/ws/src/other.js'] });
+  const live = makeWorld({ script: [dispatch(brief('orch-builder')), finish('a')], workerFinal: laneFinal({ ...releasedWriter(), lane: { ...lane, state: 'integrated', reason: null } }, { text: outside }) });
+  await withSession(live, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.deepEqual(outcome.scopeViolations, ['/lanes/lane-1/ws/src/other.js']);
+    const record = outcome.boundary.results.find((entry) => entry.predicate === 'settle.reported_scope');
+    assert.equal(record.advisory, false);
+  });
+  const refused = makeWorld({ script: [dispatch(brief('orch-builder')), finish('a')], workerFinal: laneFinal({ ...lanePlain, lane: lane }, { text: outside }) });
+  await withSession(refused, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    const record = outcome.boundary.results.find((entry) => entry.predicate === 'settle.reported_scope');
+    assert.equal(record.advisory, true);
+  });
+});
+
+test('a refused lane adds settle.lane_scope and the lane field reaches the decision prompt', async () => {
+  const lane = laneOf({ reason: 'lane_scope_refused', scopeViolations: ['docs/x.md'], path: '/lanes/kept' });
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), dispatch(brief('orch-builder')), finish('a')],
+    workerFinal: laneFinal({ ...lanePlain, lane }),
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    const outcome = result.assignments[0];
+    assert.deepEqual(laneCodes(outcome), ['settle.lane_scope:FAIL:lane_scope_refused']);
+    assert.deepEqual(outcome.lane, {
+      state: 'not_integrated', reason: 'lane_scope_refused', conflicts: [], scopeViolations: ['docs/x.md'], unsafePaths: [], path: '/lanes/kept',
+    });
+    assert.match(promptOutcomes(world.prompts[1]), /"lane":\{"state":"not_integrated","reason":"lane_scope_refused"/);
+    assert.match(world.prompts[1], /not_integrated/);
+    assert.match(world.prompts[1], /corrected allowedFiles/);
+  }, withWriters);
+  const plain = makeWorld({ script: [finish('Done')] });
+  await withSession(plain, async (session) => {
+    await session.orchestrator.run({ goal: 'Plan', runId: RUN_ID });
+    assert.doesNotMatch(plain.prompts[0], /not_integrated/);
+  });
+});
+
+test('the lane field survives a digest in boundedOutcomes', () => {
+  const lane = { state: 'not_integrated', reason: 'integration_conflict', conflicts: Array.from({ length: 9 }, (_, n) => `c/${n}`), scopeViolations: [], unsafePaths: [], path: '/lanes/x' };
+  const many = Array.from({ length: 30 }, (_, n) => ({
+    assignmentId: `a${n}`, attemptId: `t${n}`, role: 'r', status: 'TASK_STATE_COMPLETED', report: null, scopeViolations: [],
+    attestedScopeViolations: [], attestedDeltaKnown: true, writerExecution: null, effects: null, lane, filler: 'f'.repeat(2000),
+  }));
+  const bounded = boundedOutcomes(many);
+  const digest = bounded.find((entry) => entry.digest && entry.diagnostics);
+  assert.ok(digest);
+  assert.equal(digest.diagnostics.lane.reason, 'integration_conflict');
+  assert.equal(digest.diagnostics.lane.path, '/lanes/x');
+});
+
+test('a refused lane followed by a successful writer does not poison acceptance', async () => {
+  const workspace = gitRepo();
+  const refused = laneOf({ reason: 'lane_scope_refused', scopeViolations: ['elsewhere.js'] });
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), dispatch(brief('orch-builder')), finish('Done')],
+    workerFinal: (roleName, contextId) => (world.sends.length === 1
+      ? laneFinal({ ...lanePlain, lane: refused }, { text: report('refused', { filesChanged: ['elsewhere.js'] }) })()
+      : okWriterFinal()(roleName, contextId)),
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, contract: contractOf(nodeCheck('ok', 'process.exit(0)')) });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.acceptance.disposition, 'accepted');
+    assert.deepEqual(issueCodes(result), []);
+  }, { workspace });
+});

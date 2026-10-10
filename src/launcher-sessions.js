@@ -204,6 +204,21 @@ function deleteLeadTask(db, taskId) {
         `DELETE FROM writer_executions WHERE task_id IN (${placeholders}) AND state IN ('released', 'reconciled')`
       ).run(...relatedTaskIds);
     }
+    const hasWriterLanes = db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'writer_lanes'"
+    ).get();
+    if (hasWriterLanes && relatedTaskIds.length > 0) {
+      const placeholders = relatedTaskIds.map(() => '?').join(',');
+      const live = db.prepare(
+        `SELECT 1 FROM writer_lanes WHERE task_id IN (${placeholders}) AND state IN ('preparing', 'prepared', 'running', 'integrating') LIMIT 1`
+      ).get(...relatedTaskIds);
+      if (live) {
+        throw new SessionError(
+          'writer_lane_active',
+          'Cannot delete a session with an active writer lane!',
+        );
+      }
+    }
     if (hasLiveActivity(db)) {
       const keys = [...workers.filter(Boolean), 'lead:' + taskId];
       db.prepare(`DELETE FROM live_activity WHERE key IN (${keys.map(() => '?').join(',')})`).run(...keys);

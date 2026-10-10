@@ -503,3 +503,10 @@ test('wave_scope_overlap checks writers of one group for overlapping allowedFile
   assert.throws(() => validateDecision(dispatch([writer(['x.js']), writer(['.'])]), ctx()), (error) => error.violations[0].code === 'path_unsafe');
   overlap([writer(['lib']), writer(['src/z']), writer(['src/z/y.js'])]);
 });
+
+test('settle.lane_scope is a known predicate that acceptance does not aggregate', () => {
+  assert.deepEqual([...BOUNDARY_PREDICATES['settle.lane_scope']], ['lane_scope_refused']);
+  const { computeDisposition } = require('../src/acceptance');
+  const outcome = computeDisposition({ writers: [{ attemptId: 'a', ran: false, completed: false, reportValid: false, reportedScopeViolations: [], attestedScopeViolations: [], deltaKnown: false }] });
+  assert.ok(!outcome.issues.some((issue) => issue.predicate === 'settle.lane_scope' || issue.code === 'lane_scope_refused'));
+});
