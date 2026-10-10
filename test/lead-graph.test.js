@@ -557,6 +557,43 @@ test('worker needs_decision must be resolved by the lead', async () => {
   });
 });
 
+test('a worker decision with a bad recommendation still reaches the lead, normalized', async () => {
+  const bad = report('Need a call', {
+    outcome: 'needs_decision',
+    decisionRequest: {
+      question: 'Keep the API?',
+      options: [{ id: 'keep', description: 'Keep it' }, { id: 'drop', description: 'Drop it' }],
+      evidenceChecked: ['src/api.js'],
+      recommendation: 'maybe',
+      consequenceIfWrong: 'Breaking change',
+    },
+  });
+  const workerFinal = () => ({ state: TaskState.TASK_STATE_COMPLETED, artifacts: [{ name: 'report', parts: textParts(bad) }] });
+  const attempt = attemptId(assignmentId(RUN_ID, 1, 0));
+  const world = makeWorld({
+    script: [dispatch(brief('orch-explorer', [])), finish('Resolved', [{ decisionId: attempt, choice: 'keep', rationale: 'Evidence in src/api.js' }])],
+    workerFinal,
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.assignments[0].report.decisionRequest.recommendation, null);
+    assert.deepEqual(result.assignments[0].normalizations, ['decisionRequest.recommendation: cleared']);
+    assert.match(world.prompts[1], /Keep the API\?/);
+    assert.match(world.prompts[1], /Open worker decisions/);
+    assert.match(world.prompts[1], /decisionRequest\.recommendation: cleared/);
+  });
+});
+
+test('an empty dispatch is rejected with a reminder to finish or ask', async () => {
+  const world = makeWorld({ script: [dispatch(), finish('Nothing to do')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.match(world.prompts[1], /use finish or request_human_input instead of an empty dispatch/);
+  });
+});
+
 test('a human answer closes the related worker decisions', async () => {
   const workerFinal = () => ({
     state: TaskState.TASK_STATE_COMPLETED,

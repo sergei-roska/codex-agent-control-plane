@@ -6,6 +6,7 @@ const { canonicalRoleId, getRole } = require('./role-names');
 const MAX_ASSIGNMENTS = 4;
 const MAX_ITEMS = 20;
 const MAX_CHARS = 3_000;
+const TRUNCATION_SUFFIX = '... [truncated]';
 const WORKER_REPORT_CONTRACT = 'worker-report/v1';
 const ASSIGNMENT_FIELDS = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
 const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'wave'];
@@ -195,7 +196,7 @@ function checkStringArray(value, label, { allowEmpty = true } = {}) {
 }
 
 // Options list plus recommendation; returns an error text or null.
-function checkOptions(options, recommendation, label) {
+function checkOptions(options, recommendation, label, { lenientRecommendation = false } = {}) {
   if (!Array.isArray(options) || options.length < 2) return `${label} needs at least 2 options`;
   if (options.length > MAX_ITEMS) return `${label} options exceed the size limit`;
   const ids = new Set();
@@ -206,6 +207,7 @@ function checkOptions(options, recommendation, label) {
     if (ids.has(option.id)) return `${label} option ids must be unique`;
     ids.add(option.id);
   }
+  if (lenientRecommendation) return null;
   if (!isNonEmptyString(recommendation) || !ids.has(recommendation)) return `${label} recommendation must be one of the option ids`;
   return null;
 }
@@ -230,6 +232,22 @@ function validateWorkerReport(value) {
     return fail();
   }
   const push = (error) => { if (error) errors.push(error); };
+  const normalizations = [];
+  // Over-long strings are cut to the limit with a marker instead of invalidating the report.
+  const fit = (text, field) => {
+    if (typeof text !== 'string' || text.length <= MAX_CHARS) return text;
+    normalizations.push({ field, action: 'truncated', detail: `${text.length} chars cut to ${MAX_CHARS}` });
+    return text.slice(0, MAX_CHARS - TRUNCATION_SUFFIX.length) + TRUNCATION_SUFFIX;
+  };
+  value = { ...value, summary: fit(value.summary, 'summary') };
+  if (isPlainObject(value.decisionRequest) && sameKeys(value.decisionRequest, ['question', 'options', 'evidenceChecked', 'recommendation', 'consequenceIfWrong'])) {
+    const source = value.decisionRequest;
+    value.decisionRequest = {
+      ...source,
+      question: fit(source.question, 'decisionRequest.question'),
+      consequenceIfWrong: fit(source.consequenceIfWrong, 'decisionRequest.consequenceIfWrong'),
+    };
+  }
   if (!REPORT_OUTCOMES.includes(value.outcome)) errors.push(`outcome must be one of ${REPORT_OUTCOMES.join(', ')}`);
   push(boundedString(value.summary, 'summary', { allowEmpty: true }));
   for (const field of ['filesChanged', 'filesInspected', 'risks']) {
@@ -267,11 +285,16 @@ function validateWorkerReport(value) {
     } else {
       push(boundedString(request.question, 'decisionRequest.question'));
       push(boundedString(request.consequenceIfWrong, 'decisionRequest.consequenceIfWrong', { allowEmpty: true }));
-      push(checkOptions(request.options, request.recommendation, 'decisionRequest'));
+      push(checkOptions(request.options, request.recommendation, 'decisionRequest', { lenientRecommendation: true }));
+      if (!errors.length && !(isNonEmptyString(request.recommendation) && request.options.some((option) => option.id === request.recommendation))) {
+        value.decisionRequest = { ...request, recommendation: null };
+        normalizations.push({ field: 'decisionRequest.recommendation', action: 'cleared', detail: 'the recommendation was not one of the option ids' });
+      }
       push(checkStringArray(request.evidenceChecked, 'decisionRequest.evidenceChecked', { allowEmpty: false }));
     }
   }
-  return errors.length ? fail() : { ok: true, report: value, errors };
+  if (errors.length) return fail();
+  return { ok: true, report: normalizations.length ? { ...value, normalizations } : value, errors };
 }
 
 /** Parse and validate worker report text. Never throws: { report | null, error | null }. */

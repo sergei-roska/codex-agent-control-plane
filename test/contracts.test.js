@@ -80,7 +80,8 @@ test('validateWorkerReport rejects invalid reports', () => {
     report({ outcome: 'needs_decision', decisionRequest: request({ options: [{ id: 'a', description: 'A' }] }) }),
     report({ outcome: 'needs_decision', decisionRequest: request({ options: [{ id: 'a', description: 'A' }, { id: 'a', description: 'B' }] }) }),
     report({ outcome: 'needs_decision', decisionRequest: request({ options: [{ id: '', description: 'A' }, { id: 'b', description: 'B' }] }) }),
-    report({ outcome: 'needs_decision', decisionRequest: request({ recommendation: 'z' }) }),
+    report({ summary: 7 }),
+    report({ outcome: 'needs_decision', decisionRequest: request({ question: '' }) }),
     report({ outcome: 'needs_decision', decisionRequest: request({ evidenceChecked: [] }) }),
     report({ outcome: 'needs_decision', decisionRequest: request({ extra: 1 }) }),
     report({ outcome: 'needs_decision', decisionRequest: 'nope' }),
@@ -91,6 +92,37 @@ test('validateWorkerReport rejects invalid reports', () => {
     assert.equal(result.report, null);
     assert.ok(result.errors.length > 0);
   }
+});
+
+test('a recommendation outside the options is cleared and noted, not rejected', () => {
+  for (const recommendation of ['z', '']) {
+    const input = report({ outcome: 'needs_decision', decisionRequest: request({ recommendation }) });
+    const result = validateWorkerReport(input);
+    assert.equal(result.ok, true);
+    assert.equal(result.report.decisionRequest.recommendation, null);
+    assert.equal(result.report.decisionRequest.question, 'Which?');
+    assert.equal(result.report.normalizations.length, 1);
+    assert.equal(result.report.normalizations[0].field, 'decisionRequest.recommendation');
+    assert.equal(result.report.normalizations[0].action, 'cleared');
+    assert.equal(input.decisionRequest.recommendation, recommendation);
+  }
+  assert.equal(validateWorkerReport(report()).report.normalizations, undefined);
+});
+
+test('over-long strings are truncated with a suffix and noted', () => {
+  const long = 'x'.repeat(5000);
+  const result = validateWorkerReport(report({ summary: long }));
+  assert.equal(result.ok, true);
+  assert.equal(result.report.summary.length, 3000);
+  assert.ok(result.report.summary.endsWith('... [truncated]'));
+  assert.deepEqual(result.report.normalizations.map((entry) => [entry.field, entry.action]), [['summary', 'truncated']]);
+  const needs = validateWorkerReport(report({ outcome: 'needs_decision', decisionRequest: request({ question: long, consequenceIfWrong: long }) }));
+  assert.equal(needs.ok, true);
+  assert.ok(needs.report.decisionRequest.question.endsWith('... [truncated]'));
+  assert.equal(needs.report.normalizations.length, 2);
+  assert.equal(parseWorkerReport(JSON.stringify(report({ summary: long }))).report.summary.length, 3000);
+  // Structural errors still invalidate even next to an over-long string.
+  assert.equal(validateWorkerReport(report({ summary: long, filesChanged: [1] })).ok, false);
 });
 
 test('parseWorkerReport never throws', () => {

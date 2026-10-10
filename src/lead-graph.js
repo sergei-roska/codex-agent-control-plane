@@ -516,7 +516,7 @@ const RULE_REMINDERS = {
   'assignment.paths': PATH_RULE,
   'assignment.writer_scope': 'Writable roles require explicit allowedFiles; read-only roles may use [].',
   'decision.parse': 'Return only one JSON object matching the supplied schema.',
-  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, and humanInput, with unused fields empty.',
+  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, and humanInput, with unused fields empty. A dispatch needs 1 to 4 assignments. If there is nothing to dispatch, use finish or request_human_input instead of an empty dispatch.',
   'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds.',
   'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, and wave; role must be an available role id.',
   'assignment.wave': 'wave is an integer >= 1 or null; consecutive assignments with the same wave run concurrently, and writers in one wave need pairwise disjoint allowedFiles; use null for sequential steps.',
@@ -707,6 +707,8 @@ function buildLeadGraph(deps) {
       status: result.status,
       report: analysis.report,
       reportError: analysis.reportError,
+      ...(Array.isArray(analysis.report?.normalizations) && analysis.report.normalizations.length > 0
+        ? { normalizations: analysis.report.normalizations.map((entry) => `${entry.field}: ${entry.action}`) } : {}),
       ...(analysis.report ? {} : { text: analysis.text ?? '' }),
       failureKind: result.failureKind || null,
       scopeViolations: violations,
