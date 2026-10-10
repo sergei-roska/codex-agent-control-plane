@@ -72,7 +72,7 @@ function laneDir() {
   return path.join(tmp('wt-lane-'), 'lane');
 }
 
-test('createBase captures modification, deletion, untracked; skips ignored', () => {
+test('createBase captures modification, deletion, untracked; skips ignored', async () => {
   const dir = makeRepo({ '.gitignore': 'ignored.log\n' });
   try {
     write(dir, 'a.txt', 'changed\n');
@@ -92,7 +92,7 @@ test('createBase captures modification, deletion, untracked; skips ignored', () 
   } finally { cleanup(dir); }
 });
 
-test('shared repo index, HEAD, refs, stash and config are untouched by every operation', () => {
+test('shared repo index, HEAD, refs, stash and config are untouched by every operation', async () => {
   const dir = makeRepo();
   const lane = laneDir();
   try {
@@ -102,11 +102,11 @@ test('shared repo index, HEAD, refs, stash and config are untouched by every ope
     const base = wt.createBase(dir);
     const added = wt.addLane({ root: dir, base: base.commit, dir: lane });
     write(added.workspacePath, 'b.txt', 'b-lane\n');
-    const { patch } = wt.collectPatch({ lane: added.path, base: base.commit });
+    const { patch } = wt.collectPatch({ lane: added.path, adminDir: added.adminDir, base: base.commit });
     assert.ok(patch.length > 0);
     assert.deepEqual(repoState(dir), before);
     // The patch is relative to the base, which already holds the dirty a.txt, so it applies as-is.
-    assert.deepEqual(wt.applyPatch({ root: dir, patch }), { applied: true });
+    assert.deepEqual(await wt.applyPatch({ root: dir, patch }), { applied: true });
     assert.deepEqual(repoState(dir), before);
     assert.equal(fs.readFileSync(path.join(dir, 'b.txt'), 'utf8'), 'b-lane\n');
     wt.removeLane({ root: dir, lane: added.path });
@@ -114,7 +114,7 @@ test('shared repo index, HEAD, refs, stash and config are untouched by every ope
   } finally { cleanup(dir, path.dirname(lane)); }
 });
 
-test('two lanes from one base: binary file, delete and new file, both apply in sequence', () => {
+test('two lanes from one base: binary file, delete and new file, both apply in sequence', async () => {
   const dir = makeRepo({ 'img.bin': Buffer.from([0, 1, 2, 255, 0, 7]) });
   const l1 = laneDir();
   const l2 = laneDir();
@@ -128,12 +128,12 @@ test('two lanes from one base: binary file, delete and new file, both apply in s
     fs.writeFileSync(path.join(one.workspacePath, 'img.bin'), bytes);
     fs.rmSync(path.join(two.workspacePath, 'del.txt'));
     write(two.workspacePath, 'sub/new.txt', 'brand new\n');
-    const p1 = wt.collectPatch({ lane: one.path, base: base.commit });
-    const p2 = wt.collectPatch({ lane: two.path, base: base.commit });
+    const p1 = wt.collectPatch({ lane: one.path, adminDir: one.adminDir, base: base.commit });
+    const p2 = wt.collectPatch({ lane: two.path, adminDir: two.adminDir, base: base.commit });
     assert.deepEqual(p1.changes.map((c) => `${c.status}:${c.path}`).sort(), ['M:a.txt', 'M:img.bin']);
     assert.deepEqual(p2.changes.map((c) => `${c.status}:${c.path}`).sort(), ['A:sub/new.txt', 'D:del.txt']);
-    assert.deepEqual(wt.applyPatch({ root: dir, patch: p1.patch }), { applied: true });
-    assert.deepEqual(wt.applyPatch({ root: dir, patch: p2.patch }), { applied: true });
+    assert.deepEqual(await wt.applyPatch({ root: dir, patch: p1.patch }), { applied: true });
+    assert.deepEqual(await wt.applyPatch({ root: dir, patch: p2.patch }), { applied: true });
     const expected = { ...original };
     expected['a.txt'] = readTree(one.workspacePath)['a.txt'];
     expected['img.bin'] = `-:${bytes.toString('base64')}`;
@@ -145,7 +145,7 @@ test('two lanes from one base: binary file, delete and new file, both apply in s
   } finally { cleanup(dir, path.dirname(l1), path.dirname(l2)); }
 });
 
-test('a lane edit of a file the shared tree changed meanwhile is a conflict and leaves the tree byte-identical', () => {
+test('a lane edit of a file the shared tree changed meanwhile is a conflict and leaves the tree byte-identical', async () => {
   const dir = makeRepo();
   const lane = laneDir();
   try {
@@ -153,11 +153,11 @@ test('a lane edit of a file the shared tree changed meanwhile is a conflict and 
     const added = wt.addLane({ root: dir, base: base.commit, dir: lane });
     write(added.workspacePath, 'a.txt', 'a1\nlane\na3\n');
     write(added.workspacePath, 'b.txt', 'b-lane\n');
-    const { patch } = wt.collectPatch({ lane: added.path, base: base.commit });
+    const { patch } = wt.collectPatch({ lane: added.path, adminDir: added.adminDir, base: base.commit });
     write(dir, 'a.txt', 'a1\nshared\na3\n');
     const before = readTree(dir);
     const state = repoState(dir);
-    const result = wt.applyPatch({ root: dir, patch });
+    const result = await wt.applyPatch({ root: dir, patch });
     assert.equal(result.applied, false);
     assert.equal(result.conflict, true);
     assert.deepEqual(result.paths, ['a.txt']);
@@ -168,16 +168,16 @@ test('a lane edit of a file the shared tree changed meanwhile is a conflict and 
   } finally { cleanup(dir, path.dirname(lane)); }
 });
 
-test('a new file that already exists in the shared tree is reported as a conflict path', () => {
+test('a new file that already exists in the shared tree is reported as a conflict path', async () => {
   const dir = makeRepo();
   const lane = laneDir();
   try {
     const base = wt.createBase(dir);
     const added = wt.addLane({ root: dir, base: base.commit, dir: lane });
     write(added.workspacePath, 'fresh.txt', 'lane\n');
-    const { patch } = wt.collectPatch({ lane: added.path, base: base.commit });
+    const { patch } = wt.collectPatch({ lane: added.path, adminDir: added.adminDir, base: base.commit });
     write(dir, 'fresh.txt', 'shared\n');
-    const result = wt.applyPatch({ root: dir, patch });
+    const result = await wt.applyPatch({ root: dir, patch });
     assert.equal(result.conflict, true);
     assert.deepEqual(result.paths, ['fresh.txt']);
     assert.equal(fs.readFileSync(path.join(dir, 'fresh.txt'), 'utf8'), 'shared\n');
@@ -185,28 +185,28 @@ test('a new file that already exists in the shared tree is reported as a conflic
   } finally { cleanup(dir, path.dirname(lane)); }
 });
 
-test('a patch applies when the shared tree differs from the base only in unrelated files', () => {
+test('a patch applies when the shared tree differs from the base only in unrelated files', async () => {
   const dir = makeRepo();
   const lane = laneDir();
   try {
     const base = wt.createBase(dir);
     const added = wt.addLane({ root: dir, base: base.commit, dir: lane });
     write(added.workspacePath, 'a.txt', 'a1\nA2\na3\n');
-    const { patch } = wt.collectPatch({ lane: added.path, base: base.commit });
+    const { patch } = wt.collectPatch({ lane: added.path, adminDir: added.adminDir, base: base.commit });
     write(dir, 'keep.txt', 'someone else\n');
     write(dir, 'extra.txt', 'x\n');
-    assert.deepEqual(wt.applyPatch({ root: dir, patch }), { applied: true });
+    assert.deepEqual(await wt.applyPatch({ root: dir, patch }), { applied: true });
     assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'a1\nA2\na3\n');
     assert.equal(fs.readFileSync(path.join(dir, 'keep.txt'), 'utf8'), 'someone else\n');
     wt.removeLane({ root: dir, lane: added.path });
   } finally { cleanup(dir, path.dirname(lane)); }
 });
 
-test('an empty patch applies without git', () => {
-  assert.deepEqual(wt.applyPatch({ root: '/nonexistent-dir', patch: Buffer.alloc(0) }), { applied: true });
+test('an empty patch applies without git', async () => {
+  assert.deepEqual(await wt.applyPatch({ root: '/nonexistent-dir', patch: Buffer.alloc(0) }), { applied: true });
 });
 
-test('ignored .venv is symlinked into the lane and never shows up in collectPatch', () => {
+test('ignored .venv is symlinked into the lane and never shows up in collectPatch', async () => {
   const dir = makeRepo({ '.gitignore': '.venv/\nnode_modules/\n', 'plain/x.txt': 'x\n' });
   const lane = laneDir();
   try {
@@ -220,9 +220,8 @@ test('ignored .venv is symlinked into the lane and never shows up in collectPatc
     assert.equal(fs.readlinkSync(link), path.join(dir, '.venv'));
     assert.ok(fs.existsSync(path.join(link, 'lib', 'mod.py')));
     write(added.workspacePath, 'a.txt', 'a1\nA2\na3\n');
-    const withLinks = wt.collectPatch({ lane: added.path, base: base.commit });
-    assert.ok(withLinks.changes.some((c) => c.path === '.venv'), 'the symlink is visible without exclusion');
-    const excluded = wt.collectPatch({ lane: added.path, base: base.commit, exclude: ['.venv'] });
+    assert.throws(() => wt.collectPatch({ lane: added.path, adminDir: added.adminDir, base: base.commit }), (e) => e.reason === 'escaping_symlink' && e.paths[0] === '.venv', 'the link is refused without exclusion');
+    const excluded = wt.collectPatch({ lane: added.path, adminDir: added.adminDir, base: base.commit, exclude: ['.venv'] });
     assert.deepEqual(excluded.changes, [{ status: 'M', path: 'a.txt' }]);
     assert.ok(!excluded.patch.toString().includes('.venv'));
     wt.removeLane({ root: dir, lane: added.path });
@@ -230,7 +229,7 @@ test('ignored .venv is symlinked into the lane and never shows up in collectPatc
   } finally { cleanup(dir, path.dirname(lane)); }
 });
 
-test('executable bit change and a file name with spaces round-trip', () => {
+test('executable bit change and a file name with spaces round-trip', async () => {
   const dir = makeRepo({ 'run.sh': '#!/bin/sh\n' });
   const lane = laneDir();
   try {
@@ -238,16 +237,16 @@ test('executable bit change and a file name with spaces round-trip', () => {
     const added = wt.addLane({ root: dir, base: base.commit, dir: lane });
     fs.chmodSync(path.join(added.workspacePath, 'run.sh'), 0o755);
     write(added.workspacePath, 'dir with space/my file.txt', 'spaced\n');
-    const { patch, changes } = wt.collectPatch({ lane: added.path, base: base.commit });
+    const { patch, changes } = wt.collectPatch({ lane: added.path, adminDir: added.adminDir, base: base.commit });
     assert.deepEqual(changes.map((c) => `${c.status}:${c.path}`).sort(), ['A:dir with space/my file.txt', 'M:run.sh']);
-    assert.deepEqual(wt.applyPatch({ root: dir, patch }), { applied: true });
+    assert.deepEqual(await wt.applyPatch({ root: dir, patch }), { applied: true });
     assert.ok(fs.statSync(path.join(dir, 'run.sh')).mode & 0o100);
     assert.equal(fs.readFileSync(path.join(dir, 'dir with space', 'my file.txt'), 'utf8'), 'spaced\n');
     wt.removeLane({ root: dir, lane: added.path });
   } finally { cleanup(dir, path.dirname(lane)); }
 });
 
-test('an unborn HEAD repository works end to end', () => {
+test('an unborn HEAD repository works end to end', async () => {
   const dir = fs.realpathSync(tmp('wt-unborn-'));
   const lane = laneDir();
   try {
@@ -259,16 +258,16 @@ test('an unborn HEAD repository works end to end', () => {
     const added = wt.addLane({ root: dir, base: base.commit, dir: lane });
     write(added.workspacePath, 'a.txt', 'two\n');
     write(added.workspacePath, 'b.txt', 'b\n');
-    const { patch, changes } = wt.collectPatch({ lane: added.path, base: base.commit });
+    const { patch, changes } = wt.collectPatch({ lane: added.path, adminDir: added.adminDir, base: base.commit });
     assert.equal(changes.length, 2);
-    assert.deepEqual(wt.applyPatch({ root: dir, patch }), { applied: true });
+    assert.deepEqual(await wt.applyPatch({ root: dir, patch }), { applied: true });
     assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'two\n');
     assert.equal(fs.readFileSync(path.join(dir, 'b.txt'), 'utf8'), 'b\n');
     wt.removeLane({ root: dir, lane: added.path });
   } finally { cleanup(dir, path.dirname(lane)); }
 });
 
-test('a workspace in a subdirectory gets the right prefix and workspacePath', () => {
+test('a workspace in a subdirectory gets the right prefix and workspacePath', async () => {
   const dir = makeRepo({ 'ws/inner.txt': 'inner\n', 'ws/.gitignore': '.venv/\n', 'top.txt': 'top\n' });
   const lane = laneDir();
   try {
@@ -282,32 +281,43 @@ test('a workspace in a subdirectory gets the right prefix and workspacePath', ()
     assert.ok(fs.lstatSync(path.join(added.workspacePath, '.venv')).isSymbolicLink());
     write(added.workspacePath, 'inner.txt', 'edited\n');
     write(added.path, 'top.txt', 'top edited\n');
-    const { patch, changes } = wt.collectPatch({ lane: added.path, base: base.commit, exclude: ['ws/.venv'] });
+    const { patch, changes } = wt.collectPatch({ lane: added.path, adminDir: added.adminDir, base: base.commit, exclude: ['ws/.venv'] });
     assert.deepEqual(changes.map((c) => c.path).sort(), ['top.txt', 'ws/inner.txt']);
-    assert.deepEqual(wt.applyPatch({ root, patch }), { applied: true });
+    assert.deepEqual(await wt.applyPatch({ root, patch }), { applied: true });
     assert.equal(fs.readFileSync(path.join(root, 'inner.txt'), 'utf8'), 'edited\n');
     assert.equal(fs.readFileSync(path.join(dir, 'top.txt'), 'utf8'), 'top edited\n');
     wt.removeLane({ root, lane: added.path });
   } finally { cleanup(dir, path.dirname(lane)); }
 });
 
-test('removeLane after the directory was deleted does not throw; prune leaves only the main tree', () => {
+test('removeLane of a vanished lane deletes only its admin dir and leaves other worktrees alone', async () => {
   const dir = makeRepo();
-  const lane = laneDir();
+  const l1 = laneDir();
+  const l2 = laneDir();
+  const l3 = laneDir();
   try {
     const base = wt.createBase(dir);
-    const added = wt.addLane({ root: dir, base: base.commit, dir: lane });
-    assert.equal(sh(dir, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree ')).length, 2);
-    fs.rmSync(added.path, { recursive: true, force: true });
-    wt.removeLane({ root: dir, lane: added.path });
-    wt.removeLane({ root: dir, lane: added.path });
-    wt.pruneLanes(dir);
-    const listed = sh(dir, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree '));
-    assert.deepEqual(listed, [`worktree ${dir}`]);
-  } finally { cleanup(dir, path.dirname(lane)); }
+    const one = wt.addLane({ root: dir, base: base.commit, dir: l1 });
+    const two = wt.addLane({ root: dir, base: base.commit, dir: l2 });
+    const three = wt.addLane({ root: dir, base: base.commit, dir: l3 });
+    assert.ok(fs.existsSync(one.adminDir));
+    fs.rmSync(one.path, { recursive: true, force: true });
+    fs.rmSync(two.path, { recursive: true, force: true });
+    const lanesRoot = path.dirname(l1);
+    assert.throws(() => wt.removeLane({ root: dir, lane: one.path }), (e) => e.code === 'lanes_root_required');
+    assert.throws(() => wt.removeLane({ root: dir, lane: one.path, lanesRoot: path.dirname(l2) }), (e) => e.code === 'lane_outside_root');
+    wt.removeLane({ root: dir, lane: one.path, lanesRoot });
+    wt.removeLane({ root: dir, lane: one.path, lanesRoot });
+    assert.ok(!fs.existsSync(one.adminDir));
+    assert.ok(fs.existsSync(two.adminDir), 'another vanished worktree is not ours to prune');
+    assert.ok(fs.existsSync(three.adminDir));
+    wt.removeLane({ root: dir, lane: three.path });
+    assert.ok(!fs.existsSync(three.adminDir));
+    assert.ok(fs.existsSync(two.adminDir));
+  } finally { cleanup(dir, path.dirname(l1), path.dirname(l2), path.dirname(l3)); }
 });
 
-test('inspectRepo rejects a non-git directory and a repo with submodules', () => {
+test('inspectRepo rejects a non-git directory and a repo with submodules', async () => {
   const plain = tmp('wt-plain-');
   const withGitlink = makeRepo();
   const withModules = makeRepo();
@@ -324,7 +334,7 @@ test('inspectRepo rejects a non-git directory and a repo with submodules', () =>
   } finally { cleanup(plain, withGitlink, withModules); }
 });
 
-test('timing: createBase + addLane + collectPatch + applyPatch on ~1000 files', () => {
+test('timing: createBase + addLane + collectPatch + applyPatch on ~1000 files', async () => {
   const dir = makeRepo();
   const lane = laneDir();
   try {
@@ -338,13 +348,213 @@ test('timing: createBase + addLane + collectPatch + applyPatch on ~1000 files', 
     const added = wt.addLane({ root: dir, base: base.commit, dir: lane });
     const t2 = Date.now();
     for (let i = 100; i < 105; i += 1) write(added.workspacePath, `src/d${i % 20}/file${i}.txt`, 'lane edit\n');
-    const { patch, changes } = wt.collectPatch({ lane: added.path, base: base.commit });
+    const { patch, changes } = wt.collectPatch({ lane: added.path, adminDir: added.adminDir, base: base.commit });
     const t3 = Date.now();
-    const result = wt.applyPatch({ root: dir, patch });
+    const result = await wt.applyPatch({ root: dir, patch });
     const t4 = Date.now();
     assert.equal(changes.length, 5);
     assert.equal(result.applied, true);
     wt.removeLane({ root: dir, lane: added.path });
     console.log(`# timing ms: createBase=${t1 - t0} addLane=${t2 - t1} collectPatch=${t3 - t2} applyPatch=${t4 - t3} total=${t4 - t0}`);
   } finally { cleanup(dir, path.dirname(lane)); }
+});
+
+function hookMarkers(dir) {
+  const marker = path.join(dir, '..', `${path.basename(dir)}-marker`);
+  const script = path.join(dir, '..', `${path.basename(dir)}-script.sh`);
+  fs.writeFileSync(script, `#!/bin/sh\necho "$0 $*" >> '${marker}'\n`, { mode: 0o755 });
+  fs.mkdirSync(path.join(dir, '.git', 'hooks'), { recursive: true });
+  fs.copyFileSync(script, path.join(dir, '.git', 'hooks', 'post-checkout'));
+  fs.chmodSync(path.join(dir, '.git', 'hooks', 'post-checkout'), 0o755);
+  fs.appendFileSync(path.join(dir, '.git', 'config'), `[core]\n\tfsmonitor = ${script}\n`);
+  return { marker, script };
+}
+
+test('hooks and fsmonitor configured in the repo are never run by any module call', async () => {
+  const dir = makeRepo();
+  const lane = laneDir();
+  const { marker, script } = hookMarkers(dir);
+  try {
+    write(dir, 'a.txt', 'dirty\n');
+    const base = wt.createBase(dir);
+    const added = wt.addLane({ root: dir, base: base.commit, dir: lane });
+    write(added.workspacePath, 'b.txt', 'lane\n');
+    wt.inspectRepo(dir);
+    wt.inspectLaneSafety({ lane: added.path, adminDir: added.adminDir });
+    const { patch } = wt.collectPatch({ lane: added.path, adminDir: added.adminDir, base: base.commit });
+    write(dir, 'a.txt', 'a1\na2\na3\n');
+    await wt.applyPatch({ root: dir, patch });
+    wt.removeLane({ root: dir, lane: added.path });
+    assert.ok(!fs.existsSync(marker), 'a hook or fsmonitor ran');
+  } finally { cleanup(dir, path.dirname(lane), marker, script); }
+});
+
+function laneFixture(files) {
+  const dir = makeRepo(files);
+  const lane = laneDir();
+  const base = wt.createBase(dir);
+  const added = wt.addLane({ root: dir, base: base.commit, dir: lane, links: ['.venv'] });
+  return { dir, lane, base, added, done: () => cleanup(dir, path.dirname(lane)) };
+}
+
+function refused(fx, reason, exclude = []) {
+  const safety = wt.inspectLaneSafety({ lane: fx.added.path, adminDir: fx.added.adminDir, exclude });
+  assert.equal(safety.ok, false);
+  assert.equal(safety.reason, reason);
+  assert.throws(
+    () => wt.collectPatch({ lane: fx.added.path, adminDir: fx.added.adminDir, base: fx.base.commit, exclude }),
+    (e) => e.code === 'lane_unsafe' && e.reason === reason && e.paths.length > 0,
+  );
+  return safety;
+}
+
+test('a nested .git directory or file is refused', async () => {
+  const fx = laneFixture();
+  try {
+    fs.mkdirSync(path.join(fx.added.path, 'vendor', 'x', '.git'), { recursive: true });
+    assert.deepEqual(refused(fx, 'nested_git').paths, [path.join('vendor', 'x', '.git')]);
+    fs.rmSync(path.join(fx.added.path, 'vendor'), { recursive: true });
+    write(fx.added.path, 'other/.git', 'gitdir: /somewhere/else\n');
+    assert.deepEqual(refused(fx, 'nested_git').paths, [path.join('other', '.git')]);
+    fs.rmSync(path.join(fx.added.path, 'other'), { recursive: true });
+    assert.equal(wt.inspectLaneSafety({ lane: fx.added.path, adminDir: fx.added.adminDir }).ok, true);
+  } finally { fx.done(); }
+});
+
+test('a nested repository staged as a gitlink is refused at the index level', async () => {
+  const fx = laneFixture();
+  try {
+    const real = path.join(fx.added.path, 'sub');
+    fs.mkdirSync(real);
+    execFileSync('git', ['-C', real, 'init', '-q']);
+    write(real, 'f.txt', 'f\n');
+    execFileSync('git', ['-C', real, 'add', '.']);
+    execFileSync('git', ['-C', real, '-c', 'user.name=t', '-c', 'user.email=t@e.com', 'commit', '-q', '-m', 'x']);
+    assert.deepEqual(refused(fx, 'gitlink').paths, ['sub']);
+    // A repository without commits cannot be staged at all: reported as nested_git.
+    fs.rmSync(real, { recursive: true });
+    fs.mkdirSync(real);
+    execFileSync('git', ['-C', real, 'init', '-q']);
+    write(real, 'f.txt', 'f\n');
+    assert.deepEqual(refused(fx, 'nested_git').paths, ['sub']);
+  } finally { fx.done(); }
+});
+
+test('ignored directories are not inspected; the same content in a tracked-visible dir is refused', async () => {
+  const fx = laneFixture({ '.gitignore': 'envs/\n' });
+  try {
+    const work = fx.added.path;
+    // Inside an ignored dir: absolute symlink, nested repo with a commit, and a stray .git file.
+    fs.mkdirSync(path.join(work, 'envs', 'py'), { recursive: true });
+    fs.symlinkSync('/usr/bin/python3', path.join(work, 'envs', 'py', 'python'));
+    const nested = path.join(work, 'envs', 'repo');
+    fs.mkdirSync(nested);
+    execFileSync('git', ['-C', nested, 'init', '-q']);
+    write(nested, 'f.txt', 'f\n');
+    execFileSync('git', ['-C', nested, 'add', '.']);
+    execFileSync('git', ['-C', nested, '-c', 'user.name=t', '-c', 'user.email=t@e.com', 'commit', '-q', '-m', 'x']);
+    write(work, 'envs/stray/.git', 'gitdir: /nonexistent\n');
+    write(work, 'a.txt', 'a1\nA2\na3\n');
+    assert.deepEqual(wt.inspectLaneSafety({ lane: work, adminDir: fx.added.adminDir }), { ok: true });
+    const { changes } = wt.collectPatch({ lane: work, adminDir: fx.added.adminDir, base: fx.base.commit });
+    assert.deepEqual(changes, [{ status: 'M', path: 'a.txt' }]);
+    // Same shapes in a visible dir are refused.
+    fs.symlinkSync('/usr/bin/python3', path.join(work, 'python'));
+    assert.deepEqual(refused(fx, 'escaping_symlink').paths, ['python']);
+    fs.rmSync(path.join(work, 'python'));
+    write(work, 'visible/.git', 'gitdir: /nonexistent\n');
+    assert.deepEqual(refused(fx, 'nested_git').paths, [path.join('visible', '.git')]);
+  } finally { fx.done(); }
+});
+
+test('absolute and escaping symlinks are refused, in-tree relative ones allowed', async () => {
+  const fx = laneFixture();
+  try {
+    fs.symlinkSync('a.txt', path.join(fx.added.path, 'rel-ok'));
+    fs.mkdirSync(path.join(fx.added.path, 'd'));
+    fs.symlinkSync('../a.txt', path.join(fx.added.path, 'd', 'up-ok'));
+    assert.equal(wt.inspectLaneSafety({ lane: fx.added.path, adminDir: fx.added.adminDir }).ok, true);
+    const ok = wt.collectPatch({ lane: fx.added.path, adminDir: fx.added.adminDir, base: fx.base.commit });
+    assert.deepEqual(ok.changes.map((c) => c.path).sort(), ['d/up-ok', 'rel-ok']);
+    fs.symlinkSync('/etc/passwd', path.join(fx.added.path, 'abs'));
+    assert.deepEqual(refused(fx, 'escaping_symlink').paths, ['abs']);
+    fs.rmSync(path.join(fx.added.path, 'abs'));
+    fs.symlinkSync('../../outside', path.join(fx.added.path, 'd', 'up-bad'));
+    assert.deepEqual(refused(fx, 'escaping_symlink').paths, [path.join('d', 'up-bad')]);
+  } finally { fx.done(); }
+});
+
+test('the linked env dir is skipped by the safety scan when excluded', async () => {
+  const fx = laneFixture({ '.gitignore': '.venv/\n' });
+  try {
+    assert.deepEqual(fx.added.linked, []);
+    fs.symlinkSync(path.join(fx.dir, 'a.txt'), path.join(fx.added.path, '.venv'));
+    refused(fx, 'escaping_symlink');
+    assert.equal(wt.inspectLaneSafety({ lane: fx.added.path, adminDir: fx.added.adminDir, exclude: ['.venv'] }).ok, true);
+  } finally { fx.done(); }
+});
+
+test('a rewritten lane .git pointer cannot redirect git; the admin dir comes from the shared repo', async () => {
+  const dir = makeRepo();
+  const decoy = makeRepo({ 'decoy.txt': 'decoy\n' });
+  const lane = laneDir();
+  try {
+    const base = wt.createBase(dir);
+    const added = wt.addLane({ root: dir, base: base.commit, dir: lane });
+    assert.equal(fs.realpathSync(path.dirname(added.adminDir)), fs.realpathSync(path.join(dir, '.git', 'worktrees')));
+    fs.writeFileSync(path.join(added.path, '.git'), `gitdir: ${path.join(decoy, '.git')}\n`);
+    write(added.workspacePath, 'a.txt', 'a1\nA2\na3\n');
+    const { changes } = wt.collectPatch({ lane: added.path, root: dir, base: base.commit });
+    assert.deepEqual(changes, [{ status: 'M', path: 'a.txt' }]);
+  } finally { cleanup(dir, decoy, path.dirname(lane)); }
+});
+
+test('renames show as delete plus add', async () => {
+  const fx = laneFixture();
+  try {
+    fs.renameSync(path.join(fx.added.path, 'keep.txt'), path.join(fx.added.path, 'moved.txt'));
+    const { changes } = wt.collectPatch({ lane: fx.added.path, adminDir: fx.added.adminDir, base: fx.base.commit });
+    assert.deepEqual(changes.map((c) => `${c.status}:${c.path}`).sort(), ['A:moved.txt', 'D:keep.txt']);
+    assert.ok(changes.every((c) => c.oldPath === undefined));
+  } finally { fx.done(); }
+});
+
+test('detached apply reports its pid through onSpawn and applies', async () => {
+  const fx = laneFixture();
+  try {
+    write(fx.added.workspacePath, 'a.txt', 'a1\nA2\na3\n');
+    const { patch } = wt.collectPatch({ lane: fx.added.path, adminDir: fx.added.adminDir, base: fx.base.commit });
+    const pids = [];
+    assert.deepEqual(await wt.applyPatch({ root: fx.dir, patch, onSpawn: (pid) => pids.push(pid) }), { applied: true });
+    assert.equal(pids.length, 1);
+    assert.ok(Number.isInteger(pids[0]) && pids[0] > 0);
+    assert.equal(fs.readFileSync(path.join(fx.dir, 'a.txt'), 'utf8'), 'a1\nA2\na3\n');
+  } finally { fx.done(); }
+});
+
+test('a non-zero apply exit after a passing check is reported as partial', async () => {
+  const fx = laneFixture();
+  try {
+    write(fx.added.workspacePath, 'a.txt', 'a1\nA2\na3\n');
+    const { patch } = wt.collectPatch({ lane: fx.added.path, adminDir: fx.added.adminDir, base: fx.base.commit });
+    const { EventEmitter } = require('node:events');
+    const { PassThrough } = require('node:stream');
+    const calls = [];
+    const spawnFn = (cmd, args, options) => {
+      calls.push({ cmd, args, options });
+      const child = new EventEmitter();
+      child.pid = 4242;
+      child.stdin = new PassThrough();
+      child.stderr = new PassThrough();
+      setImmediate(() => { child.stderr.write('error: disk full\n'); child.emit('close', 1, null); });
+      return child;
+    };
+    const pids = [];
+    const result = await wt.applyPatch({ root: fx.dir, patch, spawnFn, onSpawn: (pid) => pids.push(pid) });
+    assert.deepEqual(result, { applied: false, conflict: false, partial: true, message: 'error: disk full' });
+    assert.deepEqual(pids, [4242]);
+    assert.equal(calls[0].options.detached, true);
+    assert.ok(calls[0].args.includes('--whitespace=nowarn'));
+    assert.ok(calls[0].args.includes('core.hooksPath=/dev/null'));
+  } finally { fx.done(); }
 });
