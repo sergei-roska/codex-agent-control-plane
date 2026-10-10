@@ -5,11 +5,13 @@ const fs = require('node:fs');
 const { AgentEvent, InMemoryTaskStore, DefaultRequestHandler } = require('@a2a-js/sdk/server');
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
 const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/server/express');
+const { ClientFactory } = require('@a2a-js/sdk/client');
 const { CodexAppServer } = require('./codex-app-server');
 const { loadRoles, createLeadRole } = require('./role-catalog');
 const { registerRoleAgents } = require('./a2a-role-service');
 const { LeadOrchestrator, ResumeInputError } = require('./lead-orchestrator');
 const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
+const { createBudgetWatcher } = require('./budget-watcher');
 const { WriterAdmission } = require('./writer-admission');
 const { UsageLedger } = require('./usage-ledger');
 const { createActivityStore } = require('./activity-store');
@@ -22,6 +24,13 @@ const { canonicalRoleId, roleDisplayName } = require('./role-names');
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 3000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+const AUTO_RESUME_TEXT = 'Automatic resume: Codex usage budget is available again.';
+
+/** CODEX_A2A_AUTO_RESUME: on by default; '0' or 'false' disables. */
+function autoResumeEnabled(env = process.env) {
+  const value = String(env.CODEX_A2A_AUTO_RESUME ?? '').trim().toLowerCase();
+  return value !== '0' && value !== 'false';
+}
 
 function textPart(text) {
   return { content: { $case: 'text', value: text }, mediaType: 'text/plain', filename: '', metadata: undefined };
@@ -62,7 +71,7 @@ function answerCommand(taskId, pause) {
 }
 
 /** Human-readable INPUT_REQUIRED text for a pause, including how to answer. */
-function describePause(taskId, pause) {
+function describePause(taskId, pause, { autoResume = false, nextCheckAt = null } = {}) {
   const lines = [];
   if (pause?.kind === 'human_decision') {
     lines.push(`Decision required: ${pause.question || '(no question given)'}`);
@@ -76,7 +85,13 @@ function describePause(taskId, pause) {
   } else if (pause?.kind === 'waiting_for_budget') {
     lines.push(`Waiting for budget (${pause.source || 'unknown source'}): ${pause.message || 'usage limit reached.'}`);
     if (pause.resetsAt) lines.push(`Reported reset hint: ${pause.resetsAt}`);
-    lines.push('Send a message to this task to retry once quota is available.');
+    if (autoResume) {
+      lines.push('The server resumes this task automatically once Codex budget is available.');
+      if (nextCheckAt) lines.push(`Next budget check: ${new Date(nextCheckAt).toISOString()}`);
+      lines.push('Send a message to this task to resume it immediately.');
+    } else {
+      lines.push('Send a message to this task to retry once quota is available.');
+    }
   } else if (pause?.kind === 'writer_unresolved') {
     lines.push('Earlier writer outcome(s) are unresolved: the server could not prove the writer stopped, so writable work is blocked.');
     for (const attempt of pause.attempts || []) lines.push(`  - ${attempt.attemptId} (${attempt.role}): ${attempt.reason}`);
@@ -207,10 +222,20 @@ function isResumeInputError(error) {
   return error instanceof ResumeInputError;
 }
 
-function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000 }) {
+function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, budgetWatcher = null }) {
   const controllers = new Map();
   const reservations = new Set();
   const inflight = new Set();
+
+  // Registers a budget pause with the watcher before describing it, so the text can name the next check.
+  function describePauseText(taskId, pause) {
+    if (!budgetWatcher) return describePause(taskId, pause);
+    if (pause?.kind === 'waiting_for_budget') {
+      budgetWatcher.notePause(taskId, pause);
+      return describePause(taskId, pause, { autoResume: true, nextCheckAt: budgetWatcher.status(taskId)?.nextCheckAt ?? null });
+    }
+    return describePause(taskId, pause);
+  }
 
   async function executeLead(requestContext, eventBus) {
     const { taskId, contextId } = requestContext;
@@ -227,9 +252,11 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000 }
       metadata: {},
     };
     const resuming = requestContext.task?.status?.state === TaskState.TASK_STATE_INPUT_REQUIRED;
+    // Whoever resumes the run (a human or the watcher), it no longer waits for budget.
+    if (resuming) budgetWatcher?.forget(taskId);
     let effectivePause = null;
     const republishPause = (pause, explanation, suffix) => {
-      const text = explanation ? `${explanation}\n${describePause(taskId, pause)}` : describePause(taskId, pause);
+      const text = explanation ? `${explanation}\n${describePauseText(taskId, pause)}` : describePauseText(taskId, pause);
       eventBus.publish(AgentEvent.statusUpdate({
         taskId,
         contextId,
@@ -388,7 +415,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000 }
         eventBus.publish(AgentEvent.statusUpdate({
           taskId,
           contextId,
-          status: status(TaskState.TASK_STATE_INPUT_REQUIRED, agentMessage(taskId, contextId, `pause-${Date.now()}`, describePause(taskId, pause))),
+          status: status(TaskState.TASK_STATE_INPUT_REQUIRED, agentMessage(taskId, contextId, `pause-${Date.now()}`, describePauseText(taskId, pause))),
           metadata: { pause },
         }));
         return;
@@ -469,6 +496,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000 }
       return running;
     },
     async cancelTask(taskId, eventBus) {
+      budgetWatcher?.forget(taskId, { dropHistory: true });
       const controller = controllers.get(taskId);
       if (controller) {
         controller.abort();
@@ -526,10 +554,10 @@ function rejectOverlappingLeadTask(executor) {
   };
 }
 
-function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore() }) {
+function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), budgetWatcher = null }) {
   const endpoint = new URL('/orchestrator', `${baseUrl}/`).toString();
   const card = makeLeadCard({ leadRole, endpoint });
-  const executor = makeLeadExecutor({ orchestrator, loadTask: (id) => taskStore.load(id, {}) });
+  const executor = makeLeadExecutor({ orchestrator, loadTask: (id) => taskStore.load(id, {}), budgetWatcher });
   const requestHandler = new DefaultRequestHandler(card, taskStore, executor);
   app.use('/orchestrator/agent-card.json', agentCardHandler({ agentCardProvider: async () => AgentCard.toJSON(card) }));
   app.use('/orchestrator', authMiddleware, express.json(), rejectOverlappingLeadTask(executor), jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));
@@ -563,6 +591,8 @@ async function startServer({
   stateFile,
   state: providedState,
   workspaceLockDir,
+  autoResume = autoResumeEnabled(),
+  budgetWatcherOptions = {},
 } = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new RangeError('port must be an integer from 0 to 65535');
   if (typeof workspace !== 'string' || !workspace || !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
@@ -621,10 +651,25 @@ async function startServer({
       roles, appServer, workspace, baseUrl, admission, usageLedger, activityStore, skillCatalog,
       taskStoreFactory: (roleId) => createTaskStore(state, roleId),
     });
+    const leadTaskStore = createTaskStore(state, 'orchestrator');
+    let budgetWatcher = null;
+    const loopback = { client: null };
+    if (autoResume) {
+      const models = new Set([...roles.values()].map((role) => role.model).filter(Boolean));
+      if (leadRole.model) models.add(leadRole.model);
+      budgetWatcher = createBudgetWatcher({
+        models: [...models],
+        readRateLimits: async () => (typeof appServer.readRateLimits === 'function' ? appServer.readRateLimits() : null),
+        listPausedRuns: () => listBudgetPausedRuns({ state, taskStore: leadTaskStore, orchestrator }),
+        resumeRun: (taskId) => resumeBudgetRun({ taskId, baseUrl, authToken, taskStore: leadTaskStore, orchestrator, executor: () => leadAgent.executor, loopback }),
+        ...budgetWatcherOptions,
+      });
+    }
     const leadAgent = registerLead(app, {
-      leadRole, orchestrator, baseUrl, authMiddleware, taskStore: createTaskStore(state, 'orchestrator'),
+      leadRole, orchestrator, baseUrl, authMiddleware, taskStore: leadTaskStore, budgetWatcher,
     });
     ready = true;
+    budgetWatcher?.start();
     return {
       app,
       httpServer,
@@ -633,9 +678,11 @@ async function startServer({
       roles,
       specialistAgents,
       leadAgent,
+      budgetWatcher,
       host: HOST,
       port: actualPort,
       async close() {
+        budgetWatcher?.stop();
         leadAgent.executor.cancelAll();
         // Let canceled runs confirm downstream and persist their terminal state first.
         await bounded(leadAgent.executor.settled(), SHUTDOWN_TIMEOUT_MS);
@@ -669,6 +716,49 @@ async function startServer({
     releaseWorkspaceLock();
     throw error;
   }
+}
+
+/** Lead tasks waiting in INPUT_REQUIRED whose checkpoint pause is waiting_for_budget. */
+async function listBudgetPausedRuns({ state, taskStore, orchestrator }) {
+  const rows = state.db.prepare('SELECT tenant, id FROM tasks WHERE owner = ? AND status_state = ? ORDER BY id')
+    .all('orchestrator', 'TASK_STATE_INPUT_REQUIRED');
+  const paused = [];
+  for (const { id } of rows) {
+    let pause = null;
+    try { pause = (await orchestrator.getPause?.(id)) || null; } catch (_) { pause = null; }
+    if (pause?.kind === 'waiting_for_budget') paused.push({ runId: id, pause });
+  }
+  return paused;
+}
+
+/**
+ * Resumes a budget-paused lead task through the same A2A message/send a human uses (loopback, bearer token).
+ * Returns false when the task is no longer waiting for budget; a message to a task that is already
+ * executing is also rejected server-side by rejectOverlappingLeadTask.
+ */
+async function resumeBudgetRun({ taskId, baseUrl, authToken, taskStore, orchestrator, executor, loopback }) {
+  const task = await taskStore.load(taskId, {});
+  if (!task || task.status?.state !== TaskState.TASK_STATE_INPUT_REQUIRED) return false;
+  const pause = (await orchestrator.getPause?.(taskId)) || null;
+  if (pause?.kind !== 'waiting_for_budget') return false;
+  if (executor().isTaskActive(taskId)) return false;
+  if (!loopback.client) loopback.client = await new ClientFactory().createFromUrl(baseUrl, '/orchestrator/agent-card.json');
+  await loopback.client.sendMessage({
+    tenant: '',
+    message: {
+      messageId: `auto-resume-${taskId}-${Date.now()}`,
+      contextId: task.contextId || '',
+      taskId,
+      role: 1,
+      parts: [textPart(AUTO_RESUME_TEXT)],
+      metadata: { autoResume: { reason: 'budget' } },
+      extensions: [],
+      referenceTaskIds: [],
+    },
+    configuration: { acceptedOutputModes: ['text/plain'], returnImmediately: true },
+    metadata: undefined,
+  }, { serviceParameters: { Authorization: `Bearer ${authToken}` } });
+  return true;
 }
 
 function bounded(promise, timeoutMs) {

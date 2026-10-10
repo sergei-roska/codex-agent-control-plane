@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
-const { startServer, makeLeadExecutor, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts } = require('../src/server');
+const { startServer, describePause, makeLeadExecutor, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts } = require('../src/server');
 const { makeLeadCard } = require('../src/server');
 const fs = require('node:fs');
 const { ResumeInputError } = require('../src/lead-orchestrator');
@@ -1228,5 +1228,115 @@ test('JSON-RPC calls get 503 starting with Retry-After until startup completes',
   } finally {
     await runtime.close();
     require('node:fs').rmSync(tokenDirectory, { recursive: true, force: true });
+  }
+});
+
+const BUDGET_PAUSE = { kind: 'waiting_for_budget', source: 'lead', message: 'usage limit', resetsAt: null };
+const RATE_LIMITS_OK = { ordinaryUsageAllowed: true, rateLimits: { rateLimitReachedType: null }, rateLimitsByLimitId: null };
+
+test('describePause explains automatic resume for a budget pause and keeps the old text when it is off', () => {
+  const off = describePause('t1', BUDGET_PAUSE);
+  assert.match(off, /Send a message to this task to retry once quota is available\./);
+  assert.doesNotMatch(off, /automatically/);
+  const nextCheckAt = Date.parse('2027-01-01T00:00:00.000Z');
+  const on = describePause('t1', BUDGET_PAUSE, { autoResume: true, nextCheckAt });
+  assert.match(on, /resumes this task automatically once Codex budget is available/);
+  assert.match(on, /Next budget check: 2027-01-01T00:00:00\.000Z/);
+  assert.match(on, /Send a message to this task to resume it immediately\./);
+});
+
+test('a budget pause registers with the watcher and the loopback resume reaches the lead resume path', async () => {
+  const dir = tmpDir();
+  const resumes = [];
+  let paused = true;
+  const orchestrator = {
+    async run(args) { return { runId: args.runId, status: 'waiting_for_budget', text: '', rounds: 0, assignments: [], pause: BUDGET_PAUSE }; },
+    async getPause() { return paused ? BUDGET_PAUSE : null; },
+    async resume(args) { paused = false; resumes.push(args); return { runId: args.runId, status: 'completed', text: 'ok', rounds: 1, assignments: [] }; },
+  };
+  const runtime = await startLeadServer(orchestrator, dir, {
+    listen: true,
+    port: 0,
+    appServer: { ...CHATGPT_APP_SERVER(), async readRateLimits() { return RATE_LIMITS_OK; } },
+    budgetWatcherOptions: { intervalMs: 40, marginMs: 0 },
+  });
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const first = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    assert.equal(first.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.match(statusText(first), /resumes this task automatically/);
+    assert.equal(runtime.budgetWatcher.status(first.id).state, 'waiting');
+    for (let i = 0; i < 100 && resumes.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(resumes.length, 1);
+    assert.match(resumes[0].input.answer, /Automatic resume: Codex usage budget is available again\./);
+    assert.equal(resumes[0].runId, first.id);
+    for (let i = 0; i < 100; i++) {
+      const task = await handler.getTask({ id: first.id }, CALL());
+      if (task.status.state === TaskState.TASK_STATE_COMPLETED) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal((await handler.getTask({ id: first.id }, CALL())).status.state, TaskState.TASK_STATE_COMPLETED);
+    assert.equal(runtime.budgetWatcher.status(first.id), null);
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a human resume forgets the run and auto-resume off leaves no watcher and the old pause text', async () => {
+  const dir = tmpDir();
+  const resumes = [];
+  const orchestrator = {
+    async run(args) { return { runId: args.runId, status: 'waiting_for_budget', text: '', rounds: 0, assignments: [], pause: BUDGET_PAUSE }; },
+    async getPause() { return BUDGET_PAUSE; },
+    async resume(args) { resumes.push(args); return { runId: args.runId, status: 'completed', text: 'ok', rounds: 1, assignments: [] }; },
+  };
+  const on = await startLeadServer(orchestrator, dir, { budgetWatcherOptions: { intervalMs: 600_000 } });
+  try {
+    const handler = on.leadAgent.requestHandler;
+    const first = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    assert.equal(on.budgetWatcher.status(first.id).state, 'waiting');
+    await handler.sendMessage({ message: userMessage('go', { taskId: first.id, contextId: first.contextId }), configuration: {} }, CALL());
+    assert.equal(on.budgetWatcher.status(first.id), null);
+  } finally {
+    await on.close();
+  }
+  const off = await startLeadServer(orchestrator, dir, { autoResume: false });
+  try {
+    assert.equal(off.budgetWatcher, null);
+    const first = await off.leadAgent.requestHandler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    assert.match(statusText(first), /Send a message to this task to retry once quota is available\./);
+    assert.doesNotMatch(statusText(first), /automatically/);
+  } finally {
+    await off.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('startup registers INPUT_REQUIRED lead tasks paused for budget and skips other pauses', async () => {
+  const dir = tmpDir();
+  const stateFile = path.join(dir, 'state.sqlite');
+  const seed = await openStateDatabase({ filePath: stateFile });
+  const waiting = { state: TaskState.TASK_STATE_INPUT_REQUIRED, timestamp: new Date().toISOString() };
+  const store = createTaskStore(seed, 'orchestrator');
+  for (const id of ['lead-budget', 'lead-human']) {
+    await store.save({ id, contextId: `c-${id}`, status: waiting, artifacts: [], history: [], metadata: {} }, CALL());
+  }
+  await seed.close();
+  const runtime = await startServer({
+    listen: false,
+    stateFile,
+    tokenFile: path.join(dir, 'token'),
+    appServer: CHATGPT_APP_SERVER(),
+    orchestratorFactory: () => ({ async getPause(id) { return id === 'lead-budget' ? BUDGET_PAUSE : HUMAN_PAUSE; } }),
+    budgetWatcherOptions: { intervalMs: 600_000 },
+  });
+  try {
+    for (let i = 0; i < 50 && !runtime.budgetWatcher.status('lead-budget'); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(runtime.budgetWatcher.status('lead-budget').state, 'waiting');
+    assert.equal(runtime.budgetWatcher.status('lead-human'), null);
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
