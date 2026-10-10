@@ -17,6 +17,7 @@ const { createBudgetWatcher } = require('./budget-watcher');
 const { WriterAdmission } = require('./writer-admission');
 const { LaneManager, selectWriterIsolation, laneRetentionHours } = require('./writer-lanes');
 const { UsageLedger } = require('./usage-ledger');
+const { SessionThreads } = require('./session-threads');
 const { createActivityStore } = require('./activity-store');
 const { createEvidenceStore } = require('./evidence-store');
 const { validateAcceptanceContract, formatAcceptance, invalidAcceptanceContract } = require('./acceptance');
@@ -289,6 +290,8 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
     try {
       eventBus.publish(AgentEvent.task(task));
       let goal;
+      // SES-01: the owner's own words of a follow-up run, shown verbatim in the continuing lead thread.
+      let newRequest;
       let livePause = null;
       if (resuming) {
         try { livePause = (await orchestrator.getPause?.(taskId)) || null; } catch (_) { livePause = null; }
@@ -349,6 +352,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
         }
         let priorGoal = null;
         try { priorGoal = (await orchestrator.getRunGoal?.(refId)) || null; } catch (_) { priorGoal = null; }
+        newRequest = goal;
         goal = composeFollowUpGoal({ refTask, priorGoal, digest: await loadRunDigest(orchestrator, refId), newRequest: goal });
       }
 
@@ -402,11 +406,12 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       let result;
       if (resuming) {
         try {
-          result = await orchestrator.resume({ runId: taskId, input: resumeInput, signal: controller.signal, onEvent });
+          result = await orchestrator.resume({ runId: taskId, input: resumeInput, signal: controller.signal, onEvent, contextId });
         } catch (error) {
           if (error?.name !== 'RunNotFoundError' || pauseKind !== 'restart') throw error;
           // Crash before the first checkpoint: start over from the original goal.
           let original = firstUserGoal(task);
+          const originalRequest = original;
           const originalRefIds = original ? firstUserReferenceIds(task) : [];
           if (originalRefIds.length > 0) {
             const refId = originalRefIds[0];
@@ -426,10 +431,10 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
             // Never continue as if no checks were required: carry an invalid marker into acceptance.
             originalContract = invalidAcceptanceContract(`Stored acceptance contract is invalid: ${contractError.message}`);
           }
-          result = await orchestrator.run({ goal: original, runId: taskId, contract: originalContract, signal: controller.signal, onEvent });
+          result = await orchestrator.run({ goal: original, runId: taskId, contract: originalContract, signal: controller.signal, onEvent, contextId, ...(originalRefIds.length > 0 ? { newRequest: originalRequest } : {}) });
         }
       } else {
-        result = await orchestrator.run({ goal, runId: taskId, contract, signal: controller.signal, onEvent });
+        result = await orchestrator.run({ goal, runId: taskId, contract, signal: controller.signal, onEvent, contextId, ...(newRequest ? { newRequest } : {}) });
       }
       const paused = (result?.status === 'input_required' || result?.status === 'waiting_for_budget') && !controller.signal.aborted;
       if (paused) {
@@ -679,9 +684,10 @@ async function startServer({
     const usageLedger = new UsageLedger({ db: state.db });
     const evidenceStore = createEvidenceStore(state.db);
     const activityStore = createActivityStore(state.db);
+    const sessionThreads = new SessionThreads({ db: state.db });
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog,
-      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, activityStore, evidenceStore,
+      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, activityStore, evidenceStore, sessionThreads,
       parallelWriters: worktreeMode,
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);

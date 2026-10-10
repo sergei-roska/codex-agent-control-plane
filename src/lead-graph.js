@@ -24,6 +24,10 @@ const MAX_REPORT_CHARS = 100_000;
 // Lead projection caps (docs/evidence-artifact-contract.md, "Lead projection").
 const MAX_VIOLATION_PATHS = 50;
 const MAX_PROMPT_OUTCOMES_CHARS = 60_000;
+// SES-01: context size (input of the last model request) above which the session starts a new lead thread.
+const DEFAULT_LEAD_ROLLOVER_TOKENS = 150_000;
+const ROLLOVER_WINDOW_FRACTION = 0.6;
+const DELTA_REMINDER = 'The rules, roles, and output format from the start of this thread still apply. Return only one JSON object matching the supplied schema.';
 const TEXT_PROJECTION_HEAD = 6000;
 const TEXT_PROJECTION_TAIL = 2000;
 const TEXT_EVIDENCE_THRESHOLD = TEXT_PROJECTION_HEAD + TEXT_PROJECTION_TAIL;
@@ -595,6 +599,13 @@ const LeadState = Annotation.Root({
   rejections: last(() => []),
   consecutiveRejections: last(() => 0),
   retryDecide: last(() => false),
+  // SES-01: the session (A2A contextId), the owner's raw new message of a follow-up run, and what
+  // the lead thread in `threadId` has already been shown (outcome count, goal text). Old
+  // checkpoints read the defaults: no session, so the lead behaves as before.
+  contextId: last(() => null),
+  newRequest: last(() => null),
+  leadSeenOutcomes: last(() => 0),
+  leadSeenGoal: last(() => null),
   // Usage-limited attempts of the latest batch that can be continued after the budget resume (BUD-2).
   continuable: last(() => []),
 });
@@ -607,6 +618,7 @@ const LeadState = Annotation.Root({
  *   cancelUntilConfirmed(client, taskId, contextId) -> terminal task,
  *   emit(onEvent, event), checkpointer?,
  *   admission?: WriterAdmission, reconcileWaitMs?: number,
+ *   sessionThreads?: SessionThreads, sessionDigest?({ contextId, runId, runIds, state }) -> string, rolloverTokens?: number,
  *   parallelWriters?: boolean, usageLedger?: UsageLedger, activityStore?: ActivityStore, evidenceStore?: EvidenceStore, runCheckImpl?, snapshot?,
  * }
  * Returns the compiled graph when deps.checkpointer is given, else the StateGraph.
@@ -619,6 +631,9 @@ function buildLeadGraph(deps) {
   const { admission } = deps;
   const reconcileWaitMs = Number.isFinite(deps.reconcileWaitMs) ? deps.reconcileWaitMs : DEFAULT_RECONCILE_WAIT_MS;
 
+  // Threshold: the explicit setting, else 60% of the known context window, else the default.
+  const rolloverThreshold = (contextWindow) => (Number.isFinite(deps.rolloverTokens) ? deps.rolloverTokens
+    : Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow * ROLLOVER_WINDOW_FRACTION : DEFAULT_LEAD_ROLLOVER_TOKENS);
   const runtimeOf = (config) => deps.runtimeFor(config?.configurable?.thread_id) || {};
   const requestOptions = (signal) => ({ ...(signal ? { signal } : {}), ...deps.authOptions() });
 
@@ -909,32 +924,26 @@ function buildLeadGraph(deps) {
     };
   }
 
-  function decisionPrompt(state, extras) {
-    const openDecisions = state.openDecisions.map(({ id, role, request }) => ({ id, role, request }));
-    const goal = state.goalOverride
-      ? [`Goal (changed by the owner during this run; authoritative, it replaces the original goal):\n${state.goalOverride}`, `Original goal (background only):\n${state.goal}`]
-      : [`User goal:\n${state.goal}`];
-    const pinnedChecks = state.contract?.requiredChecks || [];
-    let checks = 'Acceptance checks: none are pinned yet; propose them in acceptanceChecks (see the rules below).';
-    if (state.contract?.invalid) checks = 'Acceptance checks: the owner contract of this run is invalid; acceptanceChecks proposals are ignored.';
-    else if (pinnedChecks.length > 0) {
-      checks = `Pinned acceptance checks (source ${state.contract.source || 'owner'}; they run at finish; acceptanceChecks proposals are ignored and only the owner can change them):\n${JSON.stringify(pinnedChecks.map(({ id, argv }) => ({ id, argv })))}`;
-    }
+  const roundsLine = (state) => {
     const extensions = (state.roundExtensions || []).length === 0 ? ''
       : ` Budget extensions: ${state.roundExtensions.map((entry) => `+${entry.rounds} at round ${entry.round} (${entry.by}${entry.reason ? `: ${entry.reason}` : ''})`).join('; ')}.`;
-    const sections = [
-      'Plan and coordinate the requested work as the read-only team lead. Return only JSON matching the supplied schema.',
-      'The lead must not edit files. Delegate all changes through the A2A role agents.',
-      ...goal,
-      `Dispatch rounds already used: ${state.round}/${roundLimit(state)}. A dispatch decision consumes one round.${extensions}`,
-      checks,
-      'Available roles:\n' + JSON.stringify([...roles.values()].map(({ name, displayName, description, sandbox, model, effort }) => ({ id: canonicalRoleId(name), name: displayName || roleDisplayName(name), description, sandbox, model, effort }))),
-      `Available skill candidates (choose 0-5 relevant IDs for each assignment; no skill is required for unrelated work):\n${JSON.stringify(extras.skillCandidates)}`,
-      `Available skill IDs and names (trusted selectable IDs):\n${JSON.stringify(extras.skillNames)}`,
-      'The candidate descriptions are lexical hints. You may select any listed skill ID based on semantic relevance to the task, even when it was not in the candidate shortlist.',
-    ];
-    if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
-    sections.push('Open worker decisions (resolve each in resolutions, or list it in humanInput.relatedDecisionIds when owner-only; a dispatch of only read-only roles may keep them open while you investigate):\n' + JSON.stringify(openDecisions));
+    return `Dispatch rounds already used: ${state.round}/${roundLimit(state)}. A dispatch decision consumes one round.${extensions}`;
+  };
+
+  const checksLine = (state) => {
+    const pinnedChecks = state.contract?.requiredChecks || [];
+    if (state.contract?.invalid) return 'Acceptance checks: the owner contract of this run is invalid; acceptanceChecks proposals are ignored.';
+    if (pinnedChecks.length > 0) {
+      return `Pinned acceptance checks (source ${state.contract.source || 'owner'}; they run at finish; acceptanceChecks proposals are ignored and only the owner can change them):\n${JSON.stringify(pinnedChecks.map(({ id, argv }) => ({ id, argv })))}`;
+    }
+    return 'Acceptance checks: none are pinned yet; propose them in acceptanceChecks (see the rules below).';
+  };
+
+  const openDecisionsSection = (state) => 'Open worker decisions (resolve each in resolutions, or list it in humanInput.relatedDecisionIds when owner-only; a dispatch of only read-only roles may keep them open while you investigate):\n' + JSON.stringify(state.openDecisions.map(({ id, role, request }) => ({ id, role, request })));
+
+  // Optional notes shared by the full and the delta prompt (acceptance, goal investigation, human answers, rejection).
+  function stateNotes(state) {
+    const sections = [];
     if (state.acceptance?.disposition === 'rejected' && state.acceptanceAttempts > 0 && !state.status) {
       const issues = (state.acceptance.issues || []).map((issue) => `${issue.code}: ${issue.detail}`);
       sections.push(`Acceptance note: the deterministic acceptance run for your finish decision was rejected (disposition ${state.acceptance.disposition}). You may dispatch fixes within the round limits, then finish again; a second rejection ends the run as rejected. Your final text never changes the disposition.\nIssues:\n${issues.map((line) => `- ${line}`).join('\n')}`);
@@ -950,9 +959,55 @@ function buildLeadGraph(deps) {
         ...violations.map((entry) => `- ${entry.predicate} ${entry.code}: ${entry.detail}`),
         ...reminders].join('\n'));
     }
+    return sections;
+  }
+
+  const outcomesForPrompt = (outcomes) => boundedOutcomes(outcomes.map(({ objective: _objective, continuation: _continuation, ...outcome }) => outcome));
+
+  // SES-01: the lead thread already holds the rules and roles; send only what is new since its last turn.
+  function deltaPrompt(state, extras) {
+    const sections = [DELTA_REMINDER];
+    if (extras.goalChanged) {
+      if (state.goalOverride) sections.push(`The owner changed the goal during this run (authoritative; it replaces the earlier goal):\n${state.goalOverride}`);
+      else if (state.newRequest) sections.push(`New message from the owner (authoritative; the earlier conversation in this thread is background):\n${state.newRequest}`);
+      else sections.push(`New goal from the owner (authoritative):\n${state.goal}`);
+    }
+    sections.push(roundsLine(state), checksLine(state));
+    if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
+    if (extras.goalChanged) sections.push(`Available skill candidates (choose 0-5 relevant IDs for each assignment; no skill is required for unrelated work):\n${JSON.stringify(extras.skillCandidates)}`);
+    sections.push(openDecisionsSection(state));
+    sections.push(...stateNotes(state));
+    const fresh = state.outcomes.slice(extras.seenOutcomes);
+    if (fresh.length > 0) sections.push('Worker outcomes since your last turn (including failures):\n' + JSON.stringify(outcomesForPrompt(fresh)));
+    sections.push(DELTA_REMINDER);
+    return sections.join('\n\n');
+  }
+
+  function decisionPrompt(state, extras) {
+    return extras.delta ? deltaPrompt(state, extras) : fullPrompt(state, extras);
+  }
+
+  function fullPrompt(state, extras) {
+    const goal = state.goalOverride
+      ? [`Goal (changed by the owner during this run; authoritative, it replaces the original goal):\n${state.goalOverride}`, `Original goal (background only):\n${state.goal}`]
+      : [`User goal:\n${state.goal}`];
+    const sections = [
+      'Plan and coordinate the requested work as the read-only team lead. Return only JSON matching the supplied schema.',
+      'The lead must not edit files. Delegate all changes through the A2A role agents.',
+      ...goal,
+      roundsLine(state),
+      checksLine(state),
+      'Available roles:\n' + JSON.stringify([...roles.values()].map(({ name, displayName, description, sandbox, model, effort }) => ({ id: canonicalRoleId(name), name: displayName || roleDisplayName(name), description, sandbox, model, effort }))),
+      `Available skill candidates (choose 0-5 relevant IDs for each assignment; no skill is required for unrelated work):\n${JSON.stringify(extras.skillCandidates)}`,
+      `Available skill IDs and names (trusted selectable IDs):\n${JSON.stringify(extras.skillNames)}`,
+      'The candidate descriptions are lexical hints. You may select any listed skill ID based on semantic relevance to the task, even when it was not in the candidate shortlist.',
+    ];
+    if (extras.sessionDigest) sections.splice(1 + goal.length + 1, 0, `Session so far (this lead thread is new; the earlier conversation of this session is summarized here, background only):\n${extras.sessionDigest}`);
+    if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
+    sections.push(openDecisionsSection(state));
+    sections.push(...stateNotes(state));
     // The objective is kept for the run digest only; the bounded prompt stays as before.
-    const promptOutcomes = state.outcomes.map(({ objective: _objective, continuation: _continuation, ...outcome }) => outcome);
-    sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(boundedOutcomes(promptOutcomes)));
+    sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(outcomesForPrompt(state.outcomes)));
     sections.push([
       'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, and continueFrom (null unless continuing a worker). Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles; read-only roles may use allowedFiles []. allowedFiles entries are exact paths or directory prefixes; globs are not supported. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
       deps.parallelWriters
@@ -1045,21 +1100,54 @@ function buildLeadGraph(deps) {
     const skillCandidates = findSkillCandidates(skillCatalog, [state.goal, ...priorSkillContext.map((item) => item.summary)].join('\n'), { limit: 12 });
     const skillNames = [...skillCatalog.values()].map(({ id, name }) => ({ id, name }));
     const candidateIds = skillNames.map(({ id }) => id);
+    // SES-01: one lead thread per session. A rejection retry keeps the current thread; otherwise the
+    // session thread is resumed when it is in the current Codex home and still small enough.
+    const contextId = runtime.contextId ?? state.contextId ?? null;
+    const sessions = contextId ? deps.sessionThreads : null;
+    const codexHome = appServer.getCodexHome?.() ?? null;
+    const session = sessions ? sessions.get(contextId) : null;
+    let threadId = null;
+    let rolledOver = false;
+    if (state.retryDecide && state.threadId) threadId = state.threadId;
+    else if (session?.threadId) {
+      if (session.codexHome === codexHome && (session.lastInputTokens == null || session.lastInputTokens <= rolloverThreshold(session.contextWindow))) threadId = session.threadId;
+      else rolledOver = true;
+    }
+    const goalKey = state.goalOverride || state.goal;
+    const turnInputs = async (resumeThreadId) => {
+      // What the lead thread already saw: nothing unless it is this run's own thread.
+      const sameThread = Boolean(resumeThreadId) && resumeThreadId === state.threadId;
+      const delta = Boolean(sessions) && Boolean(resumeThreadId);
+      const sessionDigest = delta || !session?.threadId || !deps.sessionDigest ? '' : await deps.sessionDigest({ contextId, runId: state.runId, runIds: session.runIds, state });
+      const seenGoal = sameThread ? state.leadSeenGoal : null;
+      return decisionPrompt(state, {
+        notes, skillCandidates, skillNames, delta, sessionDigest,
+        seenOutcomes: sameThread ? (state.leadSeenOutcomes || 0) : 0,
+        goalChanged: seenGoal !== goalKey,
+      });
+    };
     let leadResult;
     const activity = deps.activityStore?.begin({ key: `lead:${state.runId}`, runId: state.runId, role: 'coordinator' });
     let activityOutcome = 'failed';
+    const runLead = async (resumeThreadId) => appServer.run({
+      role: leadRole,
+      cwd: workspace,
+      input: await turnInputs(resumeThreadId),
+      ...(resumeThreadId ? { threadId: resumeThreadId } : {}),
+      outputSchema: DECISION_SCHEMA,
+      signal,
+      ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
+    });
     try {
-      leadResult = await appServer.run({
-        role: leadRole,
-        cwd: workspace,
-        input: decisionPrompt(state, { notes, skillCandidates, skillNames }),
-        // Each round's prompt is self-contained; resuming the thread duplicated it and grew the
-        // context every round. Only a retry after a rejected decision continues the same thread.
-        ...(state.retryDecide && state.threadId ? { threadId: state.threadId } : {}),
-        outputSchema: DECISION_SCHEMA,
-        signal,
-        ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
-      });
+      try {
+        leadResult = await runLead(threadId);
+      } catch (error) {
+        // A rejected resume (thread gone or unusable) starts a new thread with the full prompt; nothing ran.
+        if (!threadId || signal?.aborted || error?.name === 'AbortError' || error?.failureClass !== 'request_rejected' || error?.outcomeUnknown === true) throw error;
+        threadId = null;
+        rolledOver = Boolean(sessions);
+        leadResult = await runLead(null);
+      }
       activityOutcome = String(leadResult?.status ?? 'completed');
     } catch (error) {
       activityOutcome = signal?.aborted ? 'canceled' : 'failed';
@@ -1072,7 +1160,25 @@ function buildLeadGraph(deps) {
       activity?.end(activityOutcome);
     }
     update.threadId = leadResult.threadId || state.threadId;
+    // The thread has now seen this turn's goal and outcomes (a new thread got them in its full prompt).
+    update.leadSeenOutcomes = state.outcomes.length;
+    update.leadSeenGoal = goalKey;
     recordLeadTurn(state, leadResult, leadResult.status || 'completed');
+    if (sessions && update.threadId) {
+      try {
+        const contextTokens = leadResult.usage?.contextTokens;
+        const contextWindow = leadResult.usage?.contextWindow;
+        sessions.upsert({
+          contextId,
+          threadId: update.threadId,
+          codexHome,
+          lastInputTokens: Number.isFinite(contextTokens) ? contextTokens : null,
+          contextWindow: Number.isFinite(contextWindow) ? contextWindow : null,
+          runId: state.runId,
+          rolledOver,
+        });
+      } catch (_) { /* Session bookkeeping never breaks a run. */ }
+    }
 
     let decision;
     let agentContract = null;

@@ -149,6 +149,15 @@ function renderRunDigest(digest, maxChars = DIGEST_MAX_CHARS) {
   return `${rendered.slice(0, maxChars - 3)}...`;
 }
 
+// SES-01: explicit context-size threshold for a session's lead thread, or null (then 60% of the
+// model window, else 150000, is used by the graph).
+function rolloverTokensFromEnv(env = process.env) {
+  const value = env.CODEX_A2A_LEAD_ROLLOVER_TOKENS ? Number(env.CODEX_A2A_LEAD_ROLLOVER_TOKENS) : NaN;
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+const SESSION_DIGEST_MAX_CHARS = 12000;
+
 class LeadOrchestrator {
   constructor({
     appServer,
@@ -173,6 +182,8 @@ class LeadOrchestrator {
     runCheckImpl,
     snapshot,
     skillCatalog = loadSkillCatalog(),
+    sessionThreads = null,
+    rolloverTokens = rolloverTokensFromEnv(),
   } = {}) {
     if (!appServer || typeof appServer.run !== 'function') throw new TypeError('appServer.run is required');
     if (!(roles instanceof Map)) throw new TypeError('roles must be a Map');
@@ -219,6 +230,9 @@ class LeadOrchestrator {
       runCheckImpl,
       snapshot,
       skillCatalog,
+      sessionThreads,
+      rolloverTokens,
+      sessionDigest: (input) => this._sessionDigest(input),
       runtimeFor: (runId) => this.runtimes.get(runId),
       clientFor: (roleName) => this._clientFor(roleName),
       authOptions: () => this._authRequestOptions(),
@@ -279,16 +293,41 @@ class LeadOrchestrator {
     return LeadOrchestrator._exists(snapshot) && (snapshot.next || []).length > 0;
   }
 
+  /**
+   * Digest for a lead thread that starts mid-session (SES-01): the current run's digest, then the final
+   * texts of the session's earlier runs (newest first), bounded to 12000 chars. The earlier runs are the
+   * ids kept in the session row; their final text comes from their checkpoints.
+   */
+  async _sessionDigest({ runId, runIds = [], state }) {
+    const parts = [];
+    const current = renderRunDigest(buildRunDigest(state), 6000);
+    if (current) parts.push(`Current run so far:\n${current}`);
+    const earlier = [];
+    for (const id of [...runIds].reverse()) {
+      if (id === runId) continue;
+      let values = null;
+      try { values = (await this._snapshot(id)).values || null; } catch (_) { values = null; }
+      if (!values?.goal) continue;
+      earlier.push(`- Run ${id} [${values.status || 'unknown'}] goal: ${digestClip(values.newRequest || values.goal, 400)}\n  final: ${digestClip(values.text, 1500) || '(none)'}`);
+    }
+    if (earlier.length > 0) parts.push(`Earlier runs in this session (newest first):\n${earlier.join('\n')}`);
+    return digestClip(parts.join('\n\n'), SESSION_DIGEST_MAX_CHARS);
+  }
+
   /** `contract` is the acceptance contract; it is pinned in graph state here and never changed afterwards. */
-  async run({ goal, runId = randomUUID(), contract, signal, onEvent, interruptAfter } = {}) {
+  async run({ goal, runId = randomUUID(), contract, signal, onEvent, interruptAfter, contextId, newRequest } = {}) {
     if (!isNonEmptyString(goal)) throw new TypeError('goal must be a non-empty string');
     if (!isNonEmptyString(runId)) throw new TypeError('runId must be a non-empty string');
     const pinnedContract = validateAcceptanceContract(contract);
     if (LeadOrchestrator._exists(await this._snapshot(runId))) throw new Error(`A checkpoint already exists for run ${runId}; use resume()`);
-    return this._drive(runId, { goal, runId, contract: pinnedContract }, { signal, onEvent, interruptAfter, resumed: false });
+    return this._drive(runId, {
+      goal, runId, contract: pinnedContract,
+      ...(isNonEmptyString(contextId) ? { contextId } : {}),
+      ...(isNonEmptyString(newRequest) ? { newRequest } : {}),
+    }, { signal, onEvent, interruptAfter, resumed: false, contextId });
   }
 
-  async resume({ runId, input, signal, onEvent, interruptAfter } = {}) {
+  async resume({ runId, input, signal, onEvent, interruptAfter, contextId } = {}) {
     if (!isNonEmptyString(runId)) throw new TypeError('runId must be a non-empty string');
     const snapshot = await this._snapshot(runId);
     if (!LeadOrchestrator._exists(snapshot)) throw new RunNotFoundError(runId);
@@ -313,11 +352,11 @@ class LeadOrchestrator {
     } else if (pending) {
       graphInput = new Command({ resume: input ?? true });
     }
-    return this._drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed: true });
+    return this._drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed: true, contextId });
   }
 
-  async _drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed }) {
-    this.runtimes.set(runId, { signal, onEvent, resumed, pendingNotes: [] });
+  async _drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed, contextId }) {
+    this.runtimes.set(runId, { signal, onEvent, resumed, pendingNotes: [], ...(isNonEmptyString(contextId) ? { contextId } : {}) });
     try {
       await this.graph.invoke(graphInput, this._config(runId, interruptAfter));
       return await this._settle(runId, onEvent);

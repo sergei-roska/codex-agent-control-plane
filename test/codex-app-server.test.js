@@ -707,6 +707,36 @@ test('derives per-turn tokens from total deltas on a new thread and a second tur
   assert.equal(second.usage.effort, 'high');
 });
 
+test('usage carries the context size and window from the last-request breakdown', async (t) => {
+  const base = usageHandler([[]]);
+  const handler = (request, send) => {
+    if (request.method === 'turn/start') {
+      send({ id: request.id, result: { turn: { id: 'turn-c1', status: 'inProgress' } } });
+      setImmediate(() => {
+        const params = (total, last) => ({ threadId: request.params.threadId, turnId: 'turn-c1', tokenUsage: { total, last, modelContextWindow: 272000 } });
+        send({ method: 'thread/tokenUsage/updated', params: params(bd(100, 0, 5, 0, 105), bd(100, 0, 5, 0, 105)) });
+        send({ method: 'thread/tokenUsage/updated', params: params(bd(260, 0, 15, 0, 275), bd(160, 0, 10, 0, 170)) });
+        send({ method: 'turn/completed', params: { threadId: request.params.threadId, turn: { id: 'turn-c1', status: 'completed' } } });
+      });
+      return undefined;
+    }
+    return base(request, send);
+  };
+  const fake = fakeSpawn(handler);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const result = await client.run({ role, cwd: '/tmp/p', input: 'a' });
+  assert.equal(result.usage.contextTokens, 160);
+  assert.equal(result.usage.contextWindow, 272000);
+  assert.equal(result.usage.tokens.inputTokens, 260);
+
+  const none = fakeSpawn(usageHandler([[bd(10, 0, 1, 0, 11)]]));
+  const bare = new CodexAppServer({ spawnImpl: none.spawnImpl });
+  t.after(() => bare.close());
+  const plain = await bare.run({ role, cwd: '/tmp/p', input: 'a' });
+  assert.equal(plain.usage.contextTokens, 10);
+});
+
 test('a resumed thread with unknown baseline reports null tokens but keeps the raw total', async (t) => {
   const fake = fakeSpawn(usageHandler([[bd(500, 0, 50, 0, 550)], [bd(520, 0, 60, 0, 580)]]));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });

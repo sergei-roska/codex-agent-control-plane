@@ -785,7 +785,7 @@ class CodexAppServer {
     }
     baseline = this.threadTotals.get(threadId) || null;
 
-    const run = { threadId, turnId: null, status: null, text: '', events: [], onEvent, terminal: null, baseline, lastTotal: null, ctx };
+    const run = { threadId, turnId: null, status: null, text: '', events: [], onEvent, terminal: null, baseline, lastTotal: null, lastRequest: null, contextWindow: null, ctx };
     run.abortRequested = false;
     run.interruptSent = false;
     ctx.run = run;
@@ -903,6 +903,8 @@ class CodexAppServer {
       tokens,
       tokenSource,
       cumulativeTotal,
+      contextTokens: Number.isFinite(run?.lastRequest?.inputTokens) ? run.lastRequest.inputTokens : null,
+      contextWindow: run?.contextWindow ?? null,
       appServerVersion: this.appServerVersion,
       startupMs: ctx.startupMs,
       coldStart: ctx.coldStart,
@@ -1076,7 +1078,12 @@ class CodexAppServer {
     if (message.method === 'thread/tokenUsage/updated' && params.threadId && params.tokenUsage?.total) {
       this.threadTotals.set(params.threadId, params.tokenUsage.total);
       const owner = this.runs.get(params.threadId);
-      if (owner && (!owner.turnId || owner.turnId === params.turnId)) owner.lastTotal = params.tokenUsage.total;
+      if (owner && (!owner.turnId || owner.turnId === params.turnId)) {
+        owner.lastTotal = params.tokenUsage.total;
+        // `last` is the most recent model request: its input is the current context size.
+        owner.lastRequest = params.tokenUsage.last || null;
+        owner.contextWindow = Number.isFinite(params.tokenUsage.modelContextWindow) ? params.tokenUsage.modelContextWindow : null;
+      }
     }
 
     const run = this.runs.get(params.threadId);

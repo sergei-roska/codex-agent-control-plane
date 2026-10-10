@@ -546,7 +546,7 @@ test('lead executor resumes a restart pause with an empty message', async () => 
     task: { id: 't-restart', contextId: 'ctx', status: { state: TaskState.TASK_STATE_INPUT_REQUIRED }, artifacts: [], history: [], metadata: { pause: { kind: 'restart' } } },
     userMessage: { parts: [{ text: '' }] },
   }, { publish: (event) => seen.push(event) });
-  assert.deepEqual(resumes[0], { runId: 't-restart', input: { answer: '' }, signal: resumes[0].signal, onEvent: resumes[0].onEvent });
+  assert.deepEqual(resumes[0], { runId: 't-restart', input: { answer: '' }, signal: resumes[0].signal, onEvent: resumes[0].onEvent, contextId: 'ctx' });
   assert.equal(typeof resumes[0].onEvent, 'function');
   assert.equal(seen.at(-1).data.status.state, TaskState.TASK_STATE_COMPLETED);
 });
@@ -1653,4 +1653,53 @@ test('a follow-up goal carries the previous run digest and works without one', a
   runs.length = 0;
   await runFollowUp({ orchestrator: { async getRunGoal() { return null; }, async run(args) { runs.push(args); return { status: 'completed', text: 'ok' }; } }, referenceTasks: [refTask()] });
   assert.doesNotMatch(runs[0].goal, /Previous run in this session/);
+});
+
+test('the session contextId and the raw new request reach the orchestrator run', async () => {
+  const runs = [];
+  const orchestrator = {
+    async getRunGoal() { return null; },
+    async run(args) { runs.push(args); return { status: 'completed', text: 'ok' }; },
+  };
+  await runFollowUp({ orchestrator, referenceTasks: [refTask()], message: 'Now do more' });
+  assert.equal(runs[0].contextId, 'ctx');
+  assert.equal(runs[0].newRequest, 'Now do more');
+  assert.match(runs[0].goal, /Earlier task old-1/);
+
+  runs.length = 0;
+  await makeLeadExecutor({ orchestrator }).execute({
+    taskId: 'plain-1', contextId: 'ctx-2', userMessage: textMessage('Fresh goal'),
+  }, { publish() {} });
+  assert.equal(runs[0].contextId, 'ctx-2');
+  assert.equal('newRequest' in runs[0], false);
+  assert.equal(runs[0].goal, 'Fresh goal');
+});
+
+test('a resume passes the session contextId to the orchestrator', async () => {
+  const resumes = [];
+  const orchestrator = {
+    async getPause() { return HUMAN_PAUSE; },
+    async resume(args) { resumes.push(args); return { status: 'completed', text: 'ok' }; },
+  };
+  await makeLeadExecutor({ orchestrator }).execute(
+    pausedContext('t-resume', HUMAN_PAUSE, { parts: [{ content: { $case: 'text', value: 'use a' } }] }),
+    { publish() {} },
+  );
+  assert.equal(resumes[0].runId, 't-resume');
+  assert.equal(typeof resumes[0].contextId, 'string');
+});
+
+test('startup gives the orchestrator a session thread store on the state database', async () => {
+  const dir = tmpDir();
+  let options = null;
+  const runtime = await startLeadServer({ async run() {} }, dir, { orchestratorFactory: (o) => { options = o; return { async run() {} }; } });
+  try {
+    assert.equal(typeof options.sessionThreads.upsert, 'function');
+    options.sessionThreads.upsert({ contextId: 'ctx-s', threadId: 'th-1', codexHome: '/h', lastInputTokens: 42, runId: 'r1' });
+    const row = runtime.state.db.prepare('SELECT thread_id, codex_home, last_input_tokens FROM session_threads WHERE context_id = ?').get('ctx-s');
+    assert.deepEqual({ ...row }, { thread_id: 'th-1', codex_home: '/h', last_input_tokens: 42 });
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -14,6 +14,7 @@ const { loadSkillCatalog } = require('../src/skill-catalog');
 const { invalidAcceptanceContract } = require('../src/acceptance');
 const { createEvidenceStore } = require('../src/evidence-store');
 const { createActivityStore } = require('../src/activity-store');
+const { SessionThreads } = require('../src/session-threads');
 const { boundedOutcomes } = require('../src/lead-graph');
 const {
   DispatchJournal, openStateDatabase, assignmentId, attemptId, deterministicContextId,
@@ -130,6 +131,8 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
   const world = {
     script,
     leadTurns: 0,
+    threadArgs: [],
+    threadSeq: 0,
     prompts: [],
     dispatchInputs: [],
     sends: [],
@@ -154,15 +157,19 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
     };
   };
   world.appServer = {
+    getCodexHome() { return world.codexHome ?? null; },
     async run(args) {
       world.prompts.push(args.input);
+      world.threadArgs.push(args.threadId);
       const next = world.script[world.leadTurns];
       world.leadTurns += 1;
       if (next === undefined) throw new Error('lead script exhausted');
       const extras = world.leadExtras ? world.leadExtras(world.leadTurns) : {};
-      if (typeof next === 'function') return { threadId: 'lead-thread', status: 'completed', text: await next(args), ...extras };
+      // SES-01 tests set freshThreads: a turn without a threadId opens thread-N, a resumed one keeps its id.
+      const threadId = world.freshThreads ? (args.threadId || `thread-${world.threadSeq += 1}`) : 'lead-thread';
+      if (typeof next === 'function') return { threadId, status: 'completed', text: await next(args), ...extras };
       if (next instanceof Error) throw next;
-      return { threadId: 'lead-thread', status: 'completed', text: next, ...extras };
+      return { threadId, status: 'completed', text: next, ...extras };
     },
   };
   world.clientFactory = {
@@ -223,6 +230,7 @@ class Session {
       reconcileWaitMs: 20,
       ...(this.options.withEvidence ? { evidenceStore: this.evidenceStore = createEvidenceStore(this.state.db) } : {}),
       ...(this.options.withLedger ? { usageLedger: new UsageLedger({ db: this.state.db }) } : {}),
+      ...(this.options.withSessions ? { sessionThreads: this.sessions = new SessionThreads({ db: this.state.db }) } : {}),
       ...(this.options.withActivity ? { activityStore: createActivityStore(this.state.db) } : {}),
       ...(this.options.orchestrator || {}),
     });
@@ -1267,6 +1275,226 @@ test('each check process identity is recorded on the acceptance admission for cr
     }
     assert.notEqual(real[0].processIdentity.pid, real[1].processIdentity.pid);
   }, { workspace });
+});
+
+
+// ------------------------------------------------------------- SES-01 session threads
+
+const SESSION = 'ctx-1';
+// A turn's summed input can far exceed the context; rollover looks at contextTokens only.
+const tokenUsage = (contextTokens, contextWindow = null, summed = 5 * contextTokens) => ({
+  model: 'gpt-lead', tokens: { inputTokens: summed, totalTokens: summed }, tokenSource: 'total_delta', contextTokens, contextWindow,
+});
+const sessionWorld = (script) => Object.assign(makeWorld({ script }), { freshThreads: true });
+
+test('the second round of a session resumes the same thread with a delta prompt that carries the new outcomes', async () => {
+  const world = sessionWorld([dispatch(brief('orch-explorer', [])), finish('Done')]);
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Look around', runId: RUN_ID, contextId: SESSION });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.threadArgs, [undefined, 'thread-1']);
+    assert.match(world.prompts[0], /Available roles:/);
+    assert.match(world.prompts[0], /User goal:\nLook around/);
+    assert.doesNotMatch(world.prompts[1], /Available roles:|Available skill IDs|User goal:/);
+    assert.match(world.prompts[1], /Worker outcomes since your last turn/);
+    assert.match(world.prompts[1], /orch-explorer done/);
+    assert.match(world.prompts[1], /Dispatch rounds already used: 1\//);
+    assert.match(world.prompts[1], /Open worker decisions/);
+    assert.match(world.prompts[1], /still apply\. Return only one JSON object/);
+    assert.ok(world.prompts[1].length < world.prompts[0].length / 2);
+    const row = session.sessions.get(SESSION);
+    assert.equal(row.threadId, 'thread-1');
+    assert.deepEqual(row.runIds, [RUN_ID]);
+    assert.equal(row.rollovers, 0);
+  }, { withSessions: true });
+});
+
+test('a follow-up run in the same session resumes the thread and shows the new owner message verbatim', async () => {
+  const world = sessionWorld([finish('First answer'), finish('Second answer')]);
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'First task', runId: RUN_ID, contextId: SESSION });
+    const result = await session.orchestrator.run({
+      goal: 'This is a follow-up ... composed goal text ... New request: Now do X',
+      newRequest: 'Now do X, exactly',
+      runId: 'run-2',
+      contextId: SESSION,
+    });
+    assert.equal(result.text, 'Second answer');
+    assert.deepEqual(world.threadArgs, [undefined, 'thread-1']);
+    assert.match(world.prompts[1], /New message from the owner[^\n]*\nNow do X, exactly/);
+    assert.doesNotMatch(world.prompts[1], /composed goal text|Available roles:/);
+    assert.match(world.prompts[1], /Available skill candidates/);
+    assert.deepEqual(session.sessions.get(SESSION).runIds, [RUN_ID, 'run-2']);
+  }, { withSessions: true });
+});
+
+test('a lead thread above the input-token threshold rolls over to a new thread with the full prompt and a session digest', async () => {
+  const world = sessionWorld([finish('First answer'), dispatch(brief('orch-explorer', [])), finish('Second answer')]);
+  world.leadExtras = (n) => ({ usage: tokenUsage(n === 1 ? 200000 : 1000) });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'First task', runId: RUN_ID, contextId: SESSION });
+    assert.equal(session.sessions.get(SESSION).lastInputTokens, 200000);
+    const result = await session.orchestrator.run({ goal: 'Second task', runId: 'run-2', contextId: SESSION });
+    assert.equal(result.text, 'Second answer');
+    assert.deepEqual(world.threadArgs.slice(0, 2), [undefined, undefined]);
+    assert.match(world.prompts[1], /Available roles:/);
+    assert.match(world.prompts[1], /Session so far/);
+    assert.match(world.prompts[1], /Earlier runs in this session[^]*run-1[^]*final: First answer/);
+    assert.match(world.prompts[1], /Current run so far/);
+    // The new thread is small, so the next turn resumes it with a delta prompt and no digest.
+    assert.equal(world.threadArgs[2], 'thread-2');
+    assert.doesNotMatch(world.prompts[2], /Session so far|Available roles:/);
+    const row = session.sessions.get(SESSION);
+    assert.equal(row.threadId, 'thread-2');
+    assert.equal(row.rollovers, 1);
+  }, { withSessions: true });
+  // At exactly the threshold the thread is kept.
+  const keep = sessionWorld([finish('A'), finish('B')]);
+  keep.leadExtras = () => ({ usage: tokenUsage(150000) });
+  await withSession(keep, async (session) => {
+    await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
+    await session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION });
+    assert.deepEqual(keep.threadArgs, [undefined, 'thread-1']);
+  }, { withSessions: true });
+});
+
+test('a large summed input with a small context keeps the thread; an unknown context never rolls over', async () => {
+  const world = sessionWorld([finish('A'), finish('B'), finish('C')]);
+  world.leadExtras = (n) => ({ usage: n === 2 ? { model: 'gpt-lead', tokens: { inputTokens: 900000 }, tokenSource: 'total_delta' } : tokenUsage(20000, null, 400000) });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
+    assert.equal(session.sessions.get(SESSION).lastInputTokens, 20000);
+    await session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION });
+    assert.equal(session.sessions.get(SESSION).lastInputTokens, null);
+    await session.orchestrator.run({ goal: 'C', runId: 'run-3', contextId: SESSION });
+    assert.deepEqual(world.threadArgs, [undefined, 'thread-1', 'thread-1']);
+    assert.equal(session.sessions.get(SESSION).rollovers, 0);
+  }, { withSessions: true });
+});
+
+test('a context above 60% of the model window rolls over, below it does not', async () => {
+  const over = sessionWorld([finish('A'), finish('B')]);
+  over.leadExtras = () => ({ usage: tokenUsage(61000, 100000) });
+  await withSession(over, async (session) => {
+    await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
+    assert.equal(session.sessions.get(SESSION).contextWindow, 100000);
+    await session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION });
+    assert.deepEqual(over.threadArgs, [undefined, undefined]);
+    assert.equal(session.sessions.get(SESSION).rollovers, 1);
+  }, { withSessions: true });
+  const under = sessionWorld([finish('A'), finish('B')]);
+  under.leadExtras = () => ({ usage: tokenUsage(60000, 100000) });
+  await withSession(under, async (session) => {
+    await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
+    await session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION });
+    assert.deepEqual(under.threadArgs, [undefined, 'thread-1']);
+  }, { withSessions: true });
+});
+
+test('the explicit rollover setting wins over the window fraction', async () => {
+  const world = sessionWorld([finish('A'), finish('B')]);
+  world.leadExtras = () => ({ usage: tokenUsage(30000, 1000000) });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
+    await session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION });
+    assert.deepEqual(world.threadArgs, [undefined, undefined]);
+  }, { withSessions: true, orchestrator: { rolloverTokens: 20000 } });
+});
+
+test('the rollover threshold comes from CODEX_A2A_LEAD_ROLLOVER_TOKENS through the orchestrator option', async () => {
+  const world = sessionWorld([finish('A'), finish('B')]);
+  world.leadExtras = () => ({ usage: tokenUsage(600) });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
+    await session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION });
+    assert.deepEqual(world.threadArgs, [undefined, undefined]);
+    assert.equal(session.sessions.get(SESSION).rollovers, 1);
+  }, { withSessions: true, orchestrator: { rolloverTokens: 500 } });
+});
+
+test('a different Codex home starts a new thread with the full prompt and records the new home', async () => {
+  const world = sessionWorld([finish('A'), finish('B')]);
+  world.codexHome = '/homes/a';
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
+    assert.equal(session.sessions.get(SESSION).codexHome, '/homes/a');
+    world.codexHome = '/homes/b';
+    await session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION });
+    assert.deepEqual(world.threadArgs, [undefined, undefined]);
+    assert.match(world.prompts[1], /Available roles:/);
+    assert.match(world.prompts[1], /Session so far/);
+    const row = session.sessions.get(SESSION);
+    assert.equal(row.codexHome, '/homes/b');
+    assert.equal(row.threadId, 'thread-2');
+    assert.equal(row.rollovers, 1);
+  }, { withSessions: true });
+});
+
+test('a rejected resume retries once on a new thread with the full prompt and counts a rollover', async () => {
+  const rejected = (args) => { throw Object.assign(new Error('thread not found'), { failureClass: 'request_rejected', args }); };
+  const world = sessionWorld([finish('A'), rejected, finish('B')]);
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
+    const result = await session.orchestrator.run({ goal: 'B task', runId: 'run-2', contextId: SESSION });
+    assert.equal(result.text, 'B');
+    assert.deepEqual(world.threadArgs, [undefined, 'thread-1', undefined]);
+    assert.doesNotMatch(world.prompts[1], /Available roles:/);
+    assert.match(world.prompts[2], /Available roles:/);
+    assert.match(world.prompts[2], /Session so far/);
+    const row = session.sessions.get(SESSION);
+    assert.equal(row.threadId, 'thread-2');
+    assert.equal(row.rollovers, 1);
+  }, { withSessions: true });
+
+  // An unknown outcome or another failure class is not retried.
+  const unknown = sessionWorld([finish('A'), (args) => { throw Object.assign(new Error('lost'), { failureClass: 'request_rejected', outcomeUnknown: true, args }); }]);
+  await withSession(unknown, async (session) => {
+    await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
+    await assert.rejects(session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION }), /lost/);
+    assert.equal(unknown.leadTurns, 2);
+  }, { withSessions: true });
+});
+
+test('a rejection retry keeps the current thread and feeds the violations in a delta prompt', async () => {
+  const world = sessionWorld([dispatch(brief('orch-builder', ['src/*'])), dispatch(brief('orch-builder')), finish('Fixed')]);
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, contextId: SESSION });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.threadArgs, [undefined, 'thread-1', 'thread-1']);
+    assert.match(world.prompts[1], /Rejected decision:/);
+    assert.match(world.prompts[1], /assignment\.paths path_glob_unsupported/);
+    assert.doesNotMatch(world.prompts[1], /Available roles:/);
+    assert.doesNotMatch(world.prompts[2], /Rejected decision:/);
+    // The outcome of the dispatched worker is shown once, in the turn after it finished.
+    assert.doesNotMatch(world.prompts[1], /Worker outcomes since your last turn/);
+    assert.match(world.prompts[2], /Worker outcomes since your last turn/);
+    assert.equal(session.sessions.get(SESSION).rollovers, 0);
+  }, { withSessions: true });
+});
+
+test('without a contextId the lead behaves as before: no session row, a fresh thread per round', async () => {
+  const world = sessionWorld([dispatch(brief('orch-explorer', [])), finish('Done')]);
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.threadArgs, [undefined, undefined]);
+    assert.match(world.prompts[1], /Available roles:/);
+    assert.match(world.prompts[1], /Prior worker outcomes/);
+    assert.equal(session.sessions.get(SESSION), null);
+  }, { withSessions: true });
+});
+
+test('a run resumed after a restart still uses the session thread, and an old checkpoint without session channels works', async () => {
+  const world = sessionWorld([dispatch(brief('orch-explorer', [])), finish('Done')]);
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID, contextId: SESSION, interruptAfter: ['decide'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID, contextId: SESSION });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.threadArgs[1], 'thread-1');
+    assert.doesNotMatch(world.prompts[1], /Available roles:/);
+  }, { withSessions: true });
 });
 
 // ------------------------------------------------------------- lead usage
