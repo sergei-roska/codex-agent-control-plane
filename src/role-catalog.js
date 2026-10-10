@@ -175,7 +175,7 @@ function createLeadRole({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
     displayName: roleDisplayName('coordinator'),
     description: 'Read-only orchestrator lead that plans work and dispatches bounded tasks to A2A roles.',
     model: 'gpt-6.1-sol',
-    effort: 'high',
+    effort: 'medium',
     sandbox: 'read-only',
     tools: { mcpServers: [], skills: false },
     instructions: [
