@@ -851,9 +851,10 @@
         if (data.primary) {
           const used = data.primary.usedPercent !== undefined ? data.primary.usedPercent : 0;
           const bar = document.getElementById('fiveHourBar');
-          bar.style.width = Math.min(used, 100) + '%';
-          bar.className = 'progress-bar-fill' + (used > 85 ? ' danger' : used > 60 ? ' warning' : '');
-          document.getElementById('fiveHourVal').innerText = used + '%';
+          const remaining = Math.max(0, Math.min(100, 100 - used));
+          bar.style.width = remaining + '%';
+          bar.className = 'progress-bar-fill' + (remaining < 15 ? ' danger' : remaining < 40 ? ' warning' : '');
+          document.getElementById('fiveHourVal').innerText = remaining + '% left';
 
           if (data.primary.resetsAt) {
             const date = new Date(data.primary.resetsAt * 1000);
@@ -864,13 +865,14 @@
         if (data.secondary) {
           const used = data.secondary.usedPercent !== undefined ? data.secondary.usedPercent : 0;
           const bar = document.getElementById('weeklyBar');
-          bar.style.width = Math.min(used, 100) + '%';
-          bar.className = 'progress-bar-fill' + (used > 85 ? ' danger' : used > 60 ? ' warning' : '');
-          document.getElementById('weeklyVal').innerText = used + '%';
+          const remaining = Math.max(0, Math.min(100, 100 - used));
+          bar.style.width = remaining + '%';
+          bar.className = 'progress-bar-fill' + (remaining < 15 ? ' danger' : remaining < 40 ? ' warning' : '');
+          document.getElementById('weeklyVal').innerText = remaining + '% left';
 
           if (data.secondary.resetsAt) {
             const date = new Date(data.secondary.resetsAt * 1000);
-            document.getElementById('weeklyReset').innerText = 'Resets: ' + date.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + formatResetCountdown(data.secondary.resetsAt);
+            document.getElementById('weeklyReset').innerText = 'Resets: ' + date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + formatResetCountdown(data.secondary.resetsAt);
           }
         }
       } catch (_) {}
