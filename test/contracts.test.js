@@ -6,7 +6,7 @@ const {
   WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, validateWorkerReport, parseWorkerReport,
   DECISION_SCHEMA, validateDecision, classifyCodexError, findCodexErrorInfo, safeRelativePath,
   ASSIGNMENT_FIELDS, MAX_ASSIGNMENTS, BoundaryViolation, BOUNDARY_PREDICATES,
-  checkSpecialistRequest, pathsOutsideAllowed, executionGroups,
+  checkSpecialistRequest, pathsOutsideAllowed, executionGroups, HUMAN_REASONS,
 } = require('../src/contracts');
 
 function walk(schema, visit) {
@@ -180,8 +180,9 @@ const roles = new Map([
   ['orch-repair-sol', { name: 'orch-repair-sol', sandbox: 'workspace-write' }],
   ['orch-architect', { name: 'orch-architect', sandbox: 'read-only' }],
 ]);
+const INVESTIGATION = { assignmentId: 'run:r1:a0', round: 1 };
 function ctx(overrides = {}) {
-  return { roles, attemptedRoles: new Set(), outcomeCount: 1, openDecisionIds: new Set(), ...overrides };
+  return { roles, attemptedRoles: new Set(), outcomeCount: 1, openDecisionIds: new Set(), investigations: [INVESTIGATION], ...overrides };
 }
 function assignment(overrides = {}) {
   return {
@@ -197,8 +198,8 @@ function finish(overrides = {}) {
 }
 function human(overrides = {}) {
   return {
-    reason: 'product_choice', question: 'Which?', options: [{ id: 'a', description: 'A' }, { id: 'b', description: 'B' }],
-    recommendation: 'a', evidenceChecked: ['x'], independentWork: 'none', relatedDecisionIds: [], ...overrides,
+    reason: 'credentials_or_access', question: 'Which?', options: [{ id: 'a', description: 'A' }, { id: 'b', description: 'B' }],
+    recommendation: 'a', evidenceChecked: ['run:r1:a0 found no deploy token'], independentWork: 'none', relatedDecisionIds: [], ...overrides,
   };
 }
 function ask(overrides = {}) {
@@ -296,7 +297,7 @@ test('assignment skills are bounded, unique, catalog-selectable, and legacy deci
 test('validateDecision enforces humanInput rules', () => {
   const open = ctx({ openDecisionIds: new Set(['d1']) });
   const bad = (overrides, pattern, context = ctx()) => throws(ask({ humanInput: human(overrides) }), context, pattern);
-  bad({ reason: 'whim' }, /reason must be one of/);
+  bad({ reason: 'whim' }, /reason must be an owner-only decision/);
   bad({ question: '' }, /question must not be empty/);
   bad({ question: 'x'.repeat(3001) }, /size limit/);
   bad({ independentWork: 5 }, /independentWork must be a string/);
@@ -318,7 +319,10 @@ test('validateDecision enforces resolutions and open decisions', () => {
   validateDecision(ask({ resolutions: [res('d1')], humanInput: human({ relatedDecisionIds: ['d2'] }) }), open);
   throws(finish({ resolutions: [res('d1')] }), open, /Open decision d2 must be resolved/);
   throws(finish(), open, /Open decision d1 must be resolved/);
-  throws(dispatch([assignment()], { resolutions: [res('d1')] }), open, /Open decision d2/);
+  throws(dispatch([assignment({ role: 'orch-builder', allowedFiles: ['src/a.js'] })], { resolutions: [res('d1')] }), open, /Open decision d2/);
+  // LL-6: a read-only dispatch may keep open decisions open while it investigates them.
+  validateDecision(dispatch([assignment()], { resolutions: [res('d1')] }), open);
+  validateDecision(dispatch([assignment()]), open);
   throws(finish({ resolutions: [res('zzz')] }), ctx(), /not open/);
   throws(finish({ resolutions: [res('d1'), res('d1'), res('d2')] }), open, /Duplicate resolution/);
   throws(finish({ resolutions: [res('d1', { choice: ' ' }), res('d2')] }), open, /choice must not be empty/);
@@ -627,4 +631,56 @@ test('checkSpecialistRequest keeps a scope continuation reason and rejects other
   const out = checkSpecialistRequest(specialist({ continuation: { ofAttemptId: 'x', threadId: 't', laneId: null, codexHome: null, reason: 'scope' } }), { id: 'orch-builder', sandbox: 'workspace-write' }, { workspace: '/ws' });
   assert.equal(out.continuation.reason, 'scope');
   specialistCode(specialist({ continuation: { ofAttemptId: 'x', reason: 'other' } }), { id: 'orch-builder', sandbox: 'workspace-write' }, 'assignment.shape', 'field_invalid');
+});
+
+// ------------------------------------------------- LL-6: investigate before asking
+
+const investigateFirst = (decision, context) => {
+  let caught;
+  try { validateDecision(decision, context); } catch (error) { caught = error; }
+  assert.ok(caught instanceof BoundaryViolation, 'expected investigation_missing');
+  assert.equal(caught.violations[0].predicate, 'decision.investigate_first');
+  assert.equal(caught.violations[0].code, 'investigation_missing');
+  assert.ok(BOUNDARY_PREDICATES['decision.investigate_first'].includes('investigation_missing'));
+  return caught;
+};
+
+test('only the closed list of owner-only decisions may reach the owner', () => {
+  assert.deepEqual(HUMAN_REASONS, ['paid_resources', 'credentials_or_access', 'external_write', 'irreversible_operation', 'prd_requirement_change']);
+  assert.deepEqual(DECISION_SCHEMA.properties.humanInput.anyOf[0].properties.reason.enum, HUMAN_REASONS);
+  for (const reason of HUMAN_REASONS) validateDecision(ask({ humanInput: human({ reason }) }), ctx());
+  for (const reason of ['product_choice', 'missing_authority', 'irreversible_or_external', 'scope_change']) {
+    throws(ask({ humanInput: human({ reason }) }), ctx(), /humanInput\.reason must be an owner-only decision: one of paid_resources, credentials_or_access/);
+  }
+});
+
+test('request_human_input needs a cited investigation from a round after the blocker appeared', () => {
+  // No investigation in the run at all.
+  investigateFirst(ask(), ctx({ investigations: [] }));
+  // An investigation exists but is not cited.
+  investigateFirst(ask({ humanInput: human({ evidenceChecked: ['README.md'] }) }), ctx());
+  // A longer id does not cite a shorter one.
+  investigateFirst(ask({ humanInput: human({ evidenceChecked: ['run:r1:a01 says so'] }) }), ctx());
+  // Cited in relatedDecisionIds by assignmentId instead of in evidenceChecked.
+  validateDecision(ask({ humanInput: human({ evidenceChecked: ['README.md'], relatedDecisionIds: ['run:r1:a0'] }) }), ctx());
+  // The blocker is the open decision d1 raised in round 2: an investigation of round 2 is not after it.
+  const open = (investigations) => ctx({ openDecisionIds: new Set(['d1']), openDecisionRounds: new Map([['d1', 2]]), investigations });
+  const asked = ask({ humanInput: human({ relatedDecisionIds: ['d1'], evidenceChecked: ['run:r2:a0 traced it'] }) });
+  investigateFirst(asked, open([{ assignmentId: 'run:r2:a0', round: 2 }]));
+  const caught = investigateFirst(ask({ humanInput: human({ relatedDecisionIds: ['d1'], evidenceChecked: ['run:r1:a0'] }) }), open([INVESTIGATION]));
+  assert.match(caught.message, /from a round after 2/);
+  validateDecision(ask({ humanInput: human({ relatedDecisionIds: ['d1'], evidenceChecked: ['run:r3:a1 traced it'] }) }), open([{ assignmentId: 'run:r3:a1', round: 3 }]));
+  // A non-open id that is no investigation is still refused.
+  throws(ask({ humanInput: human({ relatedDecisionIds: ['ghost'] }) }), ctx(), /not open: ghost/);
+});
+
+test('a repeated unmet-goal finish needs an investigation finished after the first one, cited in final', () => {
+  const since = (round, investigations) => ctx({ goalInvestigationRound: round, investigations });
+  validateDecision(finish({ goalAchieved: false, final: 'Blocked on X' }), ctx());
+  investigateFirst(finish({ goalAchieved: false, final: 'Still blocked on X' }), since(2, [INVESTIGATION]));
+  investigateFirst(finish({ goalAchieved: false, final: 'run:r1:a0 shows X' }), since(2, [INVESTIGATION]));
+  const caught = investigateFirst(finish({ goalAchieved: false, final: 'No evidence' }), since(2, [{ assignmentId: 'run:r3:a0', round: 3 }]));
+  assert.match(caught.message, /state why each remaining blocker is owner-only/);
+  validateDecision(finish({ goalAchieved: false, final: 'X needs a paid license (run:r3:a0)' }), since(2, [{ assignmentId: 'run:r3:a0', round: 3 }]));
+  validateDecision(finish({ goalAchieved: true, final: 'Done' }), since(2, []));
 });

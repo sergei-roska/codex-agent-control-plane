@@ -15,7 +15,9 @@ const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks'
 const ASSIGNMENT_ARRAY_FIELDS = ASSIGNMENT_FIELDS.filter((field) => field !== 'role' && field !== 'objective');
 const REPORT_OUTCOMES = ['completed', 'blocked', 'needs_decision', 'failed'];
 const CHECK_RESULTS = ['passed', 'failed', 'not_run'];
-const HUMAN_REASONS = ['missing_authority', 'irreversible_or_external', 'product_choice'];
+// LL-6: the closed list of decisions only the owner may take (humanInput.reason). Interpreting the PRD,
+// fixing evidence tooling, choosing an implementation, and expanding file scope are the lead's decisions.
+const HUMAN_REASONS = ['paid_resources', 'credentials_or_access', 'external_write', 'irreversible_operation', 'prd_requirement_change'];
 const USAGE_LIMIT_NAMES = new Set(['usageLimitExceeded', 'rateLimitExceeded']);
 const MAX_CAUSE_DEPTH = 5;
 
@@ -24,6 +26,7 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'decision.envelope': Object.freeze(['decision_envelope_invalid', 'assignment_count_invalid']),
   'decision.resolutions': Object.freeze(['decision_unresolved']),
   'decision.goal': Object.freeze(['goal_unstated']),
+  'decision.investigate_first': Object.freeze(['investigation_missing']),
   'decision.acceptance_checks': Object.freeze(['acceptance_checks_invalid']),
   'assignment.shape': Object.freeze(['assignment_shape_invalid', 'role_unknown', 'field_invalid']),
   'assignment.writer_scope': Object.freeze(['writer_scope_missing']),
@@ -527,19 +530,49 @@ function pathsOutsideAllowed(paths, allowedFiles, workspace) {
   });
 }
 
-function checkHumanInput(humanInput, openIds) {
+// True when `text` names `id`, and not only as the prefix of a longer id (r1:a1 is not cited by r1:a10).
+function citesId(text, id) {
+  if (typeof text !== 'string' || !id) return false;
+  for (let at = text.indexOf(id); at !== -1; at = text.indexOf(id, at + 1)) {
+    if (!/[0-9]/.test(text[at + id.length] || '')) return true;
+  }
+  return false;
+}
+
+/**
+ * LL-6 investigate first. An investigation of a blocker is a finished read-only outcome of this run with
+ * a valid report (ctx.investigations: [{ assignmentId, round }]) from a round after `afterRound`, the round
+ * in which the blocker first appeared, and the escalation must cite its assignmentId (in `ids` or `texts`).
+ */
+function citedInvestigation(ctx, afterRound, { ids = [], texts = [] }) {
+  return (ctx.investigations || []).find((entry) => entry.round > afterRound
+    && (ids.includes(entry.assignmentId) || texts.some((text) => citesId(text, entry.assignmentId)))) || null;
+}
+
+function checkHumanInput(humanInput, openIds, ctx = {}) {
   if (!isPlainObject(humanInput)) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input requires a humanInput object');
   const keys = ['reason', 'question', 'options', 'recommendation', 'evidenceChecked', 'independentWork', 'relatedDecisionIds'];
   if (!sameKeys(humanInput, keys)) throw violation('decision.envelope', 'decision_envelope_invalid', `humanInput must contain exactly ${keys.join(', ')}`);
-  if (!HUMAN_REASONS.includes(humanInput.reason)) throw violation('decision.envelope', 'decision_envelope_invalid', `humanInput.reason must be one of ${HUMAN_REASONS.join(', ')}`);
+  if (!HUMAN_REASONS.includes(humanInput.reason)) {
+    throw violation('decision.envelope', 'decision_envelope_invalid', `humanInput.reason must be an owner-only decision: one of ${HUMAN_REASONS.join(', ')}; anything else is yours to decide after investigation`);
+  }
   const problem = boundedString(humanInput.question, 'humanInput.question')
     || boundedString(humanInput.independentWork, 'humanInput.independentWork', { allowEmpty: true })
     || checkOptions(humanInput.options, humanInput.recommendation, 'humanInput')
     || checkStringArray(humanInput.evidenceChecked, 'humanInput.evidenceChecked', { allowEmpty: false })
     || checkStringArray(humanInput.relatedDecisionIds, 'humanInput.relatedDecisionIds');
   if (problem) throw violation('decision.envelope', 'decision_envelope_invalid', problem);
+  const investigationIds = new Set((ctx.investigations || []).map((entry) => entry.assignmentId));
   for (const id of humanInput.relatedDecisionIds) {
-    if (!openIds.has(id)) throw violation('decision.resolutions', 'decision_unresolved', `humanInput.relatedDecisionIds references a decision that is not open: ${id}`);
+    // An investigation may be cited here by its assignmentId; every other id must be an open decision.
+    if (!openIds.has(id) && !investigationIds.has(id)) throw violation('decision.resolutions', 'decision_unresolved', `humanInput.relatedDecisionIds references a decision that is not open: ${id}`);
+  }
+  // The blocker first appeared in the latest round of the related open worker decisions (0 when none).
+  const rounds = humanInput.relatedDecisionIds.filter((id) => openIds.has(id)).map((id) => ctx.openDecisionRounds?.get(id) ?? 0);
+  const blockerRound = Math.max(0, ...rounds);
+  if (!citedInvestigation(ctx, blockerRound, { ids: humanInput.relatedDecisionIds, texts: humanInput.evidenceChecked })) {
+    throw violation('decision.investigate_first', 'investigation_missing',
+      `request_human_input needs a finished read-only investigation of the blocker from a round after ${blockerRound}, cited by its assignmentId in evidenceChecked or relatedDecisionIds`);
   }
 }
 
@@ -593,7 +626,8 @@ function checkWaveScopes(assignments, ctx) {
 
 /**
  * Validate a parsed lead decision. Throws Error on violation.
- * ctx = { roles: Map, attemptedRoles: Set, outcomeCount: number, openDecisionIds: Set, unresolvedWriterCount?: number }
+ * ctx = { roles: Map, attemptedRoles: Set, outcomeCount: number, openDecisionIds: Set, unresolvedWriterCount?: number,
+ *   investigations?: [{ assignmentId, round }], openDecisionRounds?: Map, goalInvestigationRound?: number | null }
  */
 function validateDecision(decision, ctx) {
   if (!isPlainObject(decision)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead decision must be a JSON object');
@@ -631,10 +665,16 @@ function validateDecision(decision, ctx) {
     if (decision.assignments.length !== 0 || !decision.final.trim()) throw violation('decision.envelope', 'decision_envelope_invalid', 'Finish decisions require no assignments and non-empty final text');
     if (decision.humanInput !== null) throw violation('decision.envelope', 'decision_envelope_invalid', 'Finish decisions must leave humanInput null');
     if (decision.goalAchieved === null && !legacyGoal) throw violation('decision.goal', 'goal_unstated', 'finish requires goalAchieved true or false');
+    // LL-6: after the first unmet-goal finish, another one needs an investigation finished since then, cited in final.
+    const since = ctx.goalInvestigationRound;
+    if (decision.goalAchieved === false && Number.isInteger(since) && !citedInvestigation(ctx, since, { texts: [decision.final] })) {
+      throw violation('decision.investigate_first', 'investigation_missing',
+        `A repeated finish with goalAchieved false needs a finished read-only investigation from a round after ${since}, cited by its assignmentId in final, and final must state why each remaining blocker is owner-only`);
+    }
   } else if (decision.action === 'request_human_input') {
     if (decision.assignments.length !== 0) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input decisions require no assignments');
     if (decision.final.trim()) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input decisions must leave final empty');
-    checkHumanInput(decision.humanInput, openIds);
+    checkHumanInput(decision.humanInput, openIds, ctx);
   } else {
     if (decision.assignments.length < 1 || decision.assignments.length > MAX_ASSIGNMENTS) {
       throw violation('decision.envelope', 'assignment_count_invalid', `Dispatch must contain between 1 and ${MAX_ASSIGNMENTS} assignments`);
@@ -650,7 +690,11 @@ function validateDecision(decision, ctx) {
   }
 
   const related = new Set(decision.action === 'request_human_input' ? decision.humanInput.relatedDecisionIds : []);
-  for (const id of openIds) {
+  // LL-6: a dispatch of only read-only roles may leave open decisions open while they are investigated;
+  // without it no investigation could follow the round a worker decision was raised in.
+  const investigating = decision.action === 'dispatch'
+    && decision.assignments.every((assignment) => getRole(ctx.roles, assignment.role)?.sandbox === 'read-only');
+  for (const id of investigating ? [] : openIds) {
     if (!resolved.has(id) && !related.has(id)) throw violation('decision.resolutions', 'decision_unresolved', `Open decision ${id} must be resolved or listed in humanInput.relatedDecisionIds`);
   }
   // goalAchieved only means something on finish.
@@ -700,4 +744,5 @@ module.exports = {
   DECISION_ASSIGNMENT_FIELDS,
   MAX_ASSIGNMENTS,
   executionGroups,
+  HUMAN_REASONS,
 };

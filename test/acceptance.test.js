@@ -13,7 +13,7 @@ const { WriterAdmission } = require('../src/writer-admission');
 const { takeSnapshot } = require('../src/workspace-snapshot');
 const {
   validateAcceptanceContract, parseCheckCommand, runCheck, computeDisposition, runAcceptance, verifyCandidate, assessWithoutChecks, formatAcceptance,
-  acceptanceIssue, invalidAcceptanceContract, unrunAcceptance, validateAgentChecks, pinAgentChecks, runSandboxedCheck,
+  acceptanceIssue, invalidAcceptanceContract, unrunAcceptance, validateAgentChecks, pinAgentChecks, runSandboxedCheck, currentPins, repinChecks, describePinChanges,
 } = require('../src/acceptance');
 
 const vcs = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' });
@@ -706,4 +706,47 @@ test('a modified or deleted pinned script gives check_changed and the check is n
   const deleted = await runAcceptance({ workspace: dir, runId: 'r', attempt: 2, contract, appServer: exec, runCheckImpl: noHostRun });
   assert.equal(exec.calls.length, 0);
   assert.deepEqual(codes(deleted), ['check_changed']);
+});
+
+// ------------------------------------------------- LL-6: reviewed changes of pinned checks
+
+test('a change judged as weakening fails as check_weakened for exactly that content, without running', async () => {
+  const dir = pinWorkspace();
+  const contract = validateAgentChecks([{ id: 'py', argv: ['python', 'tools/validate.py'], timeoutMs: null }], { workspace: dir });
+  const exec = fakeExec({ exitCode: 0, stdout: '', stderr: '' });
+  fs.writeFileSync(path.join(dir, 'tools', 'validate.py'), 'print(2)\n');
+  const weakened = [{ checkId: 'py', pins: currentPins(contract.requiredChecks[0], dir), by: 'auditor review r:r1:review1' }];
+  const failed = await runAcceptance({ workspace: dir, runId: 'r', attempt: 1, contract, appServer: exec, runCheckImpl: noHostRun, weakened });
+  assert.equal(exec.calls.length, 0);
+  assert.equal(failed.disposition, 'rejected');
+  assert.deepEqual(codes(failed), ['check_weakened']);
+  assert.equal(failed.issues[0].result, 'FAIL');
+  assert.match(failed.issues[0].detail, /weakens its requirement \(auditor review r:r1:review1\)/);
+  // Other content than the judged one is a new change.
+  fs.writeFileSync(path.join(dir, 'tools', 'validate.py'), 'print(3)\n');
+  const again = await runAcceptance({ workspace: dir, runId: 'r', attempt: 2, contract, appServer: exec, runCheckImpl: noHostRun, weakened });
+  assert.deepEqual(codes(again), ['check_changed']);
+});
+
+test('repinChecks pins the reviewed content and describePinChanges falls back to the current content', async () => {
+  const dir = pinWorkspace();
+  const contract = validateAgentChecks([{ id: 'py', argv: ['python', 'tools/validate.py'], timeoutMs: null }], { workspace: dir });
+  fs.writeFileSync(path.join(dir, 'tools', 'validate.py'), 'print(2)\n');
+  const [change] = describePinChanges(contract.requiredChecks[0], dir);
+  assert.equal(change.path, 'tools/validate.py');
+  assert.equal(change.pinnedSha256, contract.requiredChecks[0].pins[0].sha256);
+  assert.equal(change.currentSha256, crypto.createHash('sha256').update('print(2)\n').digest('hex'));
+  // The pinned bytes were never committed here, so only the current content can be shown.
+  assert.equal(change.diff, 'print(2)\n');
+  assert.match(change.note, /not available from git/);
+  const reviewed = [{ id: 'py', pins: currentPins(contract.requiredChecks[0], dir) }];
+  const repinned = repinChecks(contract, reviewed);
+  assert.deepEqual(validateAcceptanceContract(repinned), repinned);
+  assert.equal(repinned.source, 'agent');
+  const exec = fakeExec({ exitCode: 0, stdout: '', stderr: '' });
+  const result = await runAcceptance({ workspace: dir, runId: 'r', attempt: 1, contract: repinned, appServer: exec, runCheckImpl: noHostRun });
+  assert.equal(result.disposition, 'accepted');
+  assert.equal(exec.calls.length, 1);
+  // A file that was gone at review time loses its pin.
+  assert.equal('pins' in repinChecks(contract, [{ id: 'py', pins: [{ path: 'tools/validate.py', sha256: null }] }]).requiredChecks[0], false);
 });

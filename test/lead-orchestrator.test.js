@@ -335,19 +335,20 @@ test('dispatches writable batches serially and read-only batches in parallel', a
 
 test('rejects a human choice outside pending options and preserves free-text resume', async () => {
   const request = {
-    reason: 'product_choice',
+    reason: 'irreversible_operation',
     question: 'Which implementation should be used?',
     options: [
       { id: 'minimal', description: 'Use the minimal implementation' },
       { id: 'extended', description: 'Use the extended implementation' },
     ],
     recommendation: 'minimal',
-    evidenceChecked: ['The existing project structure'],
+    evidenceChecked: ['human-choice-run:r1:a0 inspected the existing project structure'],
     independentWork: '',
     relatedDecisionIds: [],
   };
   const h = makeHarness({
     decisions: [
+      decision('dispatch', [brief('orch-explorer', [])]),
       JSON.stringify({ action: 'request_human_input', assignments: [], final: '', resolutions: [], humanInput: request }),
       decision('finish', [], 'Decision received'),
     ],
@@ -363,11 +364,11 @@ test('rejects a human choice outside pending options and preserves free-text res
     );
     assert.deepEqual(await h.orchestrator.getPause(paused.runId), pending);
   }
-  assert.equal(h.calls.filter((call) => call.type === 'lead').length, 1);
+  assert.equal(h.calls.filter((call) => call.type === 'lead').length, 2);
 
   const result = await h.orchestrator.resume({ runId: paused.runId, input: { answer: 'Proceed with a text-only answer' } });
   assert.equal(result.status, 'completed');
-  const resumedLead = h.calls.filter((call) => call.type === 'lead')[1];
+  const resumedLead = h.calls.filter((call) => call.type === 'lead')[2];
   assert.match(resumedLead.input, /"answer":"Proceed with a text-only answer"/);
   assert.equal(resumedLead.input.includes('"choice"'), false);
 });

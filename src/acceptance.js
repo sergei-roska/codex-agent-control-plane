@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { takeSnapshot } = require('./workspace-snapshot');
 const { readProcessIdentity } = require('./process-quiescence');
 
@@ -209,6 +209,76 @@ function pinAgentChecks(contract, workspace) {
 // Pinned paths of an agent check whose content changed or which are gone.
 function changedPins(check, workspace) {
   return (check.pins || []).filter((pin) => hashWorkspaceFile(pin.path, workspace) !== pin.sha256).map((pin) => pin.path);
+}
+
+// Current content hash of every pinned path of a check (null when the file is gone).
+function currentPins(check, workspace) {
+  return (check.pins || []).map((pin) => ({ path: pin.path, sha256: hashWorkspaceFile(pin.path, workspace) }));
+}
+
+// True when a review record judged exactly the current content of the check's pinned files.
+function samePins(recorded, current) {
+  return recorded.length === current.length
+    && current.every((pin) => recorded.some((entry) => entry.path === pin.path && entry.sha256 === pin.sha256));
+}
+
+/**
+ * LL-6: re-pin checks of an agent contract to the content that was reviewed and approved
+ * (reviewed: [{ id, pins: [{ path, sha256 | null }] }]). A pinned file that was gone loses its pin; the
+ * check then fails when it runs. Content changed after the review is detected again as check_changed.
+ */
+function repinChecks(contract, reviewed) {
+  const byId = new Map(reviewed.map((entry) => [entry.id, entry.pins || []]));
+  const requiredChecks = contract.requiredChecks.map((check) => {
+    if (!byId.has(check.id) || !check.pins) return check;
+    const pins = byId.get(check.id).filter((pin) => typeof pin.sha256 === 'string').map(({ path: file, sha256 }) => ({ path: file, sha256 }));
+    const { pins: _old, ...rest } = check;
+    return pins.length > 0 ? { ...rest, pins } : rest;
+  });
+  return { ...contract, requiredChecks };
+}
+
+const DIFF_MAX_CHARS = 8000;
+
+function readGit(workspace, args) {
+  return execFileSync('git', ['-C', workspace, ...args], {
+    stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 * MiB, timeout: 10000,
+    // Read-only: no optional index refresh or lock.
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+  });
+}
+
+/**
+ * LL-6: what changed in each pinned file of a check, for the reviewer: { path, pinnedSha256,
+ * currentSha256, diff, note }. The diff comes read-only from git when the committed HEAD version is
+ * exactly the pinned content; otherwise only the current content is given (the pinned bytes are not kept).
+ */
+function describePinChanges(check, workspace) {
+  const clip = (text) => (text.length > DIFF_MAX_CHARS ? `${text.slice(0, DIFF_MAX_CHARS)}\n[... ${text.length - DIFF_MAX_CHARS} chars omitted]` : text);
+  return (check.pins || []).flatMap((pin) => {
+    const current = hashWorkspaceFile(pin.path, workspace);
+    if (current === pin.sha256) return [];
+    const entry = { path: pin.path, pinnedSha256: pin.sha256, currentSha256: current, diff: '', note: '' };
+    let headMatches = false;
+    try {
+      const head = readGit(workspace, ['show', `HEAD:./${pin.path}`]);
+      headMatches = crypto.createHash('sha256').update(head).digest('hex') === pin.sha256;
+    } catch { headMatches = false; }
+    if (headMatches) {
+      try {
+        entry.diff = clip(readGit(workspace, ['diff', '--no-color', '--no-ext-diff', 'HEAD', '--', `./${pin.path}`]).toString('utf8'));
+        entry.note = 'Diff of the pinned content (committed at HEAD) against the current file.';
+        return [entry];
+      } catch { /* fall back to the current content */ }
+    }
+    if (current === null) {
+      entry.note = 'The pinned file is gone.';
+    } else {
+      try { entry.diff = clip(fs.readFileSync(path.resolve(workspace, pin.path), 'utf8')); } catch { entry.diff = ''; }
+      entry.note = 'The pinned content is not available from git; this is the current file content.';
+    }
+    return [entry];
+  });
 }
 
 function parseCheckCommand(text, index) {
@@ -433,6 +503,8 @@ const ISSUE_META = {
   contract_invalid: ['accept.contract_valid', 'UNKNOWN', false],
   // A pinned script of an agent check was edited or removed: the check is not run, the owner decides.
   check_changed: ['accept.checks', 'UNKNOWN', false],
+  // LL-6: a reviewer judged that the change to a pinned check weakens its requirement: the check fails.
+  check_weakened: ['accept.checks', 'FAIL', false],
 };
 
 /** An acceptance issue as a violation record; keeps `code` and `detail` for existing consumers. */
@@ -451,6 +523,7 @@ function computeDisposition({
     const result = results.get(check.id);
     if (!result) add('check_missing', `Required check "${check.id}" has no result.`);
     else if (result.result === 'error' && result.error === 'check_changed') add('check_changed', result.detail);
+    else if (result.result === 'failed' && result.error === 'check_weakened') add('check_weakened', result.detail);
     else if (result.result === 'error') add('check_error', `Required check "${check.id}" could not run in the sandbox (${result.error || 'error'}); it is unverified.`);
     else if (result.result !== 'passed') {
       const ids = [result.stdoutEvidence?.id, result.stderrEvidence?.id].filter(Boolean);
@@ -564,7 +637,7 @@ function storeCheckStream(evidenceStore, runId, attemptId, check, result, stream
 
 async function runAcceptance({
   workspace, runId, attempt, contract, writers = [], unresolvedWriterCount = 0, admission, signal,
-  snapshot = takeSnapshot, runCheckImpl = runCheck, evidenceStore = null, appServer = null,
+  snapshot = takeSnapshot, runCheckImpl = runCheck, evidenceStore = null, appServer = null, weakened = [],
 }) {
   const validated = validateAcceptanceContract(contract);
   const { requiredChecks } = validated;
@@ -594,7 +667,16 @@ async function runAcceptance({
       let captured = null;
       const onCapture = (value) => { captured = value; };
       const changed = sandboxed ? changedPins(check, workspace) : [];
-      const result = changed.length > 0
+      // LL-6: a change already judged as weakening (for exactly this content) fails the check without a new review.
+      const verdict = changed.length > 0
+        ? weakened.find((entry) => entry.checkId === check.id && samePins(entry.pins || [], currentPins(check, workspace)))
+        : null;
+      const result = verdict
+        ? {
+          id: check.id, argv: check.argv, result: 'failed', error: 'check_weakened', exitCode: null, sandboxed: true,
+          detail: `Pinned acceptance check "${check.id}" fails: the change to ${changed.join(', ')} weakens its requirement (${verdict.by}). Restore the requirement or fix the cause.`,
+        }
+        : changed.length > 0
         ? {
           id: check.id, argv: check.argv, result: 'error', error: 'check_changed', exitCode: null, sandboxed: true,
           detail: `Pinned acceptance check "${check.id}" was not run: ${changed.join(', ')} changed since it was pinned. Changing a pinned acceptance check needs the owner's decision.`,
@@ -676,4 +758,5 @@ module.exports = {
   validateAcceptanceContract, parseCheckCommand, runCheck, computeDisposition, runAcceptance, verifyCandidate,
   assessWithoutChecks, formatAcceptance, acceptanceIssue, unrunAcceptance, invalidAcceptanceContract,
   validateAgentChecks, pinAgentChecks, runSandboxedCheck, AGENT_CHECK_SANDBOX_POLICY, AGENT_CHECK_TOOLS,
+  currentPins, repinChecks, describePinChanges,
 };

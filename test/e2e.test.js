@@ -50,20 +50,23 @@ function workerReport(summary = 'All good') {
   };
 }
 
-function humanDecision() {
+// LL-6: an owner-only question that cites the round-1 explorer the lead dispatched first.
+function humanDecision(_call, input) {
+  const investigation = /"assignmentId":"([^"]*:r1:a0)"/.exec(input)[1];
   return decision({
     action: 'request_human_input',
     humanInput: {
-      reason: 'product_choice',
+      reason: 'credentials_or_access',
       question: 'Which flavour?',
       options: [{ id: 'a', description: 'Option A' }, { id: 'b', description: 'Option B' }],
       recommendation: 'a',
-      evidenceChecked: ['README.md'],
+      evidenceChecked: [`${investigation} checked README.md`],
       independentWork: '',
       relatedDecisionIds: [],
     },
   });
 }
+const investigateThenAsk = () => [decision({ action: 'dispatch', assignments: [assignment('orch-explorer')] }), humanDecision];
 
 /**
  * Fake Codex app server. leadScript entries are decision objects or functions
@@ -197,7 +200,7 @@ test('e2e real stack', async (suite) => {
 
   await suite.test('human decision: pause, answer, finish', async (t) => {
     const appServer = makeFakeAppServer({
-      leadScript: [humanDecision(), decision({ final: 'Went with A.' })],
+      leadScript: [...investigateThenAsk(), decision({ final: 'Went with A.' })],
     });
     await withStack(t, appServer, async (stack) => {
       const paused = await send(stack, { text: 'Pick something' });
@@ -214,15 +217,15 @@ test('e2e real stack', async (suite) => {
       });
       assert.equal(done.status.state, TaskState.TASK_STATE_COMPLETED);
       assert.equal(artifactText(done), 'Acceptance: not_required\n\nWent with A.');
-      assert.equal(appServer.leadCalls.length, 2);
-      assert.match(appServer.leadCalls[1].input, /Please use flavour A because of reasons/);
-      assert.match(appServer.leadCalls[1].input, /"choice":"a"/);
+      assert.equal(appServer.leadCalls.length, 3);
+      assert.match(appServer.leadCalls[2].input, /Please use flavour A because of reasons/);
+      assert.match(appServer.leadCalls[2].input, /"choice":"a"/);
     });
   });
 
   await suite.test('wrong decisionId keeps the task waiting without calling the lead', async (t) => {
     const appServer = makeFakeAppServer({
-      leadScript: [humanDecision(), decision({ final: 'Went with B.' })],
+      leadScript: [...investigateThenAsk(), decision({ final: 'Went with B.' })],
     });
     await withStack(t, appServer, async (stack) => {
       const paused = await send(stack, { text: 'Pick something' });
@@ -237,7 +240,7 @@ test('e2e real stack', async (suite) => {
       });
       assert.equal(wrong.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
       assert.equal(wrong.metadata.pause.decisionId, decisionId);
-      assert.equal(appServer.leadCalls.length, 1);
+      assert.equal(appServer.leadCalls.length, 2);
 
       // The correct id still works afterwards.
       const done = await send(stack, {
@@ -247,7 +250,7 @@ test('e2e real stack', async (suite) => {
         metadata: { decisionId, choice: 'b' },
       });
       assert.equal(done.status.state, TaskState.TASK_STATE_COMPLETED);
-      assert.equal(appServer.leadCalls.length, 2);
+      assert.equal(appServer.leadCalls.length, 3);
     });
   });
 
