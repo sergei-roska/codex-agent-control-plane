@@ -128,6 +128,13 @@ statements, and the pragma is set per connection. Old databases open unchanged.
 
 - Automatic resume of interrupted runs after a restart.
 - Recovery of a lost report in W6/W8 (only the attested delta survives).
+
+Worktree mode (2026-10-10, [parallel writers design](parallel-writers-design.md)): W5
+and W6 apply to the integration row, not to the Codex turn, which runs in a lane without
+admission. A lane turn interrupted by a restart leaves a `writer_lanes` row that startup
+marks `orphaned` (lane kept, nothing integrated); an interrupted integration is resolved
+through its `writer_executions` row. G2's "never executed" also covers "never
+integrated": no execution row exists for the attempt.
 - Exactly-once delivery for read-only attempts.
 - Effects outside the workspace (network, other directories) are not observed or
   reconciled by any of these records.

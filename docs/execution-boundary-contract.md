@@ -103,6 +103,14 @@ with `path_unsafe`, because a dot must never grant whole-repository write scope.
 | `settle.attested_scope` | `attested_scope_violation`, `delta_unknown` | git delta (`src/workspace-snapshot.js:366-399`) | safety-critical |
 | `settle.writer_settled` | `writer_unresolved` | `writer_executions.state` (`src/lead-graph.js:235-238`, `:808-873`) | safety-critical |
 | `settle.report_outcome` | `writer_reported_failure` | `report.outcome` of a writer (`failed`, `blocked`) | advisory |
+| `settle.lane_scope` | `lane_scope_refused` | server-computed lane patch paths (`src/writer-lanes.js`) | fails the attempt only; not aggregated by `accept.writers` |
+
+Worktree mode (2026-10-10, [parallel writers design](parallel-writers-design.md)): a
+writer that ran in a lane and was never integrated has no `writer_executions` row and
+`effects: "none"`; `settle.writer_settled` treats it as settled, `settle.attested_scope`
+is PASS (nothing reached the shared tree), and `settle.reported_scope` is advisory. A
+lane whose patch was applied (or whose integration acquired admission) is attested by
+the integration row's delta exactly like a shared-mode writer.
 
 `settle.report_outcome` is advisory on purpose: writers are collected across
 rounds, and a later attempt may repair an earlier failed one, so a self-report

@@ -88,6 +88,30 @@ Every writable Codex turn passes through the role executor, which admits at most
 - Workspace lock: a second server on the same workspace is refused by a lock file in the OS temp dir (`codex-a2a-workspace-<hash>.lock`).
 - Every writer records a before/after workspace snapshot (git); the server attests `changedPaths` (ignored files are invisible).
 
+### Parallel writers in worktrees
+
+When the workspace is the top of a git work tree without submodules, writers run in
+parallel, each in its own git worktree ("lane"), and the server applies each lane's
+patch to the shared working tree under writer admission when the writer finishes. The
+lead groups concurrent assignments with `wave`; writers of one wave must own disjoint
+`allowedFiles`. At startup the server proves with a sandbox probe that a lane cannot
+write the shared tree, its `.git`, or through linked environment directories; if the
+probe fails, writers run one at a time as before. Patches outside `allowedFiles`,
+conflicts with concurrent edits, and canceled or failed turns are not integrated; the
+lane is kept for inspection. See `docs/parallel-writers-design.md`.
+
+- `CODEX_A2A_WRITER_ISOLATION=worktree|shared` (default `worktree`).
+- `CODEX_A2A_LANE_LINKS` (default `.venv,venv,node_modules`): ignored directories linked into lanes.
+- `CODEX_A2A_LANE_RETENTION_HOURS` (default 72): kept lanes are removed after this at startup.
+- Lanes live under the state directory (`.runtime/projects/<id>/lanes`), or under `~/.cache/codex-a2a/lanes/` when that would be inside the workspace.
+
+### Automatic resume after a usage limit
+
+A run paused for Codex usage budget resumes by itself once the account may be used
+again (`account/rateLimits/read`: `ordinaryUsageAllowed` and no reached limit for the
+team's models). Checks run at the reported reset plus a minute and every 5 minutes;
+sending a message still resumes at once. `CODEX_A2A_AUTO_RESUME=0` turns it off.
+
 ### Reconciliation pause
 
 After a batch, the lead graph settles every writable outcome that is not provably finished, without asking a model. If quiescence cannot be proven, the lead task is `INPUT_REQUIRED` with pause `writer_unresolved`. Send any message to the task to retry once the earlier writer is stopped. Writable dispatch is refused while a writer is unresolved, and in a serial batch the remaining writers are skipped (`skipped_unresolved_writer`) after an unsettled one.

@@ -16,6 +16,13 @@ Status: implementation spec, written by the reviewing lead (Claude). It extends
 | Release | Only when the turn ended with a confirmed terminal (`turn/completed` observed) or never reached `turn/start`. A task marked failed with an unknown outcome is not a release. |
 | Cross-process | A second server on the same workspace is refused by a workspace lock. The lock is a kernel-held SQLite exclusive transaction (`BEGIN EXCLUSIVE`, `busy_timeout = 0`) kept open for the holder's lifetime; the kernel drops it when the process dies, so there is no stale-lock takeover. The lock identity is the realpath of `git rev-parse --git-common-dir` (non-git: the canonical workspace). Default file: `<git common dir>/codex-a2a-writer.lockdb`, shared by every workspace in the repository (nested workspaces such as `/repo` and `/repo/sub` exclude each other). With `CODEX_A2A_WORKSPACE_LOCK_DIR` the file is `<dir>/codex-a2a-writer-<sha256(identity)[0:16]>.lockdb`, so nested workspaces still collide; non-git without an override uses the OS temp dir. The state lock is `<stateFile>.lockdb`. Old `*.lock` text files are ignored. |
 
+Worktree mode (2026-10-10, [parallel writers design](parallel-writers-design.md)): when
+the confinement probe passed and the attempt is eligible, a writer's Codex turn runs in
+its own git worktree and holds no admission. Admission (and everything below) then
+guards only the server-run integration of the lane's patch, which records a pending and
+then a real process identity like acceptance checks. Shared mode keeps the table above
+unchanged.
+
 Every writer execution records a workspace snapshot before and after
 (`src/workspace-snapshot.js`: git HEAD, porcelain status, content hash of every dirty or
 untracked path). The delta (`changedPaths`) is attested by the server, not reported by the
