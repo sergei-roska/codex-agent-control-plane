@@ -1841,3 +1841,113 @@ test('boundedOutcomes elides older outcomes into entries with identity and block
   assert.equal(counter.length, 1);
   assert.ok(counter[0].elided > 0 && typeof counter[0].note === 'string');
 });
+
+// ----------------------------------------------------- wave groups (parallelWriters)
+
+const waveBrief = (roleName, allowedFiles, wave) => ({ ...brief(roleName, allowedFiles), wave });
+const withWriters = { orchestrator: { parallelWriters: true } };
+
+test('parallelWriters submits a group together and the next group only after all of it finished', async () => {
+  const seen = [];
+  const world = makeWorld({
+    script: [dispatch(
+      waveBrief('orch-builder', ['src/a.js'], 1), waveBrief('orch-builder', ['src/b.js'], 1), waveBrief('orch-builder', ['src/c.js'], 1),
+      waveBrief('orch-explorer', [], null),
+    ), finish('Done')],
+    workerFinal: okWriterFinal(),
+    pollsNeeded: 1,
+  });
+  world.getTaskFault = (id, count) => { if (count === 1) seen.push(world.sends.length); };
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 4);
+    assert.deepEqual(seen, [3, 3, 3, 4]);
+    assert.deepEqual(world.dispatchInputs.slice(0, 3).map((input) => input.wave), [1, 1, 1]);
+    assert.equal(world.dispatchInputs[3].wave, null);
+    const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.ok(snapshot);
+  }, withWriters);
+});
+
+test('parallelWriters persists item groups in the checkpoint batch', async () => {
+  const world = makeWorld({
+    script: [dispatch(waveBrief('orch-builder', ['src/a.js'], 1), waveBrief('orch-builder', ['src/b.js'], 1), waveBrief('orch-explorer', [], null)), finish('Done')],
+    workerFinal: okWriterFinal(),
+  });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, interruptAfter: ['dispatch'] });
+    const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.deepEqual(snapshot.values.batch.items.map((item) => item.group), [0, 0, 1]);
+    assert.equal(snapshot.values.batch.parallel, false);
+  }, withWriters);
+});
+
+test('an unsettled writer in group 1 skips the writers of group 2', async () => {
+  const world = makeWorld({
+    script: [dispatch(
+      waveBrief('orch-builder', ['src/a.js'], 1), waveBrief('orch-builder', ['src/b.js'], 1), waveBrief('orch-builder', ['src/c.js'], 2),
+    ), finish('Done')],
+    workerFinal: (roleName, contextId) => {
+      world.admission.rows.set(contextId, admissionRow(contextId, 'unresolved'));
+      return unresolvedWriterTask(roleName);
+    },
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 2);
+    const third = result.assignments.find((entry) => entry.assignmentId === assignmentId(RUN_ID, 1, 2) && entry.kind !== 'reconciliation');
+    assert.equal(third.status, 'skipped_unresolved_writer');
+    assert.equal(third.effects, 'none');
+  }, withWriters);
+});
+
+test('without parallelWriters waved writers still run one at a time in array order', async () => {
+  const order = [];
+  const world = makeWorld({
+    script: [dispatch(waveBrief('orch-builder', ['src/a.js'], 1), waveBrief('orch-builder', ['src/b.js'], 1)), finish('Done')],
+    workerFinal: okWriterFinal(),
+    pollsNeeded: 1,
+  });
+  world.getTaskFault = (id, count) => { if (count === 1) order.push(world.sends.length); };
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(world.sends.length, 2);
+    assert.deepEqual(order, [1, 2]);
+  });
+});
+
+test('a checkpointed batch without item groups keeps serial behavior under parallelWriters', async () => {
+  const order = [];
+  const world = makeWorld({
+    script: [dispatch(
+      waveBrief('orch-builder', ['src/a.js'], 1), waveBrief('orch-builder', ['src/b.js'], 2), waveBrief('orch-builder', ['src/c.js'], 2),
+    ), finish('Done')],
+    workerFinal: okWriterFinal(),
+    pollsNeeded: 1,
+  });
+  world.getTaskFault = (id, count) => { if (count === 1) order.push(world.sends.length); };
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, interruptAfter: ['dispatch'] });
+    // Strip groups as a checkpoint written before this change would have.
+    const config = { configurable: { thread_id: RUN_ID } };
+    const { batch } = (await session.orchestrator.graph.getState(config)).values;
+    await session.orchestrator.graph.updateState(config, { batch: { ...batch, items: batch.items.map(({ group, ...rest }) => rest) } });
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(order, [1, 2, 3]);
+  }, withWriters);
+});
+
+test('the decision prompt describes waves according to parallelWriters', async () => {
+  for (const [options, pattern] of [[withWriters, /isolated copy of the workspace/], [undefined, /writers always run one at a time|Writers always run one at a time/]]) {
+    const world = makeWorld({ script: [finish('Done')] });
+    await withSession(world, async (session) => {
+      await session.orchestrator.run({ goal: 'Plan', runId: RUN_ID });
+      assert.match(world.prompts[0], pattern);
+      assert.match(world.prompts[0], /Waves: assignment\.wave/);
+      assert.match(world.prompts[0], /skills, and wave/);
+    }, options);
+  }
+});

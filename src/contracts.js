@@ -8,7 +8,7 @@ const MAX_ITEMS = 20;
 const MAX_CHARS = 3_000;
 const WORKER_REPORT_CONTRACT = 'worker-report/v1';
 const ASSIGNMENT_FIELDS = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
-const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills'];
+const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'wave'];
 const ASSIGNMENT_ARRAY_FIELDS = ASSIGNMENT_FIELDS.filter((field) => field !== 'role' && field !== 'objective');
 const REPORT_OUTCOMES = ['completed', 'blocked', 'needs_decision', 'failed'];
 const CHECK_RESULTS = ['passed', 'failed', 'not_run'];
@@ -24,6 +24,7 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'assignment.writer_scope': Object.freeze(['writer_scope_missing']),
   'assignment.paths': Object.freeze(['path_unsafe', 'path_glob_unsupported']),
   'assignment.skills': Object.freeze(['skill_invalid']),
+  'assignment.wave': Object.freeze(['wave_invalid', 'wave_scope_overlap']),
   'dispatch.skill_pins': Object.freeze(['skill_pin_drift']),
   'dispatch.writer_admission': Object.freeze(['fenced', 'admission_blocked']),
   'assignment.role_ladder': Object.freeze(['role_ladder_violation', 'architect_constraint']),
@@ -129,6 +130,7 @@ const DECISION_SCHEMA = {
           checks: stringArray,
           stopConditions: stringArray,
           skills: { type: 'array', items: { type: 'string' }, maxItems: 5 },
+          wave: { type: ['integer', 'null'], minimum: 1 },
         },
       },
     },
@@ -287,12 +289,17 @@ function parseWorkerReport(text) {
 
 function checkAssignment(assignment, decision, ctx) {
   if (!isPlainObject(assignment)) throw violation('assignment.shape', 'assignment_shape_invalid', 'Each assignment must be an object');
-  const legacy = sameKeys(assignment, ASSIGNMENT_FIELDS);
-  if (!legacy && !sameKeys(assignment, DECISION_ASSIGNMENT_FIELDS)) {
-    throw violation('assignment.shape', 'assignment_shape_invalid', 'Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and optionally skills');
+  const keys = Object.keys(assignment);
+  const shapeOk = ASSIGNMENT_FIELDS.every((field) => keys.includes(field)) && keys.every((field) => DECISION_ASSIGNMENT_FIELDS.includes(field));
+  if (!shapeOk) {
+    throw violation('assignment.shape', 'assignment_shape_invalid', 'Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and optionally skills and wave');
   }
-  // Older checkpoints and callers predate assignment skill routing.
-  if (legacy) assignment.skills = [];
+  // Older checkpoints and callers predate assignment skill routing and waves.
+  if (!keys.includes('skills')) assignment.skills = [];
+  if (!keys.includes('wave')) assignment.wave = null;
+  if (assignment.wave !== null && !(Number.isInteger(assignment.wave) && assignment.wave >= 1)) {
+    throw violation('assignment.wave', 'wave_invalid', `Assignment wave must be an integer >= 1 or null, got ${JSON.stringify(assignment.wave)}`);
+  }
   const role = getRole(ctx.roles, assignment.role);
   if (!role) throw violation('assignment.shape', 'role_unknown', `Unknown role: ${String(assignment.role)}`);
   assignment.role = role.name;
@@ -350,7 +357,7 @@ function checkAssignment(assignment, decision, ctx) {
 const SPECIALIST_REQUIRED_KEYS = ['objective', 'allowedFiles'];
 const SPECIALIST_OPTIONAL_KEYS = [
   'role', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions',
-  'skills', 'skillPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance',
+  'skills', 'wave', 'skillPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance',
 ];
 const SPECIALIST_ARRAY_KEYS = ['inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
 
@@ -448,6 +455,54 @@ function checkHumanInput(humanInput, openIds) {
 }
 
 /**
+ * Execution groups of an assignment list: maximal runs of consecutive assignments sharing the same
+ * non-null wave; a null wave is a group of one. Returns arrays of assignment indexes in array order.
+ */
+function executionGroups(assignments) {
+  const groups = [];
+  let previousWave = null;
+  assignments.forEach((assignment, index) => {
+    const wave = assignment?.wave ?? null;
+    if (wave !== null && wave === previousWave) groups[groups.length - 1].push(index);
+    else groups.push([index]);
+    previousWave = wave;
+  });
+  return groups;
+}
+
+// Normalized scope path: no leading './', no trailing '/'; '' means the whole workspace root.
+function scopePath(file) {
+  const trimmed = String(file).trim().replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  return trimmed === '.' ? '' : trimmed;
+}
+
+function scopesOverlap(a, b) {
+  const left = scopePath(a);
+  const right = scopePath(b);
+  if (left === '' || right === '') return true;
+  if (left === right) return true;
+  return right.startsWith(`${left}/`) || left.startsWith(`${right}/`);
+}
+
+function checkWaveScopes(assignments, ctx) {
+  for (const group of executionGroups(assignments)) {
+    const writers = group.filter((index) => getRole(ctx.roles, assignments[index].role)?.sandbox !== 'read-only');
+    for (let i = 0; i < writers.length; i += 1) {
+      for (let j = i + 1; j < writers.length; j += 1) {
+        const first = assignments[writers[i]];
+        const second = assignments[writers[j]];
+        for (const left of first.allowedFiles) {
+          const right = second.allowedFiles.find((file) => scopesOverlap(left, file));
+          if (right === undefined) continue;
+          throw violation('assignment.wave', 'wave_scope_overlap',
+            `Wave ${first.wave}: writers #${writers[i]} (${first.role}) and #${writers[j]} (${second.role}) have overlapping allowedFiles: ${left} vs ${right}`);
+        }
+      }
+    }
+  }
+}
+
+/**
  * Validate a parsed lead decision. Throws Error on violation.
  * ctx = { roles: Map, attemptedRoles: Set, outcomeCount: number, openDecisionIds: Set, unresolvedWriterCount?: number }
  */
@@ -488,6 +543,7 @@ function validateDecision(decision, ctx) {
     if (decision.final.trim()) throw violation('decision.envelope', 'decision_envelope_invalid', 'Dispatch decisions must leave final empty');
     if (decision.humanInput !== null) throw violation('decision.envelope', 'decision_envelope_invalid', 'Dispatch decisions must leave humanInput null');
     for (const assignment of decision.assignments) checkAssignment(assignment, decision, ctx);
+    checkWaveScopes(decision.assignments, ctx);
     const unresolved = ctx.unresolvedWriterCount || 0;
     if (unresolved > 0 && decision.assignments.some((assignment) => getRole(ctx.roles, assignment.role)?.sandbox !== 'read-only')) {
       throw violation('dispatch.writer_unresolved', 'writer_unresolved', `Writable dispatch refused: ${unresolved} writer outcome(s) are unresolved`);
@@ -542,4 +598,5 @@ module.exports = {
   ASSIGNMENT_FIELDS,
   DECISION_ASSIGNMENT_FIELDS,
   MAX_ASSIGNMENTS,
+  executionGroups,
 };

@@ -6,7 +6,7 @@ const {
   WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, validateWorkerReport, parseWorkerReport,
   DECISION_SCHEMA, validateDecision, classifyCodexError, findCodexErrorInfo, safeRelativePath,
   ASSIGNMENT_FIELDS, MAX_ASSIGNMENTS, BoundaryViolation, BOUNDARY_PREDICATES,
-  checkSpecialistRequest, pathsOutsideAllowed,
+  checkSpecialistRequest, pathsOutsideAllowed, executionGroups,
 } = require('../src/contracts');
 
 function walk(schema, visit) {
@@ -38,7 +38,8 @@ test('schemas satisfy strict structured output rules', () => {
   assert.equal(WORKER_REPORT_SCHEMA.properties.decisionRequest.anyOf[1].type, 'null');
   assert.equal(DECISION_SCHEMA.properties.humanInput.anyOf[1].type, 'null');
   assert.deepEqual(DECISION_SCHEMA.properties.action.enum, ['dispatch', 'finish', 'request_human_input']);
-  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills']);
+  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'wave']);
+  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.wave, { type: ['integer', 'null'], minimum: 1 });
 });
 
 function report(overrides = {}) {
@@ -451,4 +452,54 @@ test('pathsOutsideAllowed matches exact files and directory prefixes', () => {
   assert.deepEqual(pathsOutsideAllowed(['./src/a.js'], ['./src'], '/ws'), []);
   assert.deepEqual(pathsOutsideAllowed(['src/a.js'], [], '/ws'), ['src/a.js']);
   assert.deepEqual(pathsOutsideAllowed(['/elsewhere/x.js'], ['src'], '/ws'), ['/elsewhere/x.js']);
+});
+
+test('executionGroups groups consecutive equal non-null waves; null is a group of one', () => {
+  const groups = (...waves) => executionGroups(waves.map((wave) => ({ wave })));
+  assert.deepEqual(groups(1, 1, 1), [[0, 1, 2]]);
+  assert.deepEqual(groups(null, null), [[0], [1]]);
+  assert.deepEqual(groups(1, 1, null, 2), [[0, 1], [2], [3]]);
+  assert.deepEqual(groups(1, 2, 1), [[0], [1], [2]]);
+  assert.deepEqual(executionGroups([{}, {}]), [[0], [1]]);
+  assert.deepEqual(executionGroups([]), []);
+});
+
+test('assignment.wave is a known predicate with both codes', () => {
+  assert.deepEqual([...BOUNDARY_PREDICATES['assignment.wave']], ['wave_invalid', 'wave_scope_overlap']);
+});
+
+test('a legacy assignment gets wave null injected', () => {
+  const legacy = assignment();
+  validateDecision(dispatch([legacy]), ctx());
+  assert.equal(legacy.wave, null);
+  assert.deepEqual(legacy.skills, []);
+  const withWave = assignment({ skills: [], wave: 2 });
+  validateDecision(dispatch([withWave]), ctx());
+  assert.equal(withWave.wave, 2);
+});
+
+test('wave_invalid rejects non-integer or < 1 waves', () => {
+  for (const wave of [0, -1, 1.5, '1']) {
+    assert.throws(() => validateDecision(dispatch([assignment({ wave })]), ctx()), (error) => error.violations[0].code === 'wave_invalid');
+  }
+});
+
+test('wave_scope_overlap checks writers of one group for overlapping allowedFiles', () => {
+  const writer = (allowedFiles, wave = 1, role = 'orch-builder') => assignment({ role, allowedFiles, wave });
+  const overlap = (assignments, pattern) => assert.throws(() => validateDecision(dispatch(assignments), ctx()), (error) => {
+    assert.equal(error.violations[0].predicate, 'assignment.wave');
+    assert.equal(error.violations[0].code, 'wave_scope_overlap');
+    if (pattern) assert.match(error.violations[0].detail, pattern);
+    return true;
+  });
+  validateDecision(dispatch([writer(['src/a']), writer(['src/b'])]), ctx());
+  validateDecision(dispatch([writer(['src/ab.js']), writer(['src/a'])]), ctx());
+  validateDecision(dispatch([writer(['src/a']), writer(['src/a/b.js'], 2)]), ctx());
+  validateDecision(dispatch([writer(['src/a']), writer(['src/a'], null)]), ctx());
+  validateDecision(dispatch([writer(['src/a']), assignment({ wave: 1, allowedFiles: ['src/a'] })]), ctx());
+  overlap([writer(['src/a.js']), writer(['src/a.js'])], /#0 \(orch-builder\) and #1 \(orch-builder\).*src\/a\.js/);
+  overlap([writer(['src/a']), writer(['src/a/b.js'])], /src\/a vs src\/a\/b\.js/);
+  // A bare root scope never reaches the group check: the path rules refuse it first.
+  assert.throws(() => validateDecision(dispatch([writer(['x.js']), writer(['.'])]), ctx()), (error) => error.violations[0].code === 'path_unsafe');
+  overlap([writer(['lib']), writer(['src/z']), writer(['src/z/y.js'])]);
 });

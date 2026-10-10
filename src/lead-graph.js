@@ -8,7 +8,7 @@ const {
 } = require('@langchain/langgraph');
 const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
 const {
-  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, BoundaryViolation, parseWorkerReport, classifyCodexError,
+  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, BoundaryViolation, parseWorkerReport, classifyCodexError, executionGroups,
 } = require('./contracts');
 const { runAcceptance, assessWithoutChecks, unrunAcceptance } = require('./acceptance');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
@@ -484,7 +484,8 @@ const RULE_REMINDERS = {
   'decision.parse': 'Return only one JSON object matching the supplied schema.',
   'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, and humanInput, with unused fields empty.',
   'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds.',
-  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and skills; role must be an available role id.',
+  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, and wave; role must be an available role id.',
+  'assignment.wave': 'wave is an integer >= 1 or null; consecutive assignments with the same wave run concurrently, and writers in one wave need pairwise disjoint allowedFiles; use null for sequential steps.',
   'assignment.skills': 'Select at most 5 unique skill IDs from the trusted listed skill IDs; use [] when none apply.',
   'assignment.role_ladder': 'Respect the role ladder: recovery-engineer follows an engineer attempt, senior-engineer follows recovery-engineer, and architect needs prior evidence and one narrow decision.',
   'dispatch.writer_unresolved': 'Do not dispatch writable roles while writer outcomes are unresolved; use read-only roles.',
@@ -529,7 +530,7 @@ const LeadState = Annotation.Root({
  *   cancelUntilConfirmed(client, taskId, contextId) -> terminal task,
  *   emit(onEvent, event), checkpointer?,
  *   admission?: WriterAdmission, reconcileWaitMs?: number,
- *   usageLedger?: UsageLedger, activityStore?: ActivityStore, evidenceStore?: EvidenceStore, runCheckImpl?, snapshot?,
+ *   parallelWriters?: boolean, usageLedger?: UsageLedger, activityStore?: ActivityStore, evidenceStore?: EvidenceStore, runCheckImpl?, snapshot?,
  * }
  * Returns the compiled graph when deps.checkpointer is given, else the StateGraph.
  */
@@ -710,7 +711,10 @@ function buildLeadGraph(deps) {
     }
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(boundedOutcomes(state.outcomes)));
     sections.push([
-      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and skills. Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles; read-only roles may use allowedFiles []. allowedFiles entries are exact paths or directory prefixes; globs are not supported. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
+      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, and wave. Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles; read-only roles may use allowedFiles []. allowedFiles entries are exact paths or directory prefixes; globs are not supported. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
+      deps.parallelWriters
+        ? 'Waves: assignment.wave is an integer >= 1 or null. Consecutive assignments sharing the same wave run concurrently. Writers in one wave each work in an isolated copy of the workspace made from the same starting state and do not see each other\'s changes; their changes are integrated into the shared workspace as each finishes. A later wave (or a null-wave assignment after them), for example a verifier, sees the integrated result. Writers in one wave must own disjoint allowedFiles. Use null for strictly sequential steps.'
+        : 'Waves: assignment.wave may be used to group read-only work that runs concurrently. Writers always run one at a time in array order regardless of wave. Use null otherwise.',
       'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, and humanInput. Use empty arrays, an empty string, or null for unused fields.',
       'Worker decision requests: resolve them yourself (resolutions: decisionId, choice, rationale) whenever the evidence supports a choice. Worker reports are self-reported; check scopeViolations and reportError.',
       'Use request_human_input only for missing_authority, irreversible_or_external, or product_choice, and only after investigating: give options, a recommendation, the evidence checked, and the independent work that can proceed.',
@@ -1048,6 +1052,8 @@ function buildLeadGraph(deps) {
     if (!batch) {
       const round = state.round + 1;
       const parallel = state.pendingAssignments.every((assignment) => getRole(roles, assignment.role).sandbox === 'read-only');
+      const groupOf = new Map();
+      executionGroups(state.pendingAssignments).forEach((members, groupIndex) => members.forEach((index) => groupOf.set(index, groupIndex)));
       batch = {
         round,
         parallel,
@@ -1065,6 +1071,7 @@ function buildLeadGraph(deps) {
             role: assignment.role,
             sandbox: role.sandbox,
             assignment,
+            group: groupOf.get(index),
             contract: {
               id: BOUNDARY_CONTRACT_ID,
               reportContract: 'worker-report/v1',
@@ -1110,9 +1117,17 @@ function buildLeadGraph(deps) {
         }),
       };
     }
-    const targets = batch.parallel
-      ? batch.items.filter((item) => item.state === 'pending')
-      : batch.items.filter((item) => item.state === 'pending').slice(0, 1);
+    // Group dispatch (parallelWriters): the lowest group with pending items, once earlier groups are finished.
+    // Batches checkpointed without item groups keep the serial or parallel behavior of batch.parallel.
+    const grouped = Boolean(deps.parallelWriters) && !batch.parallel && batch.items.every((item) => Number.isInteger(item.group));
+    let targets;
+    if (batch.parallel) targets = batch.items.filter((item) => item.state === 'pending');
+    else if (grouped) {
+      const pendingGroups = batch.items.filter((item) => item.state === 'pending').map((item) => item.group);
+      const next = pendingGroups.length > 0 ? Math.min(...pendingGroups) : null;
+      const earlierDone = batch.items.every((item) => item.group >= next || item.state === 'finished');
+      targets = next !== null && earlierDone ? batch.items.filter((item) => item.state === 'pending' && item.group === next) : [];
+    } else targets = batch.items.filter((item) => item.state === 'pending').slice(0, 1);
     if (state.unresolvedWriters.length > 0 && targets.some((item) => item.sandbox !== 'read-only')) {
       throw new Error(`Writable dispatch refused: ${state.unresolvedWriters.length} writer outcome(s) are unresolved`);
     }
