@@ -1,5 +1,9 @@
 # Session-continuous lead thread (SES-01)
 
+Implemented in `63080b4`. Rollover measures the last model request's context
+(`tokenUsage.last.inputTokens`) against 60% of `modelContextWindow`, not the summed
+input of a turn, which overstated the context several times over.
+
 Status: decided by the lead on 2026-10-10 at the owner's request: "Until I press New
 session, every message is a continuation; the context, the cached tokens, and the
 thread are kept. It is not a new task, it is a continuation."
