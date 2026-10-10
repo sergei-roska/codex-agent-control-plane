@@ -319,3 +319,30 @@ test('deleteLeadTask without a writer_lanes table behaves as before', async (t) 
   deleteLeadTask(db, 't1');
   assert.equal(db.prepare("SELECT count(*) AS c FROM tasks WHERE id = 't1'").get().c, 0);
 });
+
+test('workers carry assignment_id, round and taskState for finished workers', async (t) => {
+  const FAILED = TaskState.TASK_STATE_FAILED;
+  const db = await fixture(t, CHAIN, [
+    lead('w1', 'wc-1', DONE, 'one', '2026-01-01T00:00:00.000Z'),
+    lead('w2', 'wc-2', FAILED, 'two', '2026-01-01T00:00:00.000Z'),
+  ]);
+  const ins = db.prepare(`INSERT INTO dispatch_journal
+    (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id, state, created_at, updated_at)
+    VALUES (?, 't1', ?, 'reviewer', 'read-only', 'c', ?, ?, '2026-01-01', '2026-01-01')`);
+  ins.run('r-1', 't1:r2:a0', 'w1', 'finished');
+  ins.run('r-2', 't1:r10:a1:c1', 'w2', 'finished');
+  ins.run('r-3', 'legacy', 'missing-task', 'finished');
+  ins.run('r-4', 't1:r3:a0', 'w3', 'submitted');
+  const row = db.prepare("SELECT * FROM tasks WHERE id = 't1'").get();
+  const view = formatLeadTask(db, row);
+  const by = Object.fromEntries(view.workers.map((w) => [w.task_id, w]));
+  assert.equal(by.w1.assignment_id, 't1:r2:a0');
+  assert.equal(by.w1.round, 2);
+  assert.equal(by.w1.taskState, 'TASK_STATE_COMPLETED');
+  assert.equal(by.w2.round, 10);
+  assert.equal(by.w2.taskState, 'TASK_STATE_FAILED');
+  assert.equal(by['missing-task'].round, null);
+  assert.equal(by['missing-task'].taskState, null);
+  assert.equal(by.w3.round, 3);
+  assert.equal(by.w3.taskState, undefined);
+});

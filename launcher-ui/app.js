@@ -424,66 +424,181 @@
       return text;
     }
 
-    function workerLines(w, now) {
+    const openRounds = new Set();
+
+    function taskStateKind(state) {
+      if (state === 'TASK_STATE_WORKING' || state === 2) return 'working';
+      if (isPausedState(state)) return 'paused';
+      if (state === 'TASK_STATE_COMPLETED' || state === 3) return 'completed';
+      if (state === 'TASK_STATE_FAILED' || state === 4 || state === 'TASK_STATE_REJECTED' || state === 7) return 'failed';
+      if (state === 'TASK_STATE_CANCELED' || state === 5) return 'canceled';
+      return 'unknown';
+    }
+
+    function statePill(kind, label) {
+      const pill = document.createElement('span');
+      pill.className = 'pill pill-' + kind;
+      if (kind === 'working' || kind === 'running') pill.appendChild(textEl('span', 'pulse-dot', ''));
+      pill.appendChild(document.createTextNode(label));
+      return pill;
+    }
+
+    function workerStatus(w) {
+      if (isActiveWorker(w)) return { kind: 'running', label: 'running' };
+      const k = taskStateKind(w.taskState);
+      if (k === 'completed') return { kind: 'done', label: 'done' };
+      if (k === 'failed') return { kind: 'failed', label: 'failed' };
+      if (k === 'canceled') return { kind: 'canceled', label: 'canceled' };
+      return { kind: 'finished', label: 'finished' };
+    }
+
+    function workerDuration(w, now) {
       const a = w.activity || null;
       const startedAt = (a && a.startedAt) || w.created_at;
-      const lines = [];
-      const duration = isActiveWorker(w)
+      return isActiveWorker(w)
         ? spanBetween(startedAt, now)
         : spanBetween(startedAt, (a && a.endedAt) || w.updated_at);
-      lines.push('  [' + w.state + '] ' + roleDisplayName(w.role) + ' - ' + duration);
-      if (w.objective && isActiveWorker(w)) {
-        const obj = String(w.objective);
-        lines.push('      task: ' + (obj.length > 160 ? obj.slice(0, 157) + '...' : obj));
+    }
+
+    function activityLines(row, a, now) {
+      const line = document.createElement('div');
+      line.className = 'act-line';
+      line.appendChild(textEl('span', 'phase-chip phase-' + (PHASE_LABELS[a.phase] ? a.phase : 'starting'), phaseLabel(a.phase)));
+      if (a.summary) {
+        const sum = textEl('span', 'act-summary', a.summary);
+        sum.title = a.summary;
+        line.appendChild(sum);
       }
-      if (a && isActiveWorker(w)) {
-        lines.push('      ' + activityDetail(a) + ' | ' + (a.commands || 0) + ' commands, '
-          + (a.fileChanges || 0) + ' file edits | last event ' + spanBetween(a.updatedAt, now) + ' ago');
+      line.appendChild(textEl('span', 'act-counts', (a.commands || 0) + ' commands | ' + (a.fileChanges || 0) + ' edits'));
+      const idle = (now - Date.parse(a.updatedAt)) / 1000;
+      const level = idle > 180 ? ' idle-red' : idle >= 60 ? ' idle-amber' : '';
+      line.appendChild(textEl('span', 'act-idle' + level, 'last event ' + spanBetween(a.updatedAt, now) + ' ago'));
+      row.appendChild(line);
+    }
+
+    function workerRow(w, now) {
+      const active = isActiveWorker(w);
+      const st = workerStatus(w);
+      const row = document.createElement('div');
+      row.className = 'w-row' + (active ? ' w-active' : ' w-finished');
+      row.appendChild(statePill(st.kind, st.label));
+      row.appendChild(textEl('span', 'w-name', roleDisplayName(w.role)));
+      row.appendChild(textEl('span', 'w-dur', workerDuration(w, now)));
+      if (active) {
+        if (w.objective) {
+          const obj = textEl('div', 'w-task', String(w.objective));
+          obj.title = String(w.objective);
+          row.appendChild(obj);
+        }
+        if (w.activity) activityLines(row, w.activity, now);
       }
-      return lines;
+      return row;
+    }
+
+    function leadActivityRow(la, now) {
+      const row = document.createElement('div');
+      row.className = 'w-row w-active';
+      row.appendChild(statePill('running', 'running'));
+      row.appendChild(textEl('span', 'w-name', 'Lead'));
+      row.appendChild(textEl('span', 'w-dur', spanBetween(la.startedAt, now)));
+      activityLines(row, la, now);
+      return row;
+    }
+
+    function roundSummary(label, group) {
+      const counts = { done: 0, failed: 0, canceled: 0, finished: 0, running: 0 };
+      group.forEach(w => { counts[workerStatus(w).kind]++; });
+      const parts = [];
+      ['done', 'failed', 'canceled', 'finished', 'running'].forEach(k => {
+        if (counts[k]) parts.push(counts[k] + ' ' + k);
+      });
+      return label + ': ' + parts.join(', ');
+    }
+
+    function roundGroups(workers) {
+      const byRound = new Map();
+      workers.forEach(w => {
+        const key = Number.isInteger(w.round) ? w.round : null;
+        if (!byRound.has(key)) byRound.set(key, []);
+        byRound.get(key).push(w);
+      });
+      const keys = [...byRound.keys()].filter(k => k !== null).sort((x, y) => x - y);
+      if (byRound.has(null)) keys.push(null);
+      return keys.map(k => ({ key: k, label: k === null ? 'Other' : 'Round ' + k, workers: byRound.get(k) }));
+    }
+
+    function workingBody(turn, now) {
+      const workers = turn.workers || [];
+      const wrap = document.createElement('div');
+      wrap.className = 'lead-body';
+      wrap.appendChild(textEl('div', 'lead-intro', 'Lead analyzes the goal, creates assignments, and coordinates specialists...'));
+      const la = turn.leadActivity;
+      if (la && !la.endedAt && !workers.some(isActiveWorker)) wrap.appendChild(leadActivityRow(la, now));
+      const groups = roundGroups(workers);
+      groups.forEach((g, i) => {
+        const rows = document.createElement('div');
+        rows.className = 'w-rows';
+        g.workers.forEach(w => rows.appendChild(workerRow(w, now)));
+        const isNewest = i === groups.length - 1;
+        if (isNewest) {
+          const box = document.createElement('div');
+          box.className = 'round-group';
+          box.appendChild(textEl('div', 'round-head', g.label));
+          box.appendChild(rows);
+          wrap.appendChild(box);
+          return;
+        }
+        const details = document.createElement('details');
+        details.className = 'round-group';
+        const memo = turn.leadTask.id + '#' + g.key;
+        details.open = openRounds.has(memo);
+        details.addEventListener('toggle', () => {
+          if (details.open) openRounds.add(memo); else openRounds.delete(memo);
+        });
+        details.appendChild(textEl('summary', 'round-head', roundSummary(g.label, g.workers)));
+        details.appendChild(rows);
+        wrap.appendChild(details);
+      });
+      return wrap;
     }
 
     function leadBubble(turn) {
       const t = turn.leadTask;
-      const workers = turn.workers || [];
       const state = t.state;
       const now = Date.now();
+      const kind = taskStateKind(state);
       const bubble = document.createElement('div');
       bubble.className = 'bubble bubble-lead';
       const head = document.createElement('div');
       head.className = 'bubble-head';
       head.appendChild(textEl('span', '', 'Lead'));
       let body = '';
+      let bodyEl = null;
 
-      if (state === 'TASK_STATE_WORKING' || state === 2) {
-        head.appendChild(textEl('span', '', 'working'));
-        body = 'Lead analyzes the goal, creates assignments, and coordinates specialists...';
-        if (workers.length) {
-          body += '\n\nRound specialists:\n' + workers.flatMap(w => workerLines(w, now)).join('\n');
-        }
-        const la = turn.leadActivity;
-        if (la && !la.endedAt && !workers.some(isActiveWorker)) {
-          body += '\n\nLead: ' + activityDetail(la) + ' - ' + spanBetween(la.startedAt, now)
-            + ' | last event ' + spanBetween(la.updatedAt, now) + ' ago';
-        }
-      } else if (isPausedState(state)) {
-        head.appendChild(textEl('span', '', 'paused'));
+      if (kind === 'working') {
+        head.appendChild(statePill('working', 'working'));
+        bodyEl = workingBody(turn, now);
+      } else if (kind === 'paused') {
+        head.appendChild(statePill('paused', 'paused'));
         bubble.classList.add('bubble-paused');
         body = 'Paused: waiting for a human decision.\n\n' + extractParts(t.status?.message?.parts);
-      } else if (state === 'TASK_STATE_COMPLETED' || state === 3) {
+      } else if (kind === 'completed') {
         const artifact = t.artifacts?.at(-1);
-        head.appendChild(textEl('span', '', acceptanceLabel(artifact?.metadata?.acceptance?.disposition)));
+        head.appendChild(statePill('completed', acceptanceLabel(artifact?.metadata?.acceptance?.disposition)));
         body = extractParts(artifact?.parts) || extractParts(t.status?.message?.parts) || 'Completed without additional text.';
-      } else if (state === 'TASK_STATE_FAILED' || state === 4) {
-        head.appendChild(textEl('span', '', 'failed'));
+      } else if (kind === 'failed') {
+        head.appendChild(statePill('failed', 'failed'));
         bubble.classList.add('bubble-failed');
         body = 'Task failed with an error:\n\n' + extractParts(t.status?.message?.parts);
+      } else if (kind === 'canceled') {
+        head.appendChild(statePill('canceled', 'canceled'));
+        body = extractParts(t.status?.message?.parts);
       } else {
-        head.appendChild(textEl('span', '', String(state)));
+        head.appendChild(statePill('canceled', 'ended'));
         body = extractParts(t.status?.message?.parts);
       }
       bubble.appendChild(head);
-      bubble.appendChild(textEl('div', '', body));
+      bubble.appendChild(bodyEl || textEl('div', 'lead-text', body));
       return bubble;
     }
 

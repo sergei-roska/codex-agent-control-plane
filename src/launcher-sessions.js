@@ -84,6 +84,20 @@ function workerObjective(db, taskId) {
   }
 }
 
+function roundOf(assignmentId) {
+  const m = /:r(\d+):/.exec(String(assignmentId || ''));
+  return m ? Number(m[1]) : null;
+}
+
+function workerTaskState(db, taskId) {
+  try {
+    const row = db.prepare('SELECT status_state FROM tasks WHERE id = ?').get(taskId);
+    return row && row.status_state ? row.status_state : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function formatLeadTask(db, lead) {
   let goal = '';
   let lastInstruction = '';
@@ -105,9 +119,18 @@ function formatLeadTask(db, lead) {
     } catch (_) {}
   }
 
-  const rows = db.prepare("SELECT role, state, task_id, created_at, updated_at FROM dispatch_journal WHERE run_id = ? ORDER BY created_at ASC").all(lead.id);
+  const rows = db.prepare("SELECT role, state, task_id, assignment_id, created_at, updated_at FROM dispatch_journal WHERE run_id = ? ORDER BY created_at ASC").all(lead.id);
   const activity = activityReader(db);
-  const workers = rows.map(w => ({ ...w, objective: (w.state === 'submitting' || w.state === 'submitted') ? workerObjective(db, w.task_id) : null, activity: activity(w.task_id) }));
+  const workers = rows.map(w => {
+    const active = w.state === 'submitting' || w.state === 'submitted';
+    return {
+      ...w,
+      round: roundOf(w.assignment_id),
+      taskState: active ? undefined : workerTaskState(db, w.task_id),
+      objective: active ? workerObjective(db, w.task_id) : null,
+      activity: activity(w.task_id)
+    };
+  });
 
   return {
     leadTask: {
