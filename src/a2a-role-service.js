@@ -12,6 +12,7 @@ const {
 const { WriterAdmission } = require('./writer-admission');
 const { loadSkillCatalog, resolveSkillSelection } = require('./skill-catalog');
 const { canonicalRoleId, legacyRoleId, roleDisplayName } = require('./role-names');
+const { deterministicContextId } = require('./durable-store');
 
 function displayRoleName(roleId, role) {
   return role.displayName || (canonicalRoleId(roleId) === roleId && role.name !== roleId ? role.name : roleDisplayName(roleId));
@@ -110,6 +111,22 @@ function failureMetadata(error) {
     // Restart budget exhausted: no child was spawned and no turn started.
     ...(isSupervisorExhausted(error) ? { effects: 'none' } : {}),
   };
+}
+
+const CONTINUE_INPUT = 'The usage limit has reset. Continue the assignment from where you stopped.';
+const CUT_OFF_NOTE = 'A previous attempt at this assignment was cut off by a usage limit; its partial changes are already in the working directory. Inspect them and finish the assignment.';
+const CUT_OFF_LANE_LOST_NOTE = 'A previous attempt at this assignment was cut off by a usage limit; its working copy could not be reused, so its partial changes are not available. Start the assignment again.';
+
+// The assignment text without the lead's continuation key (a fresh thread must not see it).
+function withoutContinuation(input) {
+  try {
+    const value = JSON.parse(input);
+    if (value && typeof value === 'object' && Object.hasOwn(value, 'continuation')) {
+      const { continuation: _drop, ...rest } = value;
+      return JSON.stringify(rest);
+    }
+  } catch (_) { /* not JSON: keep as is */ }
+  return input;
 }
 
 function makeStatus(state, message) {
@@ -327,11 +344,26 @@ function makeExecutor({
       // Set once appServer.run was reached: { usage, permissionEvents, provenance }.
       let telemetry = null;
       let selectedSkills = [];
-      const failedMetadata = (error) => ({
-        ...failureMetadata(error),
-        ...(writer ? { writerExecution: writer } : {}),
-        ...(telemetry ? telemetry : {}),
-      });
+      // BUD-2: how a continuation request was served ({ laneAdopted, laneFallback, threadResumed }), else null.
+      let continued = null;
+      // Thread of the last turn, for a usage-limit continuation metadata.
+      let seenThreadId = null;
+      const failedMetadata = (error) => {
+        const base = failureMetadata(error);
+        return {
+          ...base,
+          ...(base.failureKind === 'usage_limit' && seenThreadId ? {
+            continuation: {
+              threadId: seenThreadId,
+              laneId: lane ? lane.id : null,
+              codexHome: appServer.getCodexHome?.() ?? null,
+            },
+          } : {}),
+          ...(continued ? { continued } : {}),
+          ...(writer ? { writerExecution: writer } : {}),
+          ...(telemetry ? telemetry : {}),
+        };
+      };
       const executeStartedAt = new Date().toISOString();
       const executeStartMs = performance.now();
       // Writer attempts only: ms from the admission request to admitted or refused. Null for read-only.
@@ -450,7 +482,19 @@ function makeExecutor({
         if (useLane) {
           let prepared;
           try {
-            prepared = await lanes.prepare({ contextId, taskId });
+            const continuation = structured?.continuation ?? null;
+            if (continuation) continued = { laneAdopted: false, laneFallback: null, threadResumed: false };
+            // Adopt the kept lane of the cut-off attempt; any other state falls back to a fresh lane.
+            const adoption = continuation?.laneId
+              ? lanes.adopt({ contextId, taskId, ofContextId: deterministicContextId(continuation.ofAttemptId), laneId: continuation.laneId })
+              : null;
+            if (adoption?.lane) {
+              continued.laneAdopted = true;
+              prepared = { lane: adoption.lane };
+            } else {
+              if (adoption?.fallback) continued.laneFallback = adoption.fallback;
+              prepared = adoption?.refused ? { refused: adoption.refused } : await lanes.prepare({ contextId, taskId });
+            }
           } catch (error) {
             recordPreTurn('failed');
             publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
@@ -553,19 +597,42 @@ function makeExecutor({
         const activity = activityStore?.begin({
           key: taskId, runId: activityRunId(requestContext, input), role: canonicalRoleId(roleId),
         });
+        const callRun = (threadId, text) => appServer.run({
+          role: { id: roleId, ...role },
+          cwd: lane ? lane.workspacePath : workspace,
+          input: lane ? lanes.laneInput(lane, text) : text,
+          ...(threadId ? { threadId } : {}),
+          selectedSkills,
+          outputSchema: WORKER_REPORT_SCHEMA,
+          signal: controller.signal,
+          ...(execution ? { onTurnStart: (info) => admission.recordTurnStart(execution.executionId, info) } : {}),
+          ...(lane ? { sandboxPolicy: lanes.sandboxPolicy(lane), onTurnStart: (info) => lanes.recordTurnStart(lane, info) } : {}),
+          ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
+        });
         try {
           if (lane) lanes.markRunning(lane);
-          result = await appServer.run({
-            role: { id: roleId, ...role },
-            cwd: lane ? lane.workspacePath : workspace,
-            input: lane ? lanes.laneInput(lane, input) : input,
-            selectedSkills,
-            outputSchema: WORKER_REPORT_SCHEMA,
-            signal: controller.signal,
-            ...(execution ? { onTurnStart: (info) => admission.recordTurnStart(execution.executionId, info) } : {}),
-            ...(lane ? { sandboxPolicy: lanes.sandboxPolicy(lane), onTurnStart: (info) => lanes.recordTurnStart(lane, info) } : {}),
-            ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
-          });
+          const continuation = structured?.continuation ?? null;
+          if (continuation) {
+            continued ??= { laneAdopted: false, laneFallback: null, threadResumed: false };
+            // A lane writer whose lane is gone cannot claim its partial changes are present.
+            const laneLost = Boolean(continuation.laneId) && !continued.laneAdopted;
+            const sameHome = (appServer.getCodexHome?.() ?? null) === (continuation.codexHome ?? null);
+            const freshInput = `${laneLost ? CUT_OFF_LANE_LOST_NOTE : CUT_OFF_NOTE}\n${withoutContinuation(input)}`;
+            if (continuation.threadId && !laneLost && sameHome) {
+              try {
+                result = await callRun(continuation.threadId, CONTINUE_INPUT);
+                continued.threadResumed = true;
+              } catch (error) {
+                // A rejected resume (thread gone or unusable) starts a fresh thread; nothing ran.
+                if (error?.failureClass !== 'request_rejected' || error?.outcomeUnknown === true || controller.signal.aborted) throw error;
+                result = await callRun(null, freshInput);
+              }
+            } else {
+              result = await callRun(null, freshInput);
+            }
+          } else {
+            result = await callRun(null, input);
+          }
         } catch (error) {
           runError = error;
         } finally {
@@ -573,6 +640,7 @@ function makeExecutor({
             ? (controller.signal.aborted ? 'canceled' : 'failed')
             : controller.signal.aborted ? 'canceled' : String(result?.status ?? 'unknown'));
         }
+        seenThreadId = result?.threadId || runError?.execution?.threadId || runError?.threadId || result?.execution?.threadId || null;
         recordUsage(runError || result, runError
           ? (controller.signal.aborted ? 'canceled' : runError.outcomeUnknown === true ? 'interrupted' : 'failed')
           : controller.signal.aborted ? 'canceled' : String(result?.status ?? 'unknown'));
@@ -657,6 +725,7 @@ function makeExecutor({
                 ...(parsedReport.error ? { reportError: parsedReport.error } : {}),
                 boundary,
                 threadId: result.threadId || null,
+                ...(continued ? { continued } : {}),
             ...(selectedSkills.length ? { selectedSkills: selectedSkills.map(({ id, sha256 }) => ({ id, sha256 })) } : {}),
                 ...(writer ? { writerExecution: writer } : {}),
                 ...(telemetry ? telemetry : {}),

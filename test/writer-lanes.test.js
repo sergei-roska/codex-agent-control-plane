@@ -17,6 +17,7 @@ const {
   LaneManager, createLaneStore, selectWriterIsolation, resolveLanesRoot, laneLinks, laneRetentionHours,
 } = require('../src/writer-lanes');
 const { tmp, makeRepo, readTree, probeExec } = require('./helpers/lane-fixtures');
+const { deterministicContextId } = require('../src/durable-store');
 
 const writerRoles = new Map([
   ['orch-writer-a', { name: 'Writer A', description: 'Writes.', instructions: 'Implement.', model: 'test', effort: 'low', sandbox: 'workspace-write' }],
@@ -45,12 +46,12 @@ async function until(predicate, ms = 3000) {
 }
 
 // A worktree-mode role service over a fresh repo; `run(options)` plays the agent.
-function setup(t, run, { manager = {}, service = {}, version = 'v1' } = {}) {
+function setup(t, run, { manager = {}, service = {}, version = 'v1', home } = {}) {
   const repo = makeRepo();
   const lanesRoot = tmp('lanes-');
   const db = new Database(':memory:');
   const admission = new WriterAdmission({ db, workspace: repo, settleMs: 20 });
-  const appServer = { getVersion: () => version, run: (options) => run(options) };
+  const appServer = { getVersion: () => version, run: (options) => run(options), ...(home !== undefined ? { getCodexHome: () => home } : {}) };
   const lanes = new LaneManager({
     db, workspace: repo, admission, appServer, mode: 'worktree', lanesRoot, links: [], probe: { version: 'v1', ok: true, reason: null }, ...manager,
   });
@@ -520,7 +521,7 @@ test('the lane store keeps exactly the designed columns', () => {
   createLaneStore(db);
   assert.deepEqual(db.prepare('PRAGMA table_info(writer_lanes)').all().map((column) => column.name), [
     'lane_id', 'context_id', 'task_id', 'workspace', 'path', 'base_commit', 'state', 'reason',
-    'turn_start_json', 'execution_id', 'created_at', 'updated_at',
+    'turn_start_json', 'execution_id', 'created_at', 'updated_at', 'continued_from',
   ]);
 });
 
@@ -541,4 +542,206 @@ test('one mutex per real workspace serializes work from separate managers', asyn
   gate.resolve();
   await Promise.all([first, second]);
   assert.deepEqual(order, ['first-start', 'first-end', 'second']);
+});
+
+// ---------------------------------------------------------------- continuation (BUD-2)
+
+const limitError = (threadId) => Object.assign(new Error('usage limit'), {
+  codexError: { codexErrorInfo: 'usageLimitExceeded' }, execution: { threadId },
+});
+const OLD_CONTEXT = deterministicContextId('att-1');
+const continuationOf = (task, extra = {}) => ({ ofAttemptId: 'att-1', ...task.status.message.metadata.continuation, ...extra });
+const contextOfNew = deterministicContextId('att-1:c1');
+
+// A first attempt that writes a partial file in its lane and is cut off by a usage limit.
+async function limitedFirstAttempt(env, role = 'orch-writer-a') {
+  const task = await env.send(role, request(['a.txt']), { contextId: OLD_CONTEXT });
+  assert.equal(task.status.state, 4);
+  return task;
+}
+
+test('a usage-limited lane writer reports a continuation with its thread, lane, and home', async (t) => {
+  const env = setup(t, async ({ cwd }) => {
+    fs.writeFileSync(path.join(cwd, 'a.txt'), 'partial\n');
+    throw limitError('thr-1');
+  }, { home: '/homes/a' });
+  const task = await limitedFirstAttempt(env);
+  const meta = task.status.message.metadata;
+  assert.equal(meta.failureKind, 'usage_limit');
+  assert.deepEqual(meta.continuation, { threadId: 'thr-1', laneId: writerOf(task).lane.id, codexHome: '/homes/a' });
+  assert.equal(writerOf(task).lane.state, 'not_integrated');
+});
+
+test('a continuation adopts the old lane: same path, old row continued, partial file visible, thread resumed', async (t) => {
+  const calls = [];
+  let first = true;
+  const env = setup(t, async (options) => {
+    calls.push(options);
+    if (first) {
+      first = false;
+      fs.writeFileSync(path.join(options.cwd, 'a.txt'), 'partial\n');
+      throw limitError('thr-1');
+    }
+    assert.equal(fs.readFileSync(path.join(options.cwd, 'a.txt'), 'utf8'), 'partial\n');
+    fs.writeFileSync(path.join(options.cwd, 'a.txt'), 'finished\n');
+    return ok();
+  }, { home: '/homes/a' });
+  const failed = await limitedFirstAttempt(env);
+  const oldLane = writerOf(failed).lane;
+
+  const task = await env.send('orch-writer-a', request(['a.txt'], { continuation: continuationOf(failed) }), { contextId: contextOfNew });
+  assert.equal(task.status.state, 3);
+  assert.equal(calls[1].cwd, oldLane.path);
+  assert.equal(calls[1].threadId, 'thr-1');
+  assert.equal(calls[1].input.split('\n').slice(1).join('\n'), 'The usage limit has reset. Continue the assignment from where you stopped.');
+  const lane = writerOf(task).lane;
+  assert.notEqual(lane.id, oldLane.id);
+  assert.equal(lane.path, oldLane.path);
+  assert.equal(lane.base, oldLane.base);
+  assert.equal(lane.state, 'integrated');
+  assert.deepEqual(task.artifacts[0].metadata.continued, { laneAdopted: true, laneFallback: null, threadResumed: true });
+  const oldRow = env.lanes.store.get(oldLane.id);
+  const newRow = env.lanes.store.get(lane.id);
+  assert.equal(oldRow.state, 'continued');
+  assert.equal(newRow.continuedFrom, oldLane.id);
+  assert.equal(newRow.contextId, contextOfNew);
+  assert.equal(fs.readFileSync(path.join(env.repo, 'a.txt'), 'utf8'), 'finished\n');
+});
+
+test('a different App Server home starts a fresh thread in the adopted lane', async (t) => {
+  const calls = [];
+  const env = setup(t, async (options) => {
+    calls.push(options);
+    if (calls.length === 1) throw limitError('thr-1');
+    return ok();
+  }, { home: '/homes/b' });
+  const failed = await limitedFirstAttempt(env);
+  const task = await env.send('orch-writer-a', request(['a.txt'], { continuation: continuationOf(failed, { codexHome: '/homes/a' }) }), { contextId: contextOfNew });
+  assert.equal(task.status.state, 3);
+  assert.equal(calls[1].threadId, undefined);
+  assert.equal(calls[1].cwd, writerOf(failed).lane.path);
+  assert.match(calls[1].input, /cut off by a usage limit; its partial changes are already in the working directory/);
+  assert.equal(JSON.parse(calls[1].input.split('\n').slice(2).join('\n')).continuation, undefined);
+  assert.deepEqual(task.artifacts[0].metadata.continued, { laneAdopted: true, laneFallback: null, threadResumed: false });
+});
+
+test('a rejected thread resume falls back to a fresh thread', async (t) => {
+  const calls = [];
+  const env = setup(t, async (options) => {
+    calls.push(options);
+    if (calls.length === 1) throw limitError('thr-1');
+    if (options.threadId) throw Object.assign(new Error('no rollout found for thread'), { failureClass: 'request_rejected' });
+    return ok();
+  }, { home: null });
+  const failed = await limitedFirstAttempt(env);
+  const task = await env.send('orch-writer-a', request(['a.txt'], { continuation: continuationOf(failed) }), { contextId: contextOfNew });
+  assert.equal(task.status.state, 3);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[1].threadId, 'thr-1');
+  assert.equal(calls[2].threadId, undefined);
+  assert.match(calls[2].input, /cut off by a usage limit/);
+  assert.equal(task.artifacts[0].metadata.continued.threadResumed, false);
+});
+
+test('adoption is refused for a wrong state or owner and falls back to a fresh lane', async (t) => {
+  const calls = [];
+  const env = setup(t, async (options) => {
+    calls.push(options);
+    if (calls.length === 1) throw limitError('thr-1');
+    return ok();
+  }, { home: null });
+  const failed = await limitedFirstAttempt(env);
+  const oldLane = writerOf(failed).lane;
+
+  // Wrong owner: the lane belongs to another context.
+  let task = await env.send('orch-writer-a', request(['a.txt'], { continuation: continuationOf(failed, { ofAttemptId: 'att-other' }) }), { contextId: contextOfNew });
+  assert.equal(task.status.state, 3);
+  assert.equal(task.artifacts[0].metadata.continued.laneFallback, 'lane_not_owned');
+  assert.equal(env.lanes.store.get(oldLane.id).state, 'not_integrated');
+  assert.notEqual(calls[1].cwd, oldLane.path);
+  assert.equal(calls[1].threadId, undefined);
+  assert.match(calls[1].input, /working copy could not be reused/);
+
+  // Wrong state: a canceled lane is not adoptable.
+  env.lanes.store.update(oldLane.id, { reason: 'canceled' });
+  task = await env.send('orch-writer-a', request(['a.txt'], { continuation: continuationOf(failed) }), { contextId: deterministicContextId('att-1:c2') });
+  assert.equal(task.artifacts[0].metadata.continued.laneAdopted, false);
+  assert.equal(task.artifacts[0].metadata.continued.laneFallback, 'lane_state_not_integrated');
+  assert.equal(env.lanes.store.get(oldLane.id).state, 'not_integrated');
+  assert.equal(env.lanes.store.get(writerOf(task).lane.id).continuedFrom, null);
+
+  // Missing row.
+  task = await env.send('orch-writer-a', request(['a.txt'], { continuation: continuationOf(failed, { laneId: 'lane-nope' }) }), { contextId: deterministicContextId('att-1:c3') });
+  assert.equal(task.artifacts[0].metadata.continued.laneFallback, 'lane_row_missing');
+});
+
+test('a shared writer and a read-only role continue by resuming their thread', async (t) => {
+  const calls = [];
+  const readers = new Map([['orch-reader', { name: 'Reader', description: 'Reads.', instructions: 'Read.', model: 'test', effort: 'low', sandbox: 'read-only' }]]);
+  const env = setup(t, async (options) => {
+    calls.push(options);
+    if (calls.length === 1 || calls.length === 3) throw limitError('thr-shared');
+    return ok();
+  }, { home: null, manager: { mode: 'shared' }, service: { roles: new Map([...writerRoles, ...readers]) } });
+  const failed = await limitedFirstAttempt(env);
+  assert.equal(failed.status.message.metadata.continuation.laneId, null);
+  const task = await env.send('orch-writer-a', request(['a.txt'], { continuation: continuationOf(failed) }), { contextId: contextOfNew });
+  assert.equal(task.status.state, 3);
+  assert.equal(calls[1].threadId, 'thr-shared');
+  assert.equal(calls[1].cwd, env.repo);
+  assert.equal(calls[1].input, 'The usage limit has reset. Continue the assignment from where you stopped.');
+  assert.equal(writerOf(task).state, 'released');
+
+  const readerFirst = await env.send('orch-reader', request([]), { contextId: deterministicContextId('att-r') });
+  assert.equal(readerFirst.status.state, 4);
+  const readerTask = await env.send('orch-reader', request([], { continuation: continuationOf(readerFirst, { ofAttemptId: 'att-r' }) }), { contextId: deterministicContextId('att-r:c1') });
+  assert.equal(readerTask.status.state, 3);
+  assert.equal(calls.at(-1).threadId, 'thr-shared');
+});
+
+test('retention never removes an adopted path while another row references it', async (t) => {
+  const env = recoveryEnv(t);
+  const { lanes } = env;
+  const old = (await lanes.prepare({ contextId: 'c1', taskId: 't1' })).lane;
+  await lanes.complete({ lane: old, integrate: false, reason: 'turn_failed' });
+  const adopted = lanes.adopt({ contextId: 'c2', taskId: 't2', ofContextId: 'c1', laneId: old.id });
+  assert.equal(adopted.lane.path, old.path);
+  assert.equal(lanes.store.get(old.id).state, 'continued');
+  assert.equal(lanes.store.get(adopted.lane.id).continuedFrom, old.id);
+  // The adopted lane is refused for a second continuation and for a fenced context.
+  assert.deepEqual(lanes.adopt({ contextId: 'c3', taskId: 't3', ofContextId: 'c1', laneId: old.id }), { fallback: 'lane_state_continued' });
+  env.admission.fence('c-fenced', 'test');
+  assert.equal(lanes.adopt({ contextId: 'c-fenced', taskId: 't4', ofContextId: 'c1', laneId: old.id }).refused.code, 'fenced');
+
+  const later = (extra) => Date.now() + 73 * 3600 * 1000 + extra;
+  // Both rows kept at the same path: the older one is skipped, the newer one removes the path once.
+  await lanes.complete({ lane: adopted.lane, integrate: false, reason: 'turn_failed' });
+  lanes.store.update(old.id, { state: 'not_integrated', reason: 'turn_failed' });
+  const summary = lanes.recover({ retentionHours: 72, now: later(0) });
+  assert.deepEqual(summary.removed, [adopted.lane.id]);
+  assert.equal(lanes.store.get(old.id).state, 'not_integrated');
+  assert.equal(fs.existsSync(old.path), false);
+
+  // A continued row is terminal and never removed by retention.
+  const second = (await lanes.prepare({ contextId: 'c5', taskId: 't5' })).lane;
+  await lanes.complete({ lane: second, integrate: false, reason: 'outcome_unknown' });
+  const again = lanes.adopt({ contextId: 'c6', taskId: 't6', ofContextId: 'c5', laneId: second.id });
+  assert.ok(again.lane);
+  const next = lanes.recover({ retentionHours: 72, now: later(0) });
+  assert.deepEqual(next.removed, [again.lane.id]);
+  assert.equal(lanes.store.get(second.id).state, 'continued');
+});
+
+test('a lane table created before continued_from gains the column', () => {
+  const db = new Database(':memory:');
+  db.exec(`CREATE TABLE writer_lanes (
+    lane_id TEXT PRIMARY KEY, context_id TEXT NOT NULL, task_id TEXT, workspace TEXT NOT NULL, path TEXT NOT NULL,
+    base_commit TEXT, state TEXT NOT NULL, reason TEXT, turn_start_json TEXT, execution_id TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);`);
+  db.prepare("INSERT INTO writer_lanes VALUES ('L1','c','t','/w','/p',NULL,'orphaned',NULL,NULL,NULL,'x','x')").run();
+  const store = createLaneStore(db);
+  assert.equal(store.get('L1').continuedFrom, null);
+  store.insert({ laneId: 'L2', contextId: 'c', workspace: '/w', path: '/p', continuedFrom: 'L1' });
+  assert.equal(store.get('L2').continuedFrom, 'L1');
+  createLaneStore(db);
 });

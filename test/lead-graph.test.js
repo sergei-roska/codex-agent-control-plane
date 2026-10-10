@@ -2097,3 +2097,153 @@ test('a refused lane followed by a successful writer does not poison acceptance'
     assert.deepEqual(issueCodes(result), []);
   }, { workspace });
 });
+
+// ----------------------------------------------------- continuation of limited attempts (BUD-2)
+
+const limitedTask = (n, { continuation = true } = {}) => ({
+  state: TaskState.TASK_STATE_FAILED,
+  message: {
+    messageId: `m-${n}`,
+    role: 2,
+    parts: textParts('usage limit reached'),
+    metadata: {
+      failureKind: 'usage_limit',
+      effects: 'none',
+      ...(continuation ? { continuation: { threadId: `th-${n}`, laneId: null, codexHome: null } } : {}),
+    },
+  },
+});
+const contextOfAssignment = (id) => deterministicContextId(attemptId(id));
+
+test('a usage-limited writer is continued after the budget resume without a lead turn', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('Done')],
+    workerFinal: (roleName, contextId) => (contextId === contextOfAssignment(assignmentId(RUN_ID, 1, 0))
+      ? limitedTask(1) : okWriterFinal()(roleName, contextId)),
+  });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    assert.equal(world.sends.length, 1);
+    assert.equal(world.dispatchInputs[0].continuation, undefined);
+
+    const stopped = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['continue_limited'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(snapshot.values.round, 1);
+    assert.equal(world.leadTurns, 1);
+    assert.equal(snapshot.values.batch.items[0].assignmentId, `${assignmentId(RUN_ID, 1, 0)}:c1`);
+
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.rounds, 1);
+    assert.equal(world.leadTurns, 2);
+    assert.equal(world.sends.length, 2);
+    const sent = world.dispatchInputs[1];
+    assert.equal(sent.assignmentId, `${assignmentId(RUN_ID, 1, 0)}:c1`);
+    assert.deepEqual(sent.continuation, { ofAttemptId: attemptId(assignmentId(RUN_ID, 1, 0)), threadId: 'th-1', laneId: null, codexHome: null });
+    assert.equal(sent.objective, world.dispatchInputs[0].objective);
+    assert.deepEqual(sent.allowedFiles, world.dispatchInputs[0].allowedFiles);
+    const continuedAttempt = attemptId(`${assignmentId(RUN_ID, 1, 0)}:c1`);
+    assert.equal(world.sends[1], deterministicContextId(continuedAttempt));
+    assert.equal(session.journal.get(continuedAttempt).state, 'finished');
+    assert.match(world.prompts[1], /usage_limit/);
+    assertAtMostOneSendPerContext(world);
+  });
+});
+
+test('limited items of one wave are continued concurrently under parallelWriters', async () => {
+  const seen = [];
+  const limitedContexts = new Set([0, 1].map((index) => contextOfAssignment(assignmentId(RUN_ID, 1, index))));
+  const world = makeWorld({
+    script: [dispatch(waveBrief('orch-builder', ['src/a.js'], 1), waveBrief('orch-builder', ['src/b.js'], 1)), finish('Done')],
+    workerFinal: (roleName, contextId) => (limitedContexts.has(contextId) ? limitedTask(contextId.slice(0, 4)) : okWriterFinal()(roleName, contextId)),
+    pollsNeeded: 1,
+  });
+  world.getTaskFault = (id, count) => { if (count === 1) seen.push(world.sends.length); };
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 4);
+    assert.deepEqual(seen, [2, 2, 4, 4]);
+    assert.deepEqual(world.dispatchInputs.slice(2).map((input) => input.assignmentId).sort(),
+      [0, 1].map((index) => `${assignmentId(RUN_ID, 1, index)}:c1`));
+    assert.equal(result.rounds, 1);
+  }, withWriters);
+});
+
+test('without parallelWriters the continuations run one at a time', async () => {
+  const seen = [];
+  const limitedContexts = new Set([0, 1].map((index) => contextOfAssignment(assignmentId(RUN_ID, 1, index))));
+  const world = makeWorld({
+    script: [dispatch(waveBrief('orch-builder', ['src/a.js'], 1), waveBrief('orch-builder', ['src/b.js'], 1)), finish('Done')],
+    workerFinal: (roleName, contextId) => (limitedContexts.has(contextId) ? limitedTask(contextId.slice(0, 4)) : okWriterFinal()(roleName, contextId)),
+    pollsNeeded: 1,
+  });
+  world.getTaskFault = (id, count) => { if (count === 1) seen.push(world.sends.length); };
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(seen.slice(2), [3, 4]);
+  });
+});
+
+test('a third usage limit on the same assignment is not continued', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-builder')), finish('Gave up')], workerFinal: () => limitedTask(world.sends.length) });
+  await withSession(world, async (session) => {
+    let result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'waiting_for_budget');
+    result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'waiting_for_budget');
+    assert.equal(world.sends.length, 2);
+    result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'waiting_for_budget');
+    assert.equal(world.sends.length, 3);
+    assert.equal(world.leadTurns, 1);
+    result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 3);
+    assert.equal(world.leadTurns, 2);
+    const base = assignmentId(RUN_ID, 1, 0);
+    assert.deepEqual(world.dispatchInputs.map((input) => input.assignmentId), [base, `${base}:c1`, `${base}:c2`]);
+    assert.equal(world.dispatchInputs[2].continuation.ofAttemptId, attemptId(`${base}:c1`));
+    assert.equal(result.rounds, 1);
+  });
+});
+
+test('no continuation for a non-limit failure or a limit without a continuation', async () => {
+  const failed = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('Handled')],
+    workerFinal: () => ({ state: TaskState.TASK_STATE_FAILED, message: { messageId: 'm', role: 2, parts: textParts('boom'), metadata: { failureKind: 'other', effects: 'none' } } }),
+  });
+  await withSession(failed, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(failed.sends.length, 1);
+  });
+  const bare = makeWorld({ script: [dispatch(brief('orch-builder')), finish('Handled')], workerFinal: () => limitedTask(1, { continuation: false }) });
+  await withSession(bare, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(bare.sends.length, 1);
+    assert.equal(bare.leadTurns, 2);
+  });
+});
+
+test('a checkpoint without the continuable channel resumes to decide as before', async () => {
+  const world = makeWorld({ script: [usageLimitError(), finish('Recovered')] });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Work', runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.deepEqual(snapshot.values.continuable, []);
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 0);
+  });
+});

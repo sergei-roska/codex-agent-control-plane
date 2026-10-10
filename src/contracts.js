@@ -358,7 +358,7 @@ function checkAssignment(assignment, decision, ctx) {
 const SPECIALIST_REQUIRED_KEYS = ['objective', 'allowedFiles'];
 const SPECIALIST_OPTIONAL_KEYS = [
   'role', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions',
-  'skills', 'wave', 'skillPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance',
+  'skills', 'wave', 'skillPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance', 'continuation',
 ];
 const SPECIALIST_ARRAY_KEYS = ['inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
 
@@ -421,7 +421,27 @@ function checkSpecialistRequest(request, role, { workspace } = {}) {
   for (const key of ['role', 'assignmentId', 'workspace', 'reportContract']) {
     if (request[key] !== undefined) out[key] = request[key];
   }
+  if (request.continuation !== undefined) out.continuation = checkContinuation(request.continuation, label);
   return out;
+}
+
+// Continuation of a usage-limited attempt: { ofAttemptId, threadId, laneId, codexHome }.
+function checkContinuation(value, label) {
+  const bad = (detail) => violation('assignment.shape', 'field_invalid', `Request for ${label}: continuation ${detail}`);
+  if (!isPlainObject(value)) throw bad('must be an object');
+  const unknown = Object.keys(value).filter((key) => !['ofAttemptId', 'threadId', 'laneId', 'codexHome'].includes(key));
+  if (unknown.length) throw bad(`has an unknown key: ${unknown[0]}`);
+  if (!isNonEmptyString(value.ofAttemptId)) throw bad('needs a non-empty ofAttemptId');
+  for (const key of ['threadId', 'laneId', 'codexHome']) {
+    const field = value[key];
+    if (field !== undefined && field !== null && !isNonEmptyString(field)) throw bad(`${key} must be a non-empty string or null`);
+  }
+  return {
+    ofAttemptId: value.ofAttemptId,
+    threadId: value.threadId ?? null,
+    laneId: value.laneId ?? null,
+    codexHome: value.codexHome ?? null,
+  };
 }
 
 function normalizeRel(file, workspace) {

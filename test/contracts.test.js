@@ -437,6 +437,20 @@ test('checkSpecialistRequest rejects writer scope, paths, and request input prob
   assert.equal(checkSpecialistRequest(specialist({ requireAcceptance: false }), WRITER, { workspace: '/ws' }).allowedFiles[0], 'src');
 });
 
+test('checkSpecialistRequest validates and normalizes the continuation key', () => {
+  const full = { ofAttemptId: 'run:r1:a0:t1', threadId: 'th-1', laneId: 'lane-1', codexHome: '/home/x/.codex' };
+  assert.deepEqual(checkSpecialistRequest(specialist({ continuation: full }), WRITER, { workspace: '/ws' }).continuation, full);
+  assert.deepEqual(
+    checkSpecialistRequest(specialist({ role: 'orch-explorer', allowedFiles: [], continuation: { ofAttemptId: 'a:t1', threadId: 'th' } }), READER, { workspace: '/ws' }).continuation,
+    { ofAttemptId: 'a:t1', threadId: 'th', laneId: null, codexHome: null },
+  );
+  assert.equal(checkSpecialistRequest(specialist(), WRITER, { workspace: '/ws' }).continuation, undefined);
+  for (const bad of ['x', null, [], {}, { ofAttemptId: '' }, { ofAttemptId: 'a', threadId: 5 }, { ofAttemptId: 'a', laneId: '' },
+    { ofAttemptId: 'a', extra: 1 }]) {
+    specialistCode(specialist({ continuation: bad }), WRITER, 'assignment.shape', 'field_invalid');
+  }
+});
+
 test('checkSpecialistRequest drops "." and "./" from read-only scope', () => {
   const out = checkSpecialistRequest(specialist({ role: 'orch-explorer', allowedFiles: ['.', './', 'docs'] }), READER, { workspace: '/ws' });
   assert.deepEqual(out.allowedFiles, ['docs']);

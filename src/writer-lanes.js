@@ -18,7 +18,8 @@ const DEFAULT_LINKS = '.venv,venv,node_modules';
 const DEFAULT_RETENTION_HOURS = 72;
 const LIVE_STATES = new Set(['preparing', 'prepared', 'running']);
 const KEPT_STATES = new Set(['orphaned', 'not_integrated']);
-const TERMINAL_STATES = new Set(['integrated', 'not_integrated', 'orphaned', 'removed']);
+const TERMINAL_STATES = new Set(['integrated', 'not_integrated', 'orphaned', 'removed', 'continued']);
+const ADOPTABLE_REASONS = new Set(['turn_failed', 'outcome_unknown']);
 
 function createLaneStore(db) {
   db.exec(`
@@ -34,9 +35,14 @@ function createLaneStore(db) {
       turn_start_json TEXT,
       execution_id TEXT,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      continued_from TEXT
     );
   `);
+  // A table created before BUD-2 lacks the continued_from column.
+  if (!db.prepare('PRAGMA table_info(writer_lanes)').all().some((column) => column.name === 'continued_from')) {
+    db.exec('ALTER TABLE writer_lanes ADD COLUMN continued_from TEXT');
+  }
   const columns = { state: 'state', reason: 'reason', baseCommit: 'base_commit', turnStart: 'turn_start_json', executionId: 'execution_id' };
   const toRecord = (row) => (row ? {
     laneId: row.lane_id,
@@ -49,15 +55,16 @@ function createLaneStore(db) {
     reason: row.reason,
     turnStart: row.turn_start_json == null ? null : JSON.parse(row.turn_start_json),
     executionId: row.execution_id,
+    continuedFrom: row.continued_from ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   } : null);
   const now = () => new Date().toISOString();
   return {
-    insert({ laneId, contextId, taskId = null, workspace, path: lanePath }) {
+    insert({ laneId, contextId, taskId = null, workspace, path: lanePath, continuedFrom = null }) {
       const at = now();
-      db.prepare(`INSERT INTO writer_lanes (lane_id, context_id, task_id, workspace, path, state, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 'preparing', ?, ?)`).run(laneId, contextId, taskId, workspace, lanePath, at, at);
+      db.prepare(`INSERT INTO writer_lanes (lane_id, context_id, task_id, workspace, path, state, continued_from, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'preparing', ?, ?, ?)`).run(laneId, contextId, taskId, workspace, lanePath, continuedFrom, at, at);
     },
     update(laneId, fields) {
       const sets = [];
@@ -311,6 +318,32 @@ class LaneManager {
     }
   }
 
+  /**
+   * BUD-2: continue a usage-limited attempt in its own lane. Adopts the kept lane `laneId` only if
+   * its row belongs to `ofContextId` and is not_integrated with reason turn_failed or outcome_unknown.
+   * The old row becomes `continued`; a new row records the same path and base with continued_from.
+   * Returns `{ refused }` for a fenced context, `{ lane, continuedFrom }`, or `{ fallback: reason }`.
+   */
+  adopt({ contextId, taskId, ofContextId, laneId }) {
+    if (this.admission.isFenced(contextId)) {
+      return { refused: { code: 'fenced', message: `Context "${contextId}" is fenced; its writer will not run.` } };
+    }
+    const old = laneId ? this.store.get(laneId) : null;
+    if (!old) return { fallback: 'lane_row_missing' };
+    if (old.workspace !== this.workspace || old.contextId !== ofContextId) return { fallback: 'lane_not_owned' };
+    if (old.state !== 'not_integrated' || !ADOPTABLE_REASONS.has(old.reason)) return { fallback: `lane_state_${old.state}` };
+    if (!old.baseCommit || !exists(old.path)) return { fallback: 'lane_vanished' };
+    const id = `lane-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+    this.db.transaction(() => {
+      this.store.update(old.laneId, { state: 'continued', reason: null });
+      this.store.insert({ laneId: id, contextId, taskId, workspace: this.workspace, path: old.path, continuedFrom: old.laneId });
+      this.store.update(id, { state: 'prepared', baseCommit: old.baseCommit });
+    })();
+    const linked = this.links.filter((name) => linksTo(path.join(old.path, name), path.join(this.workspace, name)));
+    // No admin dir: collectPatch finds it from the shared root, as laneApplied does.
+    return { lane: { id, path: old.path, workspacePath: old.path, base: old.baseCommit, linked, adminDir: undefined }, continuedFrom: old.laneId };
+  }
+
   laneInput(lane, input) {
     return `Your isolated working directory is ${lane.workspacePath}; all paths are relative to it and you edit files only there. The server integrates your changes into the shared workspace after your turn.\n${input}`;
   }
@@ -339,7 +372,7 @@ class LaneManager {
     if (!integrate) return refuse(reason || 'turn_failed');
     let collected;
     try {
-      collected = collectPatch({ lane: lane.path, base: lane.base, exclude: lane.linked, adminDir: lane.adminDir });
+      collected = collectPatch({ lane: lane.path, base: lane.base, exclude: lane.linked, adminDir: lane.adminDir, ...(lane.adminDir ? {} : { root: this.workspace }) });
     } catch (error) {
       return refuse('lane_unsafe', { unsafePaths: error?.code === 'lane_unsafe' && Array.isArray(error.paths) ? error.paths : [] });
     }
@@ -490,6 +523,9 @@ class LaneManager {
     for (const row of this.store.list(this.workspace)) {
       const kept = KEPT_STATES.has(row.state) || (row.state === 'integrated' && exists(row.path));
       if (!kept || !(Date.parse(row.updatedAt) <= cutoff) || !isInside(root, realish(row.path))) continue;
+      // An adopted path stays while a non-terminal or newer row still references it.
+      if (this.store.list(this.workspace).some((other) => other.laneId !== row.laneId && other.path === row.path
+        && (!TERMINAL_STATES.has(other.state) || other.createdAt > row.createdAt || other.continuedFrom === row.laneId))) continue;
       try {
         removeLane({ root: this.workspace, lane: row.path, lanesRoot: this.lanesRoot });
         if (row.state !== 'integrated') this.store.update(row.laneId, { state: 'removed' });

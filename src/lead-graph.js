@@ -152,6 +152,7 @@ function assignmentResult(task, { onOversize } = {}) {
   const writerExecution = artifacts.map((artifact) => artifact.metadata?.writerExecution).find((entry) => entry && typeof entry === 'object')
     || (status?.message?.metadata?.writerExecution && typeof status.message.metadata.writerExecution === 'object' ? status.message.metadata.writerExecution : null);
   const effects = status?.message?.metadata?.effects;
+  const continuation = status?.message?.metadata?.continuation;
   const stateName = taskStateName(status?.state);
   const extras = typeof onOversize === 'function' && (artifactTexts.some((value) => value.length > MAX_REPORT_CHARS) || text.length > MAX_REPORT_CHARS)
     ? onOversize({ artifactTexts, joined: text, parseText: artifactTexts[0] || text, completed: stateName === 'TASK_STATE_COMPLETED', lanePath: lanePathOf(writerExecution) })
@@ -167,6 +168,7 @@ function assignmentResult(task, { onOversize } = {}) {
     ...(typeof failureKind === 'string' ? { failureKind } : {}),
     ...(writerExecution ? { writerExecution } : {}),
     ...(typeof effects === 'string' ? { effects } : {}),
+    ...(continuation && typeof continuation === 'object' && !Array.isArray(continuation) ? { continuation } : {}),
     ...(extras || {}),
   };
 }
@@ -508,6 +510,7 @@ function pauseMessage(value) {
 // ------------------------------------------------------------ the graph
 
 const MAX_AUTO_REJECTIONS = 2;
+const MAX_CONTINUATIONS = 2;
 const PATH_RULE = "allowedFiles entries are repository-relative paths or directory prefixes without '.', '..', globs, or a leading '/'; read-only roles may use [].";
 const RULE_REMINDERS = {
   'assignment.paths': PATH_RULE,
@@ -551,6 +554,8 @@ const LeadState = Annotation.Root({
   rejections: last(() => []),
   consecutiveRejections: last(() => 0),
   retryDecide: last(() => false),
+  // Usage-limited attempts of the latest batch that can be continued after the budget resume (BUD-2).
+  continuable: last(() => []),
 });
 
 /**
@@ -1031,6 +1036,7 @@ function buildLeadGraph(deps) {
       assignmentId: item.assignmentId,
       workspace,
       reportContract: REPORT_CONTRACT_LINE,
+      ...(item.continuation ? { continuation: item.continuation } : {}),
     });
     let submitted;
     try {
@@ -1261,11 +1267,27 @@ function buildLeadGraph(deps) {
       });
     }
     const limited = summaries.some((outcome) => outcome.failureKind === 'usage_limit');
+    // BUD-2: cut-off attempts that carry a continuation are continued after the budget resume.
+    const continuable = finished
+      .filter((item) => item.result?.failureKind === 'usage_limit' && item.result.continuation)
+      .map((item) => ({
+        item: {
+          runId: item.runId,
+          assignmentId: item.assignmentId,
+          attemptId: item.attemptId,
+          role: item.role,
+          sandbox: item.sandbox,
+          assignment: item.assignment,
+          ...(item.contract ? { contract: item.contract } : {}),
+        },
+        continuation: item.result.continuation,
+      }));
     return {
       outcomes: [...state.outcomes, ...summaries],
       openDecisions: open,
       unresolvedWriters,
       batch: null,
+      continuable,
       ...(limited ? { budget: { source: 'worker' } } : {}),
     };
   }
@@ -1362,6 +1384,47 @@ function buildLeadGraph(deps) {
       value.message = pauseMessage(value);
       interrupt(value);
     }
+  }
+
+  // BUD-2: after a budget resume, continue each cut-off attempt (at most MAX_CONTINUATIONS per original
+  // assignment) before the lead re-plans. No lead turn, no new round: the batch re-enters dispatch.
+  async function continueLimited(state, config) {
+    const candidates = state.continuable || [];
+    if (candidates.length === 0) return {};
+    const runtime = runtimeOf(config);
+    if (runtime.signal?.aborted) return { status: 'canceled', text: CANCELED_TEXT, continuable: [] };
+    const items = [];
+    for (const { item: origin, continuation } of candidates) {
+      const match = /^(.*):c(\d+)$/.exec(origin.assignmentId);
+      const original = match ? match[1] : origin.assignmentId;
+      const count = match ? Number(match[2]) : 0;
+      if (count >= MAX_CONTINUATIONS) continue;
+      const assignmentId = `${original}:c${count + 1}`;
+      const attemptId = makeAttemptId(assignmentId);
+      items.push({
+        runId: origin.runId,
+        assignmentId,
+        attemptId,
+        contextId: deterministicContextId(attemptId),
+        role: origin.role,
+        sandbox: origin.sandbox,
+        assignment: origin.assignment,
+        group: 0,
+        ...(origin.contract ? { contract: origin.contract } : {}),
+        continuation: {
+          ofAttemptId: origin.attemptId,
+          threadId: continuation.threadId ?? null,
+          laneId: continuation.laneId ?? null,
+          codexHome: continuation.codexHome ?? null,
+        },
+        state: 'pending',
+        taskId: null,
+        result: null,
+      });
+    }
+    if (items.length === 0) return { continuable: [] };
+    const parallel = items.every((item) => item.sandbox === 'read-only');
+    return { continuable: [], batch: { round: state.round, parallel, continuation: true, items } };
   }
 
   async function humanInput(state) {
@@ -1508,6 +1571,10 @@ function buildLeadGraph(deps) {
     return 'decide';
   };
   const afterReconcile = (state) => (state.budget ? 'budget_pause' : 'decide');
+  const afterContinueLimited = (state) => {
+    if (state.status) return 'finish';
+    return state.batch ? 'dispatch' : 'decide';
+  };
 
   const graph = new StateGraph(LeadState)
     .addNode('intake', intake)
@@ -1518,6 +1585,7 @@ function buildLeadGraph(deps) {
     .addNode('reconcile', reconcile)
     .addNode('human_input', humanInput)
     .addNode('budget_pause', budgetPause)
+    .addNode('continue_limited', continueLimited)
     .addNode('accept', accept)
     .addNode('finish', finish)
     .addEdge(START, 'intake')
@@ -1529,7 +1597,8 @@ function buildLeadGraph(deps) {
     .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'decide'])
     .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'decide'])
     .addEdge('human_input', 'decide')
-    .addEdge('budget_pause', 'decide')
+    .addEdge('budget_pause', 'continue_limited')
+    .addConditionalEdges('continue_limited', afterContinueLimited, ['finish', 'dispatch', 'decide'])
     .addEdge('finish', END);
 
   return deps.checkpointer ? graph.compile({ checkpointer: deps.checkpointer }) : graph;
