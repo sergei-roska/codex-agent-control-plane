@@ -1937,3 +1937,25 @@ test('run() sends a supplied sandboxPolicy instead of the role default', async (
   const turnStart = fake.getChild().sent.find(({ method }) => method === 'turn/start');
   assert.deepEqual(turnStart.params.sandboxPolicy, policy);
 });
+
+test('codexHome sets CODEX_HOME in the spawn env; without it the options are unchanged', async (t) => {
+  const seen = [];
+  const make = (extra) => {
+    const fake = fakeSpawn(baseHandler());
+    const client = new CodexAppServer({
+      spawnImpl: (command, args, options) => { seen.push(options); return fake.spawnImpl(command, args, options); },
+      ...extra,
+    });
+    t.after(() => client.close());
+    return client;
+  };
+  const plain = make({});
+  await plain.start();
+  assert.deepEqual(Object.keys(seen[0]).sort(), ['detached', 'stdio']);
+  assert.equal(plain.getCodexHome(), null);
+  const homed = make({ codexHome: '/tmp/a2a-profile-x' });
+  await homed.start();
+  assert.equal(seen[1].env.CODEX_HOME, '/tmp/a2a-profile-x');
+  assert.equal(seen[1].env.PATH, process.env.PATH);
+  assert.equal(homed.getCodexHome(), '/tmp/a2a-profile-x');
+});

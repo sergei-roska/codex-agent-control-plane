@@ -129,8 +129,10 @@ class CodexAppServer {
     backoffMs = DEFAULT_BACKOFF_MS,
     exitWaitMs = DEFAULT_EXIT_WAIT_MS,
     cooldownMs = DEFAULT_COOLDOWN_MS,
+    codexHome = null,
   } = {}) {
     this.codexPath = codexPath;
+    this.codexHome = codexHome || null;
     this.spawnImpl = spawnImpl;
     this.requestTimeoutMs = requestTimeoutMs;
     this.turnTimeoutMs = resolveTurnTimeoutMs(turnTimeoutMs);
@@ -369,6 +371,7 @@ class CodexAppServer {
       stdio: ['pipe', 'pipe', 'inherit'],
       // Own process group, so the whole tree can be signalled and proven gone.
       detached: true,
+      ...(this.codexHome ? { env: { ...process.env, CODEX_HOME: this.codexHome } } : {}),
     });
     this.child = child;
     this.closed = false;
@@ -898,6 +901,10 @@ class CodexAppServer {
 
   getVersion() {
     return this.appServerVersion;
+  }
+
+  getCodexHome() {
+    return this.codexHome;
   }
 
   // Runs one standalone command in the server sandbox (no thread, no turn); buffered result.

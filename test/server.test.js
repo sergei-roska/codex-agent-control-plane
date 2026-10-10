@@ -1461,3 +1461,38 @@ test('startup recovery orphans a lane row left running by a previous process', a
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test('server wiring follows the active account profile and works without a profiles file', async () => {
+  const dir = tmpDir();
+  const made = [];
+  const factory = (home) => {
+    const inst = { home, closed: false, async start() {}, async getAccount() { return { account: { type: 'chatgpt' } }; }, async run() {}, getVersion() { return 'fake'; }, async execCommand() { return {}; }, async close() { this.closed = true; } };
+    made.push(inst);
+    return inst;
+  };
+  const common = { listen: false, stateFile: ':memory:', orchestratorFactory: () => ({ async run() {} }), appServerFactory: factory };
+  const accountsDir = path.join(dir, 'accounts');
+  const plain = await startServer({ ...common, accountsDir, tokenFile: path.join(dir, 'token1'), workspaceLockDir: path.join(dir, 'l1') });
+  try {
+    assert.equal(made.length, 1);
+    assert.equal(made[0].home, null);
+    assert.equal(typeof plain.accountProfiles.read, 'function');
+    assert.equal(plain.appServer, plain.switchingAppServer);
+  } finally {
+    await plain.close();
+  }
+  const { createAccountProfiles } = require('../src/account-profiles');
+  const profiles = createAccountProfiles({ accountsDir, codexDefaultHome: path.join(dir, 'nohome') });
+  const profile = profiles.addProfile({ name: 'second' });
+  profiles.setActive('second');
+  const homed = await startServer({ ...common, accountsDir, tokenFile: path.join(dir, 'token2'), workspaceLockDir: path.join(dir, 'l2') });
+  try {
+    assert.equal(made.length, 2);
+    assert.equal(made[1].home, profile.home);
+    assert.equal(homed.appServer.getCodexHome(), profile.home);
+  } finally {
+    await homed.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  assert.equal(made[1].closed, true);
+});

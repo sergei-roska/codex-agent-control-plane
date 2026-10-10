@@ -6,7 +6,8 @@ const { AgentEvent, InMemoryTaskStore, DefaultRequestHandler } = require('@a2a-j
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
 const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/server/express');
 const { ClientFactory } = require('@a2a-js/sdk/client');
-const { CodexAppServer } = require('./codex-app-server');
+const { createAccountProfiles } = require('./account-profiles');
+const { createSwitchingAppServer } = require('./app-server-switch');
 const { loadRoles, createLeadRole } = require('./role-catalog');
 const { registerRoleAgents } = require('./a2a-role-service');
 const { LeadOrchestrator, ResumeInputError } = require('./lead-orchestrator');
@@ -583,7 +584,9 @@ function protectRoleRpcMounts(app, authMiddleware) {
 async function startServer({
   port = Number(process.env.PORT || DEFAULT_PORT),
   workspace = process.env.CODEX_WORKSPACE || process.cwd(),
-  appServer = new CodexAppServer(),
+  appServer: injectedAppServer = null,
+  accountsDir,
+  appServerFactory,
   listen = true,
   listenImpl = (application, listenPort, host, callback) => application.listen(listenPort, host, callback),
   profilesDir,
@@ -599,6 +602,13 @@ async function startServer({
   if (typeof workspace !== 'string' || !workspace || !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`workspace must be an existing directory: ${workspace}`);
   }
+  // An injected App Server is used as is; otherwise the switching wrapper follows the active account profile.
+  const accountProfiles = createAccountProfiles(accountsDir ? { accountsDir } : {});
+  const switching = injectedAppServer ? null : createSwitchingAppServer({
+    profiles: accountProfiles,
+    ...(appServerFactory ? { create: appServerFactory } : {}),
+  });
+  const appServer = injectedAppServer || switching;
   let httpServer = null;
   let state = providedState || null;
   const ownsState = !providedState;
@@ -682,6 +692,8 @@ async function startServer({
       app,
       httpServer,
       appServer,
+      accountProfiles,
+      switchingAppServer: switching,
       state,
       roles,
       specialistAgents,
