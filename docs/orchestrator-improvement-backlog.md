@@ -176,6 +176,8 @@ in the listed order unless marked independent.
 | BUD-2 | done `27f464e` | Continue a worker cut off by a usage limit in its own thread and lane instead of re-planning. |
 | ACC-01 | done `fb0ad8b`, `eff0083`, `3438c10` | Several Codex accounts as profiles, login and switching from the web UI, automatic switch to an account with budget when a run pauses for a limit ([design](codex-accounts-design.md)). |
 | CA-01 | queued after PW-3 | Competing approaches: the lead may give one assignment to N writers in separate lanes; the winner is chosen by executed checks, only the winner is integrated (PRD section 9.1 analogue). |
+| UI-01 | idea | Under the session status, list the skills given to the run's assignments and the MCP servers and tools enabled per turn ([ideas](dashboard-ideas-backlog.md)). |
+| UI-02 | idea | Integrations sidebar: Confluence, Figma, GTM, Context7 and more, with auth state and per-role enablement ([ideas](dashboard-ideas-backlog.md)). |
 | EP-01 | queued after CA-01 | Execution Paths (owner product decision, 2026-10-10): at intake the lead selects one path from a closed catalog (for example iterative, distributed, review) and records it with the run; decisions are validated against the path's role and cardinality rules; changing the path goes back through planning. Compare paths with [the benchmark plan](orchestration-benchmark-plan.md). |
 
 ## Phase A: baseline, compact evidence, executable contracts
