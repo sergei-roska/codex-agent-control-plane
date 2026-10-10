@@ -547,6 +547,12 @@
       font-family: 'JetBrains Mono', monospace;
     }
 
+    .inline-notice {
+      font-size: 12.5px;
+      color: var(--danger);
+      white-space: pre-wrap;
+    }
+
     .accounts-list { display: flex; flex-direction: column; gap: 12px; }
     .account-block {
       display: flex;

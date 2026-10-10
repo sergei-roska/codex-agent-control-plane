@@ -22,6 +22,11 @@ async function main() {
     if (stopping) return;
     stopping = true;
     try {
+      try {
+        await app.closeAccountLogins?.();
+      } catch (err) {
+        console.error('closeAccountLogins failed:', err);
+      }
       await projects.stopAll();
     } finally {
       process.exit(0);

@@ -163,10 +163,37 @@
       logs.scrollTop = logs.scrollHeight;
     }
 
+    const noticeTimers = {};
+    function showNotice(elId, text) {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      el.textContent = text;
+      el.classList.remove('hidden');
+      clearTimeout(noticeTimers[elId]);
+      noticeTimers[elId] = setTimeout(function () { el.classList.add('hidden'); }, 6000);
+    }
+
+    // Inline "<question> Yes / No" confirmation shown in place of the given controls.
+    function inlineConfirm(container, question, onYes, onNo) {
+      const saved = Array.from(container.childNodes);
+      container.textContent = '';
+      container.appendChild(textEl('span', 'limit-reset', question));
+      const yes = textEl('button', 'btn btn-danger-outline btn-sm', 'Yes');
+      yes.addEventListener('click', function () { yes.disabled = true; onYes(); });
+      const no = textEl('button', 'btn btn-secondary btn-sm', 'No');
+      no.addEventListener('click', function () {
+        container.textContent = '';
+        saved.forEach(function (n) { container.appendChild(n); });
+        if (onNo) onNo();
+      });
+      container.appendChild(yes);
+      container.appendChild(no);
+    }
+
     async function addProject() {
       const input = document.getElementById('projectPathInput');
       const projectPath = input.value.trim();
-      if (!projectPath) return alert('Specify project path!');
+      if (!projectPath) return showNotice('projectNotice', 'Specify project path!');
       try {
         const res = await fetch('/api/projects', {
           method: 'POST',
@@ -178,21 +205,25 @@
         await refreshProjects();
         selectProject(data.project.id);
       } catch (err) {
-        alert('Failed to add project: ' + err.message);
+        showNotice('projectNotice', 'Failed to add project: ' + err.message);
       }
     }
 
-    async function removeProject() {
+    function removeProject() {
       const cur = currentProject();
       if (!cur) return;
-      if (!confirm('Remove project from the list?\n' + cur.path + '\n(Files and task history stay on disk.)')) return;
+      const row = document.getElementById('removeProjectBtn').parentNode;
+      inlineConfirm(row, 'Remove from list? (files stay on disk)', doRemoveProject);
+    }
+
+    async function doRemoveProject() {
       try {
         const res = await fetch(projectUrl(''), { method: 'DELETE' });
         const data = await res.json();
         if (!res.ok || !data.success) throw new Error(data.error || 'Failed to remove project');
         await refreshProjects();
       } catch (err) {
-        alert('Failed to remove project: ' + err.message);
+        showNotice('projectNotice', 'Failed to remove project: ' + err.message);
       }
     }
 
@@ -649,7 +680,7 @@
           actions.className = 'history-item-actions';
           if (isTerminalState(s.state)) {
             const delBtn = textEl('button', 'btn btn-danger-outline btn-sm', 'Delete');
-            delBtn.addEventListener('click', () => deleteSessionItem(s.contextId, s.goal));
+            delBtn.addEventListener('click', () => deleteSessionItem(s.contextId, actions));
             actions.appendChild(delBtn);
           }
           const openBtn = textEl('button', 'btn btn-secondary btn-sm', 'Open');
@@ -675,8 +706,11 @@
       pollSession();
     }
 
-    async function deleteSessionItem(contextId, goalText) {
-      if (!confirm('Delete the whole session from the database?\n"' + goalText + '"')) return;
+    function deleteSessionItem(contextId, actions) {
+      inlineConfirm(actions, 'Delete session?', function () { doDeleteSession(contextId); });
+    }
+
+    async function doDeleteSession(contextId) {
       try {
         const res = await fetch(projectUrl('/sessions/' + encodeURIComponent(contextId)), { method: 'DELETE' });
         const data = await res.json();
@@ -685,12 +719,12 @@
         loadSessions();
         openHistoryModal();
       } catch (err) {
-        alert('Failed to delete: ' + err.message);
+        showNotice('historyNotice', 'Failed to delete: ' + err.message);
       }
     }
 
     async function startServer() {
-      if (!currentProjectId) return alert('Add or select a project first!');
+      if (!currentProjectId) return showNotice('projectNotice', 'Add or select a project first!');
 
       const startBtn = document.getElementById('startBtn');
       const text = document.getElementById('serverStatusText');
@@ -733,7 +767,7 @@
           }
         }
       } catch (err) {
-        alert('Failed to stop: ' + err.message);
+        showNotice('projectNotice', 'Failed to stop: ' + err.message);
       }
       refreshProjects();
       setTimeout(updateStatus, 500);
@@ -741,7 +775,7 @@
 
     async function sendMessage() {
       const goal = document.getElementById('taskGoal').value.trim();
-      if (!goal) return alert('Enter a message!');
+      if (!goal) return showNotice('sendError', 'Enter a message!');
 
 
       const last = lastTurn();
@@ -781,7 +815,7 @@
 
     // The request returns when the lead run ends; the transcript is driven by polling meanwhile.
     async function executeA2A(payload) {
-      if (!currentProjectId) return alert('Add or select a project first!');
+      if (!currentProjectId) return showNotice('sendError', 'Add or select a project first!');
       const pid = currentProjectId;
       const sid = currentSessionId;
       const errorEl = document.getElementById('sendError');

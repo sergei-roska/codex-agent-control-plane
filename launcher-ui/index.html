@@ -47,6 +47,7 @@
           <input type="text" id="projectPathInput" value="__DEFAULT_WORKSPACE__" spellcheck="false" aria-label="Project path to add">
           <button id="addProjectBtn" class="btn btn-secondary btn-sm" onclick="addProject()">Add project</button>
         </div>
+        <div id="projectNotice" class="inline-notice hidden" role="alert"></div>
       </div>
 
       <div class="btn-group">
@@ -181,6 +182,7 @@
         </h3>
         <button class="modal-close-btn" onclick="closeHistoryModal()">✕</button>
       </div>
+      <div id="historyNotice" class="inline-notice hidden" role="alert"></div>
       <div class="modal-body" id="historyListContainer">
         <div style="text-align: center; color: var(--text-dim); padding: 20px;">Loading sessions...</div>
       </div>
