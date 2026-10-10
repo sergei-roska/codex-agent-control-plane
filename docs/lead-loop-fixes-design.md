@@ -95,6 +95,46 @@ as `node --version` are not refused.
   `allowedFiles` as a continuation of that worker's thread (and lane), reusing the
   BUD-2 continuation path, so the worker does not re-discover its context.
 
+## LL-6 investigate before asking (owner correction, 2026-10-10)
+
+The owner rejected LL-1's eager escalation: "if the answer is reachable with a couple
+of logical questions and a wider search, the lead must not ask me." The owner is the
+senior engineer and has no one to ask; the lead must behave the same way. In M3 the
+blocking cause (hard-coded counts in the matrix scripts) was one search away.
+
+Decisions (they replace the conflicting parts of LL-1 and LL-4):
+
+1. Owner-only decisions are a closed list: spending money or paid resources beyond
+   the run, credentials and access grants, publishing or writing to external systems,
+   irreversible operations, and removing or weakening requirements the PRD states.
+   Interpreting the PRD, fixing evidence tooling, choosing an implementation, and
+   expanding file scope are the lead's decisions after investigation.
+2. `request_human_input` is allowed only for an owner-only decision and only when the
+   run already holds an investigation outcome about that blocker. Otherwise the
+   decision is rejected with a reminder to dispatch an investigation first (a new
+   predicate `decision.investigate_first`, code `investigation_missing`). The human
+   input must cite that investigation's evidence.
+3. A blocker that persists is a reason to investigate its root cause (explorer or
+   auditor with the concrete question), not to escalate.
+4. `finish` with `goalAchieved: false`: the first time in a run, the graph does not
+   pause. It returns to `decide` with a note that each named blocker needs a
+   root-cause investigation (or a fix) before escalation, and grants 3 extra rounds.
+   Only a later `finish` with `goalAchieved: false`, after that investigation round,
+   pauses for the owner, and its question must state why each remaining blocker is
+   owner-only, with evidence.
+5. Round limit: if the last two rounds made progress (an integrated change, a newly
+   passing acceptance check, or a resolved worker decision), the budget is extended
+   automatically by `maxRounds`, up to a total cap of 18 rounds per run. The pause
+   asks the owner only beyond the cap, because that spends the owner's budget.
+6. `check_changed` (a pinned agent check's script changed): the graph dispatches an
+   independent auditor (read-only) with the diff of the pinned script, the check's
+   purpose, and the PRD reference. A change that preserves the requirement (for
+   example, measuring from real output instead of hard-coded numbers) is approved, and
+   the check is re-pinned with new hashes. A change that weakens the requirement is
+   rejected; the check keeps failing, and the lead must fix the cause. The owner sees
+   it only if the auditor concludes the PRD requirement itself must change (owner-only
+   item 1).
+
 ## Order
 
 Wave A in parallel: LL-2 (contracts), LL-3 (digest in orchestrator and server).
