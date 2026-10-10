@@ -77,6 +77,17 @@ evaluated. Ids and codes are part of the contract.
 | `assignment.skills` | `skill_invalid` | catalog and candidate ids (`src/contracts.js:280-290`) | gate |
 | `assignment.role_ladder` | `role_ladder_violation`, `architect_constraint` | `state.attemptedRoles`, outcome count (`src/contracts.js:302-315`) | gate |
 | `dispatch.writer_unresolved` | `writer_unresolved` | `state.unresolvedWriters` (`src/contracts.js:375-378`) | safety-critical |
+| `assignment.wave` | `wave_scope_overlap`, `wave_invalid` | decision JSON (PW-2) | safety-critical |
+| `assignment.continue_from` | `continue_from_unknown`, `continue_from_role`, `continue_from_duplicate` | finished outcomes of the run (LL-5) | gate |
+| `decision.goal` | `goal_unstated` | decision JSON: `finish` needs `goalAchieved` true or false (LL-1) | gate |
+| `decision.acceptance_checks` | proposal refusals (vacuous or unsafe argv, invalid check) | decision JSON, `validateAgentChecks` in `src/acceptance.js` (LL-4) | safety-critical |
+
+Lead loop fixes (2026-10-10, [design](lead-loop-fixes-design.md)): `finish` with
+`goalAchieved: false` and reaching the round limit no longer end the run; they pause
+as an owner decision (`pause.escalation`: `goal_not_achieved` or `round_limit`; options
+`continue`, `accept_as_is`, `change_goal`). Worker decision requests with a
+recommendation outside the option ids, and over-long report strings, are normalized
+(`report.normalizations`) instead of invalidating the report.
 
 Path rules: `allowedFiles` entries are repository-relative paths or directory
 prefixes. Scope matching supports only exact paths and directory prefixes
@@ -127,7 +138,7 @@ report of an out-of-scope change is the only signal for those cases. (Corrected
 | Id | Codes | Source | Safety |
 | --- | --- | --- | --- |
 | `accept.contract_valid` | `contract_invalid` | pinned acceptance contract (`src/acceptance.js:16-56`) | safety-critical (UNKNOWN: the required checks cannot be known) |
-| `accept.checks` | `check_missing`, `check_failed` | host check runs (`src/acceptance.js:63-133`) | safety-critical |
+| `accept.checks` | `check_missing`, `check_failed`, `check_error`, `check_changed` | host runs for owner checks; Codex sandbox runs (`command/exec`, read-only workspace, no network) for agent-proposed checks. `check_error` (UNKNOWN): the sandbox was unavailable or failed. `check_changed` (UNKNOWN): a workspace script named in a pinned agent check changed after pinning; the owner decides | safety-critical |
 | `accept.snapshot` | `snapshot_unavailable` | `takeSnapshot` (`src/workspace-snapshot.js:345-363`) | safety-critical (UNKNOWN) |
 | `accept.candidate_stable` | `candidate_changed` | fingerprints around checks (`src/acceptance.js:165-170`) | safety-critical |
 | `accept.writers` | aggregates `settle.writer_settled`, `settle.attested_scope`, `settle.report_valid` over all writers of the run | outcomes | safety-critical |

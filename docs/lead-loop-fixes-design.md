@@ -2,6 +2,11 @@
 
 Status: decided by the lead on 2026-10-10; the owner approved all items, with item 4
 reworked so acceptance checks are proposed by the agent, not written by the owner.
+Implemented the same day: LL-2 `9d72147`, LL-3 `2a2600b`, LL-1 and LL-4 `0594e5e`,
+pinned-check integrity `bf68990`, checks shown in the dashboard `c553788`, LL-5
+`281db09`. Known limits: pins cover only files named directly in a check's argv; a
+sandboxed check cannot be canceled before its timeout; trivially passing commands such
+as `node --version` are not refused.
 
 ## Evidence (forensics of 7 runs on codex_team_work, 2026-10-10)
 
