@@ -469,11 +469,14 @@
         sum.title = a.summary;
         line.appendChild(sum);
       }
-      line.appendChild(textEl('span', 'act-counts', (a.commands || 0) + ' commands | ' + (a.fileChanges || 0) + ' edits'));
+      row.appendChild(line);
+      const meta = document.createElement('div');
+      meta.className = 'act-meta';
+      meta.appendChild(textEl('span', 'act-counts', (a.commands || 0) + ' commands | ' + (a.fileChanges || 0) + ' edits'));
       const idle = (now - Date.parse(a.updatedAt)) / 1000;
       const level = idle > 180 ? ' idle-red' : idle >= 60 ? ' idle-amber' : '';
-      line.appendChild(textEl('span', 'act-idle' + level, 'last event ' + spanBetween(a.updatedAt, now) + ' ago'));
-      row.appendChild(line);
+      meta.appendChild(textEl('span', 'act-idle' + level, 'last event ' + spanBetween(a.updatedAt, now) + ' ago'));
+      row.appendChild(meta);
     }
 
     function workerRow(w, now) {

@@ -891,6 +891,7 @@
     .phase-tool { color: #5eead4; background: rgba(20, 184, 166, 0.18); }
     .phase-reporting { color: var(--success); background: rgba(16, 185, 129, 0.16); }
     .act-summary { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .act-meta { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; color: var(--text-muted); }
     .act-counts, .act-idle { flex: none; white-space: nowrap; }
     .act-idle.idle-amber { color: var(--warning); }
     .act-idle.idle-red { color: var(--danger); }
