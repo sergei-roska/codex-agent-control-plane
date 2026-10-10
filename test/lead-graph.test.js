@@ -1178,14 +1178,20 @@ test('a plain read-only run is not_required and a writer run without a contract 
   }, { workspace: gitRepo() });
 });
 
-test('canceled, max_rounds and failed finishes skip acceptance and still carry a record', async () => {
+test('the round limit pauses for the owner instead of ending with max_rounds, and accept_as_is runs acceptance', async () => {
   const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), dispatch(brief('orch-explorer', []))] });
   await withSession(world, async (session) => {
-    const result = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID, contract: contractOf(nodeCheck('ok', 'process.exit(0)')) });
-    assert.equal(result.status, 'max_rounds');
-    assert.equal(result.acceptance.disposition, 'unverifiable');
-    assert.deepEqual(issueCodes(result), ['acceptance_not_run']);
+    const paused = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID, contract: contractOf(nodeCheck('ok', 'process.exit(0)')) });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'human_decision');
+    assert.equal(paused.pause.escalation, 'round_limit');
     assert.equal(world.admission.acquired.length, 0);
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Good enough', choice: 'accept_as_is' } });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Stopped after reaching the limit of 1 dispatch rounds.');
+    assert.equal(result.acceptance.disposition, 'accepted');
+    assert.equal(world.admission.acquired.length, 1);
+    assert.equal(world.leadTurns, 2);
   }, { workspace: gitRepo(), orchestrator: { maxRounds: 1 } });
 });
 
@@ -2282,5 +2288,261 @@ test('a checkpoint without the continuable channel resumes to decide as before',
     const result = await session.orchestrator.resume({ runId: RUN_ID });
     assert.equal(result.status, 'completed');
     assert.equal(world.sends.length, 0);
+  });
+});
+
+// ------------------------------------------------- LL-1: escalation instead of looping
+
+const notMet = (final) => decision({ action: 'finish', final, goalAchieved: false });
+const met = (final, extra = {}) => decision({ action: 'finish', final, goalAchieved: true, ...extra });
+const ESCALATION_IDS = ['continue', 'accept_as_is', 'change_goal'];
+
+test('finish with goalAchieved false pauses with the goal_not_achieved escalation', async () => {
+  const world = makeWorld({ script: [notMet('Blocked: the gate needs live runtime qualification.'), notMet('x'.repeat(5000))] });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Close M3', runId: RUN_ID });
+    assert.equal(paused.status, 'input_required');
+    const { pause } = paused;
+    assert.equal(pause.kind, 'human_decision');
+    assert.equal(pause.escalation, 'goal_not_achieved');
+    assert.equal(pause.question, 'Blocked: the gate needs live runtime qualification.');
+    assert.deepEqual(pause.options.map((option) => option.id), ESCALATION_IDS);
+    assert.equal(pause.recommendation, 'continue');
+    assert.equal(pause.decisionId, `${RUN_ID}:h1`);
+    assert.equal('final' in pause, false);
+    assert.match(pause.message, /Human decision needed \(goal_not_achieved\)/);
+    await assert.rejects(session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'x', choice: 'retry' } }), /choice must match/);
+    const again = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Go on', choice: 'continue' } });
+    assert.equal(again.pause.escalation, 'goal_not_achieved');
+    assert.equal(again.pause.question.length, 3000);
+  });
+});
+
+test('continue grants another maxRounds budget and passes the note to the lead', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), notMet('Blocked on B'), finish('Done')] });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
+    assert.equal(paused.pause.escalation, 'goal_not_achieved');
+    assert.match(world.prompts[1], /Dispatch rounds already used: 1\/6\./);
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Try the other path', choice: 'continue' } });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Done');
+    assert.match(world.prompts[2], /Dispatch rounds already used: 1\/12\./);
+    assert.match(world.prompts[2], /"answer":"Try the other path","choice":"continue"/);
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(values.extraRounds, 6);
+  });
+});
+
+test('an answer without a choice on an escalation is the recommended continue', async () => {
+  const world = makeWorld({ script: [notMet('Blocked'), finish('Done')] });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Keep going' } });
+    assert.equal(result.status, 'completed');
+    assert.match(world.prompts[1], /Dispatch rounds already used: 0\/12\./);
+  });
+});
+
+test('accept_as_is finishes with the lead final text and acceptance still runs', async () => {
+  const workspace = gitRepo();
+  let runs = 0;
+  const runCheckImpl = async (check) => {
+    runs += 1;
+    return { id: check.id, argv: check.argv, exitCode: 0, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'passed' };
+  };
+  const world = makeWorld({ script: [notMet('Partial: 50 of 52 rows need the owner')] });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Close M3', runId: RUN_ID, contract: contractOf(nodeCheck('unit', 'process.exit(0)')) });
+    assert.equal(paused.pause.escalation, 'goal_not_achieved');
+    assert.equal(runs, 0);
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Ship what we have', choice: 'accept_as_is', decisionId: `${RUN_ID}:h1` } });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Partial: 50 of 52 rows need the owner');
+    assert.equal(result.acceptance.disposition, 'accepted');
+    assert.equal(runs, 1);
+    assert.equal(world.leadTurns, 1);
+  }, { workspace, orchestrator: { runCheckImpl } });
+});
+
+test('change_goal replaces the goal for the rest of the run with a fresh budget; state.goal stays', async () => {
+  const world = makeWorld({ script: [notMet('Cannot do X without the vendor'), finish('Did Y')] });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'Do X', runId: RUN_ID });
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Only do Y', choice: 'change_goal' } });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Did Y');
+    assert.match(world.prompts[1], /Goal \(changed by the owner during this run; authoritative, it replaces the original goal\):\nOnly do Y/);
+    assert.match(world.prompts[1], /Original goal \(background only\):\nDo X/);
+    assert.doesNotMatch(world.prompts[1], /User goal:/);
+    assert.match(world.prompts[1], /Dispatch rounds already used: 0\/12\./);
+    assert.match(world.prompts[1], /"answer":"Only do Y","choice":"change_goal"/);
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(values.goal, 'Do X');
+    assert.equal(values.goalOverride, 'Only do Y');
+    assert.equal(await session.orchestrator.getRunGoal(RUN_ID), 'Do X');
+  });
+});
+
+test('the round limit pauses with round_limit and continue grants another budget', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), dispatch(brief('orch-explorer', [])), dispatch(brief('orch-explorer', [])), finish('Done')] });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'human_decision');
+    assert.equal(paused.pause.escalation, 'round_limit');
+    assert.match(paused.pause.question, /1 of 1 rounds used/);
+    assert.deepEqual(paused.pause.options.map((option) => option.id), ESCALATION_IDS);
+    assert.equal(world.sends.length, 1);
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'One more', choice: 'continue' } });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.rounds, 2);
+    assert.equal(world.sends.length, 2);
+    assert.match(world.prompts[2], /Dispatch rounds already used: 1\/2\./);
+    assert.match(world.prompts[3], /Dispatch rounds already used: 2\/2\./);
+  }, { orchestrator: { maxRounds: 1 } });
+});
+
+test('a finish with goalAchieved null is rejected with a reminder', async () => {
+  const world = makeWorld({ script: [decision({ action: 'finish', final: 'Done?', goalAchieved: null }), met('Done')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.match(world.prompts[1], /decision\.goal goal_unstated: finish requires goalAchieved true or false/);
+    assert.match(world.prompts[1], /finish requires goalAchieved true or false: true only when the goal is met/);
+  });
+});
+
+test('the decision prompt carries the escalation, open-decision, goalAchieved, and acceptanceChecks rules', async () => {
+  const world = makeWorld({ script: [met('Done')] });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
+    const [prompt] = world.prompts;
+    assert.match(prompt, /Escalate with request_human_input .* as soon as a blocker needs owner authority, external or live resources, or a change of scope or acceptance criteria, or the same blocker survived two rounds\./);
+    assert.match(prompt, /Worker decision requests are open decisions: .*never leave one unanswered\./);
+    assert.match(prompt, /goalAchieved: on finish set it honestly, true only when the goal is met; false names the blockers/);
+    assert.match(prompt, /acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks/);
+    assert.match(prompt, /Acceptance checks: none are pinned yet/);
+    assert.match(prompt, /Dispatch rounds already used: 0\/6\./);
+  });
+});
+
+// ------------------------------------------------- LL-4: acceptance checks proposed by the agent
+
+const EXACT_POLICY = { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+const npmTest = { id: 'unit', argv: ['npm', 'test'], timeoutMs: null };
+const pinnedNpmTest = { id: 'acceptance-contract/v1', requiredChecks: [{ id: 'unit', argv: ['npm', 'test'], timeoutMs: 600000 }], source: 'agent' };
+const proposing = (acceptanceChecks) => decision({ action: 'dispatch', assignments: [brief('orch-explorer', [])], acceptanceChecks });
+const hostRunRefused = async () => { throw new Error('an agent check must never run on the host'); };
+function withExec(world, reply) {
+  const calls = [];
+  world.appServer.execCommand = async (args) => {
+    calls.push(args);
+    if (reply instanceof Error) throw reply;
+    return typeof reply === 'function' ? reply(args) : reply;
+  };
+  return calls;
+}
+
+test('the first valid proposal is pinned, published, ignored later, and run through execCommand only', async () => {
+  const workspace = gitRepo();
+  const world = makeWorld({ script: [proposing([npmTest]), proposing([{ id: 'other', argv: ['make', 'check'], timeoutMs: null }]), met('Done')] });
+  const calls = withExec(world, { exitCode: 0, stdout: 'ok', stderr: '' });
+  const events = [];
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Ship', runId: RUN_ID, onEvent: (event) => events.push(event) });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.acceptance.disposition, 'accepted');
+    assert.deepEqual(result.acceptance.requiredCheckIds, ['unit']);
+    assert.equal(result.acceptance.checks[0].sandboxed, true);
+    const pinned = events.filter((event) => event.type === 'acceptance_contract');
+    assert.equal(pinned.length, 1);
+    assert.deepEqual(pinned[0].contract, pinnedNpmTest);
+    assert.match(world.prompts[1], /Pinned acceptance checks \(source agent;/);
+    assert.match(world.prompts[2], /acceptanceChecks proposal was ignored: the acceptance checks of this run are already pinned/);
+    assert.deepEqual(calls, [{ command: ['npm', 'test'], cwd: workspace, sandboxPolicy: EXACT_POLICY, timeoutMs: 600000 }]);
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.deepEqual(values.contract, pinnedNpmTest);
+  }, { workspace, orchestrator: { runCheckImpl: hostRunRefused } });
+});
+
+test('a pinned agent contract survives a restart and still runs sandboxed', async () => {
+  const workspace = gitRepo();
+  const world = makeWorld({ script: [proposing([npmTest]), met('Done')] });
+  const calls = withExec(world, { exitCode: 0, stdout: '', stderr: '' });
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({ goal: 'Ship', runId: RUN_ID, interruptAfter: ['decide'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    await session.restart();
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.deepEqual(values.contract, pinnedNpmTest);
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.acceptance.disposition, 'accepted');
+    assert.equal(calls.length, 1);
+    assert.match(world.prompts[1], /Pinned acceptance checks \(source agent;/);
+  }, { workspace, orchestrator: { runCheckImpl: hostRunRefused } });
+});
+
+test('a failing pinned agent check feeds the acceptance loop', async () => {
+  const workspace = gitRepo();
+  const world = makeWorld({ script: [met('Done', { acceptanceChecks: [npmTest] }), met('Still done')] });
+  const calls = withExec(world, { exitCode: 1, stdout: '', stderr: '2 failed' });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Ship', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.acceptance.disposition, 'rejected');
+    assert.deepEqual(issueCodes(result), ['check_failed']);
+    assert.equal(calls.length, 2);
+    assert.match(world.prompts[1], /Acceptance note/);
+    assert.match(world.prompts[1], /check_failed: Required check "unit" failed \(exit 1\)/);
+  }, { workspace, orchestrator: { runCheckImpl: hostRunRefused } });
+});
+
+test('an agent check whose execCommand throws is unverifiable, never accepted', async () => {
+  const workspace = gitRepo();
+  const world = makeWorld({ script: [met('Done', { acceptanceChecks: [npmTest] })] });
+  withExec(world, new Error('command/exec is not supported'));
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Ship', runId: RUN_ID });
+    assert.equal(result.acceptance.disposition, 'unverifiable');
+    assert.deepEqual(issueCodes(result), ['check_error']);
+    assert.equal(result.acceptance.checks[0].result, 'error');
+  }, { workspace, orchestrator: { runCheckImpl: hostRunRefused } });
+});
+
+test('owner checks keep running through runCheck and agent proposals are ignored', async () => {
+  const workspace = gitRepo();
+  const hostRuns = [];
+  const runCheckImpl = async (check) => {
+    hostRuns.push(check.id);
+    return { id: check.id, argv: check.argv, exitCode: 0, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'passed' };
+  };
+  const world = makeWorld({ script: [proposing([npmTest]), met('Done', { acceptanceChecks: [npmTest] })] });
+  const calls = withExec(world, { exitCode: 0, stdout: '', stderr: '' });
+  const events = [];
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Ship', runId: RUN_ID, contract: contractOf(nodeCheck('owner', 'process.exit(0)')), onEvent: (event) => events.push(event) });
+    assert.equal(result.acceptance.disposition, 'accepted');
+    assert.deepEqual(hostRuns, ['owner']);
+    assert.equal(calls.length, 0);
+    assert.equal(events.some((event) => event.type === 'acceptance_contract'), false);
+    assert.match(world.prompts[0], /Pinned acceptance checks \(source owner;/);
+    assert.match(world.prompts[1], /acceptanceChecks proposal was ignored/);
+  }, { workspace, orchestrator: { runCheckImpl } });
+});
+
+test('a vacuous or unsafe proposal is a rejected decision with a reminder and nothing is pinned', async () => {
+  const world = makeWorld({ script: [proposing([{ id: 'x', argv: ['echo', 'ok'], timeoutMs: null }]), proposing([{ id: 'y', argv: ['python3', '-c', 'pass'], timeoutMs: null }]), met('Done')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Ship', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 0);
+    assert.match(world.prompts[1], /decision\.acceptance_checks acceptance_checks_invalid: acceptanceChecks "x": echo proves nothing/);
+    assert.match(world.prompts[1], /bash and sh need a workspace script as argv\[1\]/);
+    assert.match(world.prompts[2], /inline code \(-c\) after python3 is refused/);
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.deepEqual(values.contract.requiredChecks, []);
+    assert.equal(result.acceptance.disposition, 'not_required');
   });
 });

@@ -13,7 +13,7 @@ const { WriterAdmission } = require('../src/writer-admission');
 const { takeSnapshot } = require('../src/workspace-snapshot');
 const {
   validateAcceptanceContract, parseCheckCommand, runCheck, computeDisposition, runAcceptance, verifyCandidate, assessWithoutChecks, formatAcceptance,
-  acceptanceIssue, invalidAcceptanceContract, unrunAcceptance,
+  acceptanceIssue, invalidAcceptanceContract, unrunAcceptance, validateAgentChecks, runSandboxedCheck,
 } = require('../src/acceptance');
 
 const vcs = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' });
@@ -496,4 +496,161 @@ test('check evidence carries the acceptance attempt; identical output in two run
   // A replay of the same acceptance attempt reuses the row.
   const replay = await runAcceptance({ workspace: dir, runId: 'run-att', attempt: 2, contract, evidenceStore: store });
   assert.equal(replay.checks[0].stdoutEvidence.id, b.id);
+});
+
+// ------------------------------------------------- LL-4: agent-proposed checks
+
+const EXACT_POLICY = { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+const agentContract = (...requiredChecks) => ({ id: 'acceptance-contract/v1', source: 'agent', requiredChecks });
+const noHostRun = async () => { throw new Error('an agent check must never run on the host'); };
+function fakeExec(reply) {
+  const calls = [];
+  return { calls, execCommand: async (args) => { calls.push(args); return typeof reply === 'function' ? reply(args) : reply; } };
+}
+
+test('the agent source survives contract validation and other sources are refused', () => {
+  const out = validateAcceptanceContract(agentContract({ id: 'unit', argv: ['npm', 'test'] }));
+  assert.deepEqual(out, agentContract({ id: 'unit', argv: ['npm', 'test'], timeoutMs: 600000 }));
+  assert.deepEqual(validateAcceptanceContract(out), out);
+  assert.throws(() => validateAcceptanceContract({ source: 'owner', requiredChecks: [] }), /unknown field "source"/);
+});
+
+test('validateAgentChecks pins known tools and workspace scripts with the agent source', () => {
+  const ws = '/srv/ws';
+  const contract = validateAgentChecks([
+    { id: 'unit', argv: ['npm', 'test'], timeoutMs: null },
+    { id: 'gate', argv: ['scripts/gate.sh'], timeoutMs: 1000 },
+    { id: 'abs', argv: ['/srv/ws/bin/check', '--strict'], timeoutMs: null },
+    { id: 'shell', argv: ['bash', 'scripts/m3.sh'], timeoutMs: null },
+    { id: 'py', argv: ['python', '-m', 'pytest', '-c', 'pytest.ini'], timeoutMs: null },
+    { id: 'venv', argv: ['.venv/bin/python', '-m', 'pytest'], timeoutMs: null },
+    { id: 'plugins', argv: ['pytest', '-k', 'node', '-p', 'no:cacheprovider'], timeoutMs: null },
+    { id: 'uv', argv: ['uv', 'run', 'pytest', 'tests'], timeoutMs: null },
+  ], { workspace: ws });
+  assert.equal(contract.source, 'agent');
+  assert.equal(contract.id, 'acceptance-contract/v1');
+  assert.deepEqual(contract.requiredChecks.map((check) => check.timeoutMs), [600000, 1000, 600000, 600000, 600000, 600000, 600000, 600000]);
+});
+
+test('validateAgentChecks refuses vacuous and unsafe checks, one guard at a time', () => {
+  const refuse = (argv, pattern) => assert.throws(
+    () => validateAgentChecks([{ id: 'c', argv, timeoutMs: null }], { workspace: '/srv/ws' }), pattern, JSON.stringify(argv),
+  );
+  // argv[0]: a workspace path or a known tool.
+  for (const argv of [['curl', 'x'], ['check.sh'], ['/usr/bin/python3', 'x.py'], ['../outside.sh'], ['/srv/other/x.sh'], ['/srv/ws']]) {
+    refuse(argv, /argv\[0\] must be a script path inside the workspace or one of python, python3, pytest/);
+  }
+  // Inline code after an interpreter.
+  for (const argv of [
+    ['python', '-c', 'print(1)'], ['python3', '-Ic', 'pass'], ['python', '-W', 'ignore', '-c', 'pass'], ['python3', '-Wignore', '-c', 'x'],
+    ['node', '-e', '1'], ['node', '--eval', '1'], ['node', '--eval=1'], ['node', '-p', '1'], ['node', '-pe', '1'], ['node', '-r', './setup.js', '-e', '1'],
+    ['.venv/bin/python', '-c', 'pass'], ['uv', 'run', 'python', '-c', 'pass'], ['npx', 'node', '-e', '1'], ['uv', 'run', 'bash', '-c', 'true'],
+    ['npm', 'exec', '--', 'sh', '-ec', 'true'],
+  ]) refuse(argv, /inline code/);
+  // Commands that prove nothing.
+  for (const name of ['echo', 'true', 'false', 'test', '[', 'yes']) refuse([name, 'x'], /proves nothing/);
+  refuse(['./true'], /proves nothing/);
+  refuse(['bin/echo', 'ok'], /proves nothing/);
+  // bash and sh need a workspace script as argv[1].
+  for (const argv of [['bash'], ['sh', '-c', 'exit 0'], ['bash', '-e', 'x.sh'], ['sh', '/tmp/x.sh'], ['bash', '../x.sh']]) {
+    refuse(argv, /needs a script path inside the workspace as argv\[1\]/);
+  }
+  // The acceptance-contract/v1 limits still apply.
+  refuse(['npm', 'test', ''], /argv entries must be non-empty/);
+  assert.throws(() => validateAgentChecks(Array.from({ length: 11 }, (_, i) => ({ id: `c${i}`, argv: ['npm', 'test'], timeoutMs: null })), { workspace: '/srv/ws' }), /more than 10/);
+  assert.throws(() => validateAgentChecks([{ id: 'bad id', argv: ['npm', 'test'], timeoutMs: null }], { workspace: '/srv/ws' }), /id must be/);
+  assert.throws(() => validateAgentChecks([{ id: 'x', argv: ['npm', 'test'], timeoutMs: null, shell: true }], { workspace: '/srv/ws' }), /unknown field "shell"/);
+});
+
+test('agent checks run only through execCommand with the read-only-workspace policy', async () => {
+  const dir = repo();
+  const exec = fakeExec({ exitCode: 0, stdout: 'all good', stderr: '' });
+  const db = new Database(':memory:');
+  const store = createEvidenceStore(db);
+  const result = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 1, contract: agentContract({ id: 'unit', argv: ['npm', 'test'], timeoutMs: 1234 }),
+    writers: [okWriter()], appServer: exec, runCheckImpl: noHostRun, evidenceStore: store,
+  });
+  assert.equal(result.disposition, 'accepted');
+  assert.deepEqual(exec.calls, [{ command: ['npm', 'test'], cwd: dir, sandboxPolicy: EXACT_POLICY, timeoutMs: 1234 }]);
+  const [check] = result.checks;
+  assert.equal(check.result, 'passed');
+  assert.equal(check.exitCode, 0);
+  assert.equal(check.sandboxed, true);
+  assert.equal(check.stdoutTail, 'all good');
+  assert.equal(check.stdoutEvidence.kind, 'check_stdout');
+});
+
+test('a failing agent check is rejected with check_failed and its output', async () => {
+  const dir = repo();
+  const exec = fakeExec({ exitCode: 2, stdout: '', stderr: '3 failed' });
+  const result = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 1, contract: agentContract({ id: 'unit', argv: ['pytest'] }), appServer: exec, runCheckImpl: noHostRun,
+  });
+  assert.equal(result.disposition, 'rejected');
+  assert.deepEqual(codes(result), ['check_failed']);
+  assert.equal(result.checks[0].exitCode, 2);
+  assert.equal(result.checks[0].stderrTail, '3 failed');
+});
+
+test('an agent check whose execCommand throws or is missing is unverified, never a pass', async () => {
+  const dir = repo();
+  const throwing = { execCommand: async () => { throw new Error('sandbox unavailable'); } };
+  const failed = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 1, contract: agentContract({ id: 'unit', argv: ['npm', 'test'] }), appServer: throwing, runCheckImpl: noHostRun,
+  });
+  assert.equal(failed.disposition, 'unverifiable');
+  assert.deepEqual(codes(failed), ['check_error']);
+  assert.equal(failed.checks[0].result, 'error');
+  assert.match(failed.checks[0].error, /sandbox unavailable/);
+  assert.equal(failed.issues[0].result, 'UNKNOWN');
+  const missing = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 2, contract: agentContract({ id: 'unit', argv: ['npm', 'test'] }), appServer: {}, runCheckImpl: noHostRun,
+  });
+  assert.equal(missing.disposition, 'unverifiable');
+  assert.equal(missing.checks[0].error, 'EXEC_UNAVAILABLE');
+  const noExit = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 3, contract: agentContract({ id: 'unit', argv: ['npm', 'test'] }), appServer: fakeExec({ stdout: '' }), runCheckImpl: noHostRun,
+  });
+  assert.equal(noExit.disposition, 'unverifiable');
+});
+
+test('a sandboxed check that outlives its timeoutMs is a timed-out failure', async () => {
+  const hung = { execCommand: () => new Promise(() => {}) };
+  const result = await runSandboxedCheck({ id: 'slow', argv: ['npm', 'test'], timeoutMs: 20 }, { appServer: hung, cwd: '/srv/ws', graceMs: 5 });
+  assert.equal(result.timedOut, true);
+  assert.equal(result.result, 'failed');
+  const late = { execCommand: async () => { await tick(30); throw new Error('command timed out'); } };
+  const after = await runSandboxedCheck({ id: 'slow', argv: ['npm', 'test'], timeoutMs: 20 }, { appServer: late, cwd: '/srv/ws', graceMs: 1000 });
+  assert.equal(after.timedOut, true);
+  assert.equal(after.result, 'failed');
+  const snap = { kind: 'git', head: 'h', fingerprint: 'f', entries: [] };
+  const disposition = computeDisposition({ requiredChecks: [{ id: 'slow', argv: ['x'] }], checkResults: [after], snapshotBefore: snap, snapshotAfter: snap });
+  assert.equal(disposition.disposition, 'rejected');
+});
+
+test('agent checks hold admission without a host process turn start; owner checks still use runCheck', async () => {
+  const dir = repo();
+  const turnStarts = [];
+  const admission = {
+    async acquire() { return { executionId: 'acc' }; },
+    release() {},
+    recordTurnStart(executionId, details) { turnStarts.push(details); },
+  };
+  const exec = fakeExec({ exitCode: 0, stdout: '', stderr: '' });
+  const agent = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 1, contract: agentContract({ id: 'unit', argv: ['npm', 'test'] }), admission, appServer: exec, runCheckImpl: noHostRun,
+  });
+  assert.equal(agent.admissionHeld, true);
+  assert.equal(agent.disposition, 'accepted');
+  assert.deepEqual(turnStarts, []);
+  const hostRuns = [];
+  const owner = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 2, contract: { requiredChecks: [{ id: 'unit', argv: ['npm', 'test'] }] }, admission, appServer: exec,
+    runCheckImpl: async (check) => { hostRuns.push(check.id); return { id: check.id, argv: check.argv, exitCode: 0, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'passed' }; },
+  });
+  assert.equal(owner.disposition, 'accepted');
+  assert.deepEqual(hostRuns, ['unit']);
+  assert.equal(exec.calls.length, 1);
+  assert.equal(turnStarts.length, 1);
 });

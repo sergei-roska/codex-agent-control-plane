@@ -419,3 +419,26 @@ test('renderRunDigest trims summaries, then inspected docs, then changed files w
   assert.doesNotMatch(huge, /Changed files/);
   assert.equal(renderRunDigest(null), '');
 });
+
+test('outcomes carry the bounded assignment objective and the run digest shows it', async () => {
+  const long = { ...brief('orch-explorer', []), objective: 'O'.repeat(3000) };
+  const h = makeHarness({ decisions: [decision('dispatch', [brief('orch-builder'), long]), decision('finish', [], 'Done.')] });
+  const result = await h.orchestrator.run({ goal: 'Objectives', runId: 'run-objective' });
+  assert.equal(result.assignments[0].objective, 'Complete a bounded task');
+  assert.equal(result.assignments[1].objective.length, 300);
+  const digest = await h.orchestrator.getRunDigest('run-objective');
+  assert.equal(digest.outcomes[0].objective, 'Complete a bounded task');
+  assert.match(renderRunDigest(digest), /- engineer \[completed\] Complete a bounded task/);
+  // The lead prompt keeps its previous outcome projection.
+  const secondLead = h.calls.filter((call) => call.type === 'lead')[1];
+  assert.equal(secondLead.input.includes('"objective"'), false);
+});
+
+test('renderRunDigest does not double the Next work label', () => {
+  const base = { goal: 'g', text: 't', rounds: 1, status: 'completed', outcomes: [], openDecisions: [], inspectedDocs: [], changedFiles: [] };
+  const labelled = renderRunDigest({ ...base, nextWork: 'Next work: fix the matrix' });
+  assert.match(labelled, /^Next work: fix the matrix$/m);
+  assert.doesNotMatch(labelled, /Next work: Next work/);
+  assert.doesNotMatch(renderRunDigest({ ...base, nextWork: '**Next work**: rerun the gate' }), /Next work: \*\*Next work/);
+  assert.match(renderRunDigest({ ...base, nextWork: 'Remaining work: rerun the gate' }), /^Next work: Remaining work: rerun the gate$/m);
+});

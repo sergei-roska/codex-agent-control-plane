@@ -10,7 +10,9 @@ const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
 const {
   DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, BoundaryViolation, parseWorkerReport, classifyCodexError, executionGroups,
 } = require('./contracts');
-const { runAcceptance, assessWithoutChecks, unrunAcceptance } = require('./acceptance');
+const {
+  runAcceptance, assessWithoutChecks, unrunAcceptance, validateAgentChecks, AGENT_CHECK_TOOLS,
+} = require('./acceptance');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
 const { loadSkillCatalog, findSkillCandidates, resolveSkillSelection } = require('./skill-catalog');
 const { canonicalRoleId, getRole, roleDisplayName } = require('./role-names');
@@ -511,12 +513,23 @@ function pauseMessage(value) {
 
 const MAX_AUTO_REJECTIONS = 2;
 const MAX_CONTINUATIONS = 2;
+const MAX_ESCALATION_QUESTION_CHARS = 3000;
+// LL-1: owner choices when the lead finishes without reaching the goal or the round limit is reached.
+const ESCALATION_OPTIONS = [
+  { id: 'continue', description: 'Continue: another bounded attempt, with your answer as a note to the lead' },
+  { id: 'accept_as_is', description: 'Accept as is: finish now with the current result (acceptance still runs)' },
+  { id: 'change_goal', description: 'Change goal: your answer replaces the goal, with a fresh round budget' },
+];
+const ESCALATION_CHOICES = ESCALATION_OPTIONS.map((option) => option.id);
+const CHECK_RULE = `acceptanceChecks entries are { id, argv, timeoutMs } (at most 10, timeoutMs null for the default); argv[0] is a script path inside the workspace or one of ${AGENT_CHECK_TOOLS.join(', ')}; bash and sh need a workspace script as argv[1]; inline code (-c, -e, --eval, -p) and echo, true, false, test, [, yes are refused.`;
 const PATH_RULE = "allowedFiles entries are repository-relative paths or directory prefixes without '.', '..', globs, or a leading '/'; read-only roles may use [].";
 const RULE_REMINDERS = {
   'assignment.paths': PATH_RULE,
   'assignment.writer_scope': 'Writable roles require explicit allowedFiles; read-only roles may use [].',
   'decision.parse': 'Return only one JSON object matching the supplied schema.',
-  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, and humanInput, with unused fields empty. A dispatch needs 1 to 4 assignments. If there is nothing to dispatch, use finish or request_human_input instead of an empty dispatch.',
+  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, humanInput, goalAchieved, and acceptanceChecks, with unused fields empty or null. A dispatch needs 1 to 4 assignments. If there is nothing to dispatch, use finish or request_human_input instead of an empty dispatch.',
+  'decision.goal': 'finish requires goalAchieved true or false: true only when the goal is met, false with the blockers named in final. Use null for dispatch and request_human_input.',
+  'decision.acceptance_checks': `${CHECK_RULE} Use null to propose nothing.`,
   'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds.',
   'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, and wave; role must be an available role id.',
   'assignment.wave': 'wave is an integer >= 1 or null; consecutive assignments with the same wave run concurrently, and writers in one wave need pairwise disjoint allowedFiles; use null for sequential steps.',
@@ -542,6 +555,9 @@ const LeadState = Annotation.Root({
   humanRequest: last(() => null),
   humanAnswers: last(() => []),
   humanCount: last(() => 0),
+  // LL-1: rounds granted by the owner on top of maxRounds, and a goal that replaces state.goal.
+  extraRounds: last(() => 0),
+  goalOverride: last(() => null),
   budget: last(() => null),
   unresolvedWriters: last(() => []),
   contract: last(() => ({ requiredChecks: [] })),
@@ -592,6 +608,39 @@ function buildLeadGraph(deps) {
   }
 
   const allowedFilesOf = (item) => item.contract?.allowedFiles || item.assignment.allowedFiles;
+
+  // LL-1: the owner extends the budget by maxRounds per continue or change_goal.
+  const roundLimit = (state) => maxRounds + (state.extraRounds || 0);
+
+  // LL-1: a human-decision pause raised by the server, not by the lead. `final` is the text an
+  // accept_as_is finishes with; it stays out of the pause value.
+  function escalate(state, kind, question, final) {
+    return {
+      humanCount: state.humanCount + 1,
+      humanRequest: {
+        decisionId: `${state.runId}:h${state.humanCount + 1}`,
+        escalation: kind,
+        reason: kind,
+        question: question.slice(0, MAX_ESCALATION_QUESTION_CHARS),
+        options: ESCALATION_OPTIONS.map((option) => ({ ...option })),
+        recommendation: 'continue',
+        evidenceChecked: [],
+        independentWork: '',
+        relatedDecisionIds: [],
+        final,
+      },
+    };
+  }
+
+  // LL-4: an agent proposal as a pinned contract; a bad proposal is a rejected decision.
+  function agentChecksContract(checks) {
+    try {
+      return validateAgentChecks(checks, { workspace });
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      throw new BoundaryViolation('decision.acceptance_checks', 'acceptance_checks_invalid', error.message);
+    }
+  }
 
   function workerStore(item) {
     return (kind, mediaType, content, summary) => putEvidence({
@@ -701,6 +750,7 @@ function buildLeadGraph(deps) {
       attemptId: item.attemptId,
       role: canonicalRoleId(item.role),
       roleName: roleDisplayName(item.role),
+      objective: String(item.assignment?.objective ?? '').slice(0, DIGEST_SUMMARY_CHARS),
       skills: (item.assignment?.skillPins || []).map(({ id, sha256: hash }) => ({ id, sha256: hash })),
       sandbox: item.sandbox,
       taskId: result.taskId || item.taskId || null,
@@ -730,11 +780,21 @@ function buildLeadGraph(deps) {
 
   function decisionPrompt(state, extras) {
     const openDecisions = state.openDecisions.map(({ id, role, request }) => ({ id, role, request }));
+    const goal = state.goalOverride
+      ? [`Goal (changed by the owner during this run; authoritative, it replaces the original goal):\n${state.goalOverride}`, `Original goal (background only):\n${state.goal}`]
+      : [`User goal:\n${state.goal}`];
+    const pinnedChecks = state.contract?.requiredChecks || [];
+    let checks = 'Acceptance checks: none are pinned yet; propose them in acceptanceChecks (see the rules below).';
+    if (state.contract?.invalid) checks = 'Acceptance checks: the owner contract of this run is invalid; acceptanceChecks proposals are ignored.';
+    else if (pinnedChecks.length > 0) {
+      checks = `Pinned acceptance checks (source ${state.contract.source || 'owner'}; they run at finish; acceptanceChecks proposals are ignored and only the owner can change them):\n${JSON.stringify(pinnedChecks.map(({ id, argv }) => ({ id, argv })))}`;
+    }
     const sections = [
       'Plan and coordinate the requested work as the read-only team lead. Return only JSON matching the supplied schema.',
       'The lead must not edit files. Delegate all changes through the A2A role agents.',
-      `User goal:\n${state.goal}`,
-      `Dispatch rounds already used: ${state.round}/${maxRounds}. A dispatch decision consumes one round.`,
+      ...goal,
+      `Dispatch rounds already used: ${state.round}/${roundLimit(state)}. A dispatch decision consumes one round.`,
+      checks,
       'Available roles:\n' + JSON.stringify([...roles.values()].map(({ name, displayName, description, sandbox, model, effort }) => ({ id: canonicalRoleId(name), name: displayName || roleDisplayName(name), description, sandbox, model, effort }))),
       `Available skill candidates (choose 0-5 relevant IDs for each assignment; no skill is required for unrelated work):\n${JSON.stringify(extras.skillCandidates)}`,
       `Available skill IDs and names (trusted selectable IDs):\n${JSON.stringify(extras.skillNames)}`,
@@ -754,15 +814,19 @@ function buildLeadGraph(deps) {
         ...violations.map((entry) => `- ${entry.predicate} ${entry.code}: ${entry.detail}`),
         ...reminders].join('\n'));
     }
-    sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(boundedOutcomes(state.outcomes)));
+    // The objective is kept for the run digest only; the bounded prompt stays as before.
+    const promptOutcomes = state.outcomes.map(({ objective: _objective, ...outcome }) => outcome);
+    sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(boundedOutcomes(promptOutcomes)));
     sections.push([
       'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, and wave. Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles; read-only roles may use allowedFiles []. allowedFiles entries are exact paths or directory prefixes; globs are not supported. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
       deps.parallelWriters
         ? 'Waves: assignment.wave is an integer >= 1 or null. Consecutive assignments sharing the same wave run concurrently. Writers in one wave each work in an isolated copy of the workspace made from the same starting state and do not see each other\'s changes; their changes are integrated into the shared workspace as each finishes. A later wave (or a null-wave assignment after them), for example a verifier, sees the integrated result. Writers in one wave must own disjoint allowedFiles. Use null for strictly sequential steps.'
         : 'Waves: assignment.wave may be used to group read-only work that runs concurrently. Writers always run one at a time in array order regardless of wave. Use null otherwise.',
-      'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, and humanInput. Use empty arrays, an empty string, or null for unused fields.',
-      'Worker decision requests: resolve them yourself (resolutions: decisionId, choice, rationale) whenever the evidence supports a choice. Worker reports are self-reported; check scopeViolations and reportError.',
-      'Use request_human_input only for missing_authority, irreversible_or_external, or product_choice, and only after investigating: give options, a recommendation, the evidence checked, and the independent work that can proceed.',
+      'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, humanInput, goalAchieved, and acceptanceChecks. Use empty arrays, an empty string, or null for unused fields.',
+      'Worker decision requests are open decisions: resolve each one yourself (resolutions: decisionId, choice, rationale) when the evidence supports a choice, otherwise escalate it (humanInput.relatedDecisionIds); never leave one unanswered. Worker reports are self-reported; check scopeViolations and reportError.',
+      'Escalate with request_human_input (reason missing_authority, irreversible_or_external, or product_choice; name the blockers, give options, a recommendation, the evidence checked, and the independent work that can proceed) as soon as a blocker needs owner authority, external or live resources, or a change of scope or acceptance criteria, or the same blocker survived two rounds. Do not keep dispatching around such a blocker.',
+      'goalAchieved: on finish set it honestly, true only when the goal is met; false names the blockers in final and hands the run to the owner. Use null for dispatch and request_human_input.',
+      `acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks derived from the project's PRD, release or gate documents and its test commands; the first valid proposal is pinned for the run and runs at finish in a sandbox with a read-only workspace and no network. ${CHECK_RULE} Otherwise use null. A check that cannot pass without the owner is a blocker to escalate.`,
       ...(deps.parallelWriters ? ['A writer outcome can be not_integrated (the lane field gives the reason and the lane path, which is kept): its changes never reached the shared workspace. You may re-dispatch with corrected allowedFiles, or resolve a conflict with a follow-up assignment.'] : []),
       'Writer reconciliation is mechanical: before you decide, the server reconciles every writable outcome whose effects were unknown and lists the result as an outcome of kind reconciliation, with the attested changedPaths. attestedScopeViolations are changes the server observed outside allowedFiles; a report filesChanged list is self-reported and advisory. A writable dispatch is refused while any writer outcome is unresolved. For a read-only role, dispatch_error means the submission could not be matched to a task at lookup time; such a role cannot have workspace write effects.',
     ].join('\n'));
@@ -871,6 +935,10 @@ function buildLeadGraph(deps) {
     recordLeadTurn(state, leadResult, leadResult.status || 'completed');
 
     let decision;
+    let agentContract = null;
+    let proposal = null;
+    // LL-4: proposals are honored only while the run has no owner checks and none are pinned.
+    const proposalsOpen = !state.contract?.invalid && (state.contract?.requiredChecks || []).length === 0;
     try {
       decision = parseDecision(leadResult.text);
       if (Array.isArray(decision.assignments)) {
@@ -899,6 +967,8 @@ function buildLeadGraph(deps) {
         skillCatalog,
         skillCandidateIds: candidateIds,
       });
+      proposal = Array.isArray(decision.acceptanceChecks) && decision.acceptanceChecks.length > 0 ? decision.acceptanceChecks : null;
+      if (proposal && proposalsOpen) agentContract = agentChecksContract(proposal);
     } catch (error) {
       if (!(error instanceof BoundaryViolation)) throw error;
       const consecutive = priorRejections + 1;
@@ -921,22 +991,32 @@ function buildLeadGraph(deps) {
     update.consecutiveRejections = 0;
     update.retryDecide = false;
     deps.emit(runtime.onEvent, { type: 'decision', round: state.round + 1, action: decision.action });
+    if (agentContract) {
+      // Pinned in graph state (checkpointed with this step); the server mirrors it into task metadata.
+      update.contract = agentContract;
+      deps.emit(runtime.onEvent, { type: 'acceptance_contract', round: state.round + 1, contract: agentContract });
+    } else if (proposal) {
+      runtime.pendingNotes = [...(runtime.pendingNotes || []), 'Your acceptanceChecks proposal was ignored: the acceptance checks of this run are already pinned and only the owner can change them.'];
+    }
 
     const resolved = new Map(decision.resolutions.map((entry) => [entry.decisionId, entry]));
     update.openDecisions = state.openDecisions.filter((entry) => !resolved.has(entry.id));
     update.closedDecisions = [...state.closedDecisions, ...decision.resolutions.map((entry) => ({ id: entry.decisionId, by: 'lead', choice: entry.choice }))];
 
-    if (decision.action === 'finish') return { ...update, status: 'completed', text: decision.final.trim() };
+    if (decision.action === 'finish') {
+      const final = decision.final.trim();
+      // LL-1: an unmet goal never ends the run silently; the owner decides how to go on.
+      if (decision.goalAchieved === false) return { ...update, ...escalate(state, 'goal_not_achieved', final, final) };
+      return { ...update, status: 'completed', text: final };
+    }
     if (decision.action === 'request_human_input') {
       const decisionId = `${state.runId}:h${state.humanCount + 1}`;
       return { ...update, humanCount: state.humanCount + 1, humanRequest: { decisionId, ...decision.humanInput } };
     }
-    if (state.round >= maxRounds) {
-      return {
-        ...update,
-        status: 'max_rounds',
-        text: decision.final.trim() || `Stopped after reaching the limit of ${maxRounds} dispatch rounds.`,
-      };
+    const limit = roundLimit(state);
+    if (state.round >= limit) {
+      const question = `Dispatch round limit reached: ${state.round} of ${limit} rounds used and the lead has not finished. Continue with another ${maxRounds} rounds, accept the current result as is, or change the goal?`;
+      return { ...update, ...escalate(state, 'round_limit', question, `Stopped after reaching the limit of ${limit} dispatch rounds.`) };
     }
     const pendingAssignments = decision.assignments.map((assignment) => {
       const selected = resolveSkillSelection(skillCatalog, assignment.skills || []);
@@ -1431,7 +1511,9 @@ function buildLeadGraph(deps) {
 
   async function humanInput(state) {
     const request = state.humanRequest;
-    const answer = interrupt({ kind: 'human_decision', ...request });
+    const { final: _final, ...shown } = request;
+    const answer = interrupt({ kind: 'human_decision', ...shown });
+    if (request.escalation) return resolveEscalation(state, request, answer);
     const related = new Set(request.relatedDecisionIds || []);
     return {
       humanAnswers: [...state.humanAnswers, {
@@ -1443,6 +1525,19 @@ function buildLeadGraph(deps) {
       closedDecisions: [...state.closedDecisions, ...[...related].map((id) => ({ id, by: 'human', choice: answer.choice || '' }))],
       humanRequest: null,
     };
+  }
+
+  // LL-1 resume: an answer without a known choice is the recommended continue, with the answer as a note.
+  function resolveEscalation(state, request, answer) {
+    const choice = ESCALATION_CHOICES.includes(answer.choice) ? answer.choice : 'continue';
+    const update = {
+      humanAnswers: [...state.humanAnswers, { decisionId: request.decisionId, answer: answer.answer, choice }],
+      humanRequest: null,
+    };
+    if (choice === 'accept_as_is') return { ...update, status: 'completed', text: request.final };
+    const extraRounds = (state.extraRounds || 0) + maxRounds;
+    if (choice === 'change_goal') return { ...update, extraRounds, goalOverride: String(answer.answer).trim() };
+    return { ...update, extraRounds };
   }
 
   async function budgetPause(state) {
@@ -1498,6 +1593,8 @@ function buildLeadGraph(deps) {
       unresolvedWriterCount,
       admission: deps.admission,
       runCheckImpl: deps.runCheckImpl,
+      // Agent-proposed checks run only through the App Server sandbox.
+      appServer,
       ...(deps.evidenceStore ? { evidenceStore: deps.evidenceStore } : {}),
       signal,
       ...(snapshot ? { snapshot } : {}),
@@ -1561,6 +1658,7 @@ function buildLeadGraph(deps) {
     return 'dispatch';
   };
   const afterAccept = (state) => (state.status ? 'finish' : 'decide');
+  const afterHumanInput = (state) => (state.status === 'completed' ? 'accept' : 'decide');
   const afterCollect = (state) => {
     if (state.status === 'canceled') return 'verify';
     if (state.batch.items.some((item) => item.state === 'pending')) return 'dispatch';
@@ -1598,7 +1696,7 @@ function buildLeadGraph(deps) {
     .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify'])
     .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'decide'])
     .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'decide'])
-    .addEdge('human_input', 'decide')
+    .addConditionalEdges('human_input', afterHumanInput, ['accept', 'decide'])
     .addEdge('budget_pause', 'continue_limited')
     .addConditionalEdges('continue_limited', afterContinueLimited, ['finish', 'dispatch', 'decide'])
     .addEdge('finish', END);

@@ -40,6 +40,40 @@ test('schemas satisfy strict structured output rules', () => {
   assert.deepEqual(DECISION_SCHEMA.properties.action.enum, ['dispatch', 'finish', 'request_human_input']);
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'wave']);
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.wave, { type: ['integer', 'null'], minimum: 1 });
+  assert.deepEqual(DECISION_SCHEMA.required, ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks']);
+  assert.deepEqual(DECISION_SCHEMA.properties.goalAchieved, { type: ['boolean', 'null'] });
+  const [checks, none] = DECISION_SCHEMA.properties.acceptanceChecks.anyOf;
+  assert.equal(none.type, 'null');
+  assert.equal(checks.type, 'array');
+  assert.equal(checks.maxItems, 10);
+  assert.deepEqual(checks.items.required, ['id', 'argv', 'timeoutMs']);
+  assert.deepEqual(checks.items.properties.timeoutMs, { type: ['integer', 'null'] });
+});
+
+test('goalAchieved: finish needs a boolean, legacy decisions get null injected, other actions are normalized', () => {
+  validateDecision(finish({ goalAchieved: true, acceptanceChecks: null }), ctx());
+  validateDecision(finish({ goalAchieved: false, acceptanceChecks: [] }), ctx());
+  const legacy = finish();
+  validateDecision(legacy, ctx());
+  assert.equal(legacy.goalAchieved, null);
+  assert.equal(legacy.acceptanceChecks, null);
+  let caught;
+  try { validateDecision(finish({ goalAchieved: null }), ctx()); } catch (error) { caught = error; }
+  assert.ok(caught instanceof BoundaryViolation);
+  assert.equal(caught.violations[0].predicate, 'decision.goal');
+  assert.equal(caught.violations[0].code, 'goal_unstated');
+  assert.match(caught.message, /finish requires goalAchieved true or false/);
+  assert.ok(BOUNDARY_PREDICATES['decision.goal'].includes('goal_unstated'));
+  const dispatched = dispatch([assignment()], { goalAchieved: true });
+  validateDecision(dispatched, ctx());
+  assert.equal(dispatched.goalAchieved, null);
+  const asked = ask({ goalAchieved: false });
+  validateDecision(asked, ctx());
+  assert.equal(asked.goalAchieved, null);
+  throws(finish({ goalAchieved: 'yes' }), ctx(), /goalAchieved must be true, false, or null/);
+  throws(finish({ goalAchieved: true, acceptanceChecks: {} }), ctx(), /acceptanceChecks must be an array or null/);
+  throws(finish({ goalAchieved: true, other: 1 }), ctx(), /plus goalAchieved and acceptanceChecks/);
+  assert.ok(BOUNDARY_PREDICATES['decision.acceptance_checks'].includes('acceptance_checks_invalid'));
 });
 
 function report(overrides = {}) {

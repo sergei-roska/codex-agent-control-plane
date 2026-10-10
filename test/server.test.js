@@ -546,7 +546,8 @@ test('lead executor resumes a restart pause with an empty message', async () => 
     task: { id: 't-restart', contextId: 'ctx', status: { state: TaskState.TASK_STATE_INPUT_REQUIRED }, artifacts: [], history: [], metadata: { pause: { kind: 'restart' } } },
     userMessage: { parts: [{ text: '' }] },
   }, { publish: (event) => seen.push(event) });
-  assert.deepEqual(resumes[0], { runId: 't-restart', input: { answer: '' }, signal: resumes[0].signal });
+  assert.deepEqual(resumes[0], { runId: 't-restart', input: { answer: '' }, signal: resumes[0].signal, onEvent: resumes[0].onEvent });
+  assert.equal(typeof resumes[0].onEvent, 'function');
   assert.equal(seen.at(-1).data.status.state, TaskState.TASK_STATE_COMPLETED);
 });
 
@@ -962,11 +963,12 @@ test('a restart fallback with an invalid stored contract carries an invalid mark
 
 // Submit a lead task whose run hangs, then replay the stored task into a fresh state DB as a
 // restarted server would find it (no checkpoint), resume it, and return the contract the restart run got.
-async function restartBeforeFirstCheckpoint({ requestMetadata, messageMetadata, mutateStored }) {
+async function restartBeforeFirstCheckpoint({ requestMetadata, messageMetadata, mutateStored, onFirstRun }) {
   const dir = tmpDir();
   const hung = [];
   const first = await startLeadServer({
     run(args) {
+      onFirstRun?.(args);
       return new Promise((_, reject) => { hung.push(args); args.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); });
     },
     async getPause() { return null; },
@@ -978,7 +980,7 @@ async function restartBeforeFirstCheckpoint({ requestMetadata, messageMetadata, 
     const submitted = await handler.sendMessage({ message, configuration: { returnImmediately: true }, metadata: requestMetadata }, CALL());
     for (let i = 0; i < 100 && hung.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(hung.length, 1);
-    const expectPinned = Boolean(requestMetadata?.acceptance || messageMetadata?.acceptance);
+    const expectPinned = Boolean(requestMetadata?.acceptance || messageMetadata?.acceptance || onFirstRun);
     for (let i = 0; i < 100; i += 1) {
       stored = JSON.parse(JSON.stringify(await handler.getTask({ id: submitted.id }, CALL())));
       if (!expectPinned || stored.metadata?.acceptanceContract) break;
@@ -1031,6 +1033,16 @@ test('a message-level contract survives a restart before the first checkpoint', 
   const { contract, stored } = await restartBeforeFirstCheckpoint({ messageMetadata: { acceptance: validAcceptance } });
   assert.deepEqual(stored.metadata.acceptanceContract, pinnedContract);
   assert.deepEqual(contract, pinnedContract);
+});
+
+test('checks the lead pins are recorded in the task with source agent and survive a restart', async () => {
+  const agentContract = { id: 'acceptance-contract/v1', requiredChecks: [{ id: 'unit', argv: ['npm', 'test'], timeoutMs: 600000 }], source: 'agent' };
+  const { contract, stored } = await restartBeforeFirstCheckpoint({
+    onFirstRun(args) { args.onEvent({ type: 'acceptance_contract', round: 1, contract: agentContract }); },
+  });
+  assert.deepEqual(stored.metadata.acceptanceContract, agentContract);
+  // The restart run gets the agent contract with its source, so the checks stay sandboxed.
+  assert.deepEqual(contract, agentContract);
 });
 
 test('a run without any contract restarts with no required checks', async () => {

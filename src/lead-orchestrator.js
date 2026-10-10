@@ -113,7 +113,8 @@ function renderRunDigest(digest, maxChars = DIGEST_MAX_CHARS) {
     const lines = [`Run status: ${digest.status || 'unknown'}; dispatch rounds: ${digest.rounds ?? 0}`];
     if (digest.goal) lines.push(`Goal: ${digest.goal}`);
     if (digest.text) lines.push(`Final text: ${digest.text}`);
-    if (digest.nextWork) lines.push(`Next work: ${digest.nextWork}`);
+    // The paragraph often starts with its own "Next work:" label; do not double it.
+    if (digest.nextWork) lines.push(/^\W*next work\b/i.test(digest.nextWork) ? digest.nextWork : `Next work: ${digest.nextWork}`);
     const outcomes = digest.outcomes || [];
     if (outcomes.length > 0) {
       lines.push('Worker outcomes:');

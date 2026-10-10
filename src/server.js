@@ -266,6 +266,17 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
     // Whoever resumes the run (a human or the watcher), it no longer waits for budget.
     if (resuming) budgetWatcher?.forget(taskId);
     let effectivePause = null;
+    // LL-4: checks the lead pins during the run are recorded in the task like an owner contract,
+    // with source 'agent', so a restart and the launcher see them.
+    const onEvent = (event) => {
+      if (event?.type !== 'acceptance_contract' || !event.contract) return;
+      eventBus.publish(AgentEvent.statusUpdate({
+        taskId,
+        contextId,
+        status: status(TaskState.TASK_STATE_WORKING),
+        metadata: { acceptanceContract: event.contract },
+      }));
+    };
     const republishPause = (pause, explanation, suffix) => {
       const text = explanation ? `${explanation}\n${describePauseText(taskId, pause)}` : describePauseText(taskId, pause);
       eventBus.publish(AgentEvent.statusUpdate({
@@ -391,7 +402,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       let result;
       if (resuming) {
         try {
-          result = await orchestrator.resume({ runId: taskId, input: resumeInput, signal: controller.signal });
+          result = await orchestrator.resume({ runId: taskId, input: resumeInput, signal: controller.signal, onEvent });
         } catch (error) {
           if (error?.name !== 'RunNotFoundError' || pauseKind !== 'restart') throw error;
           // Crash before the first checkpoint: start over from the original goal.
@@ -415,10 +426,10 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
             // Never continue as if no checks were required: carry an invalid marker into acceptance.
             originalContract = invalidAcceptanceContract(`Stored acceptance contract is invalid: ${contractError.message}`);
           }
-          result = await orchestrator.run({ goal: original, runId: taskId, contract: originalContract, signal: controller.signal });
+          result = await orchestrator.run({ goal: original, runId: taskId, contract: originalContract, signal: controller.signal, onEvent });
         }
       } else {
-        result = await orchestrator.run({ goal, runId: taskId, contract, signal: controller.signal });
+        result = await orchestrator.run({ goal, runId: taskId, contract, signal: controller.signal, onEvent });
       }
       const paused = (result?.status === 'input_required' || result?.status === 'waiting_for_budget') && !controller.signal.aborted;
       if (paused) {

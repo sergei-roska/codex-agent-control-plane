@@ -10,6 +10,8 @@ const TRUNCATION_SUFFIX = '... [truncated]';
 const WORKER_REPORT_CONTRACT = 'worker-report/v1';
 const ASSIGNMENT_FIELDS = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
 const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'wave'];
+const DECISION_BASE_KEYS = ['action', 'assignments', 'final', 'resolutions', 'humanInput'];
+const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks'];
 const ASSIGNMENT_ARRAY_FIELDS = ASSIGNMENT_FIELDS.filter((field) => field !== 'role' && field !== 'objective');
 const REPORT_OUTCOMES = ['completed', 'blocked', 'needs_decision', 'failed'];
 const CHECK_RESULTS = ['passed', 'failed', 'not_run'];
@@ -21,6 +23,8 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'decision.parse': Object.freeze(['decision_empty', 'decision_not_json', 'decision_not_object']),
   'decision.envelope': Object.freeze(['decision_envelope_invalid', 'assignment_count_invalid']),
   'decision.resolutions': Object.freeze(['decision_unresolved']),
+  'decision.goal': Object.freeze(['goal_unstated']),
+  'decision.acceptance_checks': Object.freeze(['acceptance_checks_invalid']),
   'assignment.shape': Object.freeze(['assignment_shape_invalid', 'role_unknown', 'field_invalid']),
   'assignment.writer_scope': Object.freeze(['writer_scope_missing']),
   'assignment.paths': Object.freeze(['path_unsafe', 'path_glob_unsupported']),
@@ -113,7 +117,7 @@ const WORKER_REPORT_SCHEMA = {
 const DECISION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['action', 'assignments', 'final', 'resolutions', 'humanInput'],
+  required: ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks'],
   properties: {
     action: { type: 'string', enum: ['dispatch', 'finish', 'request_human_input'] },
     assignments: {
@@ -160,6 +164,22 @@ const DECISION_SCHEMA = {
             evidenceChecked: stringArray,
             independentWork: { type: 'string' },
             relatedDecisionIds: stringArray,
+          },
+        },
+        { type: 'null' },
+      ],
+    },
+    goalAchieved: { type: ['boolean', 'null'] },
+    acceptanceChecks: {
+      anyOf: [
+        {
+          type: 'array',
+          maxItems: 10,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'argv', 'timeoutMs'],
+            properties: { id: { type: 'string' }, argv: stringArray, timeoutMs: { type: ['integer', 'null'] } },
           },
         },
         { type: 'null' },
@@ -553,8 +573,17 @@ function checkWaveScopes(assignments, ctx) {
 function validateDecision(decision, ctx) {
   if (!isPlainObject(decision)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead decision must be a JSON object');
   const openIds = ctx.openDecisionIds || new Set();
-  const keys = ['action', 'assignments', 'final', 'resolutions', 'humanInput'];
-  if (!sameKeys(decision, keys)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead decision must contain only action, assignments, final, resolutions, and humanInput');
+  const keys = Object.keys(decision);
+  if (!DECISION_BASE_KEYS.every((key) => keys.includes(key)) || keys.some((key) => !DECISION_KEYS.includes(key))) {
+    throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead decision must contain only action, assignments, final, resolutions, and humanInput, plus goalAchieved and acceptanceChecks');
+  }
+  // Older callers and replays predate goalAchieved and acceptanceChecks: both default to null, and a
+  // legacy finish without the key keeps finishing as before.
+  const legacyGoal = !keys.includes('goalAchieved');
+  if (legacyGoal) decision.goalAchieved = null;
+  if (!keys.includes('acceptanceChecks')) decision.acceptanceChecks = null;
+  if (decision.goalAchieved !== null && typeof decision.goalAchieved !== 'boolean') throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead goalAchieved must be true, false, or null');
+  if (decision.acceptanceChecks !== null && !Array.isArray(decision.acceptanceChecks)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead acceptanceChecks must be an array or null');
   if (!['dispatch', 'finish', 'request_human_input'].includes(decision.action)) throw violation('decision.envelope', 'decision_envelope_invalid', `Unsupported lead action: ${String(decision.action)}`);
   if (!Array.isArray(decision.assignments)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead assignments must be an array');
   if (typeof decision.final !== 'string') throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead final must be a string');
@@ -576,6 +605,7 @@ function validateDecision(decision, ctx) {
   if (decision.action === 'finish') {
     if (decision.assignments.length !== 0 || !decision.final.trim()) throw violation('decision.envelope', 'decision_envelope_invalid', 'Finish decisions require no assignments and non-empty final text');
     if (decision.humanInput !== null) throw violation('decision.envelope', 'decision_envelope_invalid', 'Finish decisions must leave humanInput null');
+    if (decision.goalAchieved === null && !legacyGoal) throw violation('decision.goal', 'goal_unstated', 'finish requires goalAchieved true or false');
   } else if (decision.action === 'request_human_input') {
     if (decision.assignments.length !== 0) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input decisions require no assignments');
     if (decision.final.trim()) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input decisions must leave final empty');
@@ -598,6 +628,8 @@ function validateDecision(decision, ctx) {
   for (const id of openIds) {
     if (!resolved.has(id) && !related.has(id)) throw violation('decision.resolutions', 'decision_unresolved', `Open decision ${id} must be resolved or listed in humanInput.relatedDecisionIds`);
   }
+  // goalAchieved only means something on finish.
+  if (decision.action !== 'finish') decision.goalAchieved = null;
 }
 
 /** Locate a codexErrorInfo value on an error, its rpcData, or along its cause chain. */

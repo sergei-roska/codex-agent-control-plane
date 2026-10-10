@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { takeSnapshot } = require('./workspace-snapshot');
 const { readProcessIdentity } = require('./process-quiescence');
@@ -16,8 +17,20 @@ const MiB = 1024 * 1024;
 const CAPTURE_HEAD_BYTES = 2 * MiB;
 const CAPTURE_TAIL_BYTES = 6 * MiB;
 const CLOSE_GRACE_MS = 2000;
+const EXEC_GRACE_MS = 2000;
 
 const CONTRACT_ID = 'acceptance-contract/v1';
+// Contract source of checks proposed by the lead agent (LL-4); owner contracts carry no source.
+const AGENT_SOURCE = 'agent';
+// Agent checks run through the App Server sandbox: the cwd is not writable, /tmp stays writable, no network.
+const AGENT_CHECK_SANDBOX_POLICY = Object.freeze({
+  type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false,
+});
+const AGENT_CHECK_TOOLS = ['python', 'python3', 'pytest', 'node', 'npm', 'npx', 'pnpm', 'yarn', 'make', 'bash', 'sh', 'uv', 'cargo', 'go'];
+const VACUOUS_COMMANDS = new Set(['echo', 'true', 'false', 'test', '[', 'yes']);
+const SHELLS = new Set(['bash', 'sh']);
+const PYTHONS = new Set(['python', 'python3']);
+const NODE_INLINE = /^(-e|-p|--eval|--print|--eval=.*|--print=.*|-[A-Za-z]*[ep][A-Za-z]*)$/;
 
 /**
  * Marker for a stored contract that failed validation on restart. It travels through
@@ -34,7 +47,9 @@ function validateAcceptanceContract(value) {
     return invalidAcceptanceContract(value.invalid.detail);
   }
   for (const key of Object.keys(value)) {
-    if (key !== 'requiredChecks' && !(key === 'id' && value.id === CONTRACT_ID)) throw new TypeError(`acceptance has unknown field "${key}"`);
+    if (key !== 'requiredChecks' && !(key === 'id' && value.id === CONTRACT_ID) && !(key === 'source' && value.source === AGENT_SOURCE)) {
+      throw new TypeError(`acceptance has unknown field "${key}"`);
+    }
   }
   const checks = value.requiredChecks === undefined ? [] : value.requiredChecks;
   if (!Array.isArray(checks)) throw new TypeError('acceptance.requiredChecks must be an array');
@@ -69,7 +84,80 @@ function validateAcceptanceContract(value) {
     }
     return { id, argv: [...argv], timeoutMs };
   });
-  return { id: CONTRACT_ID, requiredChecks };
+  // The agent source survives every re-validation, so an agent check can never run as an owner check.
+  return { id: CONTRACT_ID, requiredChecks, ...(value.source === AGENT_SOURCE ? { source: AGENT_SOURCE } : {}) };
+}
+
+// True when `file` (relative to the workspace or absolute) names a path inside the workspace.
+function insideWorkspace(file, workspace) {
+  const root = path.resolve(workspace);
+  const rel = path.relative(root, path.resolve(root, file));
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+}
+
+// First inline-code flag in the option segment of the interpreter at argv[index], or null.
+function inlineCodeFlag(argv, index) {
+  const name = path.basename(argv[index]);
+  const rest = argv.slice(index + 1);
+  if (name === 'node') return rest.find((arg) => NODE_INLINE.test(arg)) || null;
+  const python = PYTHONS.has(name);
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === '--' || !arg.startsWith('-') || arg === '-') return null;
+    if (arg.startsWith('--')) continue;
+    const letters = arg.slice(1);
+    for (let j = 0; j < letters.length; j += 1) {
+      const letter = letters[j];
+      if (letter === 'c') return arg;
+      // Python: -m starts module arguments; -W and -X take a value (attached or the next argument).
+      if (python && letter === 'm') return null;
+      if (python && (letter === 'W' || letter === 'X')) {
+        if (j === letters.length - 1) i += 1;
+        break;
+      }
+      // Shells: -o and +o take an option name.
+      if (!python && letter === 'o' && j === letters.length - 1) { i += 1; break; }
+    }
+  }
+  return null;
+}
+
+/**
+ * Validate an acceptanceChecks proposal of the lead agent (LL-4) and return it as an agent contract
+ * { id, requiredChecks, source: 'agent' }. Throws TypeError for a malformed, vacuous, or unsafe check.
+ */
+function validateAgentChecks(checks, { workspace }) {
+  if (!Array.isArray(checks)) throw new TypeError('acceptanceChecks must be an array or null');
+  // The strict decision schema has timeoutMs null for the default.
+  const normalized = checks.map((check) => {
+    if (!check || typeof check !== 'object' || Array.isArray(check) || check.timeoutMs !== null) return check;
+    const { timeoutMs: _default, ...rest } = check;
+    return rest;
+  });
+  const contract = validateAcceptanceContract({ requiredChecks: normalized });
+  const tools = new Set(AGENT_CHECK_TOOLS);
+  for (const { id, argv } of contract.requiredChecks) {
+    const at = `acceptanceChecks "${id}"`;
+    const command = argv[0];
+    const name = path.basename(command);
+    if (VACUOUS_COMMANDS.has(name)) throw new TypeError(`${at}: ${command} proves nothing and is refused`);
+    const known = !command.includes('/') && tools.has(command);
+    if (!known && !(command.includes('/') && insideWorkspace(command, workspace))) {
+      throw new TypeError(`${at}: argv[0] must be a script path inside the workspace or one of ${AGENT_CHECK_TOOLS.join(', ')}`);
+    }
+    if (SHELLS.has(name) && !(typeof argv[1] === 'string' && !argv[1].startsWith('-') && insideWorkspace(argv[1], workspace))) {
+      throw new TypeError(`${at}: ${name} needs a script path inside the workspace as argv[1]`);
+    }
+    // An interpreter at argv[0], or one started by a runner such as uv run or npx.
+    for (let index = 0; index < argv.length; index += 1) {
+      const token = index === 0 ? name : argv[index];
+      const interpreter = SHELLS.has(token) || PYTHONS.has(token) || token === 'node';
+      if (!interpreter || (index > 0 && argv[index - 1].startsWith('-') && argv[index - 1] !== '--')) continue;
+      const flag = inlineCodeFlag(argv, index);
+      if (flag) throw new TypeError(`${at}: inline code (${flag}) after ${token} is refused; put the check in a script inside the workspace`);
+    }
+  }
+  return { ...contract, source: AGENT_SOURCE };
 }
 
 function parseCheckCommand(text, index) {
@@ -209,10 +297,76 @@ function runCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
   });
 }
 
+/**
+ * Runs one agent-proposed check through appServer.execCommand in the read-only-workspace sandbox and
+ * returns the runCheck result shape. An unavailable or failing execCommand is result 'error' (never a
+ * pass); a check that outlives its timeoutMs is a timed-out failure, as with runCheck.
+ */
+async function runSandboxedCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
+  appServer, cwd, signal, onCapture, graceMs = EXEC_GRACE_MS,
+} = {}) {
+  const started = Date.now();
+  const stdout = new StreamCapture();
+  const stderr = new StreamCapture();
+  const finish = ({ exitCode = null, timedOut = false, canceled = false, error = null, result }) => {
+    const out = stdout.tailText();
+    const err = stderr.tailText();
+    if (typeof onCapture === 'function') {
+      try { onCapture({ stdout: stdout.capture(), stderr: stderr.capture() }); } catch (_) { /* evidence is best effort */ }
+    }
+    return {
+      id,
+      argv,
+      exitCode,
+      signal: null,
+      timedOut,
+      canceled,
+      error,
+      durationMs: Date.now() - started,
+      stdoutTail: out.text,
+      stderrTail: err.text,
+      stdoutTruncated: out.truncated,
+      stderrTruncated: err.truncated,
+      sandboxed: true,
+      result,
+    };
+  };
+  if (typeof appServer?.execCommand !== 'function') return finish({ error: 'EXEC_UNAVAILABLE', result: 'error' });
+  if (signal?.aborted) return finish({ canceled: true, result: 'failed' });
+  let timer = null;
+  let onAbort = null;
+  const outcome = await new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs + graceMs);
+    if (signal) {
+      onAbort = () => resolve({ canceled: true });
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    Promise.resolve()
+      .then(() => appServer.execCommand({ command: [...argv], cwd, sandboxPolicy: { ...AGENT_CHECK_SANDBOX_POLICY }, timeoutMs }))
+      .then((value) => resolve({ value }), (error) => resolve({ error }));
+  });
+  clearTimeout(timer);
+  if (onAbort) signal.removeEventListener('abort', onAbort);
+  if (outcome.canceled) return finish({ canceled: true, result: 'failed' });
+  if (outcome.timedOut) return finish({ timedOut: true, error: 'EXEC_TIMEOUT', result: 'failed' });
+  if (outcome.error) {
+    const error = `EXEC_ERROR: ${String(outcome.error?.message || outcome.error).slice(0, 300)}`;
+    if (Date.now() - started >= timeoutMs) return finish({ timedOut: true, error, result: 'failed' });
+    return finish({ error, result: 'error' });
+  }
+  const { value } = outcome;
+  if (typeof value?.stdout === 'string') stdout.push(value.stdout);
+  if (typeof value?.stderr === 'string') stderr.push(value.stderr);
+  if (!Number.isInteger(value?.exitCode)) return finish({ error: 'EXEC_NO_EXIT_CODE', result: 'error' });
+  return finish({ exitCode: value.exitCode, result: value.exitCode === 0 ? 'passed' : 'failed' });
+}
+
 // Predicate id, result, and advisory flag per acceptance issue code (docs/execution-boundary-contract.md).
 const ISSUE_META = {
   check_missing: ['accept.checks', 'FAIL', false],
   check_failed: ['accept.checks', 'FAIL', false],
+  // A sandboxed agent check that could not be run: unverified, never a pass.
+  check_error: ['accept.checks', 'UNKNOWN', false],
   snapshot_unavailable: ['accept.snapshot', 'UNKNOWN', false],
   candidate_changed: ['accept.candidate_stable', 'FAIL', false],
   writer_unresolved: ['accept.writers', 'UNKNOWN', false],
@@ -243,6 +397,7 @@ function computeDisposition({
   for (const check of requiredChecks) {
     const result = results.get(check.id);
     if (!result) add('check_missing', `Required check "${check.id}" has no result.`);
+    else if (result.result === 'error') add('check_error', `Required check "${check.id}" could not run in the sandbox (${result.error || 'error'}); it is unverified.`);
     else if (result.result !== 'passed') {
       const ids = [result.stdoutEvidence?.id, result.stderrEvidence?.id].filter(Boolean);
       const evidence = ids.length > 0 ? ` Evidence: ${ids.join(', ')}.` : '';
@@ -355,9 +510,12 @@ function storeCheckStream(evidenceStore, runId, attemptId, check, result, stream
 
 async function runAcceptance({
   workspace, runId, attempt, contract, writers = [], unresolvedWriterCount = 0, admission, signal,
-  snapshot = takeSnapshot, runCheckImpl = runCheck, evidenceStore = null,
+  snapshot = takeSnapshot, runCheckImpl = runCheck, evidenceStore = null, appServer = null,
 }) {
-  const { requiredChecks } = validateAcceptanceContract(contract);
+  const validated = validateAcceptanceContract(contract);
+  const { requiredChecks } = validated;
+  // Agent-proposed checks never run on the host: only through the App Server sandbox.
+  const sandboxed = validated.source === AGENT_SOURCE;
   let held = null;
   if (admission) {
     const id = `${runId}:accept:${attempt}`;
@@ -377,9 +535,13 @@ async function runAcceptance({
     for (const check of requiredChecks) {
       if (signal?.aborted) return canceledAcceptance(requiredChecks, checks, Boolean(held));
       // Crash window: a turn start without a proven identity keeps quiescence unproven until the real one is recorded.
-      if (held) admission.recordTurnStart(held.executionId, { processIdentity: null, pending: true, threadId: null });
+      // A sandboxed check has no host process and cannot write the workspace, so it records none.
+      if (held && !sandboxed) admission.recordTurnStart(held.executionId, { processIdentity: null, pending: true, threadId: null });
       let captured = null;
-      const result = await runCheckImpl(check, { cwd: workspace, onSpawn, signal, onCapture: (value) => { captured = value; } });
+      const onCapture = (value) => { captured = value; };
+      const result = sandboxed
+        ? await runSandboxedCheck(check, { appServer, cwd: workspace, signal, onCapture })
+        : await runCheckImpl(check, { cwd: workspace, onSpawn, signal, onCapture });
       if (captured && result && typeof result === 'object') {
         const out = evidenceStore ? storeCheckStream(evidenceStore, runId, `${runId}:acceptance:${attempt}`, check, result, 'stdout', captured.stdout) : { ref: null, error: null };
         const err = evidenceStore ? storeCheckStream(evidenceStore, runId, `${runId}:acceptance:${attempt}`, check, result, 'stderr', captured.stderr) : { ref: null, error: null };
@@ -453,4 +615,5 @@ function verifyCandidate(workspace, acceptance, snapshot = takeSnapshot) {
 module.exports = {
   validateAcceptanceContract, parseCheckCommand, runCheck, computeDisposition, runAcceptance, verifyCandidate,
   assessWithoutChecks, formatAcceptance, acceptanceIssue, unrunAcceptance, invalidAcceptanceContract,
+  validateAgentChecks, runSandboxedCheck, AGENT_CHECK_SANDBOX_POLICY, AGENT_CHECK_TOOLS,
 };
