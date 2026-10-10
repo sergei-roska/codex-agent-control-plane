@@ -1990,7 +1990,9 @@ test('the decision prompt describes waves according to parallelWriters', async (
       await session.orchestrator.run({ goal: 'Plan', runId: RUN_ID });
       assert.match(world.prompts[0], pattern);
       assert.match(world.prompts[0], /Waves: assignment\.wave/);
-      assert.match(world.prompts[0], /skills, and wave/);
+      assert.match(world.prompts[0], /skills, wave, and continueFrom/);
+      assert.match(world.prompts[0], /directory prefixes that cover the module and its tests/);
+      assert.match(world.prompts[0], /scopeExpansion[^\n]*continueFrom[^\n]*expanded allowedFiles/);
     }, options);
   }
 });
@@ -2544,5 +2546,59 @@ test('a vacuous or unsafe proposal is a rejected decision with a reminder and no
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
     assert.deepEqual(values.contract.requiredChecks, []);
     assert.equal(result.acceptance.disposition, 'not_required');
+  });
+});
+
+// ------------------------------------------------- LL-5: continue a worker with expanded scope
+
+const threadedWriterFinal = () => ({
+  state: TaskState.TASK_STATE_COMPLETED,
+  artifacts: [{
+    name: 'report',
+    parts: textParts(report('need more scope', { scopeExpansion: ['lib/other.js'] })),
+    metadata: { writerExecution: releasedWriter([]), continuation: { threadId: 'th-1', laneId: 'lane-1', codexHome: '/homes/a' } },
+  }],
+});
+
+test('continueFrom dispatches a scope continuation built from the referenced outcome', async () => {
+  const first = assignmentId(RUN_ID, 1, 0);
+  const world = makeWorld({
+    script: [
+      dispatch(brief('orch-builder')),
+      dispatch({ ...brief('orch-builder', ['src', 'lib']), continueFrom: first }),
+      finish('Done'),
+    ],
+    workerFinal: threadedWriterFinal,
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.dispatchInputs[0].continuation, undefined);
+    const sent = world.dispatchInputs[1];
+    assert.equal(sent.assignmentId, assignmentId(RUN_ID, 2, 0));
+    assert.deepEqual(sent.continuation, { ofAttemptId: attemptId(first), threadId: 'th-1', laneId: 'lane-1', codexHome: '/homes/a', reason: 'scope' });
+    assert.deepEqual(sent.allowedFiles, ['src', 'lib']);
+    assert.equal(Object.hasOwn(sent, 'continueFrom'), false);
+    assert.doesNotMatch(world.prompts[1], /th-1/);
+  });
+});
+
+test('a legacy assignment without continueFrom gets null and sends no continuation', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-builder')), finish('Done')], workerFinal: threadedWriterFinal });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(Object.hasOwn(world.dispatchInputs[0], 'continuation'), false);
+    assert.equal(Object.hasOwn(world.dispatchInputs[0], 'continueFrom'), false);
+  });
+});
+
+test('an unknown continueFrom is rejected with the rule reminder', async () => {
+  const world = makeWorld({ script: [dispatch({ ...brief('orch-builder'), continueFrom: 'no-such-assignment' }), finish('Done')] });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(world.sends.length, 0);
+    assert.match(world.prompts[1], /assignment\.continue_from continue_from_unknown/);
+    assert.match(world.prompts[1], /continueFrom is null or the assignmentId of a finished outcome/);
   });
 });

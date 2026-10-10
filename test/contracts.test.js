@@ -38,7 +38,8 @@ test('schemas satisfy strict structured output rules', () => {
   assert.equal(WORKER_REPORT_SCHEMA.properties.decisionRequest.anyOf[1].type, 'null');
   assert.equal(DECISION_SCHEMA.properties.humanInput.anyOf[1].type, 'null');
   assert.deepEqual(DECISION_SCHEMA.properties.action.enum, ['dispatch', 'finish', 'request_human_input']);
-  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'wave']);
+  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom']);
+  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.continueFrom, { type: ['string', 'null'] });
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.wave, { type: ['integer', 'null'], minimum: 1 });
   assert.deepEqual(DECISION_SCHEMA.required, ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks']);
   assert.deepEqual(DECISION_SCHEMA.properties.goalAchieved, { type: ['boolean', 'null'] });
@@ -589,4 +590,41 @@ test('settle.lane_scope is a known predicate that acceptance does not aggregate'
   const { computeDisposition } = require('../src/acceptance');
   const outcome = computeDisposition({ writers: [{ attemptId: 'a', ran: false, completed: false, reportValid: false, reportedScopeViolations: [], attestedScopeViolations: [], deltaKnown: false }] });
   assert.ok(!outcome.issues.some((issue) => issue.predicate === 'settle.lane_scope' || issue.code === 'lane_scope_refused'));
+});
+
+// ---------------------------------------------------------------- continueFrom (LL-5)
+const continuable = (entries = [['a-1', 'orch-builder']]) => new Map(entries);
+const codeOf = (fn) => { try { fn(); } catch (error) { return error.violations?.[0]; } return null; };
+
+test('continueFrom is injected as null for legacy assignments and accepted for a finished same-role outcome', () => {
+  const legacy = assignment();
+  validateDecision(dispatch([legacy]), ctx());
+  assert.equal(legacy.continueFrom, null);
+  const next = assignment({ role: 'orch-builder', allowedFiles: ['src'], continueFrom: 'a-1' });
+  validateDecision(dispatch([next]), ctx({ continuable: continuable() }));
+  assert.equal(next.continueFrom, 'a-1');
+});
+
+test('continueFrom violations carry assignment.continue_from codes', () => {
+  const builder = (overrides) => assignment({ role: 'orch-builder', allowedFiles: ['src'], ...overrides });
+  let found = codeOf(() => validateDecision(dispatch([builder({ continueFrom: 'nope' })]), ctx({ continuable: continuable() })));
+  assert.equal(found.predicate, 'assignment.continue_from');
+  assert.equal(found.code, 'continue_from_unknown');
+  found = codeOf(() => validateDecision(dispatch([builder({ continueFrom: 'a-1' })]), ctx()));
+  assert.equal(found.code, 'continue_from_unknown');
+  found = codeOf(() => validateDecision(dispatch([builder({ continueFrom: 'a-1' })]), ctx({ continuable: continuable([['a-1', 'orch-planner']]) })));
+  assert.equal(found.code, 'continue_from_role');
+  found = codeOf(() => validateDecision(dispatch([builder({ continueFrom: 'a-1' }), builder({ continueFrom: 'a-1', allowedFiles: ['lib'] })]), ctx({ continuable: continuable() })));
+  assert.equal(found.code, 'continue_from_duplicate');
+  for (const code of ['continue_from_unknown', 'continue_from_role', 'continue_from_duplicate']) {
+    assert.ok(BOUNDARY_PREDICATES['assignment.continue_from'].includes(code));
+  }
+  found = codeOf(() => validateDecision(dispatch([builder({ continueFrom: '' })]), ctx({ continuable: continuable() })));
+  assert.equal(found.code, 'field_invalid');
+});
+
+test('checkSpecialistRequest keeps a scope continuation reason and rejects other reasons', () => {
+  const out = checkSpecialistRequest(specialist({ continuation: { ofAttemptId: 'x', threadId: 't', laneId: null, codexHome: null, reason: 'scope' } }), { id: 'orch-builder', sandbox: 'workspace-write' }, { workspace: '/ws' });
+  assert.equal(out.continuation.reason, 'scope');
+  specialistCode(specialist({ continuation: { ofAttemptId: 'x', reason: 'other' } }), { id: 'orch-builder', sandbox: 'workspace-write' }, 'assignment.shape', 'field_invalid');
 });

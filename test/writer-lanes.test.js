@@ -747,3 +747,86 @@ test('a lane table created before continued_from gains the column', () => {
   assert.equal(store.get('L2').continuedFrom, 'L1');
   createLaneStore(db);
 });
+
+// ---------------------------------------------------------------- lead scope continuation (LL-5)
+
+const scopeOf = (task, extra = {}) => ({ ofAttemptId: 'att-1', ...task.artifacts[0].metadata.continuation, reason: 'scope', ...extra });
+
+test('a completed lane writer publishes thread, lane, and home as continuation metadata', async (t) => {
+  const env = setup(t, async () => ok(), { home: '/homes/a' });
+  const task = await env.send('orch-writer-a', request(['a.txt']), { contextId: OLD_CONTEXT });
+  assert.equal(task.status.state, 3);
+  assert.deepEqual(task.artifacts[0].metadata.continuation, { threadId: 't', laneId: writerOf(task).lane.id, codexHome: '/homes/a' });
+});
+
+test('a scope continuation resumes the thread with the scope note and a fresh lane after an integrated lane', async (t) => {
+  const calls = [];
+  const env = setup(t, async (options) => {
+    calls.push(options);
+    fs.writeFileSync(path.join(options.cwd, calls.length === 1 ? 'a.txt' : 'b.txt'), 'x\n');
+    return ok();
+  }, { home: '/homes/a' });
+  const first = await env.send('orch-writer-a', request(['a.txt']), { contextId: OLD_CONTEXT });
+  assert.equal(writerOf(first).lane.state, 'integrated');
+  const newRequest = request(['a.txt', 'b.txt'], { continuation: scopeOf(first) });
+  const task = await env.send('orch-writer-a', newRequest, { contextId: contextOfNew });
+  assert.equal(task.status.state, 3);
+  assert.equal(calls[1].threadId, 't');
+  assert.notEqual(calls[1].cwd, calls[0].cwd);
+  const lines = calls[1].input.split('\n');
+  assert.equal(lines[1], 'The lead expanded your scope; allowedFiles is now: ["a.txt","b.txt"]. Continue the assignment from where you stopped.');
+  const sent = JSON.parse(lines.slice(2).join('\n'));
+  assert.deepEqual(sent.allowedFiles, ['a.txt', 'b.txt']);
+  assert.equal(sent.continuation, undefined);
+  assert.deepEqual(task.artifacts[0].metadata.continued, { laneAdopted: false, laneFallback: 'lane_state_integrated', threadResumed: true });
+  assert.equal(fs.readFileSync(path.join(env.repo, 'b.txt'), 'utf8'), 'x\n');
+});
+
+test('a scope continuation adopts a kept lane and resumes the thread', async (t) => {
+  const calls = [];
+  const env = setup(t, async (options) => {
+    calls.push(options);
+    if (calls.length === 1) throw limitError('thr-1');
+    return ok();
+  }, { home: '/homes/a' });
+  const failed = await limitedFirstAttempt(env);
+  const oldLane = writerOf(failed).lane;
+  const task = await env.send('orch-writer-a', request(['a.txt', 'b.txt'], { continuation: { ...continuationOf(failed), reason: 'scope' } }), { contextId: contextOfNew });
+  assert.equal(task.status.state, 3);
+  assert.equal(calls[1].cwd, oldLane.path);
+  assert.equal(calls[1].threadId, 'thr-1');
+  assert.match(calls[1].input, /The lead expanded your scope; allowedFiles is now: \["a\.txt","b\.txt"\]/);
+  assert.deepEqual(task.artifacts[0].metadata.continued, { laneAdopted: true, laneFallback: null, threadResumed: true });
+});
+
+test('a scope continuation on another home starts a fresh thread with the scope note', async (t) => {
+  const calls = [];
+  const env = setup(t, async (options) => { calls.push(options); return ok(); }, { home: '/homes/b' });
+  const first = await env.send('orch-writer-a', request(['a.txt']), { contextId: OLD_CONTEXT });
+  const task = await env.send('orch-writer-a', request(['a.txt', 'b.txt'], { continuation: scopeOf(first, { codexHome: '/homes/a' }) }), { contextId: contextOfNew });
+  assert.equal(task.status.state, 3);
+  assert.equal(calls[1].threadId, undefined);
+  assert.match(calls[1].input, /stopped because a needed file was outside its allowedFiles/);
+  assert.equal(JSON.parse(calls[1].input.split('\n').slice(2).join('\n')).continuation, undefined);
+  assert.equal(task.artifacts[0].metadata.continued.threadResumed, false);
+});
+
+test('a scope continuation with a removed lane row starts a fresh thread and lane', async (t) => {
+  const calls = [];
+  const env = setup(t, async (options) => { calls.push(options); return ok(); }, { home: null });
+  const first = await env.send('orch-writer-a', request(['a.txt']), { contextId: OLD_CONTEXT });
+  const task = await env.send('orch-writer-a', request(['a.txt', 'b.txt'], { continuation: scopeOf(first, { laneId: 'lane-nope' }) }), { contextId: contextOfNew });
+  assert.equal(task.status.state, 3);
+  assert.equal(calls[1].threadId, undefined);
+  assert.match(calls[1].input, /working copy could not be reused/);
+  assert.equal(task.artifacts[0].metadata.continued.laneFallback, 'lane_row_missing');
+});
+
+test('a failed turn publishes its thread as continuation metadata for any failure kind', async (t) => {
+  const env = setup(t, async () => { throw Object.assign(new Error('boom'), { execution: { threadId: 'thr-x' } }); }, { home: '/homes/a' });
+  const task = await env.send('orch-writer-a', request(['a.txt']), { contextId: OLD_CONTEXT });
+  assert.equal(task.status.state, 4);
+  assert.equal(task.status.message.metadata.failureKind, 'other');
+  assert.equal(task.status.message.metadata.continuation.threadId, 'thr-x');
+  assert.equal(task.status.message.metadata.continuation.codexHome, '/homes/a');
+});

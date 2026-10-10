@@ -154,7 +154,9 @@ function assignmentResult(task, { onOversize } = {}) {
   const writerExecution = artifacts.map((artifact) => artifact.metadata?.writerExecution).find((entry) => entry && typeof entry === 'object')
     || (status?.message?.metadata?.writerExecution && typeof status.message.metadata.writerExecution === 'object' ? status.message.metadata.writerExecution : null);
   const effects = status?.message?.metadata?.effects;
-  const continuation = status?.message?.metadata?.continuation;
+  // The thread data of a finished turn: failure metadata, else the result artifact's metadata.
+  const continuation = status?.message?.metadata?.continuation
+    ?? artifacts.map((artifact) => artifact.metadata?.continuation).find((entry) => entry && typeof entry === 'object');
   const stateName = taskStateName(status?.state);
   const extras = typeof onOversize === 'function' && (artifactTexts.some((value) => value.length > MAX_REPORT_CHARS) || text.length > MAX_REPORT_CHARS)
     ? onOversize({ artifactTexts, joined: text, parseText: artifactTexts[0] || text, completed: stateName === 'TASK_STATE_COMPLETED', lanePath: lanePathOf(writerExecution) })
@@ -531,7 +533,8 @@ const RULE_REMINDERS = {
   'decision.goal': 'finish requires goalAchieved true or false: true only when the goal is met, false with the blockers named in final. Use null for dispatch and request_human_input.',
   'decision.acceptance_checks': `${CHECK_RULE} Use null to propose nothing.`,
   'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds.',
-  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, and wave; role must be an available role id.',
+  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, and continueFrom; role must be an available role id.',
+  'assignment.continue_from': 'continueFrom is null or the assignmentId of a finished outcome of this run with the same role; each such id may be used by one assignment of a decision.',
   'assignment.wave': 'wave is an integer >= 1 or null; consecutive assignments with the same wave run concurrently, and writers in one wave need pairwise disjoint allowedFiles; use null for sequential steps.',
   'assignment.skills': 'Select at most 5 unique skill IDs from the trusted listed skill IDs; use [] when none apply.',
   'assignment.role_ladder': 'Respect the role ladder: recovery-engineer follows an engineer attempt, senior-engineer follows recovery-engineer, and architect needs prior evidence and one narrow decision.',
@@ -761,6 +764,7 @@ function buildLeadGraph(deps) {
         ? { normalizations: analysis.report.normalizations.map((entry) => `${entry.field}: ${entry.action}`) } : {}),
       ...(analysis.report ? {} : { text: analysis.text ?? '' }),
       failureKind: result.failureKind || null,
+      ...(result.continuation ? { continuation: result.continuation } : {}),
       scopeViolations: violations,
       ...(violationCount > violations.length ? { scopeViolationCount: violationCount } : {}),
       writerExecution,
@@ -815,14 +819,15 @@ function buildLeadGraph(deps) {
         ...reminders].join('\n'));
     }
     // The objective is kept for the run digest only; the bounded prompt stays as before.
-    const promptOutcomes = state.outcomes.map(({ objective: _objective, ...outcome }) => outcome);
+    const promptOutcomes = state.outcomes.map(({ objective: _objective, continuation: _continuation, ...outcome }) => outcome);
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(boundedOutcomes(promptOutcomes)));
     sections.push([
-      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, and wave. Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles; read-only roles may use allowedFiles []. allowedFiles entries are exact paths or directory prefixes; globs are not supported. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
+      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, and continueFrom (null unless continuing a worker). Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles; read-only roles may use allowedFiles []. allowedFiles entries are exact paths or directory prefixes; globs are not supported. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
       deps.parallelWriters
         ? 'Waves: assignment.wave is an integer >= 1 or null. Consecutive assignments sharing the same wave run concurrently. Writers in one wave each work in an isolated copy of the workspace made from the same starting state and do not see each other\'s changes; their changes are integrated into the shared workspace as each finishes. A later wave (or a null-wave assignment after them), for example a verifier, sees the integrated result. Writers in one wave must own disjoint allowedFiles. Use null for strictly sequential steps.'
         : 'Waves: assignment.wave may be used to group read-only work that runs concurrently. Writers always run one at a time in array order regardless of wave. Use null otherwise.',
       'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, humanInput, goalAchieved, and acceptanceChecks. Use empty arrays, an empty string, or null for unused fields.',
+      'Repair and debugging assignments should use directory prefixes that cover the module and its tests, not single files. When a worker reports scopeExpansion or asks for a scope decision, prefer re-dispatching with continueFrom set to that outcome\'s assignmentId (same role) and the expanded allowedFiles over a fresh assignment: the worker continues its own thread instead of re-discovering its context.',
       'Worker decision requests are open decisions: resolve each one yourself (resolutions: decisionId, choice, rationale) when the evidence supports a choice, otherwise escalate it (humanInput.relatedDecisionIds); never leave one unanswered. Worker reports are self-reported; check scopeViolations and reportError.',
       'Escalate with request_human_input (reason missing_authority, irreversible_or_external, or product_choice; name the blockers, give options, a recommendation, the evidence checked, and the independent work that can proceed) as soon as a blocker needs owner authority, external or live resources, or a change of scope or acceptance criteria, or the same blocker survived two rounds. Do not keep dispatching around such a blocker.',
       'goalAchieved: on finish set it honestly, true only when the goal is met; false names the blockers in final and hands the run to the owner. Use null for dispatch and request_human_input.',
@@ -964,6 +969,7 @@ function buildLeadGraph(deps) {
         outcomeCount: state.outcomes.length,
         unresolvedWriterCount: state.unresolvedWriters.length,
         openDecisionIds: new Set(state.openDecisions.map((entry) => entry.id)),
+        continuable: new Map(state.outcomes.filter((outcome) => !outcome.kind && outcome.assignmentId).map((outcome) => [outcome.assignmentId, outcome.role])),
         skillCatalog,
         skillCandidateIds: candidateIds,
       });
@@ -1113,8 +1119,9 @@ function buildLeadGraph(deps) {
       }
     }
 
+    const { continueFrom: _continueFrom, ...assignmentFields } = item.assignment || {};
     const text = JSON.stringify({
-      ...item.assignment,
+      ...assignmentFields,
       assignmentId: item.assignmentId,
       workspace,
       reportContract: REPORT_CONTRACT_LINE,
@@ -1190,6 +1197,8 @@ function buildLeadGraph(deps) {
           const assignmentId = makeAssignmentId(state.runId, round, index);
           const attemptId = makeAttemptId(assignmentId);
           const role = getRole(roles, assignment.role);
+          // LL-5: continue the thread of an earlier outcome with the new (usually expanded) scope.
+          const origin = assignment.continueFrom ? state.outcomes.find((outcome) => !outcome.kind && outcome.assignmentId === assignment.continueFrom) : null;
           return {
             runId: state.runId,
             assignmentId,
@@ -1198,6 +1207,15 @@ function buildLeadGraph(deps) {
             role: assignment.role,
             sandbox: role.sandbox,
             assignment,
+            ...(origin ? {
+              continuation: {
+                ofAttemptId: origin.attemptId,
+                threadId: origin.continuation?.threadId ?? null,
+                laneId: origin.continuation?.laneId ?? null,
+                codexHome: origin.continuation?.codexHome ?? null,
+                reason: 'scope',
+              },
+            } : {}),
             group: groupOf.get(index),
             contract: {
               id: BOUNDARY_CONTRACT_ID,

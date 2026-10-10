@@ -9,7 +9,7 @@ const MAX_CHARS = 3_000;
 const TRUNCATION_SUFFIX = '... [truncated]';
 const WORKER_REPORT_CONTRACT = 'worker-report/v1';
 const ASSIGNMENT_FIELDS = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
-const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'wave'];
+const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom'];
 const DECISION_BASE_KEYS = ['action', 'assignments', 'final', 'resolutions', 'humanInput'];
 const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks'];
 const ASSIGNMENT_ARRAY_FIELDS = ASSIGNMENT_FIELDS.filter((field) => field !== 'role' && field !== 'objective');
@@ -30,6 +30,7 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'assignment.paths': Object.freeze(['path_unsafe', 'path_glob_unsupported']),
   'assignment.skills': Object.freeze(['skill_invalid']),
   'assignment.wave': Object.freeze(['wave_invalid', 'wave_scope_overlap']),
+  'assignment.continue_from': Object.freeze(['continue_from_unknown', 'continue_from_role', 'continue_from_duplicate']),
   'dispatch.skill_pins': Object.freeze(['skill_pin_drift']),
   'dispatch.writer_admission': Object.freeze(['fenced', 'admission_blocked']),
   'assignment.role_ladder': Object.freeze(['role_ladder_violation', 'architect_constraint']),
@@ -137,6 +138,7 @@ const DECISION_SCHEMA = {
           stopConditions: stringArray,
           skills: { type: 'array', items: { type: 'string' }, maxItems: 5 },
           wave: { type: ['integer', 'null'], minimum: 1 },
+          continueFrom: { type: ['string', 'null'] },
         },
       },
     },
@@ -331,22 +333,42 @@ function parseWorkerReport(text) {
   return { report: result.report, error: null };
 }
 
+// LL-5: continueFrom names a finished outcome of this run with the same role, used once per decision.
+// ctx.continuable is a Map of assignmentId -> role of the finished outcomes.
+function checkContinueFrom(assignment, role, decision, ctx) {
+  const id = assignment.continueFrom;
+  if (id === null) return;
+  if (!isNonEmptyString(id)) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} needs continueFrom as a non-empty string or null`);
+  const originRole = ctx.continuable?.get(id);
+  if (originRole === undefined) {
+    throw violation('assignment.continue_from', 'continue_from_unknown', `continueFrom ${id} is not the assignmentId of a finished outcome in this run`);
+  }
+  if (canonicalRoleId(originRole) !== canonicalRoleId(role.name)) {
+    throw violation('assignment.continue_from', 'continue_from_role', `continueFrom ${id} belongs to role ${originRole}, not ${role.name}`);
+  }
+  if (decision.assignments.some((other) => other !== assignment && isPlainObject(other) && other.continueFrom === id)) {
+    throw violation('assignment.continue_from', 'continue_from_duplicate', `continueFrom ${id} is used by more than one assignment of this decision`);
+  }
+}
+
 function checkAssignment(assignment, decision, ctx) {
   if (!isPlainObject(assignment)) throw violation('assignment.shape', 'assignment_shape_invalid', 'Each assignment must be an object');
   const keys = Object.keys(assignment);
   const shapeOk = ASSIGNMENT_FIELDS.every((field) => keys.includes(field)) && keys.every((field) => DECISION_ASSIGNMENT_FIELDS.includes(field));
   if (!shapeOk) {
-    throw violation('assignment.shape', 'assignment_shape_invalid', 'Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and optionally skills and wave');
+    throw violation('assignment.shape', 'assignment_shape_invalid', 'Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and optionally skills, wave, and continueFrom');
   }
   // Older checkpoints and callers predate assignment skill routing and waves.
   if (!keys.includes('skills')) assignment.skills = [];
   if (!keys.includes('wave')) assignment.wave = null;
+  if (!keys.includes('continueFrom')) assignment.continueFrom = null;
   if (assignment.wave !== null && !(Number.isInteger(assignment.wave) && assignment.wave >= 1)) {
     throw violation('assignment.wave', 'wave_invalid', `Assignment wave must be an integer >= 1 or null, got ${JSON.stringify(assignment.wave)}`);
   }
   const role = getRole(ctx.roles, assignment.role);
   if (!role) throw violation('assignment.shape', 'role_unknown', `Unknown role: ${String(assignment.role)}`);
   assignment.role = role.name;
+  checkContinueFrom(assignment, role, decision, ctx);
   if (!isNonEmptyString(assignment.objective)) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} needs an objective`);
   if (assignment.objective.length > MAX_CHARS) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} exceeds the size limit for objective`);
   for (const field of ASSIGNMENT_ARRAY_FIELDS) {
@@ -468,13 +490,15 @@ function checkSpecialistRequest(request, role, { workspace } = {}) {
   return out;
 }
 
-// Continuation of a usage-limited attempt: { ofAttemptId, threadId, laneId, codexHome }.
+// Continuation of an earlier attempt: { ofAttemptId, threadId, laneId, codexHome } after a usage limit, or
+// the same plus reason 'scope' when the lead re-dispatched with expanded scope (LL-5).
 function checkContinuation(value, label) {
   const bad = (detail) => violation('assignment.shape', 'field_invalid', `Request for ${label}: continuation ${detail}`);
   if (!isPlainObject(value)) throw bad('must be an object');
-  const unknown = Object.keys(value).filter((key) => !['ofAttemptId', 'threadId', 'laneId', 'codexHome'].includes(key));
+  const unknown = Object.keys(value).filter((key) => !['ofAttemptId', 'threadId', 'laneId', 'codexHome', 'reason'].includes(key));
   if (unknown.length) throw bad(`has an unknown key: ${unknown[0]}`);
   if (!isNonEmptyString(value.ofAttemptId)) throw bad('needs a non-empty ofAttemptId');
+  if (value.reason !== undefined && value.reason !== 'scope') throw bad('reason must be "scope" when present');
   for (const key of ['threadId', 'laneId', 'codexHome']) {
     const field = value[key];
     if (field !== undefined && field !== null && !isNonEmptyString(field)) throw bad(`${key} must be a non-empty string or null`);
@@ -484,6 +508,7 @@ function checkContinuation(value, label) {
     threadId: value.threadId ?? null,
     laneId: value.laneId ?? null,
     codexHome: value.codexHome ?? null,
+    ...(value.reason === 'scope' ? { reason: 'scope' } : {}),
   };
 }
 

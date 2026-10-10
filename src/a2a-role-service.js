@@ -117,6 +117,11 @@ const CONTINUE_INPUT = 'The usage limit has reset. Continue the assignment from 
 const CUT_OFF_NOTE = 'A previous attempt at this assignment was cut off by a usage limit; its partial changes are already in the working directory. Inspect them and finish the assignment.';
 const CUT_OFF_LANE_LOST_NOTE = 'A previous attempt at this assignment was cut off by a usage limit; its working copy could not be reused, so its partial changes are not available. Start the assignment again.';
 
+// LL-5: the lead re-dispatched a scope-stopped attempt with a new allowedFiles.
+const scopeResumeInput = (allowedFiles, input) => `The lead expanded your scope; allowedFiles is now: ${JSON.stringify(allowedFiles)}. Continue the assignment from where you stopped.\n${input}`;
+const SCOPE_FRESH_NOTE = 'A previous attempt at this assignment stopped because a needed file was outside its allowedFiles; the lead expanded the scope. Inspect the working directory for its partial changes and finish the assignment.';
+const SCOPE_FRESH_LANE_LOST_NOTE = 'A previous attempt at this assignment stopped because a needed file was outside its allowedFiles; the lead expanded the scope. Its working copy could not be reused, so its partial changes are not available. Start the assignment again.';
+
 // The assignment text without the lead's continuation key (a fresh thread must not see it).
 function withoutContinuation(input) {
   try {
@@ -346,19 +351,21 @@ function makeExecutor({
       let selectedSkills = [];
       // BUD-2: how a continuation request was served ({ laneAdopted, laneFallback, threadResumed }), else null.
       let continued = null;
-      // Thread of the last turn, for a usage-limit continuation metadata.
+      // Thread of the last turn, published as continuation metadata for every finished turn.
       let seenThreadId = null;
+      // laneId only while the lane row still exists, so an adopter can fall back cleanly.
+      const continuationMetadata = () => (seenThreadId ? {
+        continuation: {
+          threadId: seenThreadId,
+          laneId: lane && lanes?.store?.get?.(lane.id) ? lane.id : null,
+          codexHome: appServer.getCodexHome?.() ?? null,
+        },
+      } : {});
       const failedMetadata = (error) => {
         const base = failureMetadata(error);
         return {
           ...base,
-          ...(base.failureKind === 'usage_limit' && seenThreadId ? {
-            continuation: {
-              threadId: seenThreadId,
-              laneId: lane ? lane.id : null,
-              codexHome: appServer.getCodexHome?.() ?? null,
-            },
-          } : {}),
+          ...continuationMetadata(),
           ...(continued ? { continued } : {}),
           ...(writer ? { writerExecution: writer } : {}),
           ...(telemetry ? telemetry : {}),
@@ -615,12 +622,19 @@ function makeExecutor({
           if (continuation) {
             continued ??= { laneAdopted: false, laneFallback: null, threadResumed: false };
             // A lane writer whose lane is gone cannot claim its partial changes are present.
-            const laneLost = Boolean(continuation.laneId) && !continued.laneAdopted;
+            const scope = continuation.reason === 'scope';
+            let laneLost = Boolean(continuation.laneId) && !continued.laneAdopted;
+            // A scope stop normally integrates its lane: the changes are in the workspace and the thread stays valid.
+            if (scope && continued.laneFallback === 'lane_state_integrated') laneLost = false;
             const sameHome = (appServer.getCodexHome?.() ?? null) === (continuation.codexHome ?? null);
-            const freshInput = `${laneLost ? CUT_OFF_LANE_LOST_NOTE : CUT_OFF_NOTE}\n${withoutContinuation(input)}`;
+            const plainInput = withoutContinuation(input);
+            const freshNote = scope
+              ? (laneLost ? SCOPE_FRESH_LANE_LOST_NOTE : SCOPE_FRESH_NOTE)
+              : (laneLost ? CUT_OFF_LANE_LOST_NOTE : CUT_OFF_NOTE);
+            const freshInput = `${freshNote}\n${plainInput}`;
             if (continuation.threadId && !laneLost && sameHome) {
               try {
-                result = await callRun(continuation.threadId, CONTINUE_INPUT);
+                result = await callRun(continuation.threadId, scope ? scopeResumeInput(structured.allowedFiles, plainInput) : CONTINUE_INPUT);
                 continued.threadResumed = true;
               } catch (error) {
                 // A rejected resume (thread gone or unusable) starts a fresh thread; nothing ran.
@@ -726,6 +740,7 @@ function makeExecutor({
                 boundary,
                 threadId: result.threadId || null,
                 ...(continued ? { continued } : {}),
+                ...continuationMetadata(),
             ...(selectedSkills.length ? { selectedSkills: selectedSkills.map(({ id, sha256 }) => ({ id, sha256 })) } : {}),
                 ...(writer ? { writerExecution: writer } : {}),
                 ...(telemetry ? telemetry : {}),
