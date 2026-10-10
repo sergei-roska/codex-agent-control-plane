@@ -752,6 +752,19 @@
     .acceptance-accepted { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
     .acceptance-rejected { background: rgba(244, 63, 94, 0.15); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.3); }
     .acceptance-none { background: var(--bg-elevated); color: var(--text-dim); }
+    .acceptance-checks { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-muted); }
+    .acceptance-checks-source { font-size: 11px; color: var(--text-dim); }
+    .acceptance-check-row { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+    .acceptance-check-id { font-weight: 600; color: var(--text-main); flex: none; }
+    .acceptance-check-argv {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
 
     /* History modal */
     .modal-overlay {

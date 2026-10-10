@@ -611,6 +611,26 @@
       const last = lastTurn();
       badge.className = 'acceptance-pill acceptance-none';
       badge.textContent = 'no checks';
+      const checksEl = document.getElementById('acceptanceChecks');
+      const contract = last?.metadata?.acceptanceContract;
+      const checks = Array.isArray(contract?.requiredChecks) ? contract.requiredChecks : [];
+      checksEl.replaceChildren();
+      checksEl.classList.toggle('hidden', checks.length === 0);
+      if (checks.length > 0) {
+        badge.textContent = checks.length + (checks.length === 1 ? ' check' : ' checks');
+        checksEl.appendChild(textEl('div', 'acceptance-checks-source',
+          'Acceptance checks, ' + (contract.source === 'agent' ? 'proposed by the lead' : 'set by you')));
+        for (const check of checks) {
+          const argv = Array.isArray(check.argv) ? check.argv.join(' ') : '';
+          const row = document.createElement('div');
+          row.className = 'acceptance-check-row';
+          row.appendChild(textEl('span', 'acceptance-check-id', String(check.id ?? '')));
+          const argvEl = textEl('span', 'acceptance-check-argv', argv);
+          argvEl.title = argv;
+          row.appendChild(argvEl);
+          checksEl.appendChild(row);
+        }
+      }
       if (!last) {
         label.textContent = pendingTurn ? 'Status: task in progress...' : 'Status: waiting to start';
         return;
@@ -623,7 +643,7 @@
         const disposition = last.artifacts?.at(-1)?.metadata?.acceptance?.disposition;
         badge.className = 'acceptance-pill ' + (disposition === 'accepted' ? 'acceptance-accepted'
           : disposition === 'rejected' ? 'acceptance-rejected' : 'acceptance-none');
-        badge.textContent = acceptanceLabel(disposition);
+        if (disposition || checks.length === 0) badge.textContent = acceptanceLabel(disposition);
       } else if (state === 'TASK_STATE_FAILED' || state === 4) label.textContent = 'Status: FAILED';
       else label.textContent = 'Status: ' + state;
     }
