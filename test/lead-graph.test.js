@@ -3052,3 +3052,94 @@ test('check_changed: only an explicit PRD change reaches the owner, who may appr
     assert.deepEqual(values.contract.requiredChecks[0].pins, [{ path: 'scripts/gate.sh', sha256: sha256Of(GATE_CHANGED) }]);
   }, { workspace, orchestrator: { runCheckImpl: hostRunRefused } });
 });
+
+// ------------------------------------------------- per-project role overrides (ROLE-01)
+
+const { createLeadRole } = require('../src/role-catalog');
+const { createRoleOverrideSource, writeOverridesFile, RULES_HEADING } = require('../src/role-overrides');
+
+const profileHash = (r) => crypto.createHash('sha256').update(JSON.stringify([r.name, r.sandbox, r.model, r.effort, r.instructions || '']), 'utf8').digest('hex');
+const overrideSource = (file) => createRoleOverrideSource({ file, roles: roles(), leadRole: createLeadRole() });
+const overridesPath = () => path.join(tmpRoot, `overrides-${dbCounter += 1}`, 'role-overrides.json');
+
+test('a worker override changes the effective role and the pinned roleProfileSha256 describes it', async () => {
+  const file = overridesPath();
+  const base = roles().get('orch-builder');
+  const effective = { ...base, model: 'gpt-6-luna', effort: 'low', instructions: `${base.instructions}\n\n${RULES_HEADING}\nKeep diffs small.` };
+  const plain = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('Done')], workerFinal: okWriterFinal() });
+  await withSession(plain, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.equal(outcome.contract.roleProfileSha256, profileHash(base));
+  }, { orchestrator: { roleSource: overrideSource(file) } });
+  writeOverridesFile(file, { engineer: { model: 'gpt-6-luna', effort: 'low', extraRules: 'Keep diffs small.' } });
+  const world = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('Done')], workerFinal: okWriterFinal() });
+  await withSession(world, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.equal(outcome.contract.roleProfileSha256, profileHash(effective));
+    assert.notEqual(outcome.contract.roleProfileSha256, profileHash(base));
+    // The lead is told the effective model and effort of the role.
+    assert.match(world.prompts[0], /"id":"engineer"[^\n]*"model":"gpt-6-luna","effort":"low"/);
+  }, { orchestrator: { roleSource: overrideSource(file) } });
+});
+
+test('an override written after the graph was built applies to the next lead turn without a restart', async () => {
+  const file = overridesPath();
+  const source = overrideSource(file);
+  const world = sessionWorld([finish('A'), finish('B')]);
+  const seen = [];
+  const run = world.appServer.run;
+  world.appServer.run = async (args) => { seen.push(args.role); return run(args); };
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
+    writeOverridesFile(file, { coordinator: { model: 'gpt-6-luna', effort: 'high', extraRules: 'Be terse.' } });
+    await session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION });
+  }, { withSessions: true, orchestrator: { roleSource: source } });
+  assert.equal(seen[0].effort, 'medium');
+  assert.equal(seen[1].model, 'gpt-6-luna');
+  assert.equal(seen[1].effort, 'high');
+  assert.ok(seen[1].instructions.endsWith(`${RULES_HEADING}\nBe terse.`));
+  assert.equal(seen[1].sandbox, 'read-only');
+});
+
+test('a changed lead profile rolls the session over to a new thread; an unchanged one resumes', async () => {
+  const file = overridesPath();
+  const world = sessionWorld([finish('A'), finish('B'), finish('C'), finish('D')]);
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
+    const first = session.sessions.get(SESSION);
+    assert.equal(first.profileSha256, profileHash(createLeadRole()));
+    // Unchanged profile: the thread is resumed.
+    await session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION });
+    assert.deepEqual(world.threadArgs, [undefined, 'thread-1']);
+    assert.equal(session.sessions.get(SESSION).rollovers, 0);
+    // Changed lead profile: a new thread with the full prompt, recorded under the new hash.
+    writeOverridesFile(file, { coordinator: { extraRules: 'Be terse.' } });
+    await session.orchestrator.run({ goal: 'C', runId: 'run-3', contextId: SESSION });
+    assert.deepEqual(world.threadArgs, [undefined, 'thread-1', undefined]);
+    assert.match(world.prompts[2], /Available roles:/);
+    const rolled = session.sessions.get(SESSION);
+    assert.equal(rolled.threadId, 'thread-2');
+    assert.equal(rolled.rollovers, 1);
+    assert.notEqual(rolled.profileSha256, first.profileSha256);
+    // The same changed profile keeps the new thread.
+    await session.orchestrator.run({ goal: 'D', runId: 'run-4', contextId: SESSION });
+    assert.deepEqual(world.threadArgs, [undefined, 'thread-1', undefined, 'thread-2']);
+    assert.equal(session.sessions.get(SESSION).rollovers, 1);
+  }, { withSessions: true, orchestrator: { roleSource: overrideSource(file) } });
+});
+
+test('an invalid or removed overrides file falls back to the profile defaults for the lead and the workers', async () => {
+  const file = overridesPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '{ nope');
+  const world = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('Done')], workerFinal: okWriterFinal() });
+  const seen = [];
+  const run = world.appServer.run;
+  world.appServer.run = async (args) => { seen.push(args.role); return run(args); };
+  await withSession(world, async (session) => {
+    const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
+    assert.equal(outcome.contract.roleProfileSha256, profileHash(roles().get('orch-builder')));
+  }, { orchestrator: { roleSource: createRoleOverrideSource({ file, roles: roles(), leadRole: createLeadRole() }) } });
+  assert.equal(seen[0].model, createLeadRole().model);
+  assert.equal(seen[0].effort, createLeadRole().effort);
+});

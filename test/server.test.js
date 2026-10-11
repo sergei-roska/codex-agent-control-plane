@@ -1703,3 +1703,72 @@ test('startup gives the orchestrator a session thread store on the state databas
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('role overrides from the project file reach the orchestrator and the roles; an invalid file never blocks startup', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'server-role-overrides-'));
+  const file = path.join(dir, 'role-overrides.json');
+  const start = async (extra = {}) => {
+    let options;
+    const runtime = await startServer({
+      port: 0,
+      stateFile: ':memory:',
+      tokenFile: path.join(dir, 'a2a-token'),
+      appServer: CHATGPT_APP_SERVER(),
+      listen: false,
+      orchestratorFactory(received) {
+        options = received;
+        return { async run() { return { status: 'completed', text: 'ok' }; } };
+      },
+      ...extra,
+    });
+    return { runtime, options };
+  };
+  const warn = console.warn;
+  const warnings = [];
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    fs.writeFileSync(file, JSON.stringify({ version: 1, roles: { coordinator: { model: 'gpt-6-luna', effort: 'high' }, architect: { effort: 'low' } } }));
+    const ok = await start({ roleOverridesFile: file });
+    try {
+      assert.equal(ok.options.leadRole.model, 'gpt-6-luna');
+      assert.equal(ok.options.roles.get('architect').effort, 'low');
+      assert.equal(ok.options.roleSource.leadRole().effort, 'high');
+      // The file is the only source: a later edit shows through the source without a restart.
+      fs.writeFileSync(file, JSON.stringify({ version: 1, roles: { architect: { effort: 'medium' } } }));
+      assert.equal(ok.options.roleSource.roles().get('architect').effort, 'medium');
+      assert.equal(ok.options.roleSource.leadRole().model, require('../src/role-catalog').createLeadRole().model);
+    } finally {
+      await ok.runtime.close();
+    }
+
+    fs.writeFileSync(file, '{ nope');
+    const bad = await start({ roleOverridesFile: file });
+    try {
+      assert.equal(bad.options.leadRole.model, require('../src/role-catalog').createLeadRole().model);
+      assert.ok(warnings.some((message) => /\[roles\] Role overrides ignored/.test(message)));
+    } finally {
+      await bad.runtime.close();
+    }
+
+    const previous = process.env.CODEX_A2A_ROLE_OVERRIDES;
+    process.env.CODEX_A2A_ROLE_OVERRIDES = file;
+    fs.writeFileSync(file, JSON.stringify({ version: 1, roles: { coordinator: { effort: 'xhigh' } } }));
+    try {
+      const viaEnv = await start();
+      try {
+        assert.equal(viaEnv.options.leadRole.effort, 'xhigh');
+      } finally {
+        await viaEnv.runtime.close();
+      }
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_A2A_ROLE_OVERRIDES;
+      else process.env.CODEX_A2A_ROLE_OVERRIDES = previous;
+    }
+  } finally {
+    console.warn = warn;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

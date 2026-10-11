@@ -125,6 +125,10 @@ describe('add', () => {
     assert.equal(second.stateDb, path.join(tmp, 'rt2', 'projects', second.id, 'state.sqlite'));
     assert.equal(other.stateDbPath(first.id), first.stateDb);
     assert.equal(other.baseUrl(first.id), `http://127.0.0.1:${first.port}`);
+    // Role overrides never follow the legacy state db: every project gets its own directory.
+    assert.equal(other.roleOverridesPath(first.id), path.join(tmp, 'rt2', 'projects', first.id, 'role-overrides.json'));
+    assert.equal(other.roleOverridesPath(second.id), path.join(tmp, 'rt2', 'projects', second.id, 'role-overrides.json'));
+    assert.throws(() => other.roleOverridesPath('zzzzzzzzzz'), (e) => e.code === 'not_found');
   });
 });
 
@@ -181,6 +185,8 @@ describe('start', () => {
     assert.equal(s.opts.env.PORT, String(p.port));
     assert.equal(s.opts.env.CODEX_WORKSPACE, p.path);
     assert.equal(s.opts.env.CODEX_A2A_STATE_DB, p.stateDb);
+    assert.equal(s.opts.env.CODEX_A2A_ROLE_OVERRIDES, path.join(tmp, 'runtime', 'projects', p.id, 'role-overrides.json'));
+    assert.ok(fs.existsSync(path.dirname(s.opts.env.CODEX_A2A_ROLE_OVERRIDES)));
     assert.ok(fs.existsSync(path.dirname(p.stateDb)));
     assert.equal(manager.get(p.id).pid, s.child.pid);
     assert.match(manager.status(p.id).logs[0], /^\[LAUNCHER\] Starting orchestrator for workspace: .* on port \d+\n$/);

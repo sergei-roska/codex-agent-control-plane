@@ -1063,3 +1063,44 @@ test('ends the live activity of a canceled worker turn', async () => {
   }
   assert.deepEqual([row.phase, row.summary, row.ended_at !== null], ['done', 'canceled', true]);
 });
+
+test('a role override is applied from the next dispatch and the base roles stay untouched', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { createRoleOverrideSource, writeOverridesFile, RULES_HEADING } = require('../src/role-overrides');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-role-overrides-'));
+  try {
+    const file = path.join(dir, 'role-overrides.json');
+    const roleSource = createRoleOverrideSource({ file, roles, leadRole: { name: 'coordinator', model: 'lead', effort: 'low', instructions: 'Lead.' } });
+    const calls = [];
+    const { agents, context } = makeService({
+      async run(options) {
+        calls.push(options.role);
+        return { threadId: 'thread', turnId: 'turn', status: 'completed', text: 'ok' };
+      },
+    }, { roleSource });
+    const send = (id, text) => agents.get(id).handler.sendMessage(sendParams(message(text)), context);
+
+    await send('orch-planner', 'first');
+    writeOverridesFile(file, { 'orch-planner': { model: 'gpt-6-luna', effort: 'high', extraRules: 'Plan in two steps.' } });
+    await send('orch-planner', 'second');
+    await send('orch-reviewer', 'review');
+    writeOverridesFile(file, {});
+    await send('orch-planner', 'third');
+
+    assert.deepEqual(calls.map((role) => [role.id, role.model, role.effort]), [
+      ['orch-planner', 'test', 'low'],
+      ['orch-planner', 'gpt-6-luna', 'high'],
+      ['orch-reviewer', 'test', 'low'],
+      ['orch-planner', 'test', 'low'],
+    ]);
+    assert.equal(calls[0].instructions, 'Plan.');
+    assert.equal(calls[1].instructions, `Plan.\n\n${RULES_HEADING}\nPlan in two steps.`);
+    assert.equal(calls[1].sandbox, 'read-only');
+    assert.equal(calls[3].instructions, 'Plan.');
+    assert.equal(roles.get('orch-planner').model, 'test');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

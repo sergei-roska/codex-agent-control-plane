@@ -625,8 +625,20 @@ const LeadState = Annotation.Root({
  */
 function buildLeadGraph(deps) {
   const {
-    appServer, roles, leadRole, workspace, maxRounds, journal, pollIntervalMs,
+    appServer, workspace, maxRounds, journal, pollIntervalMs,
   } = deps;
+  // Per-project role overrides can change between turns: every graph node starts from the current
+  // roles of deps.roleSource (one read), so pinned hashes describe the roles that actually run.
+  let { roles, leadRole } = deps;
+  const syncRoles = () => {
+    if (!deps.roleSource) return;
+    roles = deps.roleSource.roles();
+    leadRole = deps.roleSource.leadRole();
+  };
+  const withRoles = (node) => (state, config) => {
+    syncRoles();
+    return node(state, config);
+  };
   const skillCatalog = deps.skillCatalog || loadSkillCatalog();
   const { admission } = deps;
   const reconcileWaitMs = Number.isFinite(deps.reconcileWaitMs) ? deps.reconcileWaitMs : DEFAULT_RECONCILE_WAIT_MS;
@@ -1107,11 +1119,16 @@ function buildLeadGraph(deps) {
     const sessions = contextId ? deps.sessionThreads : null;
     const codexHome = appServer.getCodexHome?.() ?? null;
     const session = sessions ? sessions.get(contextId) : null;
+    // ROLE-01: the lead profile of this turn (project overrides included). A thread started under another
+    // profile keeps the old instructions, so a changed hash rolls the session over to a new thread.
+    const lead = leadRole;
+    const leadProfileSha256 = roleProfileSha256(lead);
     let threadId = null;
     let rolledOver = false;
     if (state.retryDecide && state.threadId) threadId = state.threadId;
     else if (session?.threadId) {
-      if (session.codexHome === codexHome && (session.lastInputTokens == null || session.lastInputTokens <= rolloverThreshold(session.contextWindow))) threadId = session.threadId;
+      const sameProfile = !session.profileSha256 || session.profileSha256 === leadProfileSha256;
+      if (sameProfile && session.codexHome === codexHome && (session.lastInputTokens == null || session.lastInputTokens <= rolloverThreshold(session.contextWindow))) threadId = session.threadId;
       else rolledOver = true;
     }
     const goalKey = state.goalOverride || state.goal;
@@ -1131,7 +1148,7 @@ function buildLeadGraph(deps) {
     const activity = deps.activityStore?.begin({ key: `lead:${state.runId}`, runId: state.runId, role: 'coordinator' });
     let activityOutcome = 'failed';
     const runLead = async (resumeThreadId) => appServer.run({
-      role: leadRole,
+      role: lead,
       cwd: workspace,
       input: await turnInputs(resumeThreadId),
       ...(resumeThreadId ? { threadId: resumeThreadId } : {}),
@@ -1177,6 +1194,7 @@ function buildLeadGraph(deps) {
           contextWindow: Number.isFinite(contextWindow) ? contextWindow : null,
           runId: state.runId,
           rolledOver,
+          profileSha256: leadProfileSha256,
         });
       } catch (_) { /* Session bookkeeping never breaks a run. */ }
     }
@@ -2054,18 +2072,18 @@ function buildLeadGraph(deps) {
   };
 
   const graph = new StateGraph(LeadState)
-    .addNode('intake', intake)
-    .addNode('decide', decide)
-    .addNode('dispatch', dispatch)
-    .addNode('collect', collect)
-    .addNode('verify', verify)
-    .addNode('reconcile', reconcile)
-    .addNode('human_input', humanInput)
-    .addNode('budget_pause', budgetPause)
-    .addNode('continue_limited', continueLimited)
-    .addNode('accept', accept)
-    .addNode('review_check', reviewCheck)
-    .addNode('finish', finish)
+    .addNode('intake', withRoles(intake))
+    .addNode('decide', withRoles(decide))
+    .addNode('dispatch', withRoles(dispatch))
+    .addNode('collect', withRoles(collect))
+    .addNode('verify', withRoles(verify))
+    .addNode('reconcile', withRoles(reconcile))
+    .addNode('human_input', withRoles(humanInput))
+    .addNode('budget_pause', withRoles(budgetPause))
+    .addNode('continue_limited', withRoles(continueLimited))
+    .addNode('accept', withRoles(accept))
+    .addNode('review_check', withRoles(reviewCheck))
+    .addNode('finish', withRoles(finish))
     .addEdge(START, 'intake')
     .addEdge('intake', 'decide')
     .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'budget_pause', 'human_input', 'dispatch', 'decide'])

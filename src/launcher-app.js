@@ -10,6 +10,15 @@ const { parseCheckCommand } = require('./acceptance');
 const { CodexAppServer } = require('./codex-app-server');
 const { createAccountProfiles } = require('./account-profiles');
 const { loadRoles, createLeadRole } = require('./role-catalog');
+const { canonicalRoleId } = require('./role-names');
+const {
+  RoleOverrideError,
+  normalizeOverride,
+  resolveRoleName,
+  readOverridesFile,
+  writeOverridesFile,
+  effectiveRole,
+} = require('./role-overrides');
 const { ProjectError } = require('./launcher-projects');
 const {
   SessionError,
@@ -279,24 +288,82 @@ function createLauncherApp({
   });
 
   // API: team description for the "about" card
+  const pickRole = (r) => ({
+    name: r.name,
+    displayName: r.displayName || r.name,
+    description: r.description,
+    model: r.model,
+    effort: r.effort,
+    sandbox: r.sandbox,
+    tools: { mcpServers: r.tools.mcpServers, skills: r.tools.skills },
+  });
+
   app.get('/api/team', (req, res) => {
     try {
-      const pick = (r) => ({
-        name: r.name,
-        displayName: r.displayName || r.name,
-        description: r.description,
-        model: r.model,
-        effort: r.effort,
-        sandbox: r.sandbox,
-        tools: { mcpServers: r.tools.mcpServers, skills: r.tools.skills },
-      });
       res.json({
-        lead: pick(createLeadRole()),
-        roles: Array.from(loadRoles().values()).map(pick),
+        lead: pickRole(createLeadRole()),
+        roles: Array.from(loadRoles().values()).map(pickRole),
       });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // ROLE-01: the team of one project with its role overrides applied (model, effort, extra rules).
+  function projectTeam(file) {
+    const baseLead = createLeadRole();
+    const baseRoles = loadRoles();
+    const { roles: overrides, warning } = readOverridesFile(file, [...baseRoles.keys()]);
+    const describe = (base) => {
+      const override = overrides[canonicalRoleId(base.name)] || null;
+      return {
+        ...pickRole(effectiveRole(base, override)),
+        defaults: { model: base.model, effort: base.effort },
+        override: override ? { model: override.model ?? null, effort: override.effort ?? null, extraRules: override.extraRules ?? null } : null,
+      };
+    };
+    const all = [baseLead, ...baseRoles.values()];
+    return {
+      lead: describe(baseLead),
+      roles: [...baseRoles.values()].map(describe),
+      models: [...new Set(all.map((role) => role.model))].sort(),
+      warning,
+    };
+  }
+
+  app.get('/api/projects/:id/team', (req, res) => {
+    try {
+      res.json(projectTeam(projects.roleOverridesPath(req.params.id)));
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Read-modify-write of the overrides file; it is synchronous, so concurrent requests cannot interleave.
+  function changeRoleOverride(req, res, build) {
+    try {
+      const file = projects.roleOverridesPath(req.params.id);
+      const known = [...loadRoles().keys()];
+      const name = resolveRoleName(req.params.role, known);
+      // A file that is invalid today is ignored by the server, so it is replaced rather than extended.
+      const roles = { ...readOverridesFile(file, known).roles };
+      const entry = build();
+      if (entry && Object.keys(entry).length > 0) roles[name] = entry;
+      else delete roles[name];
+      writeOverridesFile(file, roles);
+      res.json({ success: true, ...projectTeam(file) });
+    } catch (e) {
+      if (e instanceof RoleOverrideError) return res.status(400).json({ success: false, error: e.message });
+      res.status(500).json({ success: false, error: e.message || String(e) });
+    }
+  }
+
+  app.put('/api/projects/:id/roles/:role/override', (req, res) => {
+    changeRoleOverride(req, res, () => normalizeOverride(req.body));
+  });
+
+  app.delete('/api/projects/:id/roles/:role/override', (req, res) => {
+    changeRoleOverride(req, res, () => null);
   });
 
   // Reads email, plan and both limit windows with a short-lived App Server for one Codex home.

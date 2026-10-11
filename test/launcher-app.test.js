@@ -39,6 +39,7 @@ function fakeProjects() {
     get: (id) => (fakeStatus[id] ? view(id) : null),
     baseUrl: (id) => 'http://127.0.0.1:' + view(id).port,
     stateDbPath: (id) => dbFiles[id],
+    roleOverridesPath: (id) => path.join(tmp, id, 'role-overrides.json'),
     touch: async (id) => { calls.push(['touch', id]); },
     add: async (p) => { maybeFail('add'); calls.push(['add', p]); return view(ID_A); },
     remove: async (id) => { maybeFail('remove'); calls.push(['remove', id]); return view(id); },
@@ -306,5 +307,121 @@ describe('favicon', () => {
   it('answers 204', async () => {
     const res = await fetch(base + '/favicon.ico');
     assert.equal(res.status, 204);
+  });
+});
+
+describe('role overrides', () => {
+  const overridesFile = (id) => path.join(tmp, id, 'role-overrides.json');
+  const find = (team, name) => [team.lead, ...team.roles].find((role) => role.name === name);
+
+  beforeEach(() => {
+    fs.rmSync(overridesFile(ID_A), { force: true });
+    fs.rmSync(overridesFile(ID_B), { force: true });
+  });
+
+  it('serves the team of a project with defaults, override, and the models list', async () => {
+    const r = await api('GET', `/api/projects/${ID_A}/team`);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.lead.name, 'coordinator');
+    assert.equal(r.body.lead.override, null);
+    assert.deepEqual(r.body.lead.defaults, { model: r.body.lead.model, effort: r.body.lead.effort });
+    assert.ok(r.body.models.includes(r.body.lead.model));
+    assert.deepEqual(r.body.models, [...r.body.models].sort());
+    assert.equal(new Set(r.body.models).size, r.body.models.length);
+    assert.equal(r.body.warning, null);
+    assert.equal((await api('GET', '/api/projects/dddddddddd/team')).status, 404);
+  });
+
+  it('PUT stores an override per project atomically and the team shows the effective values', async () => {
+    const before = await api('GET', `/api/projects/${ID_A}/team`);
+    const base = find(before.body, 'architect');
+    const r = await api('PUT', `/api/projects/${ID_A}/roles/architect/override`, { model: 'gpt-6-luna', effort: 'low', extraRules: '  Prefer small modules.  ' });
+    assert.equal(r.status, 200);
+    const architect = find(r.body, 'architect');
+    assert.equal(architect.model, 'gpt-6-luna');
+    assert.equal(architect.effort, 'low');
+    assert.deepEqual(architect.defaults, { model: base.model, effort: base.effort });
+    assert.deepEqual(architect.override, { model: 'gpt-6-luna', effort: 'low', extraRules: 'Prefer small modules.' });
+    const file = JSON.parse(fs.readFileSync(overridesFile(ID_A), 'utf8'));
+    assert.equal(file.version, 1);
+    assert.deepEqual(file.roles, { architect: { model: 'gpt-6-luna', effort: 'low', extraRules: 'Prefer small modules.' } });
+    assert.match(file.updatedAt, /^\d{4}-\d\d-\d\dT/);
+    assert.deepEqual(fs.readdirSync(path.dirname(overridesFile(ID_A))).filter((name) => name.includes('.tmp-')), []);
+    // Isolation: the other project is untouched and has no file.
+    const other = await api('GET', `/api/projects/${ID_B}/team`);
+    assert.equal(find(other.body, 'architect').override, null);
+    assert.equal(fs.existsSync(overridesFile(ID_B)), false);
+  });
+
+  it('overrides the lead through the coordinator name and keeps the other fields on a partial update', async () => {
+    const r = await api('PUT', `/api/projects/${ID_A}/roles/coordinator/override`, { effort: 'high' });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.lead.effort, 'high');
+    assert.equal(r.body.lead.model, r.body.lead.defaults.model);
+    assert.deepEqual(r.body.lead.override, { model: null, effort: 'high', extraRules: null });
+    // A legacy name resolves to the same role.
+    const legacy = await api('PUT', `/api/projects/${ID_A}/roles/orch-lead/override`, { effort: 'low' });
+    assert.equal(legacy.body.lead.effort, 'low');
+    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(overridesFile(ID_A), 'utf8')).roles), ['coordinator']);
+  });
+
+  it('empty fields clear; an all-empty PUT and DELETE reset the role', async () => {
+    await api('PUT', `/api/projects/${ID_A}/roles/engineer/override`, { model: 'gpt-6-luna', effort: 'low', extraRules: 'x' });
+    const partial = await api('PUT', `/api/projects/${ID_A}/roles/engineer/override`, { model: '', effort: 'high', extraRules: null });
+    assert.deepEqual(find(partial.body, 'engineer').override, { model: null, effort: 'high', extraRules: null });
+    const cleared = await api('PUT', `/api/projects/${ID_A}/roles/engineer/override`, { model: null, effort: '', extraRules: '   ' });
+    assert.equal(find(cleared.body, 'engineer').override, null);
+    await api('PUT', `/api/projects/${ID_A}/roles/auditor/override`, { effort: 'low' });
+    const reset = await api('DELETE', `/api/projects/${ID_A}/roles/auditor/override`);
+    assert.equal(reset.status, 200);
+    assert.equal(find(reset.body, 'auditor').override, null);
+    assert.deepEqual(JSON.parse(fs.readFileSync(overridesFile(ID_A), 'utf8')).roles, {});
+  });
+
+  it('rejects invalid input with 400 and a message, and writes nothing', async () => {
+    const put = (role, body) => api('PUT', `/api/projects/${ID_A}/roles/${role}/override`, body);
+    for (const [role, body, message] of [
+      ['architect', { model: 'claude-x' }, /Invalid model/],
+      ['architect', { effort: 'extreme' }, /Effort must be one of/],
+      ['architect', { extraRules: 'a {{TEAM_RULES}} b' }, /must not contain/],
+      ['architect', { extraRules: 'a }} b' }, /must not contain/],
+      ['architect', { extraRules: 'x'.repeat(4001) }, /limited to 4000/],
+      ['architect', { extraRules: 12 }, /must be text/],
+      ['architect', { model: 5 }, /Invalid model/],
+      ['architect', { bogus: 1 }, /Unknown override field/],
+      ['nobody', { effort: 'low' }, /Unknown role/],
+    ]) {
+      const r = await put(role, body);
+      assert.equal(r.status, 400, JSON.stringify(body).slice(0, 40));
+      assert.equal(r.body.success, false);
+      assert.match(r.body.error, message);
+    }
+    assert.equal((await put('architect', { extraRules: 'x'.repeat(4000) })).status, 200);
+    fs.rmSync(overridesFile(ID_A), { force: true });
+    assert.equal((await api('DELETE', `/api/projects/${ID_A}/roles/nobody/override`)).status, 400);
+    assert.equal(fs.existsSync(overridesFile(ID_A)), false);
+  });
+
+  it('an invalid file is reported as a warning, shows defaults, and is replaced by the next valid PUT', async () => {
+    fs.writeFileSync(overridesFile(ID_A), '{ broken');
+    const r = await api('GET', `/api/projects/${ID_A}/team`);
+    assert.equal(r.status, 200);
+    assert.match(r.body.warning, /Role overrides ignored/);
+    assert.equal(find(r.body, 'architect').override, null);
+    const put = await api('PUT', `/api/projects/${ID_A}/roles/architect/override`, { effort: 'low' });
+    assert.equal(put.status, 200);
+    assert.equal(put.body.warning, null);
+    assert.deepEqual(JSON.parse(fs.readFileSync(overridesFile(ID_A), 'utf8')).roles, { architect: { effort: 'low' } });
+  });
+
+  it('keeps the global team unchanged by project overrides', async () => {
+    await api('PUT', `/api/projects/${ID_A}/roles/architect/override`, { model: 'gpt-6-luna', effort: 'low', extraRules: 'x' });
+    const global = await api('GET', '/api/team');
+    assert.equal(global.status, 200);
+    const architect = global.body.roles.find((role) => role.name === 'architect');
+    assert.notEqual(architect.model, 'gpt-6-luna');
+    assert.equal('defaults' in architect, false);
+    assert.equal('override' in architect, false);
+    assert.equal('models' in global.body, false);
   });
 });

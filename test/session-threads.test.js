@@ -71,3 +71,24 @@ test('rows survive reopening the store on the same database', async () => {
   assert.equal(reopened.get('c1').threadId, 't1');
   await state.close();
 });
+
+test('the lead profile hash is stored, kept when omitted, replaced when given, and added to older databases', async () => {
+  const { state, store } = await open();
+  const first = store.upsert({ contextId: 'c1', threadId: 't1', profileSha256: 'hash-a' });
+  assert.equal(first.profileSha256, 'hash-a');
+  assert.equal(store.upsert({ contextId: 'c1', threadId: 't1', lastInputTokens: 5 }).profileSha256, 'hash-a');
+  assert.equal(store.upsert({ contextId: 'c1', threadId: 't2', profileSha256: 'hash-b', rolledOver: true }).profileSha256, 'hash-b');
+  assert.equal(store.upsert({ contextId: 'c2', threadId: 'x' }).profileSha256, null);
+  // A table from before the column existed gets it on construction and keeps its rows.
+  state.db.exec('DROP TABLE session_threads');
+  state.db.exec(`CREATE TABLE session_threads (
+    context_id TEXT PRIMARY KEY, thread_id TEXT, codex_home TEXT, last_input_tokens INTEGER, context_window INTEGER,
+    rollovers INTEGER NOT NULL DEFAULT 0, run_ids_json TEXT NOT NULL DEFAULT '[]', created_at TEXT, updated_at TEXT
+  )`);
+  state.db.exec("INSERT INTO session_threads (context_id, thread_id) VALUES ('old', 't-old')");
+  const migrated = new SessionThreads({ db: state.db });
+  assert.equal(migrated.get('old').threadId, 't-old');
+  assert.equal(migrated.get('old').profileSha256, null);
+  assert.equal(migrated.upsert({ contextId: 'old', threadId: 't-old', profileSha256: 'hash-c' }).profileSha256, 'hash-c');
+  await state.close();
+});

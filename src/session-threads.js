@@ -17,12 +17,17 @@ function createSessionThreadsTable(db) {
       rollovers INTEGER NOT NULL DEFAULT 0,
       run_ids_json TEXT NOT NULL DEFAULT '[]',
       created_at TEXT,
-      updated_at TEXT
+      updated_at TEXT,
+      profile_sha256 TEXT
     );
   `);
-  // Older state files have no context_window column.
-  if (!db.prepare("PRAGMA table_info('session_threads')").all().some((column) => column.name === 'context_window')) {
+  // Older state files have no context_window or profile_sha256 column.
+  const columns = db.prepare("PRAGMA table_info('session_threads')").all();
+  if (!columns.some((column) => column.name === 'context_window')) {
     db.exec('ALTER TABLE session_threads ADD COLUMN context_window INTEGER');
+  }
+  if (!columns.some((column) => column.name === 'profile_sha256')) {
+    db.exec('ALTER TABLE session_threads ADD COLUMN profile_sha256 TEXT');
   }
 }
 
@@ -36,6 +41,7 @@ function fromRow(row) {
     codexHome: row.codex_home ?? null,
     lastInputTokens: row.last_input_tokens ?? null,
     contextWindow: row.context_window ?? null,
+    profileSha256: row.profile_sha256 ?? null,
     rollovers: row.rollovers,
     runIds: Array.isArray(runIds) ? runIds : [],
     createdAt: row.created_at,
@@ -50,12 +56,12 @@ class SessionThreads {
     createSessionThreadsTable(db);
     this.selectStmt = db.prepare('SELECT * FROM session_threads WHERE context_id = ?');
     this.insertStmt = db.prepare(`
-      INSERT INTO session_threads (context_id, thread_id, codex_home, last_input_tokens, context_window, rollovers, run_ids_json, created_at, updated_at)
-      VALUES (@context_id, @thread_id, @codex_home, @last_input_tokens, @context_window, @rollovers, @run_ids_json, @now, @now)
+      INSERT INTO session_threads (context_id, thread_id, codex_home, last_input_tokens, context_window, profile_sha256, rollovers, run_ids_json, created_at, updated_at)
+      VALUES (@context_id, @thread_id, @codex_home, @last_input_tokens, @context_window, @profile_sha256, @rollovers, @run_ids_json, @now, @now)
     `);
     this.updateStmt = db.prepare(`
       UPDATE session_threads
-      SET thread_id = @thread_id, codex_home = @codex_home, last_input_tokens = @last_input_tokens, context_window = @context_window,
+      SET thread_id = @thread_id, codex_home = @codex_home, last_input_tokens = @last_input_tokens, context_window = @context_window, profile_sha256 = @profile_sha256,
           rollovers = @rollovers, run_ids_json = @run_ids_json, updated_at = @now
       WHERE context_id = @context_id
     `);
@@ -70,9 +76,10 @@ class SessionThreads {
   /**
    * Records the thread of a session after a lead turn. lastInputTokens is the context size (input of the
    * last model request) and contextWindow the model window, either may be null when unknown. `rolledOver` adds one to the rollover count;
-   * `runId` is appended to the session's run list (once).
+   * `runId` is appended to the session's run list (once). `profileSha256` is the hash of the lead profile the thread
+   * runs under; when omitted the stored one is kept.
    */
-  upsert({ contextId, threadId, codexHome = null, lastInputTokens = null, contextWindow = null, runId = null, rolledOver = false }) {
+  upsert({ contextId, threadId, codexHome = null, lastInputTokens = null, contextWindow = null, runId = null, rolledOver = false, profileSha256 = null }) {
     if (typeof contextId !== 'string' || !contextId) throw new TypeError('contextId is required');
     const existing = this.get(contextId);
     const runIds = existing ? [...existing.runIds] : [];
@@ -83,6 +90,7 @@ class SessionThreads {
       codex_home: codexHome ?? null,
       last_input_tokens: Number.isFinite(lastInputTokens) ? Math.round(lastInputTokens) : null,
       context_window: Number.isFinite(contextWindow) ? Math.round(contextWindow) : null,
+      profile_sha256: profileSha256 ?? existing?.profileSha256 ?? null,
       rollovers: (existing?.rollovers || 0) + (rolledOver ? 1 : 0),
       run_ids_json: JSON.stringify(runIds.slice(-MAX_RUN_IDS)),
       now: new Date().toISOString(),

@@ -243,6 +243,13 @@ function createProjectManager(options = {}) {
     return path.resolve(findRecord(id).stateDb);
   }
 
+  // Role overrides always live in the project's own runtime dir, also for the legacy project whose
+  // state database sits in the runtime root.
+  function roleOverridesPath(id) {
+    findRecord(id);
+    return path.join(runtimeDir, 'projects', id, 'role-overrides.json');
+  }
+
   async function touch(id) {
     return serialize(() => {
       const record = findRecord(id);
@@ -325,9 +332,17 @@ function createProjectManager(options = {}) {
         }
       });
       fs.mkdirSync(path.dirname(record.stateDb), { recursive: true, mode: 0o700 });
+      const roleOverrides = path.resolve(roleOverridesPath(id));
+      fs.mkdirSync(path.dirname(roleOverrides), { recursive: true, mode: 0o700 });
       const child = spawn(process.execPath, ['src/server.js'], {
         cwd: repoDir,
-        env: { ...process.env, PORT: String(record.port), CODEX_WORKSPACE: record.path, CODEX_A2A_STATE_DB: record.stateDb }
+        env: {
+          ...process.env,
+          PORT: String(record.port),
+          CODEX_WORKSPACE: record.path,
+          CODEX_A2A_STATE_DB: record.stateDb,
+          CODEX_A2A_ROLE_OVERRIDES: roleOverrides
+        }
       });
       rt.child = child;
       rt.logs = [];
@@ -417,7 +432,7 @@ function createProjectManager(options = {}) {
     await Promise.all(active.map((rt) => terminateChild(rt, killGraceMs + 500)));
   }
 
-  return { init, list, get, baseUrl, stateDbPath, touch, add, remove, start, stop, refresh, status, stopAll };
+  return { init, list, get, baseUrl, stateDbPath, roleOverridesPath, touch, add, remove, start, stop, refresh, status, stopAll };
 }
 
 module.exports = { createProjectManager, ProjectError };

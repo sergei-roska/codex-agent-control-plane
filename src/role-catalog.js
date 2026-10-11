@@ -15,6 +15,8 @@ const REQUIRED_FIELDS = [
 ];
 const STRING_FIELDS = new Set([...REQUIRED_FIELDS, 'display_name']);
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
+const MODEL_PATTERN = /^gpt-[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
+const LEAD_ROLE_NAME = 'coordinator';
 const SANDBOXES = new Set(['read-only', 'workspace-write']);
 const TOOLS_TABLE = 'a2a_tools';
 const MCP_NAME = /^[A-Za-z0-9_-]+$/;
@@ -108,7 +110,7 @@ function parseProfile(source, filePath) {
   if (!SANDBOXES.has(values.sandbox_mode)) {
     throw new Error(`${filePath}: unsupported sandbox_mode ${JSON.stringify(values.sandbox_mode)}`);
   }
-  if (!/^gpt-[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(values.model)) {
+  if (!MODEL_PATTERN.test(values.model)) {
     throw new Error(`${filePath}: invalid model ${JSON.stringify(values.model)}`);
   }
   const name = canonicalRoleId(values.name);
@@ -179,8 +181,8 @@ function createLeadRole({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
   const inlineRules = teamRules.replaceAll('profiles/skills/', skillPath);
 
   return {
-    name: 'coordinator',
-    displayName: roleDisplayName('coordinator'),
+    name: LEAD_ROLE_NAME,
+    displayName: roleDisplayName(LEAD_ROLE_NAME),
     description: 'Read-only orchestrator lead that plans work and dispatches bounded tasks to A2A roles.',
     model: 'gpt-6.1-sol',
     effort: 'medium',
@@ -197,4 +199,4 @@ function createLeadRole({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
   };
 }
 
-module.exports = { createLeadRole, loadRoles };
+module.exports = { createLeadRole, loadRoles, EFFORTS, MODEL_PATTERN, LEAD_ROLE_NAME };
