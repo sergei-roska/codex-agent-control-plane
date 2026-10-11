@@ -355,6 +355,14 @@ test('rejects a human choice outside pending options and preserves free-text res
   });
   const paused = await h.orchestrator.run({ goal: 'Choose implementation', runId: 'human-choice-run' });
   assert.equal(paused.status, 'input_required');
+  // The launcher decision card renders metadata.pause, which is this result's pause unchanged.
+  assert.equal(paused.pause.kind, 'human_decision');
+  assert.equal(paused.pause.reason, 'irreversible_operation');
+  assert.equal(paused.pause.question, request.question);
+  assert.deepEqual(paused.pause.options, request.options);
+  assert.equal(paused.pause.recommendation, 'minimal');
+  assert.deepEqual(paused.pause.evidenceChecked, request.evidenceChecked);
+  assert.equal(paused.pause.independentWork, '');
   const pending = await h.orchestrator.getPause(paused.runId);
 
   for (const choice of ['guess', '', null, 12]) {

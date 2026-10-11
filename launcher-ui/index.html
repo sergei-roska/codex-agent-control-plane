@@ -133,22 +133,35 @@
 
       <!-- Lead decision request card -->
       <div id="decisionCard" class="decision-banner hidden">
-        <h4>⚠️ Lead requests human decision</h4>
-        <p id="decisionQuestion" style="font-size: 13.5px; color: var(--text-main);"></p>
-        
-        <div class="field-group">
-          <label class="field-label">Available options (click to select):</label>
-          <div id="decisionOptionsList" class="decision-options"></div>
+        <h4>Lead requests human decision</h4>
+        <div id="decisionReasonRow" class="decision-meta hidden">
+          <span class="field-label">Reason:</span>
+          <span id="decisionReason" class="decision-reason"></span>
+        </div>
+        <p id="decisionQuestion" class="decision-question"></p>
+
+        <div id="decisionOptionsBlock" class="field-group">
+          <span id="decisionOptionsLabel" class="field-label">Choose one option:</span>
+          <div id="decisionOptionsList" class="decision-options" role="radiogroup" aria-labelledby="decisionOptionsLabel"></div>
         </div>
 
-        <div style="display: flex; gap: 8px;">
-          <input type="text" id="decisionId" placeholder="Decision ID" aria-label="Decision ID" readonly style="flex: 1; font-family: monospace; font-size: 12px;">
-          <input type="text" id="decisionChoice" placeholder="Selected option (optionId)" aria-label="Selected option" style="flex: 1; font-family: monospace;">
+        <div id="decisionIndependentRow" class="decision-meta hidden">
+          <span class="field-label">Can proceed meanwhile:</span>
+          <span id="decisionIndependent" class="decision-independent-text"></span>
         </div>
-        
-        <textarea id="decisionAnswer" rows="2" placeholder="Additional explanation or response text..." aria-label="Decision answer"></textarea>
-        
-        <button class="btn btn-primary" onclick="submitDecision()" style="align-self: flex-start;">
+
+        <details id="decisionEvidence" class="decision-evidence hidden">
+          <summary>Evidence the lead checked (<span id="decisionEvidenceCount">0</span>)</summary>
+          <ul id="decisionEvidenceList"></ul>
+        </details>
+
+        <input type="hidden" id="decisionId">
+        <div id="decisionIdRow" class="decision-id-row hidden">Decision ID: <code id="decisionIdText"></code></div>
+
+        <label class="field-label" for="decisionAnswer">Optional comment:</label>
+        <textarea id="decisionAnswer" rows="2" placeholder="Optional comment for the lead..." aria-label="Optional comment"></textarea>
+
+        <button id="decisionSubmit" class="btn btn-primary" onclick="submitDecision()" style="align-self: flex-start;">
           Submit answer and continue
         </button>
       </div>

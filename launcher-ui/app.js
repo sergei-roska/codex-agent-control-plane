@@ -652,27 +652,108 @@
       else label.textContent = 'Status: ' + state;
     }
 
+    // Labels for the reasons (humanInput.reason) and escalation kinds a pause can carry.
+    const DECISION_LABELS = {
+      paid_resources: 'Paid resources',
+      credentials_or_access: 'Credentials or access',
+      external_write: 'External write',
+      irreversible_operation: 'Irreversible operation',
+      prd_requirement_change: 'PRD requirement change',
+      infeasible_requirement: 'Infeasible requirement',
+      round_limit: 'Round limit reached',
+      goal_not_achieved: 'Goal not achieved',
+      check_changed: 'Acceptance check changed',
+      error: 'Error'
+    };
+    let decisionCardKey = '';
+    let decisionOptionIds = [];
+    let selectedDecisionOption = '';
+
+    function decisionLabel(key) {
+      return Object.prototype.hasOwnProperty.call(DECISION_LABELS, key) ? DECISION_LABELS[key] : key;
+    }
+
+    // Rebuilt only when the pause changes, so a selection survives the transcript polling.
+    function renderDecisionCard(pause) {
+      const isError = pause.kind === 'error';
+      const reasonKey = isError ? 'error' : (pause.escalation || pause.reason || '');
+      document.getElementById('decisionReasonRow').classList.toggle('hidden', !reasonKey);
+      document.getElementById('decisionReason').textContent = reasonKey ? decisionLabel(reasonKey) : '';
+      const question = isError
+        ? 'Lead paused due to an error: ' + (pause.message || 'Error') + '\nSend a message to retry the step.'
+        : (pause.question || pause.message || 'Waiting for response');
+      document.getElementById('decisionQuestion').textContent = question;
+      document.getElementById('decisionId').value = pause.decisionId || '';
+      document.getElementById('decisionIdText').textContent = pause.decisionId || '';
+      document.getElementById('decisionIdRow').classList.toggle('hidden', !pause.decisionId);
+
+      const options = Array.isArray(pause.options) ? pause.options : [];
+      decisionOptionIds = options.map(opt => opt.id);
+      document.getElementById('decisionOptionsBlock').classList.toggle('hidden', options.length === 0);
+      const optContainer = document.getElementById('decisionOptionsList');
+      optContainer.textContent = '';
+      options.forEach(opt => {
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = 'decisionOption';
+        input.value = opt.id;
+        input.addEventListener('change', () => selectOption(opt.id));
+        const head = document.createElement('span');
+        head.className = 'decision-option-head';
+        head.appendChild(textEl('code', 'decision-option-id', opt.id));
+        if (opt.id === pause.recommendation) head.appendChild(textEl('span', 'decision-recommended', 'Recommended'));
+        const body = document.createElement('span');
+        body.className = 'decision-option-body';
+        body.appendChild(head);
+        body.appendChild(textEl('span', 'decision-option-text', opt.description || ''));
+        const label = document.createElement('label');
+        label.className = 'decision-option';
+        label.appendChild(input);
+        label.appendChild(body);
+        optContainer.appendChild(label);
+      });
+
+      const independent = typeof pause.independentWork === 'string' ? pause.independentWork.trim() : '';
+      document.getElementById('decisionIndependentRow').classList.toggle('hidden', !independent);
+      document.getElementById('decisionIndependent').textContent = independent;
+
+      const evidence = Array.isArray(pause.evidenceChecked) ? pause.evidenceChecked : [];
+      const details = document.getElementById('decisionEvidence');
+      details.classList.toggle('hidden', evidence.length === 0);
+      details.open = false;
+      document.getElementById('decisionEvidenceCount').textContent = String(evidence.length);
+      const evidenceList = document.getElementById('decisionEvidenceList');
+      evidenceList.textContent = '';
+      evidence.forEach(item => evidenceList.appendChild(textEl('li', '', String(item))));
+    }
+
+    // The option pick is the only way to choose; with options, submit waits for one.
+    function updateDecisionControls() {
+      document.querySelectorAll('#decisionOptionsList .decision-option').forEach(label => {
+        const input = label.querySelector('input');
+        input.checked = input.value === selectedDecisionOption;
+        label.classList.toggle('selected', input.checked);
+      });
+      document.getElementById('decisionSubmit').disabled = decisionOptionIds.length > 0 && !selectedDecisionOption;
+    }
+
     function updateDecisionCard() {
       const card = document.getElementById('decisionCard');
       const last = lastTurn();
       if (!last || !isPausedState(last.state) || sending) {
         card.classList.add('hidden');
+        decisionCardKey = '';
         return;
       }
       const pause = last.metadata?.pause || {};
       card.classList.remove('hidden');
-      const promptText = pause.kind === 'error'
-        ? 'Lead paused due to an error: ' + (pause.message || 'Error') + '\nSend a message to retry the step.'
-        : (pause.question || pause.message || 'Waiting for response');
-      document.getElementById('decisionQuestion').textContent = promptText;
-      document.getElementById('decisionId').value = pause.decisionId || '';
-      const optContainer = document.getElementById('decisionOptionsList');
-      optContainer.textContent = '';
-      (pause.options || []).forEach(opt => {
-        const pill = textEl('span', 'option-pill', opt.id + ': ' + opt.description);
-        pill.onclick = () => selectOption(opt.id);
-        optContainer.appendChild(pill);
-      });
+      const key = JSON.stringify([last.id, pause.kind || '', pause.decisionId || '', pause.question || '', pause.message || '']);
+      if (key !== decisionCardKey) {
+        decisionCardKey = key;
+        selectedDecisionOption = '';
+        renderDecisionCard(pause);
+      }
+      updateDecisionControls();
     }
 
     function renderTranscript() {
@@ -937,12 +1018,14 @@
     async function submitDecision() {
       const last = lastTurn();
       if (!last) return;
+      const choice = selectedDecisionOption;
+      if (decisionOptionIds.length > 0 && !choice) return;
       const decisionId = document.getElementById('decisionId').value;
-      const choice = document.getElementById('decisionChoice').value.trim();
       const answer = document.getElementById('decisionAnswer').value.trim();
 
       document.getElementById('decisionAnswer').value = '';
-      document.getElementById('decisionChoice').value = '';
+      selectedDecisionOption = '';
+      decisionCardKey = '';
       await executeA2A({
         goal: answer || choice || 'Approved',
         taskId: last.id,
@@ -952,7 +1035,8 @@
     }
 
     function selectOption(id) {
-      document.getElementById('decisionChoice').value = id;
+      selectedDecisionOption = id;
+      updateDecisionControls();
     }
 
     // The request returns when the lead run ends; the transcript is driven by polling meanwhile.

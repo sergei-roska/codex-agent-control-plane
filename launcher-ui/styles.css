@@ -465,26 +465,114 @@
       align-items: center;
       gap: 8px;
     }
-    .decision-options {
+    .decision-question {
+      font-size: 13.5px;
+      color: var(--text-main);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .decision-meta {
       display: flex;
       flex-wrap: wrap;
+      align-items: baseline;
+      gap: 6px;
+      font-size: 12.5px;
+    }
+    .decision-reason {
+      color: var(--warning);
+      font-weight: 600;
+    }
+    .decision-independent-text {
+      color: var(--text-main);
+      overflow-wrap: anywhere;
+    }
+    .decision-options {
+      display: flex;
+      flex-direction: column;
       gap: 8px;
     }
-    .option-pill {
+    .decision-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
       background: var(--bg-elevated);
       border: 1px solid rgba(245, 158, 11, 0.3);
-      color: var(--text-main);
-      padding: 6px 12px;
       border-radius: var(--radius-sm);
-      font-size: 12px;
-      font-weight: 500;
       cursor: pointer;
       transition: all 0.15s;
     }
-    .option-pill:hover {
-      background: var(--warning);
-      color: #111;
+    .decision-option:hover {
       border-color: var(--warning);
+    }
+    .decision-option.selected {
+      border-color: var(--warning);
+      background: rgba(245, 158, 11, 0.16);
+      box-shadow: inset 0 0 0 1px var(--warning);
+    }
+    .decision-option input {
+      margin-top: 3px;
+      flex-shrink: 0;
+      accent-color: var(--warning);
+    }
+    .decision-option input:focus-visible {
+      outline: 2px solid var(--warning);
+      outline-offset: 2px;
+    }
+    .decision-option-body {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .decision-option-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .decision-option-id {
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--text-main);
+      overflow-wrap: anywhere;
+    }
+    .decision-recommended {
+      font-size: 11px;
+      font-weight: 600;
+      color: #111;
+      background: var(--warning);
+      border-radius: 999px;
+      padding: 1px 8px;
+    }
+    .decision-option-text {
+      font-size: 12.5px;
+      color: var(--text-main);
+      overflow-wrap: anywhere;
+    }
+    .decision-evidence {
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+    .decision-evidence summary {
+      cursor: pointer;
+    }
+    .decision-evidence ul {
+      margin: 6px 0 0 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .decision-evidence li {
+      overflow-wrap: anywhere;
+    }
+    .decision-id-row {
+      font-size: 11.5px;
+      color: var(--text-muted);
+    }
+    .decision-id-row code {
+      font-family: monospace;
+      overflow-wrap: anywhere;
     }
 
     /* Rate limits widget */
