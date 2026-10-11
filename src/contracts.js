@@ -17,7 +17,7 @@ const REPORT_OUTCOMES = ['completed', 'blocked', 'needs_decision', 'failed'];
 const CHECK_RESULTS = ['passed', 'failed', 'not_run'];
 // LL-6: the closed list of decisions only the owner may take (humanInput.reason). Interpreting the PRD,
 // fixing evidence tooling, choosing an implementation, and expanding file scope are the lead's decisions.
-const HUMAN_REASONS = ['paid_resources', 'credentials_or_access', 'external_write', 'irreversible_operation', 'prd_requirement_change'];
+const HUMAN_REASONS = ['paid_resources', 'credentials_or_access', 'external_write', 'irreversible_operation', 'prd_requirement_change', 'infeasible_requirement'];
 const USAGE_LIMIT_NAMES = new Set(['usageLimitExceeded', 'rateLimitExceeded']);
 const MAX_CAUSE_DEPTH = 5;
 

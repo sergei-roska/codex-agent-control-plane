@@ -646,12 +646,17 @@ const investigateFirst = (decision, context) => {
 };
 
 test('only the closed list of owner-only decisions may reach the owner', () => {
-  assert.deepEqual(HUMAN_REASONS, ['paid_resources', 'credentials_or_access', 'external_write', 'irreversible_operation', 'prd_requirement_change']);
+  assert.deepEqual(HUMAN_REASONS, ['paid_resources', 'credentials_or_access', 'external_write', 'irreversible_operation', 'prd_requirement_change', 'infeasible_requirement']);
   assert.deepEqual(DECISION_SCHEMA.properties.humanInput.anyOf[0].properties.reason.enum, HUMAN_REASONS);
   for (const reason of HUMAN_REASONS) validateDecision(ask({ humanInput: human({ reason }) }), ctx());
   for (const reason of ['product_choice', 'missing_authority', 'irreversible_or_external', 'scope_change']) {
     throws(ask({ humanInput: human({ reason }) }), ctx(), /humanInput\.reason must be an owner-only decision: one of paid_resources, credentials_or_access/);
   }
+});
+
+test('humanInput.reason infeasible_requirement is accepted and an unknown reason is still rejected', () => {
+  validateDecision(ask({ humanInput: human({ reason: 'infeasible_requirement' }) }), ctx());
+  throws(ask({ humanInput: human({ reason: 'infeasible' }) }), ctx(), /humanInput\.reason must be an owner-only decision: one of paid_resources, credentials_or_access, external_write, irreversible_operation, prd_requirement_change, infeasible_requirement/);
 });
 
 test('request_human_input needs a cited investigation from a round after the blocker appeared', () => {
