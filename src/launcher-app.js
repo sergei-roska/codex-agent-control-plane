@@ -32,6 +32,7 @@ const {
 } = require('./launcher-sessions');
 const { UsageLedger } = require('./usage-ledger');
 const { summarize } = require('./usage-report');
+const { buildSituation, gitStatus } = require('./session-situation');
 
 const UI_DIR = path.join(__dirname, '..', 'launcher-ui');
 const PROJECT_ID = /^[0-9a-f]{10}$/;
@@ -256,6 +257,18 @@ function createLauncherApp({
     }
   }
 
+  // Like withTasksDb, for an async projection that reads the database after an await.
+  async function withTasksDbAsync(projectId, options, fn) {
+    const dbPath = projects.stateDbPath(projectId);
+    if (!fs.existsSync(dbPath)) return undefined;
+    const db = openTasksDb(dbPath, options);
+    try {
+      return await fn(db);
+    } finally {
+      db.close();
+    }
+  }
+
   // API: sessions (one A2A contextId = one conversation of lead tasks)
   app.get('/api/projects/:id/sessions', (req, res) => {
     try {
@@ -285,6 +298,26 @@ function createLauncherApp({
       res.json(usage || { contextId, byRole: {}, total: usageBlock([]), unknownCount: 0 });
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Situation of one session: where the lead is, the current batch, open decisions, progress.
+  app.get('/api/projects/:id/sessions/:contextId/situation', async (req, res) => {
+    try {
+      const situation = await withTasksDbAsync(req.params.id, { readonly: true }, db => buildSituation(db, req.params.contextId));
+      if (!situation) return res.status(404).json({ error: 'Session not found' });
+      res.json(situation);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Git status of the project directory; a git failure other than "not a repository" is a 503.
+  app.get('/api/projects/:id/git-status', async (req, res) => {
+    try {
+      res.json(await gitStatus(projects.get(req.params.id).path));
+    } catch (err) {
+      res.status(503).json({ error: err.killed ? 'git status timed out' : (err.message || String(err)) });
     }
   });
 

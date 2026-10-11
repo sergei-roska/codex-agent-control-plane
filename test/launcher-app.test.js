@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { describe, it, before, after, beforeEach } = require('node:test');
+const { execFileSync } = require('node:child_process');
 const Database = require('better-sqlite3');
 const { TaskState } = require('@a2a-js/sdk');
 const { ServerCallContext } = require('@a2a-js/sdk/server');
@@ -18,6 +19,8 @@ const ID_B = 'bbbbbbbbbb';
 const ID_MISSING = 'cccccccccc';
 const ID_USAGE = 'eeeeeeeeee';
 const ID_NOLEDGER = 'ffffffffff';
+const ID_GIT = '7777777777';
+const ID_NOREPO = '8888888888';
 
 let tmp;
 let server;
@@ -27,6 +30,7 @@ let fakeStatus;
 let nextError;
 let sent;
 let dbFiles;
+let projectPaths = {};
 
 function fakeProjects() {
   const maybeFail = (name) => {
@@ -36,7 +40,7 @@ function fakeProjects() {
       throw error;
     }
   };
-  const view = (id) => ({ id, name: id, path: '/w/' + id, port: id === ID_A ? 4001 : 4002, status: fakeStatus[id] });
+  const view = (id) => ({ id, name: id, path: projectPaths[id] || '/w/' + id, port: id === ID_A ? 4001 : 4002, status: fakeStatus[id] });
   return {
     list: () => [ID_A, ID_B].map(view),
     get: (id) => (fakeStatus[id] ? view(id) : null),
@@ -116,7 +120,7 @@ beforeEach(async () => {
   calls = [];
   nextError = null;
   sent = [];
-  fakeStatus = { [ID_A]: 'running', [ID_B]: 'stopped', [ID_MISSING]: 'stopped', [ID_USAGE]: 'stopped', [ID_NOLEDGER]: 'stopped' };
+  fakeStatus = { [ID_A]: 'running', [ID_B]: 'stopped', [ID_MISSING]: 'stopped', [ID_USAGE]: 'stopped', [ID_NOLEDGER]: 'stopped', [ID_GIT]: 'stopped', [ID_NOREPO]: 'stopped' };
   if (server) server.close();
   const fakeClient = {
     getTask: async ({ id }) => ({ id, contextId: 'ctx-' + id }),
@@ -558,5 +562,62 @@ describe('session usage', () => {
     const r = await api('GET', `/api/projects/${ID_MISSING}/sessions/x/usage`);
     assert.equal(r.status, 200);
     assert.deepEqual(r.body, { contextId: 'x', byRole: {}, total: EMPTY_TOTAL, unknownCount: 0 });
+  });
+});
+
+describe('session situation and project git status', () => {
+  const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
+
+  before(() => {
+    const repo = path.join(tmp, 'repo');
+    const plain = path.join(tmp, 'plain');
+    fs.mkdirSync(repo);
+    fs.mkdirSync(plain);
+    git(repo, ['init', '-q', '-b', 'main']);
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'one\n');
+    git(repo, ['add', 'a.txt']);
+    git(repo, ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'init']);
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'one\ntwo\n');
+    fs.writeFileSync(path.join(repo, 'b.txt'), 'new\n');
+    projectPaths = { [ID_GIT]: repo, [ID_NOREPO]: plain };
+  });
+
+  after(() => {
+    projectPaths = {};
+  });
+
+  it('situation of a session without a checkpoint table gives the lead state and nulls', async () => {
+    const r = await api('GET', `/api/projects/${ID_NOLEDGER}/sessions/ctx-x/situation`);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.contextId, 'ctx-x');
+    assert.equal(r.body.leadTaskId, 'lead-x');
+    assert.equal(r.body.state, 'TASK_STATE_COMPLETED');
+    assert.equal(r.body.phase, 'done');
+    assert.equal(r.body.node, null);
+    assert.equal(r.body.round, null);
+    assert.deepEqual(r.body.batch, []);
+    assert.equal(r.body.nextSteps, null);
+  });
+
+  it('situation 404s an unknown session and a project without a state db', async () => {
+    const unknown = await api('GET', `/api/projects/${ID_NOLEDGER}/sessions/nope/situation`);
+    assert.equal(unknown.status, 404);
+    assert.deepEqual(unknown.body, { error: 'Session not found' });
+    assert.equal((await api('GET', `/api/projects/${ID_MISSING}/sessions/x/situation`)).status, 404);
+  });
+
+  it('git status of a repository lists branch, head, files and diffstat', async () => {
+    const r = await api('GET', `/api/projects/${ID_GIT}/git-status`);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.available, true);
+    assert.equal(r.body.branch, 'main');
+    assert.match(r.body.head, /^[0-9a-f]{40}$/);
+    assert.deepEqual(r.body.files.map((f) => [f.path, f.status]).sort(), [['a.txt', 'M'], ['b.txt', '??']]);
+    assert.deepEqual(r.body.diffstat, { files: 1, insertions: 1, deletions: 0 });
+  });
+
+  it('git status of a project that is not a repository is unavailable; unknown project 404s', async () => {
+    assert.deepEqual((await api('GET', `/api/projects/${ID_NOREPO}/git-status`)).body, { available: false });
+    assert.equal((await api('GET', '/api/projects/nothex/git-status')).status, 404);
   });
 });
