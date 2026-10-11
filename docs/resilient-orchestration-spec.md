@@ -15,9 +15,9 @@ Where this file and the design disagree, this file records the chosen behavior.
 | Dispatch journal | Own SQLite table, written immediately (not via graph state). |
 | State file | `.runtime/state.sqlite` next to the token (`CODEX_A2A_STATE_DB` overrides), mode 0600. One file holds checkpoints, tasks, and journal. |
 | Resume trigger | Explicit: an A2A message to the existing lead task. No timers, no auto-resume on startup. |
-| Pause representation | Lead A2A task in `TASK_STATE_INPUT_REQUIRED`, `task.metadata.pause = { kind, ... }` and a readable status message. Kinds: `human_decision`, `waiting_for_budget`, `restart`, `error` (a node failed but the checkpoint is resumable; a follow-up message retries the failed step). The pending checkpoint interrupt decides the resume path; task metadata is only a fallback. |
+| Pause representation | Lead A2A task in `TASK_STATE_INPUT_REQUIRED`, `task.metadata.pause = { kind, ... }` and a readable status message. Kinds: `human_decision`, `waiting_for_budget`, `restart`, `owner_pause`, `stopped`, `error` (a node failed but the checkpoint is resumable; a follow-up message retries the failed step). The pending checkpoint interrupt decides the resume path; task metadata is only a fallback. |
 | Auto re-dispatch | Only a read-only assignment whose journal row is `submitting` and whose context has no A2A task. Everything else uncertain goes to the lead as an outcome. |
-| Graceful shutdown | Unchanged: cancels active runs (terminal) and waits, bounded, for them before closing the state file. Only crashes, pauses, and resumable errors are resumable. |
+| Graceful shutdown | Cancels running worker turns and parks each active lead run as a resumable `stopped` pause (STOP-01, `docs/owner-pause-design.md`); an explicit task cancel stays terminal. |
 | Single instance | Exclusive `<stateFile>.lock` (pid, stale lock replaced). Order: account check, open state, lock, listen, reconcile, mount routes. |
 | Bad follow-up input | A malformed message to a paused task keeps it `INPUT_REQUIRED` with the same pause; it never becomes terminal. |
 | State content | Plain JSON only (no Error, Map, Set, class instances). |
@@ -242,6 +242,5 @@ continued the same thread. A live A2A request through the local server and CLI r
 - A crash inside a lead Codex turn repeats that turn on resume (one extra lead turn).
 - Worker `filesChanged` is self-reported; `scopeViolations` is a signal, not enforcement.
 - A budget resume while quota is still exhausted pauses again after one failed lead call.
-- Graceful shutdown still cancels active runs instead of leaving them resumable.
 - A crash before the first checkpoint restarts the run from the goal in the lead task history.
 - The SDK task-store migration DDL is replicated from the `a2a-db` CLI (not exported by the SDK); the migration name matches so the CLI treats it as applied.

@@ -106,6 +106,23 @@ Earlier ADRs: `docs/adr/phase-c-*.md`.
 - Production: make pause/stop requests durable and checked by the run loop at
   every step boundary, and show the owner the expected wait.
 
+### P-12 Lead notes live only in memory
+
+- Symptom: notes queued for the next decide (e.g. "your acceptanceChecks
+  proposal was ignored") are lost whenever the run parks (owner, budget or
+  human-decision pause) or the server restarts.
+- Cause: `pendingNotes` is held in the orchestrator runtime, not the checkpoint.
+- Production: persist lead notes with the run state.
+
+### P-13 Shutdown budget spans several stages
+
+- Symptom: drain (5 s) plus app-server and HTTP close (up to 5 s) exceeded the
+  supervisor grace, so a clean lock release could be cut off; a run that
+  completed during shutdown could still end FAILED ("cancellation could not be
+  confirmed").
+- Production: derive the supervisor grace from the orchestrator's total
+  shutdown budget, and let a completed result win over a late abort.
+
 ### P-10 The worker report schema has no free-form details field
 
 - Symptom: a Q&A answer must fit `summary` (3000 chars) plus checks /
