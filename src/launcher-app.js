@@ -33,6 +33,7 @@ const {
 const { UsageLedger } = require('./usage-ledger');
 const { summarize } = require('./usage-report');
 const { buildSituation, gitStatus } = require('./session-situation');
+const { createAskService, AskError } = require('./launcher-ask');
 
 const UI_DIR = path.join(__dirname, '..', 'launcher-ui');
 const PROJECT_ID = /^[0-9a-f]{10}$/;
@@ -45,6 +46,7 @@ const ERROR_STATUS = {
 };
 const LIMITS_TTL_MS = 30_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
+const ASK_PACK_FILES = 50;
 const SYSTEM_KEY = '__system__';
 const RESERVED_NAMES = new Set(['system']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -102,11 +104,13 @@ function createLauncherApp({
   projects,
   readAuthToken,
   createClient = (baseUrl) => new ClientFactory().createFromUrl(baseUrl, '/orchestrator/agent-card.json'),
+  createRoleClient = (roleUrl) => new ClientFactory().createFromUrl(`${roleUrl}/agent-card.json`, ''),
   openTasksDb = (file, options) => new Database(file, options),
   createAppServer = (options) => new CodexAppServer(options),
   accountProfiles = createAccountProfiles(),
   loginTimeoutMs = LOGIN_TIMEOUT_MS,
   limitsTtlMs = LIMITS_TTL_MS,
+  askOptions = {},
 }) {
   const app = express();
   const limitsCache = new Map();
@@ -150,6 +154,7 @@ function createLauncherApp({
   app.delete('/api/projects/:id', async (req, res) => {
     try {
       const project = await projects.remove(req.params.id);
+      ask.forget(req.params.id);
       res.json({ success: true, project });
     } catch (err) {
       sendProjectError(res, err);
@@ -318,6 +323,61 @@ function createLauncherApp({
       res.json(await gitStatus(projects.get(req.params.id).path));
     } catch (err) {
       res.status(503).json({ error: err.killed ? 'git status timed out' : (err.message || String(err)) });
+    }
+  });
+
+  // SIT-5: owner questions answered by the read-only scout; the lead loop is never contacted.
+  async function askPack(projectId, sessionContextId) {
+    let situation = null;
+    if (sessionContextId) {
+      try {
+        situation = (await withTasksDbAsync(projectId, { readonly: true }, db => buildSituation(db, sessionContextId))) || null;
+      } catch (_) { /* the pack is optional context */ }
+    }
+    let git = null;
+    try {
+      git = await gitStatus(projects.get(projectId).path);
+      if (Array.isArray(git.files) && git.files.length > ASK_PACK_FILES) {
+        git = { ...git, files: git.files.slice(0, ASK_PACK_FILES), filesOmitted: git.files.length - ASK_PACK_FILES };
+      }
+    } catch (_) { /* the pack is optional context */ }
+    return { situation, git };
+  }
+
+  const ask = createAskService({
+    projects,
+    authToken: () => readAuthToken(process.env.CODEX_A2A_TOKEN_FILE ? { filePath: process.env.CODEX_A2A_TOKEN_FILE } : undefined),
+    createClient: createRoleClient,
+    buildPack: askPack,
+    ...askOptions,
+  });
+
+  function sendAskError(res, err) {
+    if (err instanceof AskError) return res.status(err.status).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message || String(err) });
+  }
+
+  app.post('/api/projects/:id/ask', (req, res) => {
+    try {
+      res.json(ask.start(req.params.id, req.body));
+    } catch (err) {
+      sendAskError(res, err);
+    }
+  });
+
+  app.get('/api/projects/:id/ask/:askId', (req, res) => {
+    const record = ask.get(req.params.id, req.params.askId);
+    if (!record) return res.status(404).json({ success: false, error: 'Unknown ask: ' + req.params.askId });
+    res.json(record);
+  });
+
+  app.delete('/api/projects/:id/ask/:askId', async (req, res) => {
+    try {
+      const record = await ask.cancel(req.params.id, req.params.askId);
+      if (!record) return res.status(404).json({ success: false, error: 'Unknown ask: ' + req.params.askId });
+      res.json(record);
+    } catch (err) {
+      sendAskError(res, err);
     }
   });
 
