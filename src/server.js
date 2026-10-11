@@ -30,6 +30,8 @@ const { canonicalRoleId, roleDisplayName } = require('./role-names');
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 3000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+// close() waits up to SHUTDOWN_TIMEOUT_MS for the runs to settle, then up to the same for the app server and HTTP close.
+const SHUTDOWN_TOTAL_MS = 2 * SHUTDOWN_TIMEOUT_MS;
 const AUTO_RESUME_TEXT = 'Automatic resume: Codex usage budget is available again.';
 
 /** CODEX_A2A_AUTO_RESUME: on by default; '0' or 'false' disables. */
@@ -470,9 +472,11 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
         return;
       }
       const cancellationConfirmed = result?.status === 'canceled';
-      const cancellationUnconfirmed = controller.signal.aborted && !cancellationConfirmed;
+      // A shutdown stop that lands after the run already completed does not undo the finished result.
+      const finishedBeforeStop = result?.status === 'completed' && stoppedByOwner;
+      const cancellationUnconfirmed = controller.signal.aborted && !cancellationConfirmed && !finishedBeforeStop;
       const canceled = cancellationConfirmed;
-      const completed = result?.status === 'completed' && !controller.signal.aborted;
+      const completed = result?.status === 'completed' && (!controller.signal.aborted || finishedBeforeStop);
       const failed = !completed && !canceled;
       const output = cancellationUnconfirmed
         ? 'Cancellation was requested, but downstream A2A cancellation could not be confirmed.'
@@ -937,4 +941,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { SHUTDOWN_TIMEOUT_MS, startServer, describePause, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts };
+module.exports = { SHUTDOWN_TIMEOUT_MS, SHUTDOWN_TOTAL_MS, startServer, describePause, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts };

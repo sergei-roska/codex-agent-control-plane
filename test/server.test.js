@@ -1946,6 +1946,34 @@ test('a stopped task resumes with a plain message and recreates a run that never
   assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
 });
 
-test('the shutdown timeout the launcher grace is built on is exported and unchanged', () => {
-  assert.equal(require('../src/server').SHUTDOWN_TIMEOUT_MS, 5000);
+test('the shutdown budget the launcher grace is built on is exported: settle plus close', () => {
+  const { SHUTDOWN_TIMEOUT_MS, SHUTDOWN_TOTAL_MS } = require('../src/server');
+  assert.equal(SHUTDOWN_TIMEOUT_MS, 5000);
+  assert.equal(SHUTDOWN_TOTAL_MS, 10000);
+});
+
+test('a shutdown stop that lands after the run completed publishes the real COMPLETED result', async () => {
+  const orchestrator = stoppableOrchestrator(() => ({ status: 'completed', text: 'All done', rounds: 2, assignments: [] }));
+  const seen = [];
+  const executor = makeLeadExecutor({ orchestrator });
+  const running = executor.execute({ taskId: 't-race', contextId: 'ctx', userMessage: userMessage('Build it') }, { publish: (event) => seen.push(event) });
+  await new Promise((resolve) => setImmediate(resolve));
+  executor.cancelAll();
+  await running;
+  const last = lastStatus(seen);
+  assert.equal(last.status.state, TaskState.TASK_STATE_COMPLETED);
+  const artifact = seen.find((event) => event.kind === 'artifactUpdate');
+  assert.match(artifact.data.artifact.parts[0].content.value, /All done/);
+  assert.doesNotMatch(JSON.stringify(seen), /could not be confirmed/);
+});
+
+test('an explicit cancel after the run completed keeps the old unconfirmed-cancel failure', async () => {
+  const orchestrator = stoppableOrchestrator(() => ({ status: 'completed', text: 'All done', rounds: 2, assignments: [] }));
+  const seen = [];
+  const executor = makeLeadExecutor({ orchestrator });
+  const running = executor.execute({ taskId: 't-race2', contextId: 'ctx', userMessage: userMessage('Build it') }, { publish: (event) => seen.push(event) });
+  await new Promise((resolve) => setImmediate(resolve));
+  await executor.cancelTask('t-race2', { publish() {}, finished() {} });
+  await running;
+  assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_FAILED);
 });

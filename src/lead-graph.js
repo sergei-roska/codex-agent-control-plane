@@ -2059,13 +2059,14 @@ function buildLeadGraph(deps) {
     };
   }
 
-  const afterDecide = (state) => {
+  const afterDecide = (state, config) => {
     if (state.status === 'completed') return 'accept';
     if (state.status) return 'finish';
     if (state.budget) return 'budget_pause';
     if (state.humanRequest) return 'human_input';
     if (state.retryDecide || state.redecide) return 'decide';
-    return 'dispatch';
+    // A pause requested during the lead turn parks before anything is submitted; the plan is kept.
+    return ownerPauseRequested(config) ? 'pause_before_dispatch' : 'dispatch';
   };
   const afterAccept = (state) => {
     if (state.status) return 'finish';
@@ -2112,13 +2113,15 @@ function buildLeadGraph(deps) {
     .addNode('human_input', humanInput)
     .addNode('budget_pause', budgetPause)
     .addNode('owner_pause', ownerPause)
+    .addNode('pause_before_dispatch', ownerPause)
     .addNode('continue_limited', continueLimited)
     .addNode('accept', accept)
     .addNode('review_check', reviewCheck)
     .addNode('finish', finish)
     .addEdge(START, 'intake')
     .addEdge('intake', 'decide')
-    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'budget_pause', 'human_input', 'dispatch', 'decide'])
+    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'budget_pause', 'human_input', 'dispatch', 'decide', 'pause_before_dispatch'])
+    .addEdge('pause_before_dispatch', 'dispatch')
     .addConditionalEdges('accept', afterAccept, ['finish', 'decide', 'dispatch'])
     .addConditionalEdges('review_check', afterReviewCheck, ['accept', 'human_input'])
     .addEdge('dispatch', 'collect')

@@ -10,10 +10,11 @@ const { loadOrCreateAuthToken } = require('./local-auth');
 const REGISTRY_VERSION = 1;
 const PROBE_TIMEOUT_MS = 800;
 const STATUS_LOG_CHUNKS = 200;
-// STOP-01: the project server drains for SHUTDOWN_TIMEOUT_MS (src/server.js) after SIGTERM and parks its
-// lead runs as resumable; SIGKILL is only the fallback once that drain plus a margin has passed.
-const SERVER_DRAIN_MS = 5000;
-const KILL_GRACE_MS = SERVER_DRAIN_MS + 3000;
+// STOP-01: after SIGTERM the project server parks its lead runs as resumable, then closes the app server
+// and HTTP; that whole shutdown takes up to SHUTDOWN_TOTAL_MS (src/server.js, 2 x 5 s). SIGKILL is only
+// the fallback once that total plus a margin has passed. A test ties these numbers to the server's.
+const SERVER_SHUTDOWN_TOTAL_MS = 10000;
+const KILL_GRACE_MS = SERVER_SHUTDOWN_TOTAL_MS + 2000;
 const RUNNING_MARKERS = ['listening at', 'Codex Universal A2A'];
 
 class ProjectError extends Error {

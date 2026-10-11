@@ -173,7 +173,7 @@ test('nodeOf picks the highest branch version; nextStepsOf reads the next-work p
 test('a running session projects the batch, decisions, progress and timestamps from its checkpoint', async (t) => {
   const db = await fixture(t);
   const s = await buildSituation(db, 'ctx-run');
-  assert.deepEqual(Object.keys(s), ['contextId', 'leadTaskId', 'state', 'node', 'phase', 'round', 'budget', 'startedAt', 'updatedAt',
+  assert.deepEqual(Object.keys(s), ['contextId', 'leadTaskId', 'state', 'node', 'phase', 'pauseKind', 'round', 'budget', 'startedAt', 'updatedAt',
     'batch', 'openDecisions', 'progress', 'acceptance', 'nextSteps']);
   assert.equal(s.contextId, 'ctx-run');
   assert.equal(s.leadTaskId, 'run-1');
@@ -266,6 +266,16 @@ test('an owner_pause park is paused at any node; a restart pause is not', async 
   assert.equal((await buildSituation(db, 'ctx-park-restart')).phase, 'waiting_owner');
   // STOP-01: a stopped run is resumable like an owner pause, so it shows as paused too.
   assert.equal((await buildSituation(db, 'ctx-park-stopped')).phase, 'paused');
+});
+
+test('pauseKind names why a paused lead is parked and is null otherwise', async (t) => {
+  const db = await fixture(t);
+  assert.equal((await buildSituation(db, 'ctx-park-gate')).pauseKind, 'owner_pause');
+  assert.equal((await buildSituation(db, 'ctx-park-decide')).pauseKind, 'owner_pause');
+  assert.equal((await buildSituation(db, 'ctx-park-stopped')).pauseKind, 'stopped');
+  assert.equal((await buildSituation(db, 'ctx-park-restart')).pauseKind, null);
+  assert.equal((await buildSituation(db, 'ctx-run', { pauseRequestedRuns: ['run-1'] })).pauseKind, null);
+  assert.equal((await buildSituation(db, 'ctx-done')).pauseKind, null);
 });
 
 test('ownerPausedLead finds the latest lead turn only when it is parked on an owner pause', async (t) => {

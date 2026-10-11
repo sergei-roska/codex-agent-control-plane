@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { afterEach, beforeEach, describe, it, mock } = require('node:test');
 const { createProjectManager, ProjectError, KILL_GRACE_MS } = require('../src/launcher-projects');
-const { SHUTDOWN_TIMEOUT_MS } = require('../src/server');
+const { SHUTDOWN_TOTAL_MS } = require('../src/server');
 
 class FakeChild extends EventEmitter {
   constructor(pid) {
@@ -409,8 +409,8 @@ describe('remove', () => {
 describe('stop grace (STOP-01)', () => {
   const defaultGraceManager = () => makeManager({ killGraceMs: undefined });
 
-  it('waits the server drain plus a margin before SIGKILL', async () => {
-    assert.equal(KILL_GRACE_MS, SHUTDOWN_TIMEOUT_MS + 3000);
+  it('waits the whole server shutdown plus a margin before SIGKILL', async () => {
+    assert.equal(KILL_GRACE_MS, SHUTDOWN_TOTAL_MS + 2000);
     const manager = defaultGraceManager();
     const p = await manager.add(mkdir('a'));
     await manager.start(p.id);

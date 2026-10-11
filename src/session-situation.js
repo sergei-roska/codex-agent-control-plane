@@ -219,7 +219,9 @@ async function buildSituation(db, contextId, { pauseRequestedRuns = [] } = {}) {
   let phase = phaseOf(state, node);
   const pauseRequested = pauseRequestedRuns.includes(leadTaskId);
   // A request is "pausing" until the run parks; a parked owner pause or stop is "paused" whatever node it stopped at.
-  if (OWNER_PAUSE_KINDS.has(parkedPause(lead)?.kind)) phase = 'paused';
+  const parkedKind = parkedPause(lead)?.kind;
+  const pauseKind = OWNER_PAUSE_KINDS.has(parkedKind) ? parkedKind : null;
+  if (pauseKind) phase = 'paused';
   else if (pauseRequested && (phase === 'planning' || phase === 'working' || phase === 'verifying')) phase = 'pausing';
   const activity = liveRow(db, `lead:${leadTaskId}`);
   let startedAt = activity?.started_at ?? null;
@@ -231,6 +233,8 @@ async function buildSituation(db, contextId, { pauseRequestedRuns = [] } = {}) {
     state,
     node,
     phase,
+    // 'owner_pause' (soft pause) or 'stopped' (Stop) while parked; null otherwise.
+    pauseKind,
     round: Number.isInteger(values.round) ? values.round : null,
     budget: values.budget && typeof values.budget === 'object' ? { ...values.budget } : null,
     startedAt,

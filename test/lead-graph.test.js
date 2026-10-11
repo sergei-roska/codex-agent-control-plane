@@ -196,7 +196,9 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
         async cancelTask({ id }) {
           world.cancels.push(id);
           const task = [...world.tasks.values()].find((entry) => entry.id === id);
-          return { ...view(task, false), status: { state: TaskState.TASK_STATE_CANCELED } };
+          // A test may let the canceled turn leave a writer execution behind (world.onCancel -> status message).
+          const message = world.onCancel?.(task);
+          return { ...view(task, false), status: { state: TaskState.TASK_STATE_CANCELED, ...(message ? { message } : {}) } };
         },
         async listTasks({ contextId }) {
           const task = world.tasks.get(contextId);
@@ -3335,5 +3337,84 @@ test('a shutdown stop during a lead turn parks the run and resume runs the turn 
     assert.equal(result.status, 'completed');
     assert.equal(result.text, 'Second try');
     assert.equal(world.leadTurns, 2);
+  });
+});
+
+test('owner pause requested during a lead decide turn parks before anything is submitted and keeps the plan', async () => {
+  let session;
+  const world = makeWorld({
+    script: [async () => { session.orchestrator.requestPause(RUN_ID); return dispatch(brief('orch-explorer', [])); }, finish('Dispatched after resume')],
+  });
+  await withSession(world, async (s) => {
+    session = s;
+    const paused = await s.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'owner_pause');
+    assert.equal(world.sends.length, 0, 'nothing was submitted');
+    assert.equal(world.leadTurns, 1);
+    assert.deepEqual((await s.orchestrator._snapshot(RUN_ID)).next, ['pause_before_dispatch']);
+    await s.restart();
+    const result = await s.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 1, 'the kept plan was dispatched once');
+    assert.equal(world.leadTurns, 2, 'the lead did not plan again');
+  });
+});
+
+test('a pause request withdrawn during a lead decide turn still dispatches', async () => {
+  let session;
+  const world = makeWorld({
+    script: [async () => {
+      session.orchestrator.requestPause(RUN_ID);
+      session.orchestrator.cancelPauseRequest(RUN_ID);
+      return dispatch(brief('orch-explorer', []));
+    }, finish('Ran through')],
+  });
+  await withSession(world, async (s) => {
+    session = s;
+    const result = await s.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 1);
+  });
+});
+
+test('Stop cancels a running writer; resume reconciles it before the lead plans again', async () => {
+  const controller = new AbortController();
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('Done after stop')],
+    pollsNeeded: 5,
+    getTaskFault: (_id, count) => { if (count === 1) controller.abort(ownerStop()); },
+  });
+  // The canceled writer turn leaves an unresolved execution behind, as a turn killed mid-write does.
+  world.onCancel = (task) => {
+    world.admission.rows.set(task.contextId, admissionRow(task.contextId, 'unresolved'));
+    return {
+      messageId: 'm', role: 2, parts: textParts('canceled'),
+      metadata: { writerExecution: { executionId: `exec-${task.contextId}`, state: 'unresolved', delta: null, reason: 'outcome_unknown' } },
+    };
+  };
+  await withSession(world, async (s) => {
+    const paused = await s.orchestrator.run({ goal: 'Build', runId: RUN_ID, signal: controller.signal });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'stopped');
+    assert.equal(world.cancels.length, 1);
+    assert.equal(world.admission.reconciles.length, 0, 'nothing is reconciled while stopping');
+    const snapshot = await s.orchestrator._snapshot(RUN_ID);
+    assert.equal(snapshot.values.unresolvedWriters.length, 1);
+
+    await s.restart();
+    const result = await s.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Done after stop');
+    // Reconcile ran before the second lead turn, and the writer row ended consistent.
+    assert.equal(world.admission.reconciles.length, 1);
+    const row = [...world.admission.rows.values()][0];
+    assert.equal(row.state, 'reconciled');
+    const reconciliation = result.assignments.find((entry) => entry.kind === 'reconciliation');
+    assert.equal(reconciliation.state, 'reconciled');
+    assert.equal((await s.orchestrator._snapshot(RUN_ID)).values.unresolvedWriters.length, 0);
+    assert.equal(world.leadTurns, 2);
+    assert.equal(world.sends.length, 1);
+    assert.match(world.prompts[1], /"kind":"reconciliation"/);
   });
 });
