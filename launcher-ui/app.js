@@ -134,6 +134,7 @@
         initialSessionParam = null;
         autoOpenLatest = !currentSessionId;
         loadSessions();
+        loadTeam();
       }
       renderProjectBar();
       updateStatus();
@@ -1237,10 +1238,23 @@
     setInterval(refreshProjects, 3000);
     refreshProjects();
 
-    function addAboutRow(list, agent, isLead) {
+    function addAboutRow(list, agent, isLead, editable) {
       const row = document.createElement('div');
       row.className = 'about-role';
       row.dataset.role = canonicalRoleId(agent.name);
+      if (editable) {
+        row.classList.add('is-editable');
+        row.tabIndex = 0;
+        row.setAttribute('role', 'button');
+        row.setAttribute('aria-label', 'Edit ' + (agent.displayName || roleDisplayName(agent.name)) + ' settings');
+        row.addEventListener('click', function () { openRoleModal(agent, isLead, row); });
+        row.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            openRoleModal(agent, isLead, row);
+          }
+        });
+      }
       const head = document.createElement('div');
       head.className = 'about-role-head';
       const led = document.createElement('span');
@@ -1272,6 +1286,12 @@
       model.className = 'about-model';
       model.textContent = agent.model + ' · ' + agent.effort;
       head.appendChild(model);
+      if (agent.override) {
+        const over = document.createElement('span');
+        over.className = 'about-badge override';
+        over.textContent = 'override';
+        head.appendChild(over);
+      }
       row.appendChild(head);
       const desc = document.createElement('div');
       desc.className = 'about-desc';
@@ -1320,23 +1340,141 @@
       });
     }
 
+    // The team card shows the roles of the selected project with its overrides; without a project, the profiles.
+    let teamData = null;
+    let teamLoadToken = 0;
     async function loadTeam() {
       const errEl = document.getElementById('aboutTeamError');
+      const token = ++teamLoadToken;
+      const projectId = currentProjectId;
       try {
-        const res = await fetch('/api/team');
+        const res = await fetch(projectId ? projectUrl('/team') : '/api/team');
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        if (token !== teamLoadToken) return;
+        teamData = projectId ? data : null;
+        errEl.classList.add('hidden');
         const list = document.getElementById('aboutTeamList');
         list.textContent = '';
-        addAboutRow(list, data.lead, true);
-        data.roles.forEach(function (r) { addAboutRow(list, r, false); });
+        addAboutRow(list, data.lead, true, Boolean(projectId));
+        data.roles.forEach(function (r) { addAboutRow(list, r, false, Boolean(projectId)); });
         updateTeamLeds();
         document.getElementById('aboutTeamSummary').textContent = 'Team (' + (data.roles.length + 1) + ' agents)';
+        if (data.warning) {
+          errEl.textContent = data.warning;
+          errEl.classList.remove('hidden');
+        }
       } catch (e) {
+        if (token !== teamLoadToken) return;
         errEl.textContent = 'Failed to load team: ' + e.message;
         errEl.classList.remove('hidden');
       }
     }
+
+    // ---- Role override modal (per project)
+    const RULES_MAX = 4000;
+    const EFFORT_CHOICES = ['low', 'medium', 'high', 'xhigh'];
+    let roleModalAgent = null;
+    let roleModalOpener = null;
+    let roleModalBusy = false;
+
+    function fillRoleSelect(select, defaultValue, values, current) {
+      select.textContent = '';
+      const def = document.createElement('option');
+      def.value = '';
+      def.textContent = 'Default (' + defaultValue + ')';
+      select.appendChild(def);
+      const list = values.slice();
+      if (current && list.indexOf(current) === -1) list.push(current);
+      list.forEach(function (v) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        select.appendChild(opt);
+      });
+      select.value = current || '';
+    }
+
+    function setRoleModalError(message) {
+      const el = document.getElementById('roleModalError');
+      el.textContent = message || '';
+      el.classList.toggle('hidden', !message);
+    }
+
+    function updateRoleRulesCounter() {
+      const len = document.getElementById('roleRules').value.length;
+      const el = document.getElementById('roleRulesCounter');
+      el.textContent = len + ' / ' + RULES_MAX;
+      el.classList.toggle('is-over', len > RULES_MAX);
+    }
+
+    function setRoleModalBusy(busy) {
+      roleModalBusy = busy;
+      document.getElementById('roleSaveBtn').disabled = busy;
+      document.getElementById('roleResetBtn').disabled = busy;
+    }
+
+    function openRoleModal(agent, isLead, opener) {
+      if (!currentProjectId || !teamData) return;
+      roleModalAgent = agent;
+      roleModalOpener = opener || null;
+      const defaults = agent.defaults || { model: agent.model, effort: agent.effort };
+      const override = agent.override || {};
+      document.getElementById('roleModalTitle').textContent =
+        (agent.displayName || roleDisplayName(agent.name)) + ' (' + canonicalRoleId(agent.name) + (isLead ? ', lead' : '') + ')';
+      fillRoleSelect(document.getElementById('roleModel'), defaults.model, teamData.models || [], override.model || '');
+      fillRoleSelect(document.getElementById('roleEffort'), defaults.effort, EFFORT_CHOICES, override.effort || '');
+      document.getElementById('roleRules').value = override.extraRules || '';
+      updateRoleRulesCounter();
+      setRoleModalError('');
+      setRoleModalBusy(false);
+      document.getElementById('roleModal').classList.remove('hidden');
+      document.getElementById('roleModel').focus();
+    }
+
+    function closeRoleModal() {
+      document.getElementById('roleModal').classList.add('hidden');
+      roleModalAgent = null;
+      if (roleModalOpener && document.body.contains(roleModalOpener)) roleModalOpener.focus();
+      roleModalOpener = null;
+    }
+
+    function roleOverrideUrl() {
+      return projectUrl('/roles/' + encodeURIComponent(canonicalRoleId(roleModalAgent.name)) + '/override');
+    }
+
+    async function sendRoleOverride(method, body) {
+      if (!roleModalAgent || roleModalBusy) return;
+      setRoleModalError('');
+      setRoleModalBusy(true);
+      try {
+        await accountsApi(method, roleOverrideUrl(), body);
+        closeRoleModal();
+        await loadTeam();
+      } catch (e) {
+        setRoleModalError(e.message);
+        setRoleModalBusy(false);
+      }
+    }
+
+    function saveRoleOverride() {
+      const rules = document.getElementById('roleRules').value;
+      if (rules.length > RULES_MAX) return setRoleModalError('Extra rules are limited to ' + RULES_MAX + ' characters');
+      sendRoleOverride('PUT', {
+        model: document.getElementById('roleModel').value || null,
+        effort: document.getElementById('roleEffort').value || null,
+        extraRules: rules.trim() || null
+      });
+    }
+
+    function resetRoleOverride() {
+      sendRoleOverride('DELETE');
+    }
+
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && !document.getElementById('roleModal').classList.contains('hidden')) closeRoleModal();
+    });
+
     loadTeam();
 
     setInterval(function () { if (!accountLoginId) fetchAccounts(false); }, 30000);

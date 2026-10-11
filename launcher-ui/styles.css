@@ -731,6 +731,38 @@
       overflow-wrap: anywhere;
     }
 
+    .about-role.is-editable { cursor: pointer; }
+    .about-role.is-editable:hover { border-color: var(--border-card); background: rgba(255, 255, 255, 0.05); }
+    .about-role.is-editable:focus-visible {
+      outline: none;
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px var(--primary-glow);
+    }
+    .about-badge.override {
+      color: var(--primary);
+      border-color: var(--primary);
+    }
+
+    /* Role override modal */
+    .role-modal-card { max-width: 520px; }
+    .role-field { display: flex; flex-direction: column; gap: 6px; }
+    .role-field label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .role-rules-counter {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-align: right;
+    }
+    .role-rules-counter.is-over { color: var(--danger); }
+    .role-modal-note {
+      font-size: 11.5px;
+      color: var(--text-dim);
+    }
+    .role-modal-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
     .hidden { display: none !important; }
 
     /* Task statuses */

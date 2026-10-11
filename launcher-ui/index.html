@@ -191,6 +191,38 @@
     </div>
   </div>
 
+  <!-- Role override modal (per project) -->
+  <div id="roleModal" class="modal-overlay hidden" onclick="if(event.target === this) closeRoleModal()">
+    <div class="modal-card role-modal-card" role="dialog" aria-modal="true" aria-labelledby="roleModalTitle">
+      <div class="modal-header">
+        <h3 class="modal-title" id="roleModalTitle">Role</h3>
+        <button type="button" class="modal-close-btn" onclick="closeRoleModal()" aria-label="Close">&#10005;</button>
+      </div>
+      <form id="roleForm" class="modal-body" onsubmit="event.preventDefault(); saveRoleOverride()">
+        <div class="role-field">
+          <label for="roleModel">Model</label>
+          <select id="roleModel"></select>
+        </div>
+        <div class="role-field">
+          <label for="roleEffort">Reasoning effort</label>
+          <select id="roleEffort"></select>
+        </div>
+        <div class="role-field">
+          <label for="roleRules">Extra rules</label>
+          <textarea id="roleRules" rows="6" maxlength="4000" oninput="updateRoleRulesCounter()"></textarea>
+          <div class="role-rules-counter" id="roleRulesCounter">0 / 4000</div>
+        </div>
+        <div class="role-modal-note">Applies to this project from the next dispatch or lead turn.</div>
+        <div id="roleModalError" class="inline-notice hidden" role="alert"></div>
+        <div class="role-modal-actions">
+          <button type="submit" class="btn btn-primary btn-sm" id="roleSaveBtn">Save</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="roleResetBtn" onclick="resetRoleOverride()">Reset to defaults</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="closeRoleModal()">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script src="/ui/app.js"></script>
 </body>
 </html>
