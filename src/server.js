@@ -106,6 +106,12 @@ function describePause(taskId, pause, { autoResume = false, nextCheckAt = null, 
   } else if (pause?.kind === 'error') {
     lines.push(`The run stopped on an error${pause.errorName ? ` (${pause.errorName})` : ''}: ${pause.message || 'unknown error'}`);
     lines.push('Send a message to this task to retry the failed step.');
+  } else if (pause?.kind === 'owner_pause') {
+    lines.push('Paused by the owner. Running worker turns finished first; no new work is planned until you continue.');
+    lines.push('Send a message to this task to continue.');
+  } else if (pause?.kind === 'stopped') {
+    lines.push('Stopped by the owner. Running worker turns were cancelled; the run can continue.');
+    lines.push('Send a message to this task to continue; the lead plans the next round from the checkpoint.');
   } else if (pause?.kind === 'restart') {
     lines.push('Run interrupted by server restart. Send a message to this task to resume.');
   } else {
@@ -233,6 +239,14 @@ function firstUserReferenceIds(task) {
 
 function isResumeInputError(error) {
   return error instanceof ResumeInputError;
+}
+
+const STOPPED_PAUSE = { kind: 'stopped', message: 'Stopped by the owner' };
+
+// STOP-01: the abort reason of a server shutdown. The lead graph parks such a run instead of ending it;
+// an explicit task cancel aborts without this reason and stays terminal.
+function ownerStopReason() {
+  return Object.assign(new Error('Stopped by the owner'), { name: 'AbortError', ownerStop: true });
 }
 
 function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, budgetWatcher = null }) {
@@ -410,7 +424,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
         try {
           result = await orchestrator.resume({ runId: taskId, input: resumeInput, signal: controller.signal, onEvent, contextId });
         } catch (error) {
-          if (error?.name !== 'RunNotFoundError' || pauseKind !== 'restart') throw error;
+          if (error?.name !== 'RunNotFoundError' || (pauseKind !== 'restart' && pauseKind !== 'stopped')) throw error;
           // Crash before the first checkpoint: start over from the original goal.
           let original = firstUserGoal(task);
           const originalRequest = original;
@@ -437,6 +451,12 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
         }
       } else {
         result = await orchestrator.run({ goal, runId: taskId, contract, signal: controller.signal, onEvent, contextId, ...(newRequest ? { newRequest } : {}) });
+      }
+      const stoppedByOwner = controller.signal.aborted && controller.signal.reason?.ownerStop === true;
+      if (stoppedByOwner && (result?.status === 'canceled' || (result?.status === 'input_required' && result.pause?.kind === 'stopped'))) {
+        // Shutdown: workers were cancelled, the lead run stays resumable.
+        republishPause(STOPPED_PAUSE, '', 'stopped');
+        return;
       }
       const paused = (result?.status === 'input_required' || result?.status === 'waiting_for_budget') && !controller.signal.aborted;
       if (paused) {
@@ -490,6 +510,11 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       }));
     } catch (error) {
       const cancellationRequested = controller.signal.aborted;
+      if (cancellationRequested && controller.signal.reason?.ownerStop === true) {
+        // Shutdown stop that threw (for example an unconfirmed cancel): the checkpoint is mid-graph and resumable.
+        republishPause(STOPPED_PAUSE, '', 'stopped');
+        return;
+      }
       if (resuming && !cancellationRequested && isResumeInputError(error)) {
         republishPause(effectivePause, `The answer was rejected: ${error?.message || String(error)}. The task is still waiting.`, 'input-error');
         return;
@@ -544,8 +569,9 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
     async settled() {
       await Promise.allSettled([...inflight]);
     },
+    /** Shutdown: aborts every active run with the owner-stop reason so each parks as a resumable stopped pause. */
     cancelAll() {
-      for (const controller of controllers.values()) controller.abort();
+      for (const controller of controllers.values()) controller.abort(ownerStopReason());
     },
     isTaskActive(taskId) {
       return controllers.has(taskId) || reservations.has(taskId);
@@ -591,6 +617,32 @@ function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, ta
   app.use('/orchestrator/agent-card.json', agentCardHandler({ agentCardProvider: async () => AgentCard.toJSON(card) }));
   app.use('/orchestrator', authMiddleware, express.json(), rejectOverlappingLeadTask(executor), jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));
   return { card, requestHandler, executor };
+}
+
+/**
+ * PAUSE-01 control routes (loopback bearer token, like the role mounts). A pause only sets a flag on the
+ * active lead run(s); the run parks at its next safe boundary and no worker turn is cancelled.
+ * Responses: { runs: [{ taskId, pauseRequested }] } for the runs the call applied to (all active runs, or
+ * the one named by body.taskId).
+ */
+function registerControl(app, { authMiddleware, orchestrator }) {
+  const view = (runs) => ({ runs: runs.map((run) => ({ taskId: run.runId, pauseRequested: run.pauseRequested })) });
+  const target = (req) => {
+    const active = orchestrator.activeRuns?.() || [];
+    const taskId = req.body?.taskId;
+    return typeof taskId === 'string' && taskId ? active.filter((run) => run.runId === taskId) : active;
+  };
+  app.get('/control/pause', authMiddleware, (req, res) => {
+    res.json(view(orchestrator.activeRuns?.() || []));
+  });
+  app.post('/control/pause', authMiddleware, express.json(), (req, res) => {
+    const applied = target(req).filter((run) => orchestrator.requestPause(run.runId));
+    res.json(view(applied.map((run) => ({ runId: run.runId, pauseRequested: true }))));
+  });
+  app.post('/control/pause/cancel', authMiddleware, express.json(), (req, res) => {
+    const canceled = target(req).filter((run) => orchestrator.cancelPauseRequest(run.runId));
+    res.json(view(canceled.map((run) => ({ runId: run.runId, pauseRequested: false }))));
+  });
 }
 
 function protectRoleRpcMounts(app, authMiddleware) {
@@ -733,6 +785,7 @@ async function startServer({
     const leadAgent = registerLead(app, {
       leadRole, orchestrator, baseUrl, authMiddleware, taskStore: leadTaskStore, budgetWatcher,
     });
+    registerControl(app, { authMiddleware, orchestrator });
     ready = true;
     budgetWatcher?.start();
     return {
@@ -884,4 +937,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { startServer, describePause, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts };
+module.exports = { SHUTDOWN_TIMEOUT_MS, startServer, describePause, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts };

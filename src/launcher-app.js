@@ -32,7 +32,7 @@ const {
 } = require('./launcher-sessions');
 const { UsageLedger } = require('./usage-ledger');
 const { summarize } = require('./usage-report');
-const { buildSituation, gitStatus } = require('./session-situation');
+const { buildSituation, ownerPausedLead, gitStatus } = require('./session-situation');
 const { createAskService, AskError } = require('./launcher-ask');
 
 const UI_DIR = path.join(__dirname, '..', 'launcher-ui');
@@ -47,6 +47,8 @@ const ERROR_STATUS = {
 const LIMITS_TTL_MS = 30_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
 const ASK_PACK_FILES = 50;
+const CONTROL_TIMEOUT_MS = 3000;
+const RESUME_TEXT = 'Continue.';
 const SYSTEM_KEY = '__system__';
 const RESERVED_NAMES = new Set(['system']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -306,14 +308,104 @@ function createLauncherApp({
     }
   });
 
+  // Calls a project server control route with the loopback token; the body is the server's JSON.
+  async function controlCall(projectId, method, route, body) {
+    const authToken = readAuthToken(process.env.CODEX_A2A_TOKEN_FILE ? { filePath: process.env.CODEX_A2A_TOKEN_FILE } : undefined);
+    const response = await fetch(projects.baseUrl(projectId) + route, {
+      method,
+      headers: { Authorization: `Bearer ${authToken}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`Project server answered ${response.status} for ${route}`);
+    return response.json();
+  }
+
+  // Lead task ids with a pending pause request; [] when the server is stopped or does not answer.
+  async function pauseRequestedRuns(projectId) {
+    if (projects.get(projectId).status !== 'running') return [];
+    try {
+      const { runs } = await controlCall(projectId, 'GET', '/control/pause');
+      return (Array.isArray(runs) ? runs : []).filter((run) => run.pauseRequested === true).map((run) => run.taskId);
+    } catch (_) {
+      return [];
+    }
+  }
+
   // Situation of one session: where the lead is, the current batch, open decisions, progress.
   app.get('/api/projects/:id/sessions/:contextId/situation', async (req, res) => {
     try {
-      const situation = await withTasksDbAsync(req.params.id, { readonly: true }, db => buildSituation(db, req.params.contextId));
+      const requested = await pauseRequestedRuns(req.params.id);
+      const situation = await withTasksDbAsync(req.params.id, { readonly: true }, db => buildSituation(db, req.params.contextId, { pauseRequestedRuns: requested }));
       if (!situation) return res.status(404).json({ error: 'Session not found' });
       res.json(situation);
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // PAUSE-01: soft stop. A pause only flags the active lead run(s); the run parks at its next safe
+  // boundary and no worker is cancelled. 409 {error} when there is nothing to act on.
+  const conflict = (res, error) => res.status(409).json({ success: false, error });
+
+  app.post('/api/projects/:id/pause', async (req, res) => {
+    try {
+      if (projects.get(req.params.id).status !== 'running') return conflict(res, 'Orchestrator server is not running');
+      const { runs } = await controlCall(req.params.id, 'POST', '/control/pause', {});
+      if (!Array.isArray(runs) || runs.length === 0) return conflict(res, 'No lead run is active, so there is nothing to pause');
+      res.json({ success: true, runs });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message || String(err) });
+    }
+  });
+
+  app.post('/api/projects/:id/pause/cancel', async (req, res) => {
+    try {
+      if (projects.get(req.params.id).status !== 'running') return conflict(res, 'Orchestrator server is not running');
+      const { runs } = await controlCall(req.params.id, 'POST', '/control/pause/cancel', {});
+      if (!Array.isArray(runs) || runs.length === 0) return conflict(res, 'No pause request is pending');
+      res.json({ success: true, runs });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message || String(err) });
+    }
+  });
+
+  // Sends the continue message to the lead task of the given (or latest) session when it is parked on an owner pause.
+  app.post('/api/projects/:id/resume', async (req, res) => {
+    try {
+      const id = req.params.id;
+      if (projects.get(id).status !== 'running') return conflict(res, 'Orchestrator server is not running');
+      const wanted = req.body?.sessionContextId;
+      if (wanted !== undefined && wanted !== null && wanted !== '' && typeof wanted !== 'string') {
+        return res.status(400).json({ success: false, error: 'sessionContextId must be a string' });
+      }
+      const paused = withTasksDb(id, { readonly: true }, (db) => {
+        const contextId = wanted || listSessions(db)[0]?.contextId;
+        return contextId ? ownerPausedLead(db, contextId) : null;
+      });
+      if (!paused) return conflict(res, 'Nothing is paused');
+      const client = await createClient(projects.baseUrl(id));
+      const authToken = readAuthToken(process.env.CODEX_A2A_TOKEN_FILE ? { filePath: process.env.CODEX_A2A_TOKEN_FILE } : undefined);
+      await projects.touch(id);
+      await client.sendMessage({
+        tenant: '',
+        message: {
+          messageId: `web-resume-${Date.now()}`,
+          contextId: paused.contextId,
+          taskId: paused.taskId,
+          role: 1, // USER
+          parts: [{ content: { $case: 'text', value: RESUME_TEXT }, mediaType: 'text/plain', filename: '', metadata: undefined }],
+          metadata: undefined,
+          extensions: [],
+          referenceTaskIds: [],
+        },
+        configuration: { acceptedOutputModes: ['text/plain'], returnImmediately: true },
+        metadata: undefined,
+      }, { serviceParameters: { Authorization: `Bearer ${authToken}` } });
+      res.json({ success: true, taskId: paused.taskId });
+    } catch (err) {
+      const message = err.message || String(err);
+      res.status(/already executing/.test(message) ? 409 : 500).json({ success: false, error: message });
     }
   });
 

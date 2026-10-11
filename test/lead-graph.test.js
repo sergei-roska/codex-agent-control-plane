@@ -136,6 +136,7 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
     prompts: [],
     dispatchInputs: [],
     sends: [],
+    cancels: [],
     polls: new Map(),
     tasks: new Map(),
     pollsNeeded,
@@ -193,6 +194,7 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
           return view(task, count > world.pollsNeeded);
         },
         async cancelTask({ id }) {
+          world.cancels.push(id);
           const task = [...world.tasks.values()].find((entry) => entry.id === id);
           return { ...view(task, false), status: { state: TaskState.TASK_STATE_CANCELED } };
         },
@@ -3148,4 +3150,190 @@ test('an invalid overrides file falls back to the profile defaults for the lead 
   }, { orchestrator: loadEffective(file) });
   assert.equal(seen[0].model, createLeadRole().model);
   assert.equal(seen[0].effort, createLeadRole().effort);
+});
+
+// ---- PAUSE-01: owner pause (soft stop)
+
+test('owner pause requested during collect parks after every worker is terminal and cancels nothing', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-explorer', [])), finish('Done after pause')],
+    pollsNeeded: 2,
+    getTaskFault: (_id, count) => { if (count === 1) assert.equal(session.orchestrator.requestPause(RUN_ID), true); },
+  });
+  let session;
+  await withSession(world, async (s) => {
+    session = s;
+    const events = [];
+    const paused = await s.orchestrator.run({ goal: 'Explore', runId: RUN_ID, onEvent: (event) => events.push(event) });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'owner_pause');
+    assert.equal(paused.pause.message, 'Paused by the owner');
+    assert.equal(events.at(-1).type, 'pause');
+    assert.deepEqual(await s.orchestrator.getPause(RUN_ID), paused.pause);
+    // Parked at the gate between collect and verify: the outcomes are not settled yet.
+    assert.deepEqual((await s.orchestrator._snapshot(RUN_ID)).next, ['owner_pause']);
+    // The worker ran to its terminal state (3 polls); no cancel was sent; the lead did not run again.
+    assert.equal(world.polls.get(`task-${world.sends[0]}`), 3);
+    assert.deepEqual(world.cancels, []);
+    assert.equal(world.leadTurns, 1);
+    assert.deepEqual(s.orchestrator.activeRuns(), []);
+    assert.equal(s.orchestrator.isPauseRequested(RUN_ID), false);
+
+    const result = await s.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Done after pause');
+    assert.equal(world.leadTurns, 2);
+    assert.equal(world.sends.length, 1);
+    assert.match(world.prompts[1], /orch-explorer done/);
+    assert.deepEqual(world.cancels, []);
+  });
+});
+
+test('owner pause requested before decide parks before the next dispatch and resume continues to the next round', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-explorer', [])), dispatch(brief('orch-builder')), finish('Built')],
+  });
+  await withSession(world, async (s) => {
+    let requested = false;
+    // The round event fires in verify, after the first batch; the next boundary is the start of decide.
+    const onEvent = (event) => { if (event.type === 'round' && !requested) { requested = true; s.orchestrator.requestPause(RUN_ID); } };
+    const paused = await s.orchestrator.run({ goal: 'Work', runId: RUN_ID, onEvent });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'owner_pause');
+    assert.equal(world.leadTurns, 1);
+    assert.equal(world.sends.length, 1);
+    assert.deepEqual(world.cancels, []);
+    assert.equal((await s.orchestrator.getPause(RUN_ID)).kind, 'owner_pause');
+    assert.deepEqual((await s.orchestrator._snapshot(RUN_ID)).next, ['decide']);
+
+    // Resume with the same input a human message gives (an empty answer): the run continues.
+    const result = await s.orchestrator.resume({ runId: RUN_ID, input: { answer: '' } });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Built');
+    assert.equal(world.leadTurns, 3);
+    assert.equal(world.sends.length, 2);
+    assert.equal(result.rounds, 2);
+  });
+});
+
+test('owner pause parks again on a second request after resume', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-explorer', [])), dispatch(brief('orch-explorer', [])), finish('End')],
+  });
+  await withSession(world, async (s) => {
+    const request = (event) => { if (event.type === 'round') s.orchestrator.requestPause(RUN_ID); };
+    const first = await s.orchestrator.run({ goal: 'Work', runId: RUN_ID, onEvent: request });
+    assert.equal(first.pause.kind, 'owner_pause');
+    const second = await s.orchestrator.resume({ runId: RUN_ID, onEvent: request });
+    assert.equal(second.pause.kind, 'owner_pause');
+    assert.equal(world.leadTurns, 2);
+    const done = await s.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(done.status, 'completed');
+  });
+});
+
+test('a pause request withdrawn before the boundary leaves the run going', async () => {
+  const world = makeWorld({
+    script: [dispatch(brief('orch-explorer', [])), finish('Ran through')],
+    pollsNeeded: 2,
+    getTaskFault: (_id, count) => {
+      if (count === 1) {
+        assert.equal(session.orchestrator.requestPause(RUN_ID), true);
+        assert.equal(session.orchestrator.isPauseRequested(RUN_ID), true);
+        assert.deepEqual(session.orchestrator.activeRuns(), [{ runId: RUN_ID, pauseRequested: true }]);
+      }
+      if (count === 2) assert.equal(session.orchestrator.cancelPauseRequest(RUN_ID), true);
+    },
+  });
+  let session;
+  await withSession(world, async (s) => {
+    session = s;
+    const result = await s.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Ran through');
+    assert.equal(s.orchestrator.cancelPauseRequest(RUN_ID), false);
+    assert.equal(s.orchestrator.requestPause(RUN_ID), false);
+  });
+});
+
+test('an owner pause survives a restart while parked', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), finish('Resumed after restart')] });
+  await withSession(world, async (s) => {
+    const paused = await s.orchestrator.run({
+      goal: 'Work', runId: RUN_ID, onEvent: (event) => { if (event.type === 'round') s.orchestrator.requestPause(RUN_ID); },
+    });
+    assert.equal(paused.pause.kind, 'owner_pause');
+    await s.restart();
+    assert.equal((await s.orchestrator.getPause(RUN_ID)).kind, 'owner_pause');
+    const result = await s.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 2);
+    assert.equal(world.sends.length, 1);
+  });
+});
+
+// ---- STOP-01: a shutdown stop parks the run as a resumable stopped pause
+
+const ownerStop = () => Object.assign(new Error('Stopped by the owner'), { name: 'AbortError', ownerStop: true });
+
+test('a shutdown stop during collect cancels the worker and parks the run; resume re-plans', async () => {
+  const controller = new AbortController();
+  const world = makeWorld({
+    script: [dispatch(brief('orch-explorer', [])), finish('Re-planned and done')],
+    pollsNeeded: 5,
+    getTaskFault: (_id, count) => { if (count === 1) controller.abort(ownerStop()); },
+  });
+  await withSession(world, async (s) => {
+    const events = [];
+    const paused = await s.orchestrator.run({ goal: 'Explore', runId: RUN_ID, signal: controller.signal, onEvent: (event) => events.push(event) });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'stopped');
+    assert.equal(paused.pause.message, 'Stopped by the owner');
+    assert.equal(events.at(-1).type, 'pause');
+    assert.equal(world.cancels.length, 1, 'the running worker turn was cancelled');
+    assert.equal(world.leadTurns, 1);
+    assert.equal((await s.orchestrator.getPause(RUN_ID)).kind, 'stopped');
+
+    await s.restart();
+    const result = await s.orchestrator.resume({ runId: RUN_ID, input: { answer: '' } });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Re-planned and done');
+    assert.equal(world.leadTurns, 2);
+    assert.equal(world.sends.length, 1, 'nothing was dispatched again');
+    assert.match(world.prompts[1], /TASK_STATE_CANCELED/);
+    assert.match(world.prompts[1], /resumed after an interruption/);
+    assert.equal(await s.orchestrator.getPause(RUN_ID), null);
+  });
+});
+
+test('an explicit cancel (no stop reason) still ends the run as canceled', async () => {
+  const controller = new AbortController();
+  const world = makeWorld({
+    script: [dispatch(brief('orch-explorer', [])), finish('never')],
+    pollsNeeded: 5,
+    getTaskFault: (_id, count) => { if (count === 1) controller.abort(); },
+  });
+  await withSession(world, async (s) => {
+    const result = await s.orchestrator.run({ goal: 'Explore', runId: RUN_ID, signal: controller.signal });
+    assert.equal(result.status, 'canceled');
+    assert.equal(world.cancels.length, 1);
+    assert.equal(await s.orchestrator.getPause(RUN_ID), null);
+    assert.equal(world.leadTurns, 1);
+  });
+});
+
+test('a shutdown stop during a lead turn parks the run and resume runs the turn again', async () => {
+  const controller = new AbortController();
+  const world = makeWorld({
+    script: [async () => { controller.abort(ownerStop()); throw ownerStop(); }, finish('Second try')],
+  });
+  await withSession(world, async (s) => {
+    const paused = await s.orchestrator.run({ goal: 'Work', runId: RUN_ID, signal: controller.signal });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'stopped');
+    const result = await s.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Second try');
+    assert.equal(world.leadTurns, 2);
+  });
 });

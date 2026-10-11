@@ -517,6 +517,8 @@ function pauseMessage(value) {
 
 // ------------------------------------------------------------ the graph
 
+const OWNER_PAUSE_MESSAGE = 'Paused by the owner';
+const STOPPED_MESSAGE = 'Stopped by the owner';
 const MAX_AUTO_REJECTIONS = 2;
 const MAX_CONTINUATIONS = 2;
 const MAX_ESCALATION_QUESTION_CHARS = 3000;
@@ -594,6 +596,8 @@ const LeadState = Annotation.Root({
   acceptanceRuns: last(() => 0),
   acceptance: last(() => null),
   status: last(() => null),
+  // STOP-01: the run was canceled by a shutdown stop and finish must park it (see canceledUpdate).
+  parkOnStop: last(() => false),
   text: last(() => ''),
   result: last(() => null),
   rejections: last(() => []),
@@ -1074,10 +1078,28 @@ function buildLeadGraph(deps) {
     return { pinned: current };
   }
 
+  // A canceled run ends at finish. STOP-01: when the abort was a shutdown stop (the signal reason says so)
+  // the update also asks finish to park the run as resumable instead of ending it.
+  const canceledUpdate = (signal, extra = {}) => ({
+    ...extra,
+    status: 'canceled',
+    text: CANCELED_TEXT,
+    parkOnStop: signal?.reason?.ownerStop === true,
+  });
+
+  // PAUSE-01: the owner asked for a soft stop. It is honored only at the boundaries that call this,
+  // where no worker turn of this run is running and nothing has been mutated yet by the node.
+  const ownerPauseRequested = (config) => {
+    const runtime = runtimeOf(config);
+    return runtime.pauseRequested === true && !runtime.signal?.aborted;
+  };
+
   async function decide(state, config) {
     const runtime = runtimeOf(config);
     const { signal } = runtime;
-    if (signal?.aborted) return { status: 'canceled', text: CANCELED_TEXT };
+    if (signal?.aborted) return canceledUpdate(signal);
+    // Before notes are consumed or a dispatch is planned: everything before interrupt() re-runs on resume.
+    if (ownerPauseRequested(config)) interrupt({ kind: 'owner_pause', message: OWNER_PAUSE_MESSAGE });
 
     const notes = [...(runtime.pendingNotes || [])];
     runtime.pendingNotes = [];
@@ -1158,7 +1180,7 @@ function buildLeadGraph(deps) {
       activityOutcome = signal?.aborted ? 'canceled' : 'failed';
       const kind = error?.name === 'AbortError' && signal?.aborted ? 'aborted' : classifyCodexError(error) === 'usage_limit' ? 'usage_limit' : 'error';
       if (error?.usage || error?.execution) recordLeadTurn(state, error, kind);
-      if (kind === 'aborted') return { ...update, status: 'canceled', text: CANCELED_TEXT };
+      if (kind === 'aborted') return canceledUpdate(signal, update);
       if (kind === 'usage_limit') return { ...update, budget: { source: 'lead' } };
       throw error;
     } finally {
@@ -1610,7 +1632,7 @@ function buildLeadGraph(deps) {
     if (failure) throw failure.reason;
     const byId = new Map(settled.map((entry) => [entry.value.assignmentId, entry.value]));
     const batch = { ...state.batch, items: state.batch.items.map((item) => byId.get(item.assignmentId) || item) };
-    return { batch, ...(runtime.signal?.aborted ? { status: 'canceled', text: CANCELED_TEXT } : {}) };
+    return { batch, ...(runtime.signal?.aborted ? canceledUpdate(runtime.signal) : {}) };
   }
 
   async function verify(state, config) {
@@ -1775,7 +1797,7 @@ function buildLeadGraph(deps) {
     const candidates = state.continuable || [];
     if (candidates.length === 0) return {};
     const runtime = runtimeOf(config);
-    if (runtime.signal?.aborted) return { status: 'canceled', text: CANCELED_TEXT, continuable: [] };
+    if (runtime.signal?.aborted) return canceledUpdate(runtime.signal, { continuable: [] });
     const items = [];
     for (const { item: origin, continuation } of candidates) {
       const match = /^(.*):c(\d+)$/.exec(origin.assignmentId);
@@ -1905,6 +1927,12 @@ function buildLeadGraph(deps) {
     };
   }
 
+  // Between collect and verify every submitted worker turn is terminal. Nothing is cancelled here.
+  async function ownerPause(state, config) {
+    if (ownerPauseRequested(config)) interrupt({ kind: 'owner_pause', message: OWNER_PAUSE_MESSAGE });
+    return {};
+  }
+
   async function budgetPause(state) {
     // Everything before interrupt() re-runs on resume, so it must stay side-effect free.
     let resetsAt = null;
@@ -1996,6 +2024,12 @@ function buildLeadGraph(deps) {
   }
 
   async function finish(state) {
+    // STOP-01: a shutdown stop (signal reason ownerStop) leaves a canceled run parked, not terminal.
+    // Nothing else runs first: on resume this node re-runs from here and the run goes back to planning.
+    if (state.status === 'canceled' && state.parkOnStop) {
+      interrupt({ kind: 'stopped', message: STOPPED_MESSAGE });
+      return { status: null, text: '', parkOnStop: false };
+    }
     let acceptance = state.acceptance;
     if (!acceptance) {
       // Canceled, max_rounds or failed before any acceptance run: report what is known without running checks.
@@ -2039,10 +2073,14 @@ function buildLeadGraph(deps) {
   };
   const afterReviewCheck = (state) => (state.humanRequest ? 'human_input' : 'accept');
   const afterHumanInput = (state) => (state.status === 'completed' ? 'accept' : 'decide');
-  const afterCollect = (state) => {
+  const collectRoute = (state) => {
     if (state.status === 'canceled') return 'verify';
     if (state.batch.items.some((item) => item.state === 'pending')) return 'dispatch';
     return 'verify';
+  };
+  const afterCollect = (state, config) => {
+    if (state.status !== 'canceled' && ownerPauseRequested(config)) return 'owner_pause';
+    return collectRoute(state);
   };
   const afterVerify = (state) => {
     if (state.status === 'canceled') return 'finish';
@@ -2052,6 +2090,12 @@ function buildLeadGraph(deps) {
     return 'decide';
   };
   const afterReconcile = (state) => (state.budget ? 'budget_pause' : 'decide');
+  // A normal finish always sets the result. A finish resumed from a stop has none: unresolved writers
+  // are reconciled first (the canceled run skipped that), then the lead plans again.
+  const afterFinish = (state) => {
+    if (state.result) return END;
+    return state.unresolvedWriters.length > 0 ? 'reconcile' : 'decide';
+  };
   const afterContinueLimited = (state) => {
     if (state.status) return 'finish';
     if (state.batch) return 'dispatch';
@@ -2067,6 +2111,7 @@ function buildLeadGraph(deps) {
     .addNode('reconcile', reconcile)
     .addNode('human_input', humanInput)
     .addNode('budget_pause', budgetPause)
+    .addNode('owner_pause', ownerPause)
     .addNode('continue_limited', continueLimited)
     .addNode('accept', accept)
     .addNode('review_check', reviewCheck)
@@ -2077,13 +2122,14 @@ function buildLeadGraph(deps) {
     .addConditionalEdges('accept', afterAccept, ['finish', 'decide', 'dispatch'])
     .addConditionalEdges('review_check', afterReviewCheck, ['accept', 'human_input'])
     .addEdge('dispatch', 'collect')
-    .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify'])
+    .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify', 'owner_pause'])
+    .addConditionalEdges('owner_pause', collectRoute, ['dispatch', 'verify'])
     .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'review_check', 'decide'])
     .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'decide'])
     .addConditionalEdges('human_input', afterHumanInput, ['accept', 'decide'])
     .addEdge('budget_pause', 'continue_limited')
     .addConditionalEdges('continue_limited', afterContinueLimited, ['finish', 'dispatch', 'review_check', 'decide'])
-    .addEdge('finish', END);
+    .addConditionalEdges('finish', afterFinish, [END, 'reconcile', 'decide']);
 
   return deps.checkpointer ? graph.compile({ checkpointer: deps.checkpointer }) : graph;
 }

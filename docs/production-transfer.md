@@ -93,6 +93,19 @@ Earlier ADRs: `docs/adr/phase-c-*.md`.
 - Production: isolate side runs (separate child or quota) and add explicit
   concurrency limits.
 
+### P-11 Pause and stop can only act at graph boundaries
+
+- Symptom: a pause waits for the slowest running worker turn (up to
+  turnTimeoutMs) and for an in-progress lead decide turn; a pause requested
+  after the last boundary (e.g. during finish) is lost and the run ends
+  normally; a Stop parks only when the run reaches finish or throws, and if
+  the drain timeout is exceeded the task is left WORKING (later reconciled to a
+  restart pause).
+- Cause: LangGraph routing functions cannot interrupt (a dedicated gate node
+  was needed after collect); the pause flag is in memory.
+- Production: make pause/stop requests durable and checked by the run loop at
+  every step boundary, and show the owner the expected wait.
+
 ### P-10 The worker report schema has no free-form details field
 
 - Symptom: a Q&A answer must fit `summary` (3000 chars) plus checks /

@@ -265,10 +265,38 @@ class LeadOrchestrator {
     return Object.keys(snapshot.values || {}).length > 0 || (snapshot.next || []).length > 0;
   }
 
-  /** Pending interrupt value ({ kind: 'human_decision' | 'waiting_for_budget' | 'writer_unresolved', ... }) or null. */
+  /** Pending interrupt value ({ kind: 'human_decision' | 'waiting_for_budget' | 'writer_unresolved' | 'owner_pause', ... }) or null. */
   async getPause(runId) {
     if (!isNonEmptyString(runId)) return null;
     return LeadOrchestrator._pendingInterrupt(await this._snapshot(runId));
+  }
+
+  /**
+   * PAUSE-01: asks an active run to park as owner_pause at its next safe boundary (start of decide, or
+   * after collect). Returns false when the run is not active. No worker turn is cancelled by a pause.
+   */
+  requestPause(runId) {
+    const runtime = this.runtimes.get(runId);
+    if (!runtime) return false;
+    runtime.pauseRequested = true;
+    return true;
+  }
+
+  /** Withdraws a pause request that has not parked yet. Returns true when one was pending. */
+  cancelPauseRequest(runId) {
+    const runtime = this.runtimes.get(runId);
+    if (!runtime || runtime.pauseRequested !== true) return false;
+    runtime.pauseRequested = false;
+    return true;
+  }
+
+  isPauseRequested(runId) {
+    return this.runtimes.get(runId)?.pauseRequested === true;
+  }
+
+  /** Active runs with their pause flag; a run that parked or ended is no longer listed. */
+  activeRuns() {
+    return [...this.runtimes].map(([runId, runtime]) => ({ runId, pauseRequested: runtime.pauseRequested === true }));
   }
 
   /** The goal pinned in the run's checkpointed state, or null when there is no checkpoint. */

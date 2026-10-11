@@ -35,7 +35,7 @@ to ask. The dashboard holds most of this data but does not show it.
     200 {
       "contextId", "leadTaskId",            // latest lead turn of the session
       "state": "<A2A state>", "node": "<graph node>|null",
-      "phase": "planning|working|verifying|waiting_owner|budget_pause|done|failed|canceled",
+      "phase": "planning|working|verifying|pausing|paused|waiting_owner|budget_pause|done|failed|canceled",
       "round": n|null, "budget": { ...known fields as stored }|null,
       "startedAt", "updatedAt",
       "batch": [{ "assignmentId", "role", "objective", "state": "pending|running|done|failed",

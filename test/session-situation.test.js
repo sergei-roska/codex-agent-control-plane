@@ -11,7 +11,7 @@ const { ServerCallContext } = require('@a2a-js/sdk/server');
 const { SqliteSaver } = require('@langchain/langgraph-checkpoint-sqlite');
 const { emptyCheckpoint } = require('@langchain/langgraph-checkpoint');
 const { createTaskStore, openStateDatabase } = require('../src/durable-store');
-const { buildSituation, gitStatus, phaseOf, nodeOf, nextStepsOf, parsePorcelain, parseShortstat } = require('../src/session-situation');
+const { buildSituation, ownerPausedLead, gitStatus, phaseOf, nodeOf, nextStepsOf, parsePorcelain, parseShortstat } = require('../src/session-situation');
 
 // The store takes SDK enum values and keeps the state names, which is what the projection reads.
 const DONE = TaskState.TASK_STATE_COMPLETED;
@@ -61,6 +61,11 @@ async function fixture(t) {
     leadTask('pause-1', INPUT, '2026-03-04T10:00:00.000Z', 'ctx-pause'),
     leadTask('owner-1', INPUT, '2026-03-05T10:00:00.000Z', 'ctx-owner'),
     leadTask('bare-1', WORKING, '2026-03-06T10:00:00.000Z', 'ctx-bare'),
+    // PAUSE-01: parked on an owner pause at the gate node and at decide; a restart pause is not one.
+    { ...leadTask('park-gate', INPUT, '2026-03-07T10:00:00.000Z', 'ctx-park-gate'), metadata: { pause: { kind: 'owner_pause', message: 'Paused by the owner' } } },
+    { ...leadTask('park-decide', INPUT, '2026-03-08T10:00:00.000Z', 'ctx-park-decide'), metadata: { pause: { kind: 'owner_pause', message: 'Paused by the owner' } } },
+    { ...leadTask('park-stopped', INPUT, '2026-03-10T10:00:00.000Z', 'ctx-park-stopped'), metadata: { pause: { kind: 'stopped', message: 'Stopped by the owner' } } },
+    { ...leadTask('park-restart', INPUT, '2026-03-09T10:00:00.000Z', 'ctx-park-restart'), metadata: { pause: { kind: 'restart' } } },
   ];
   for (const task of tasks) await store.save(task, new ServerCallContext());
   state.db.exec(`CREATE TABLE IF NOT EXISTS live_activity (
@@ -129,6 +134,10 @@ async function fixture(t) {
   }, { 'branch:to:finish': 9 }, '2026-03-03T10:30:00.000Z'), 1);
 
   await put('pause-1', checkpoint(1, { round: 1, budget: { source: 'lead' } }, { 'branch:to:budget_pause': 4 }, '2026-03-04T10:10:00.000Z'), 1);
+  await put('park-gate', checkpoint(1, { round: 1 }, { 'branch:to:owner_pause': 6 }, '2026-03-07T10:10:00.000Z'), 1);
+  await put('park-decide', checkpoint(1, { round: 2 }, { 'branch:to:decide': 7 }, '2026-03-08T10:10:00.000Z'), 1);
+  await put('park-stopped', checkpoint(1, { round: 2, status: 'canceled' }, { 'branch:to:finish': 8 }, '2026-03-10T10:10:00.000Z'), 1);
+  await put('park-restart', checkpoint(1, { round: 2 }, { 'branch:to:decide': 7 }, '2026-03-09T10:10:00.000Z'), 1);
   await put('owner-1', checkpoint(1, { round: 1 }, { 'branch:to:human_input': 5 }, '2026-03-05T10:10:00.000Z'), 1);
   return state.db;
 }
@@ -235,6 +244,37 @@ test('a budget pause and a human request are waiting phases', async (t) => {
   const owner = await buildSituation(db, 'ctx-owner');
   assert.equal(owner.node, 'human_input');
   assert.equal(owner.phase, 'waiting_owner');
+});
+
+test('phase is pausing while a pause is requested and the lead has not parked yet', async (t) => {
+  const db = await fixture(t);
+  const plain = await buildSituation(db, 'ctx-run');
+  assert.equal(plain.phase, 'working');
+  const pausing = await buildSituation(db, 'ctx-run', { pauseRequestedRuns: ['run-1'] });
+  assert.equal(pausing.phase, 'pausing');
+  // A request for another run, or for a run that is not working any more, changes nothing.
+  assert.equal((await buildSituation(db, 'ctx-run', { pauseRequestedRuns: ['other'] })).phase, 'working');
+  assert.equal((await buildSituation(db, 'ctx-done', { pauseRequestedRuns: ['done-1'] })).phase, 'done');
+  assert.equal((await buildSituation(db, 'ctx-pause', { pauseRequestedRuns: ['pause-1'] })).phase, 'budget_pause');
+});
+
+test('an owner_pause park is paused at any node; a restart pause is not', async (t) => {
+  const db = await fixture(t);
+  assert.equal((await buildSituation(db, 'ctx-park-gate')).phase, 'paused');
+  assert.equal((await buildSituation(db, 'ctx-park-decide')).phase, 'paused');
+  assert.equal((await buildSituation(db, 'ctx-park-decide', { pauseRequestedRuns: ['park-decide'] })).phase, 'paused');
+  assert.equal((await buildSituation(db, 'ctx-park-restart')).phase, 'waiting_owner');
+  // STOP-01: a stopped run is resumable like an owner pause, so it shows as paused too.
+  assert.equal((await buildSituation(db, 'ctx-park-stopped')).phase, 'paused');
+});
+
+test('ownerPausedLead finds the latest lead turn only when it is parked on an owner pause', async (t) => {
+  const db = await fixture(t);
+  assert.deepEqual(ownerPausedLead(db, 'ctx-park-gate'), { taskId: 'park-gate', contextId: 'ctx-park-gate' });
+  assert.deepEqual(ownerPausedLead(db, 'ctx-park-stopped'), { taskId: 'park-stopped', contextId: 'ctx-park-stopped' });
+  assert.equal(ownerPausedLead(db, 'ctx-park-restart'), null);
+  assert.equal(ownerPausedLead(db, 'ctx-run'), null);
+  assert.equal(ownerPausedLead(db, 'ctx-nope'), null);
 });
 
 test('a lead without a checkpoint gives nulls, never invented values', async (t) => {

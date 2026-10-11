@@ -10,6 +10,10 @@ const { loadOrCreateAuthToken } = require('./local-auth');
 const REGISTRY_VERSION = 1;
 const PROBE_TIMEOUT_MS = 800;
 const STATUS_LOG_CHUNKS = 200;
+// STOP-01: the project server drains for SHUTDOWN_TIMEOUT_MS (src/server.js) after SIGTERM and parks its
+// lead runs as resumable; SIGKILL is only the fallback once that drain plus a margin has passed.
+const SERVER_DRAIN_MS = 5000;
+const KILL_GRACE_MS = SERVER_DRAIN_MS + 3000;
 const RUNNING_MARKERS = ['listening at', 'Codex Universal A2A'];
 
 class ProjectError extends Error {
@@ -66,7 +70,7 @@ function createProjectManager(options = {}) {
     isPidAlive = defaultIsPidAlive,
     ensureToken = () => loadOrCreateAuthToken(),
     kill = (pid, signal) => process.kill(pid, signal),
-    killGraceMs = 2000,
+    killGraceMs = KILL_GRACE_MS,
     logLimit = 500
   } = options;
 
@@ -435,4 +439,4 @@ function createProjectManager(options = {}) {
   return { init, list, get, baseUrl, stateDbPath, roleOverridesPath, touch, add, remove, start, stop, refresh, status, stopAll };
 }
 
-module.exports = { createProjectManager, ProjectError };
+module.exports = { createProjectManager, ProjectError, KILL_GRACE_MS };

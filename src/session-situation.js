@@ -181,18 +181,46 @@ function outcomeItemOf(outcome, db) {
   });
 }
 
+// The pause the lead task is parked on, from the task metadata the server published when it parked
+// (cleared on resume). Null unless the task is INPUT_REQUIRED with a pause object.
+function parkedPause(row) {
+  if (row?.status_state !== 'TASK_STATE_INPUT_REQUIRED' || !isString(row.metadata)) return null;
+  try {
+    const pause = JSON.parse(row.metadata)?.pause;
+    return pause && typeof pause === 'object' && isString(pause.kind) ? pause : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Pauses the owner caused and can lift with a plain continue: a soft pause and a Stop (STOP-01).
+const OWNER_PAUSE_KINDS = new Set(['owner_pause', 'stopped']);
+
+// The lead task of a session (the latest turn) when it is parked on an owner pause or stop; else null.
+function ownerPausedLead(db, contextId) {
+  const leadIds = sessionLeadTaskIds(db, contextId);
+  if (leadIds.length === 0) return null;
+  const row = db.prepare('SELECT id, context_id, status_state, metadata FROM tasks WHERE id = ?').get(leadIds[leadIds.length - 1]);
+  return OWNER_PAUSE_KINDS.has(parkedPause(row)?.kind) ? { taskId: row.id, contextId: row.context_id || contextId } : null;
+}
+
 // Projection of the session's current situation; null when the session does not exist.
 // Reads only; the caller owns the database handle and keeps it open across the await.
-async function buildSituation(db, contextId) {
+// pauseRequestedRuns: lead task ids the project server reports with a pending owner pause request.
+async function buildSituation(db, contextId, { pauseRequestedRuns = [] } = {}) {
   const leadIds = sessionLeadTaskIds(db, contextId);
   if (leadIds.length === 0) return null;
   const leadTaskId = leadIds[leadIds.length - 1];
-  const lead = db.prepare('SELECT status_state FROM tasks WHERE id = ?').get(leadTaskId);
+  const lead = db.prepare('SELECT status_state, metadata FROM tasks WHERE id = ?').get(leadTaskId);
   const state = lead?.status_state ?? null;
   const checkpoint = await latestCheckpoint(db, leadTaskId);
   const values = checkpoint?.values || {};
   const node = checkpoint?.node ?? null;
-  const phase = phaseOf(state, node);
+  let phase = phaseOf(state, node);
+  const pauseRequested = pauseRequestedRuns.includes(leadTaskId);
+  // A request is "pausing" until the run parks; a parked owner pause or stop is "paused" whatever node it stopped at.
+  if (OWNER_PAUSE_KINDS.has(parkedPause(lead)?.kind)) phase = 'paused';
+  else if (pauseRequested && (phase === 'planning' || phase === 'working' || phase === 'verifying')) phase = 'pausing';
   const activity = liveRow(db, `lead:${leadTaskId}`);
   let startedAt = activity?.started_at ?? null;
   if (!startedAt && checkpoint) startedAt = await firstCheckpointTs(db, leadTaskId);
@@ -292,4 +320,4 @@ async function gitStatus(cwd) {
   return { available: true, branch, head, files, diffstat };
 }
 
-module.exports = { buildSituation, gitStatus, phaseOf, nodeOf, nextStepsOf, parsePorcelain, parseShortstat };
+module.exports = { buildSituation, ownerPausedLead, gitStatus, phaseOf, nodeOf, nextStepsOf, parsePorcelain, parseShortstat };

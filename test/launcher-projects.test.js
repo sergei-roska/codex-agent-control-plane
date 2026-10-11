@@ -5,8 +5,9 @@ const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { afterEach, beforeEach, describe, it } = require('node:test');
-const { createProjectManager, ProjectError } = require('../src/launcher-projects');
+const { afterEach, beforeEach, describe, it, mock } = require('node:test');
+const { createProjectManager, ProjectError, KILL_GRACE_MS } = require('../src/launcher-projects');
+const { SHUTDOWN_TIMEOUT_MS } = require('../src/server');
 
 class FakeChild extends EventEmitter {
   constructor(pid) {
@@ -402,6 +403,66 @@ describe('remove', () => {
     const again = makeManager();
     await again.init();
     assert.equal(again.list().length, 0);
+  });
+});
+
+describe('stop grace (STOP-01)', () => {
+  const defaultGraceManager = () => makeManager({ killGraceMs: undefined });
+
+  it('waits the server drain plus a margin before SIGKILL', async () => {
+    assert.equal(KILL_GRACE_MS, SHUTDOWN_TIMEOUT_MS + 3000);
+    const manager = defaultGraceManager();
+    const p = await manager.add(mkdir('a'));
+    await manager.start(p.id);
+    spawned[0].child.closeOn = 'never';
+    const delays = [];
+    const real = globalThis.setTimeout;
+    // The grace timer fires at once; every other timer is left alone.
+    const patched = mock.method(globalThis, 'setTimeout', (fn, ms, ...rest) => {
+      delays.push(ms);
+      return real(fn, ms === KILL_GRACE_MS ? 0 : ms, ...rest);
+    });
+    try {
+      await manager.stop(p.id);
+    } finally {
+      patched.mock.restore();
+    }
+    assert.ok(delays.includes(KILL_GRACE_MS), `grace timer of ${KILL_GRACE_MS} ms was used: ${delays}`);
+    assert.deepEqual(spawned[0].child.signals, ['SIGTERM', 'SIGKILL']);
+  });
+
+  it('does not SIGKILL a server that finishes its drain inside the grace', async () => {
+    const manager = defaultGraceManager();
+    const p = await manager.add(mkdir('a'));
+    await manager.start(p.id);
+    spawned[0].child.closeOn = 'never';
+    const stopping = manager.stop(p.id);
+    // A drain longer than the old 2 s grace is still waited out: the child exits on its own later.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.deepEqual(spawned[0].child.signals, ['SIGTERM']);
+    spawned[0].child.emit('close', 0);
+    await stopping;
+    assert.deepEqual(spawned[0].child.signals, ['SIGTERM']);
+  });
+
+  it('stopAll waits at least the same grace before escalating', async () => {
+    const manager = defaultGraceManager();
+    const p = await manager.add(mkdir('a'));
+    await manager.start(p.id);
+    spawned[0].child.closeOn = 'never';
+    const delays = [];
+    const real = globalThis.setTimeout;
+    const patched = mock.method(globalThis, 'setTimeout', (fn, ms, ...rest) => {
+      delays.push(ms);
+      return real(fn, ms >= KILL_GRACE_MS ? 0 : ms, ...rest);
+    });
+    try {
+      await manager.stopAll();
+    } finally {
+      patched.mock.restore();
+    }
+    assert.ok(delays.some((ms) => ms >= KILL_GRACE_MS));
+    assert.deepEqual(spawned[0].child.signals, ['SIGTERM', 'SIGKILL']);
   });
 });
 

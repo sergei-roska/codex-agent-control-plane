@@ -305,7 +305,9 @@ test('shutdown interrupts active lead execution before draining HTTP requests', 
   await running;
   await runtime.close();
   assert.ok(events.indexOf('app-server-close') < events.indexOf('http-close'));
-  assert.equal(eventsSeen.at(-1).data.status.state, TaskState.TASK_STATE_FAILED);
+  // STOP-01: a shutdown parks the run as a resumable stopped pause instead of failing it.
+  assert.equal(eventsSeen.at(-1).data.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+  assert.equal(eventsSeen.at(-1).data.metadata.pause.kind, 'stopped');
   require('node:fs').rmSync(tokenDirectory, { recursive: true, force: true });
 });
 
@@ -771,7 +773,7 @@ test('a second server on a live state file is rejected and leaves the first unto
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('close() waits for the canceled lead run so its terminal state is persisted', async () => {
+test('close() waits for the stopped lead run so its stopped pause is persisted', async () => {
   const dir = tmpDir();
   const stateFile = path.join(dir, 'state.sqlite');
   let markRunning;
@@ -789,11 +791,12 @@ test('close() waits for the canceled lead run so its terminal state is persisted
   await running;
   await runtime.close();
   const done = await sent;
-  assert.equal(done.status.state, TaskState.TASK_STATE_CANCELED);
+  assert.equal(done.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
   const reopened = await openStateDatabase({ filePath: stateFile });
   try {
     const stored = await createTaskStore(reopened, 'orchestrator').load(done.id, CALL());
-    assert.equal(stored.status.state, TaskState.TASK_STATE_CANCELED);
+    assert.equal(stored.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.equal(stored.metadata.pause.kind, 'stopped');
   } finally {
     await reopened.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -1772,4 +1775,177 @@ test('role overrides from the project file reach the orchestrator and the roles;
     console.warn = warn;
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- PAUSE-01 owner pause
+
+const OWNER_PAUSE = { kind: 'owner_pause', message: 'Paused by the owner' };
+
+test('an owner pause parks the lead task as INPUT_REQUIRED with the pause metadata and resumes with an empty message', async () => {
+  const resumes = [];
+  const orchestrator = {
+    async run(args) { return { runId: args.runId, status: 'input_required', text: 'Paused by the owner', rounds: 1, assignments: [], pause: OWNER_PAUSE }; },
+    async getPause() { return OWNER_PAUSE; },
+    async resume(args) { resumes.push(args); return { runId: args.runId, status: 'completed', text: 'ok', rounds: 2, assignments: [] }; },
+  };
+  const seen = [];
+  await makeLeadExecutor({ orchestrator }).execute(
+    { taskId: 't-own', contextId: 'ctx', userMessage: userMessage('Build it') },
+    { publish: (event) => seen.push(event) },
+  );
+  const parked = lastStatus(seen);
+  assert.equal(parked.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+  assert.deepEqual(parked.metadata.pause, OWNER_PAUSE);
+  assert.match(statusText({ status: parked.status }), /Paused by the owner\./);
+  assert.match(statusText({ status: parked.status }), /continue/);
+
+  const resumed = [];
+  await makeLeadExecutor({ orchestrator }).execute(
+    pausedContext('t-own', OWNER_PAUSE, { ...userMessage(''), parts: [{ text: '' }] }),
+    { publish: (event) => resumed.push(event) },
+  );
+  assert.equal(resumes.length, 1);
+  assert.equal(lastStatus(resumed).status.state, TaskState.TASK_STATE_COMPLETED);
+});
+
+test('the control routes need the loopback token and drive the orchestrator pause flags', async () => {
+  const dir = tmpDir();
+  const calls = [];
+  const flags = new Map([['run-1', false], ['run-2', false]]);
+  const orchestrator = {
+    activeRuns: () => [...flags].map(([runId, pauseRequested]) => ({ runId, pauseRequested })),
+    requestPause: (id) => { calls.push(['request', id]); if (!flags.has(id)) return false; flags.set(id, true); return true; },
+    cancelPauseRequest: (id) => { calls.push(['cancel', id]); if (flags.get(id) !== true) return false; flags.set(id, false); return true; },
+    async getPause() { return null; },
+  };
+  const runtime = await startLeadServer(orchestrator, dir);
+  const httpServer = runtime.app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => httpServer.once('listening', resolve));
+  const base = `http://127.0.0.1:${httpServer.address().port}`;
+  const token = fs.readFileSync(path.join(dir, 'token'), 'utf8').trim();
+  const call = async (method, route, body, auth = true) => {
+    const response = await fetch(base + route, {
+      method,
+      headers: { 'content-type': 'application/json', ...(auth ? { authorization: `Bearer ${token}` } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  try {
+    for (const [method, route] of [['GET', '/control/pause'], ['POST', '/control/pause'], ['POST', '/control/pause/cancel']]) {
+      assert.equal((await call(method, route, method === 'POST' ? {} : undefined, false)).status, 401, route);
+    }
+    assert.deepEqual(calls, []);
+    assert.deepEqual((await call('GET', '/control/pause')).body.runs.map((r) => r.pauseRequested), [false, false]);
+    assert.deepEqual((await call('POST', '/control/pause/cancel', {})).body, { runs: [] });
+    const requested = await call('POST', '/control/pause', {});
+    assert.deepEqual(requested.body, { runs: [{ taskId: 'run-1', pauseRequested: true }, { taskId: 'run-2', pauseRequested: true }] });
+    // Idempotent, and a named run limits the scope.
+    assert.equal((await call('POST', '/control/pause', {})).body.runs.length, 2);
+    assert.deepEqual((await call('POST', '/control/pause/cancel', { taskId: 'run-2' })).body, { runs: [{ taskId: 'run-2', pauseRequested: false }] });
+    assert.deepEqual((await call('GET', '/control/pause')).body.runs, [{ taskId: 'run-1', pauseRequested: true }, { taskId: 'run-2', pauseRequested: false }]);
+    assert.deepEqual((await call('POST', '/control/pause', { taskId: 'nope' })).body, { runs: [] });
+  } finally {
+    httpServer.close();
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the budget watcher never registers or resumes an owner pause', async () => {
+  const dir = tmpDir();
+  const stateFile = path.join(dir, 'state.sqlite');
+  const seed = await openStateDatabase({ filePath: stateFile });
+  const store = createTaskStore(seed, 'orchestrator');
+  await store.save({
+    id: 'lead-owner', contextId: 'c-owner', status: { state: TaskState.TASK_STATE_INPUT_REQUIRED, timestamp: new Date().toISOString() },
+    artifacts: [], history: [], metadata: { pause: OWNER_PAUSE },
+  }, CALL());
+  await seed.close();
+  const runtime = await startServer({
+    listen: false,
+    stateFile,
+    tokenFile: path.join(dir, 'token'),
+    appServer: CHATGPT_APP_SERVER(),
+    orchestratorFactory: () => ({ async getPause() { return OWNER_PAUSE; } }),
+    budgetWatcherOptions: { intervalMs: 20, marginMs: 0 },
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(runtime.budgetWatcher.status('lead-owner'), null);
+    // The reconciler leaves a parked INPUT_REQUIRED task alone across a restart.
+    const task = await runtime.leadAgent.requestHandler.getTask({ id: 'lead-owner' }, CALL());
+    assert.equal(task.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- STOP-01 deterministic stop
+
+const STOPPED = { kind: 'stopped', message: 'Stopped by the owner' };
+
+// An orchestrator whose run waits for the abort and then answers like the lead graph does.
+function stoppableOrchestrator(onAbort) {
+  return {
+    async run({ signal }) {
+      await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+      return onAbort(signal);
+    },
+    async getPause() { return null; },
+  };
+}
+
+async function runUntilAborted(executor, trigger) {
+  const seen = [];
+  const running = executor.execute({ taskId: 't-stop', contextId: 'ctx', userMessage: userMessage('Build it') }, { publish: (event) => seen.push(event) });
+  await new Promise((resolve) => setImmediate(resolve));
+  trigger();
+  await running;
+  return lastStatus(seen);
+}
+
+test('a server shutdown parks the active lead run as a stopped pause instead of canceling it', async () => {
+  for (const onAbort of [
+    () => ({ status: 'canceled', text: 'Canceled', rounds: 1, assignments: [] }),
+    () => ({ status: 'input_required', text: 'Stopped by the owner', rounds: 1, assignments: [], pause: STOPPED }),
+    () => { throw Object.assign(new Error('cancel not confirmed'), { name: 'UnconfirmedCancellationError' }); },
+  ]) {
+    const executor = makeLeadExecutor({ orchestrator: stoppableOrchestrator(onAbort) });
+    const last = await runUntilAborted(executor, () => executor.cancelAll());
+    assert.equal(last.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.deepEqual(last.metadata.pause, STOPPED);
+    assert.match(statusText({ status: last.status }), /Stopped by the owner\./);
+  }
+});
+
+test('an explicit task cancel stays terminal CANCELED', async () => {
+  const executor = makeLeadExecutor({ orchestrator: stoppableOrchestrator(() => ({ status: 'canceled', text: 'Canceled', rounds: 1, assignments: [] })) });
+  const last = await runUntilAborted(executor, () => executor.cancelTask('t-stop', { publish() {}, finished() {} }));
+  assert.equal(last.status.state, TaskState.TASK_STATE_CANCELED);
+});
+
+test('a stopped task resumes with a plain message and recreates a run that never reached a checkpoint', async () => {
+  const resumes = [];
+  const runs = [];
+  const orchestrator = {
+    async getPause() { return null; },
+    async getRunGoal() { return null; },
+    async resume(args) { resumes.push(args); throw Object.assign(new Error('No checkpoint'), { name: 'RunNotFoundError' }); },
+    async run(args) { runs.push(args); return { status: 'completed', text: 'fresh' }; },
+  };
+  const seen = [];
+  await makeLeadExecutor({ orchestrator }).execute(
+    pausedContext('t-st', STOPPED, { ...userMessage(''), parts: [{ text: '' }] }, { history: [userMessage('Original goal')] }),
+    { publish: (event) => seen.push(event) },
+  );
+  assert.equal(resumes.length, 1);
+  assert.equal(runs.length, 1);
+  assert.match(runs[0].goal, /Original goal/);
+  assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
+});
+
+test('the shutdown timeout the launcher grace is built on is exported and unchanged', () => {
+  assert.equal(require('../src/server').SHUTDOWN_TIMEOUT_MS, 5000);
 });
