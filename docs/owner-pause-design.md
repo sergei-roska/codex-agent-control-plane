@@ -53,8 +53,22 @@ UI: a Pause button between Start and Stop, visible while the lead works;
 request); when parked the situation panel shows a "Paused" pill and a Resume
 primary button. Stop is unchanged.
 
-## Out of scope / known gaps
+## STOP-01 deterministic emergency stop (owner: do not postpone)
 
-- Stop semantics (drain vs SIGKILL race, terminal CANCELED) are unchanged;
-  see `docs/resilient-orchestration-spec.md:245`.
+Today the outcome of Stop depends on a race: SIGKILL after 2 s leaves the lead
+resumable (restart reconcile), a completed 5 s drain leaves it CANCELED.
+
+Decision: Stop stays an emergency brake (running worker turns are cancelled
+at once), but the lead run is always left resumable, never terminal:
+- Server shutdown parks each active lead run as INPUT_REQUIRED with
+  `pause { kind: "stopped", message: "Stopped by the owner" }` instead of
+  publishing TASK_STATE_CANCELED; worker turns are still cancelled; resume
+  input means continue, and the next round re-plans from the checkpoint (the
+  cancelled assignments are treated like interrupted ones).
+- The launcher waits for the server drain before escalating: grace = server
+  SHUTDOWN_TIMEOUT_MS + margin (5 s + 3 s), SIGKILL only as the fallback.
+- An explicit task cancel from the UI or A2A CancelTask stays terminal.
+- `docs/resilient-orchestration-spec.md:245` known gap is closed by this.
+
+## Out of scope / known gaps
 - Pause latency equals the longest running worker turn (up to turnTimeoutMs).
