@@ -199,6 +199,11 @@ function sessionRows(db, contextId) {
   return single ? [single] : [];
 }
 
+// Lead task ids of a session in the order getSession lists its turns.
+function sessionLeadTaskIds(db, contextId) {
+  return sessionRows(db, contextId).map(row => row.id);
+}
+
 function getSession(db, contextId) {
   const rows = sessionRows(db, contextId);
   if (rows.length === 0) return null;
@@ -280,6 +285,7 @@ module.exports = {
   formatLeadTask,
   listSessions,
   getSession,
+  sessionLeadTaskIds,
   deleteLeadTask,
   deleteSession,
 };

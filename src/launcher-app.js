@@ -9,7 +9,7 @@ const { ClientFactory } = require('@a2a-js/sdk/client');
 const { parseCheckCommand } = require('./acceptance');
 const { CodexAppServer } = require('./codex-app-server');
 const { createAccountProfiles } = require('./account-profiles');
-const { loadRoles, createLeadRole } = require('./role-catalog');
+const { loadRoles, createLeadRole, LEAD_ROLE_NAME } = require('./role-catalog');
 const { canonicalRoleId } = require('./role-names');
 const {
   RoleOverrideError,
@@ -28,7 +28,10 @@ const {
   getSession,
   deleteLeadTask,
   deleteSession,
+  sessionLeadTaskIds,
 } = require('./launcher-sessions');
+const { UsageLedger } = require('./usage-ledger');
+const { summarize } = require('./usage-report');
 
 const UI_DIR = path.join(__dirname, '..', 'launcher-ui');
 const PROJECT_ID = /^[0-9a-f]{10}$/;
@@ -56,6 +59,42 @@ function escapeHtml(s) {
 function sendProjectError(res, err) {
   const status = err instanceof ProjectError ? (ERROR_STATUS[err.code] || 500) : 500;
   res.status(status).json({ success: false, error: err.message || String(err) });
+}
+
+const LEGACY_LEAD_ROLE = 'orch-lead';
+const TOKEN_FIELDS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens', 'totalTokens'];
+
+function usageBlock(rows) {
+  const tokens = summarize(rows).tokens || Object.fromEntries(TOKEN_FIELDS.map((key) => [key, null]));
+  return { ...tokens, attempts: rows.length };
+}
+
+// Lead rows are keyed by run id (= lead task id) and worker rows by the dispatch journal, because
+// worker rows carry a per-attempt context id, not the session contextId. listByRun returns both.
+// Returns null when the session does not exist.
+function sessionUsage(db, contextId) {
+  const leadIds = sessionLeadTaskIds(db, contextId);
+  if (leadIds.length === 0) return null;
+  const hasLedger = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_ledger'").get());
+  const rows = [];
+  if (hasLedger) {
+    const ledger = new UsageLedger({ db, readonly: true });
+    const seen = new Set();
+    for (const leadId of leadIds) {
+      for (const row of ledger.listByRun(leadId)) {
+        if (seen.has(row.entryId)) continue;
+        seen.add(row.entryId);
+        // Lead rows written before the lead role was named coordinator fold into the current lead key.
+        if (row.kind === 'lead_turn' && row.role === LEGACY_LEAD_ROLE) row.role = LEAD_ROLE_NAME;
+        rows.push(row);
+      }
+    }
+  }
+  const byRole = {};
+  for (const role of [...new Set(rows.map((row) => row.role))].sort()) {
+    byRole[role] = usageBlock(rows.filter((row) => row.role === role));
+  }
+  return { contextId, byRole, total: usageBlock(rows), unknownCount: summarize(rows).tokensUnknownRows };
 }
 
 function createLauncherApp({
@@ -232,6 +271,18 @@ function createLauncherApp({
       const session = withTasksDb(req.params.id, { readonly: true }, db => getSession(db, req.params.contextId));
       if (!session) return res.status(404).json({ error: 'Session not found' });
       res.json(session);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Token usage of one session: { contextId, byRole, total, unknownCount }. No state DB yet -> empty usage.
+  app.get('/api/projects/:id/sessions/:contextId/usage', (req, res) => {
+    try {
+      const contextId = req.params.contextId;
+      const usage = withTasksDb(req.params.id, { readonly: true }, db => sessionUsage(db, contextId));
+      if (usage === null) return res.status(404).json({ error: 'Session not found' });
+      res.json(usage || { contextId, byRole: {}, total: usageBlock([]), unknownCount: 0 });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

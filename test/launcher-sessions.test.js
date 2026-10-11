@@ -14,6 +14,7 @@ const {
   formatLeadTask,
   listSessions,
   getSession,
+  sessionLeadTaskIds,
   deleteLeadTask,
   deleteSession,
 } = require('../src/launcher-sessions');
@@ -345,4 +346,13 @@ test('workers carry assignment_id, round and taskState for finished workers', as
   assert.equal(by['missing-task'].taskState, null);
   assert.equal(by.w3.round, 3);
   assert.equal(by.w3.taskState, undefined);
+});
+
+test('sessionLeadTaskIds lists the lead tasks of a session, with the same fallback as getSession', async (t) => {
+  const db = await fixture(t, CHAIN);
+  assert.deepEqual(sessionLeadTaskIds(db, 'ctx-a'), ['t1', 't2', 't3']);
+  assert.deepEqual(sessionLeadTaskIds(db, 'ctx-b'), ['f1']);
+  assert.deepEqual(sessionLeadTaskIds(db, 'old1'), ['old1']);
+  assert.deepEqual(sessionLeadTaskIds(db, 'nope'), []);
+  assert.deepEqual(sessionLeadTaskIds(db, ''), []);
 });

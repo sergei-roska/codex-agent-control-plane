@@ -11,10 +11,13 @@ const { ServerCallContext } = require('@a2a-js/sdk/server');
 const { createLauncherApp } = require('../src/launcher-app');
 const { ProjectError } = require('../src/launcher-projects');
 const { createTaskStore, openStateDatabase } = require('../src/durable-store');
+const { UsageLedger } = require('../src/usage-ledger');
 
 const ID_A = 'aaaaaaaaaa';
 const ID_B = 'bbbbbbbbbb';
 const ID_MISSING = 'cccccccccc';
+const ID_USAGE = 'eeeeeeeeee';
+const ID_NOLEDGER = 'ffffffffff';
 
 let tmp;
 let server;
@@ -113,7 +116,7 @@ beforeEach(async () => {
   calls = [];
   nextError = null;
   sent = [];
-  fakeStatus = { [ID_A]: 'running', [ID_B]: 'stopped', [ID_MISSING]: 'stopped' };
+  fakeStatus = { [ID_A]: 'running', [ID_B]: 'stopped', [ID_MISSING]: 'stopped', [ID_USAGE]: 'stopped', [ID_NOLEDGER]: 'stopped' };
   if (server) server.close();
   const fakeClient = {
     getTask: async ({ id }) => ({ id, contextId: 'ctx-' + id }),
@@ -448,5 +451,112 @@ describe('role overrides', () => {
     assert.equal('defaults' in architect, false);
     assert.equal('override' in architect, false);
     assert.equal('models' in global.body, false);
+  });
+});
+
+describe('session usage', () => {
+  const CTX = 'ctx-usage';
+  const EMPTY_TOTAL = { inputTokens: null, cachedInputTokens: null, outputTokens: null, reasoningOutputTokens: null, totalTokens: null, attempts: 0 };
+  const tokens = (inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens) => ({
+    inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens,
+  });
+
+  before(async () => {
+    dbFiles[ID_USAGE] = path.join(tmp, 'usage', 'state.sqlite');
+    dbFiles[ID_NOLEDGER] = path.join(tmp, 'noledger', 'state.sqlite');
+    await makeDb(dbFiles[ID_USAGE], [
+      leadTask('lead-1', TaskState.TASK_STATE_COMPLETED, 'first turn', '2026-02-01T00:00:00.000Z', CTX),
+      leadTask('lead-2', TaskState.TASK_STATE_COMPLETED, 'second turn', '2026-02-02T00:00:00.000Z', CTX, ['lead-1']),
+      leadTask('other-1', TaskState.TASK_STATE_COMPLETED, 'other session', '2026-02-03T00:00:00.000Z', 'ctx-other'),
+      leadTask('legacy-1', TaskState.TASK_STATE_COMPLETED, 'legacy lead', '2026-02-04T00:00:00.000Z', 'ctx-legacy'),
+    ]);
+    await makeDb(dbFiles[ID_NOLEDGER], [
+      leadTask('lead-x', TaskState.TASK_STATE_COMPLETED, 'no ledger', '2026-02-01T00:00:00.000Z', 'ctx-x'),
+    ]);
+    const db = new Database(dbFiles[ID_USAGE]);
+    try {
+      const ledger = new UsageLedger({ db });
+      const journal = db.prepare(`
+        INSERT INTO dispatch_journal (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id, state, created_at, updated_at)
+        VALUES (@attempt_id, @run_id, @assignment_id, @role, 'read-only', @context_id, @task_id, 'finished', @created_at, @created_at)
+      `);
+      const addJournal = (row) => journal.run({ task_id: null, created_at: '2026-02-01T00:00:00.000Z', ...row });
+      addJournal({ attempt_id: 'att-1', run_id: 'lead-1', assignment_id: 'a1', role: 'engineer', context_id: 'wctx-1', task_id: 'w-1' });
+      addJournal({ attempt_id: 'att-2', run_id: 'lead-2', assignment_id: 'a2', role: 'auditor', context_id: 'wctx-2', task_id: 'w-2' });
+      // Lost submission: the journal has no task id, only the attempt context matches the ledger row.
+      addJournal({ attempt_id: 'att-3', run_id: 'lead-2', assignment_id: 'a3', role: 'engineer', context_id: 'wctx-3', task_id: null });
+      addJournal({ attempt_id: 'att-4', run_id: 'other-1', assignment_id: 'a4', role: 'engineer', context_id: 'wctx-o', task_id: 'w-other' });
+      const lead = (entryId, runId, usage) => ({ entryId, kind: 'lead_turn', runId, role: 'coordinator', tokens: usage });
+      const worker = (entryId, role, taskId, contextId, usage) => ({ entryId, kind: 'worker_turn', role, taskId, contextId, tokens: usage });
+      ledger.record(lead('lead:l1', 'lead-1', tokens(100, 0, 10, 0, 110)));
+      ledger.record(lead('lead:l2', 'lead-2', tokens(200, 50, 20, 5, 220)));
+      ledger.record(lead('lead:l2-unknown', 'lead-2', null));
+      ledger.record(worker('engineer:w-1:t1', 'engineer', 'w-1', 'wctx-1', tokens(1000, 600, 50, 20, 1050)));
+      ledger.record(worker('auditor:w-2:t1', 'auditor', 'w-2', 'wctx-2', tokens(300, null, 30, null, 330)));
+      ledger.record(worker('auditor:w-2:pre', 'auditor', 'w-2', 'wctx-2', null));
+      ledger.record(worker('engineer:w-lost:t1', 'engineer', 'w-lost', 'wctx-3', tokens(50, 0, 5, 0, 55)));
+      ledger.record(lead('lead:o1', 'other-1', tokens(999, 0, 999, 0, 1998)));
+      ledger.record(worker('engineer:w-other:t1', 'engineer', 'w-other', 'wctx-o', tokens(999, 0, 999, 0, 1998)));
+      ledger.record({ ...lead('lead:legacy-old', 'legacy-1', tokens(10, 0, 2, 0, 12)), role: 'orch-lead' });
+      ledger.record(lead('lead:legacy-new', 'legacy-1', tokens(5, 0, 1, 0, 6)));
+    } finally {
+      db.close();
+    }
+  });
+
+  it('sums lead and worker rows per role and in total, each row counted once', async () => {
+    const r = await api('GET', `/api/projects/${ID_USAGE}/sessions/${CTX}/usage`);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.byRole.coordinator, {
+      inputTokens: 300, cachedInputTokens: 50, outputTokens: 30, reasoningOutputTokens: 5, totalTokens: 330, attempts: 3,
+    });
+    assert.deepEqual(r.body.byRole.engineer, {
+      inputTokens: 1050, cachedInputTokens: 600, outputTokens: 55, reasoningOutputTokens: 20, totalTokens: 1105, attempts: 2,
+    });
+    assert.deepEqual(r.body.byRole.auditor, {
+      inputTokens: 300, cachedInputTokens: null, outputTokens: 30, reasoningOutputTokens: null, totalTokens: 330, attempts: 2,
+    });
+    assert.deepEqual(r.body.total, {
+      inputTokens: 1650, cachedInputTokens: 650, outputTokens: 115, reasoningOutputTokens: 25, totalTokens: 1765, attempts: 7,
+    });
+    assert.equal(r.body.unknownCount, 2);
+    assert.equal(r.body.contextId, CTX);
+    assert.deepEqual(Object.keys(r.body).sort(), ['byRole', 'contextId', 'total', 'unknownCount']);
+  });
+
+  it('keeps foreign session rows out and 404s an unknown session', async () => {
+    const other = await api('GET', `/api/projects/${ID_USAGE}/sessions/ctx-other/usage`);
+    assert.equal(other.status, 200);
+    assert.deepEqual(Object.keys(other.body.byRole), ['coordinator', 'engineer']);
+    assert.equal(other.body.byRole.coordinator.attempts, 1);
+    assert.equal(other.body.byRole.engineer.totalTokens, 1998);
+    assert.equal(other.body.total.attempts, 2);
+    assert.equal(other.body.total.totalTokens, 3996);
+    const missing = await api('GET', `/api/projects/${ID_USAGE}/sessions/nope/usage`);
+    assert.equal(missing.status, 404);
+    assert.deepEqual(missing.body, { error: 'Session not found' });
+  });
+
+  it('folds lead rows recorded under the legacy orch-lead role into the coordinator key', async () => {
+    const r = await api('GET', `/api/projects/${ID_USAGE}/sessions/ctx-legacy/usage`);
+    assert.equal(r.status, 200);
+    assert.deepEqual(Object.keys(r.body.byRole), ['coordinator']);
+    assert.deepEqual(r.body.byRole.coordinator, {
+      inputTokens: 15, cachedInputTokens: 0, outputTokens: 3, reasoningOutputTokens: 0, totalTokens: 18, attempts: 2,
+    });
+    assert.deepEqual(r.body.total, r.body.byRole.coordinator);
+    assert.equal(r.body.unknownCount, 0);
+  });
+
+  it('a db without a usage ledger table gives the empty shape', async () => {
+    const r = await api('GET', `/api/projects/${ID_NOLEDGER}/sessions/ctx-x/usage`);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body, { contextId: 'ctx-x', byRole: {}, total: EMPTY_TOTAL, unknownCount: 0 });
+  });
+
+  it('a project without a state db gives the empty shape', async () => {
+    const r = await api('GET', `/api/projects/${ID_MISSING}/sessions/x/usage`);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body, { contextId: 'x', byRole: {}, total: EMPTY_TOTAL, unknownCount: 0 });
   });
 });
