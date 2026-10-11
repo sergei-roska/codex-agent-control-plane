@@ -11,7 +11,7 @@ const { createAccountProfiles } = require('./account-profiles');
 const { createSwitchingAppServer } = require('./app-server-switch');
 const { CodexAppServer } = require('./codex-app-server');
 const { loadRoles, createLeadRole } = require('./role-catalog');
-const { createRoleOverrideSource } = require('./role-overrides');
+const { loadEffectiveRoles } = require('./role-overrides');
 const { registerRoleAgents } = require('./a2a-role-service');
 const { LeadOrchestrator, ResumeInputError, renderRunDigest } = require('./lead-orchestrator');
 const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
@@ -683,25 +683,25 @@ async function startServer({
     const worktreeMode = isolation.mode === 'worktree';
     const actualPort = httpServer?.address()?.port ?? port;
     const baseUrl = `http://${HOST}:${actualPort}`;
-    const baseLeadRole = createLeadRole(profilesDir ? { profilesDir } : undefined);
-    // Per-project role overrides: model, effort, and extra rules re-read when the file changes.
-    const roleSource = createRoleOverrideSource({
-      file: roleOverridesFile, roles: baseRoles, leadRole: baseLeadRole, warn: (message) => console.warn(`[roles] ${message}`),
+    // Per-project role overrides (model, effort, extra rules) are read once here; they are edited only while the server is stopped.
+    const { roles, leadRole } = loadEffectiveRoles({
+      file: roleOverridesFile,
+      roles: baseRoles,
+      leadRole: createLeadRole(profilesDir ? { profilesDir } : undefined),
+      warn: (message) => console.warn(`[roles] ${message}`),
     });
-    const leadRole = roleSource.leadRole();
-    const roles = roleSource.roles();
     const usageLedger = new UsageLedger({ db: state.db });
     const evidenceStore = createEvidenceStore(state.db);
     const activityStore = createActivityStore(state.db);
     const sessionThreads = new SessionThreads({ db: state.db });
     const orchestrator = orchestratorFactory({
-      appServer, roles, workspace, baseUrl, authToken, leadRole, roleSource, skillCatalog,
+      appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog,
       checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, activityStore, evidenceStore, sessionThreads,
       parallelWriters: worktreeMode,
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
-      roles, roleSource, appServer, workspace, baseUrl, admission, usageLedger, activityStore, skillCatalog,
+      roles, appServer, workspace, baseUrl, admission, usageLedger, activityStore, skillCatalog,
       lanes: worktreeMode ? lanes : null,
       taskStoreFactory: (roleId) => createTaskStore(state, roleId),
     });
@@ -709,17 +709,10 @@ async function startServer({
     let budgetWatcher = null;
     const loopback = { client: null };
     if (autoResume) {
-      // The watcher reads this array on every check; it follows the effective models of the overrides.
-      const budgetModels = [];
-      const refreshBudgetModels = ({ roles: effective, leadRole: effectiveLead }) => {
-        const models = new Set([...effective.values()].map((role) => role.model).filter(Boolean));
-        if (effectiveLead.model) models.add(effectiveLead.model);
-        budgetModels.splice(0, budgetModels.length, ...models);
-      };
-      refreshBudgetModels({ roles, leadRole });
-      roleSource.onReload(refreshBudgetModels);
+      const models = new Set([...roles.values()].map((role) => role.model).filter(Boolean));
+      if (leadRole.model) models.add(leadRole.model);
       budgetWatcher = createBudgetWatcher({
-        models: budgetModels,
+        models: [...models],
         readRateLimits: async () => (typeof appServer.readRateLimits === 'function' ? appServer.readRateLimits() : null),
         listPausedRuns: () => listBudgetPausedRuns({ state, taskStore: leadTaskStore, orchestrator }),
         resumeRun: (taskId) => resumeBudgetRun({ taskId, baseUrl, authToken, taskStore: leadTaskStore, orchestrator, executor: () => leadAgent.executor, loopback }),

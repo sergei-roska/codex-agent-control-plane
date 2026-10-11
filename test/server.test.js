@@ -1735,11 +1735,12 @@ test('role overrides from the project file reach the orchestrator and the roles;
     try {
       assert.equal(ok.options.leadRole.model, 'gpt-6-luna');
       assert.equal(ok.options.roles.get('architect').effort, 'low');
-      assert.equal(ok.options.roleSource.leadRole().effort, 'high');
-      // The file is the only source: a later edit shows through the source without a restart.
+      assert.equal(ok.options.leadRole.effort, 'high');
+      // The file is read once at start: a later edit changes nothing until the server restarts.
       fs.writeFileSync(file, JSON.stringify({ version: 1, roles: { architect: { effort: 'medium' } } }));
-      assert.equal(ok.options.roleSource.roles().get('architect').effort, 'medium');
-      assert.equal(ok.options.roleSource.leadRole().model, require('../src/role-catalog').createLeadRole().model);
+      assert.equal(ok.options.roles.get('architect').effort, 'low');
+      assert.equal(ok.options.leadRole.model, 'gpt-6-luna');
+      assert.equal(ok.runtime.roles.get('architect').effort, 'low');
     } finally {
       await ok.runtime.close();
     }

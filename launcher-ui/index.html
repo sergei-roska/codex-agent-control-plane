@@ -102,6 +102,7 @@
           <div class="about-list" id="aboutTeamList"></div>
         </details>
         <div class="limit-reset hidden" id="aboutTeamError"></div>
+        <div class="limit-reset hidden" id="aboutTeamNote"></div>
       </div>
     </section>
 
@@ -212,7 +213,7 @@
           <textarea id="roleRules" rows="6" maxlength="4000" oninput="updateRoleRulesCounter()"></textarea>
           <div class="role-rules-counter" id="roleRulesCounter">0 / 4000</div>
         </div>
-        <div class="role-modal-note">Applies to this project from the next dispatch or lead turn.</div>
+        <div class="role-modal-note">Applies when the project server starts.</div>
         <div id="roleModalError" class="inline-notice hidden" role="alert"></div>
         <div class="role-modal-actions">
           <button type="submit" class="btn btn-primary btn-sm" id="roleSaveBtn">Save</button>

@@ -310,7 +310,10 @@ function createLauncherApp({
   });
 
   // ROLE-01: the team of one project with its role overrides applied (model, effort, extra rules).
-  function projectTeam(file) {
+  // The project server reads the overrides once at start, so they are edited only while it is stopped.
+  const serverActive = (id) => projects.get(id).status !== 'stopped';
+
+  function projectTeam(file, id) {
     const baseLead = createLeadRole();
     const baseRoles = loadRoles();
     const { roles: overrides, warning } = readOverridesFile(file, [...baseRoles.keys()]);
@@ -328,12 +331,13 @@ function createLauncherApp({
       roles: [...baseRoles.values()].map(describe),
       models: [...new Set(all.map((role) => role.model))].sort(),
       warning,
+      running: serverActive(id),
     };
   }
 
   app.get('/api/projects/:id/team', (req, res) => {
     try {
-      res.json(projectTeam(projects.roleOverridesPath(req.params.id)));
+      res.json(projectTeam(projects.roleOverridesPath(req.params.id), req.params.id));
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -342,6 +346,9 @@ function createLauncherApp({
   // Read-modify-write of the overrides file; it is synchronous, so concurrent requests cannot interleave.
   function changeRoleOverride(req, res, build) {
     try {
+      if (serverActive(req.params.id)) {
+        return res.status(409).json({ success: false, error: 'Stop the project server to change role settings; they are read when it starts.' });
+      }
       const file = projects.roleOverridesPath(req.params.id);
       const known = [...loadRoles().keys()];
       const name = resolveRoleName(req.params.role, known);
@@ -351,7 +358,7 @@ function createLauncherApp({
       if (entry && Object.keys(entry).length > 0) roles[name] = entry;
       else delete roles[name];
       writeOverridesFile(file, roles);
-      res.json({ success: true, ...projectTeam(file) });
+      res.json({ success: true, ...projectTeam(file, req.params.id) });
     } catch (e) {
       if (e instanceof RoleOverrideError) return res.status(400).json({ success: false, error: e.message });
       res.status(500).json({ success: false, error: e.message || String(e) });

@@ -317,6 +317,8 @@ describe('role overrides', () => {
   beforeEach(() => {
     fs.rmSync(overridesFile(ID_A), { force: true });
     fs.rmSync(overridesFile(ID_B), { force: true });
+    // Overrides are edited only while the project server is stopped.
+    fakeStatus[ID_A] = 'stopped';
   });
 
   it('serves the team of a project with defaults, override, and the models list', async () => {
@@ -329,7 +331,30 @@ describe('role overrides', () => {
     assert.deepEqual(r.body.models, [...r.body.models].sort());
     assert.equal(new Set(r.body.models).size, r.body.models.length);
     assert.equal(r.body.warning, null);
+    assert.equal(r.body.running, false);
     assert.equal((await api('GET', '/api/projects/dddddddddd/team')).status, 404);
+  });
+
+  it('reports running while the project server is starting or running and refuses edits with 409', async () => {
+    await api('PUT', `/api/projects/${ID_A}/roles/architect/override`, { effort: 'low' });
+    const before = fs.readFileSync(overridesFile(ID_A), 'utf8');
+    for (const status of ['running', 'starting']) {
+      fakeStatus[ID_A] = status;
+      const team = await api('GET', `/api/projects/${ID_A}/team`);
+      assert.equal(team.body.running, true);
+      assert.equal(find(team.body, 'architect').effort, 'low');
+      const put = await api('PUT', `/api/projects/${ID_A}/roles/architect/override`, { effort: 'high' });
+      assert.equal(put.status, 409);
+      assert.equal(put.body.success, false);
+      assert.match(put.body.error, /Stop the project server/);
+      const del = await api('DELETE', `/api/projects/${ID_A}/roles/architect/override`);
+      assert.equal(del.status, 409);
+      assert.match(del.body.error, /Stop the project server/);
+      assert.equal(fs.readFileSync(overridesFile(ID_A), 'utf8'), before);
+    }
+    fakeStatus[ID_A] = 'stopped';
+    assert.equal((await api('PUT', `/api/projects/${ID_A}/roles/architect/override`, { effort: 'high' })).status, 200);
+    assert.equal((await api('GET', `/api/projects/${ID_A}/team`)).body.running, false);
   });
 
   it('PUT stores an override per project atomically and the team shows the effective values', async () => {

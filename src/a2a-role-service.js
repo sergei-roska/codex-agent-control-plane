@@ -263,10 +263,9 @@ function activityRunId(requestContext, input) {
 }
 
 function makeExecutor({
-  roleId, role: baseRole, roleFor = () => baseRole, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, activityStore = null, skillCatalog,
+  roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, activityStore = null, skillCatalog,
   lanes = null,
 }) {
-  const role = baseRole;
   const writable = role.sandbox !== 'read-only';
   const reservations = new Map();
 
@@ -306,8 +305,6 @@ function makeExecutor({
   };
   const executor = {
     async execute(requestContext, eventBus) {
-      // The role as overridden for this project at dispatch time (model, effort, extra rules).
-      const role = roleFor();
       const { taskId, contextId } = requestContext;
       let activeTask = reservations.get(taskId);
       if (activeTask?.entered) {
@@ -847,7 +844,7 @@ function rejectOverlappingTask(executor) {
 
 /** Mount one independently stored A2A JSON-RPC agent per role. */
 function registerRoleAgents(app, {
-  roles, roleSource = null, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger, activityStore,
+  roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger, activityStore,
   skillCatalog = loadSkillCatalog(), lanes = null,
 }) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
@@ -871,10 +868,8 @@ function registerRoleAgents(app, {
     const route = `/agents/${roleId}`;
     const endpoint = new URL(route, `${origin.origin}/`).toString();
     const card = makeRoleCard({ roleId, role, endpoint });
-    // Per-project overrides are re-read when their file changes; the role's sandbox is never overridden.
-    const roleFor = () => (roleSource ? roleSource.roles().get(rawRoleId) ?? role : role);
     const executor = makeExecutor({
-      roleId, role, roleFor, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, lanes,
+      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, lanes,
     });
     const handler = new DefaultRequestHandler(
       card,

@@ -3056,10 +3056,14 @@ test('check_changed: only an explicit PRD change reaches the owner, who may appr
 // ------------------------------------------------- per-project role overrides (ROLE-01)
 
 const { createLeadRole } = require('../src/role-catalog');
-const { createRoleOverrideSource, writeOverridesFile, RULES_HEADING } = require('../src/role-overrides');
+const { loadEffectiveRoles, writeOverridesFile, RULES_HEADING } = require('../src/role-overrides');
 
 const profileHash = (r) => crypto.createHash('sha256').update(JSON.stringify([r.name, r.sandbox, r.model, r.effort, r.instructions || '']), 'utf8').digest('hex');
-const overrideSource = (file) => createRoleOverrideSource({ file, roles: roles(), leadRole: createLeadRole() });
+// What the project server does at start: the effective roles for the orchestrator options.
+const loadEffective = (file) => {
+  const { roles: effective, leadRole } = loadEffectiveRoles({ file, roles: roles(), leadRole: createLeadRole() });
+  return { roles: effective, leadRole };
+};
 const overridesPath = () => path.join(tmpRoot, `overrides-${dbCounter += 1}`, 'role-overrides.json');
 
 test('a worker override changes the effective role and the pinned roleProfileSha256 describes it', async () => {
@@ -3070,7 +3074,7 @@ test('a worker override changes the effective role and the pinned roleProfileSha
   await withSession(plain, async (session) => {
     const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
     assert.equal(outcome.contract.roleProfileSha256, profileHash(base));
-  }, { orchestrator: { roleSource: overrideSource(file) } });
+  }, { orchestrator: loadEffective(file) });
   writeOverridesFile(file, { engineer: { model: 'gpt-6-luna', effort: 'low', extraRules: 'Keep diffs small.' } });
   const world = makeWorld({ script: [dispatch(brief('orch-builder', ['src/example.js'])), finish('Done')], workerFinal: okWriterFinal() });
   await withSession(world, async (session) => {
@@ -3079,41 +3083,42 @@ test('a worker override changes the effective role and the pinned roleProfileSha
     assert.notEqual(outcome.contract.roleProfileSha256, profileHash(base));
     // The lead is told the effective model and effort of the role.
     assert.match(world.prompts[0], /"id":"engineer"[^\n]*"model":"gpt-6-luna","effort":"low"/);
-  }, { orchestrator: { roleSource: overrideSource(file) } });
+  }, { orchestrator: loadEffective(file) });
 });
 
-test('an override written after the graph was built applies to the next lead turn without a restart', async () => {
+test('a lead override reaches the lead turn with the rules block and the read-only sandbox', async () => {
   const file = overridesPath();
-  const source = overrideSource(file);
-  const world = sessionWorld([finish('A'), finish('B')]);
+  writeOverridesFile(file, { coordinator: { model: 'gpt-6-luna', effort: 'high', extraRules: 'Be terse.' } });
+  const world = sessionWorld([finish('A')]);
   const seen = [];
   const run = world.appServer.run;
   world.appServer.run = async (args) => { seen.push(args.role); return run(args); };
   await withSession(world, async (session) => {
     await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
-    writeOverridesFile(file, { coordinator: { model: 'gpt-6-luna', effort: 'high', extraRules: 'Be terse.' } });
-    await session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION });
-  }, { withSessions: true, orchestrator: { roleSource: source } });
-  assert.equal(seen[0].effort, 'medium');
-  assert.equal(seen[1].model, 'gpt-6-luna');
-  assert.equal(seen[1].effort, 'high');
-  assert.ok(seen[1].instructions.endsWith(`${RULES_HEADING}\nBe terse.`));
-  assert.equal(seen[1].sandbox, 'read-only');
+  }, { withSessions: true, orchestrator: loadEffective(file) });
+  assert.equal(seen[0].model, 'gpt-6-luna');
+  assert.equal(seen[0].effort, 'high');
+  assert.ok(seen[0].instructions.endsWith(`${RULES_HEADING}\nBe terse.`));
+  assert.equal(seen[0].sandbox, 'read-only');
 });
 
-test('a changed lead profile rolls the session over to a new thread; an unchanged one resumes', async () => {
+test('a changed lead profile after a server restart rolls the session over to a new thread; an unchanged one resumes', async () => {
   const file = overridesPath();
   const world = sessionWorld([finish('A'), finish('B'), finish('C'), finish('D')]);
+  const options = { withSessions: true, orchestrator: loadEffective(file) };
   await withSession(world, async (session) => {
     await session.orchestrator.run({ goal: 'A', runId: RUN_ID, contextId: SESSION });
     const first = session.sessions.get(SESSION);
     assert.equal(first.profileSha256, profileHash(createLeadRole()));
-    // Unchanged profile: the thread is resumed.
+    // Restart with the same profile: the persisted thread is resumed.
+    await session.restart();
     await session.orchestrator.run({ goal: 'B', runId: 'run-2', contextId: SESSION });
     assert.deepEqual(world.threadArgs, [undefined, 'thread-1']);
     assert.equal(session.sessions.get(SESSION).rollovers, 0);
-    // Changed lead profile: a new thread with the full prompt, recorded under the new hash.
+    // Restart with a changed lead profile: a new thread with the full prompt, recorded under the new hash.
     writeOverridesFile(file, { coordinator: { extraRules: 'Be terse.' } });
+    Object.assign(options.orchestrator, loadEffective(file));
+    await session.restart();
     await session.orchestrator.run({ goal: 'C', runId: 'run-3', contextId: SESSION });
     assert.deepEqual(world.threadArgs, [undefined, 'thread-1', undefined]);
     assert.match(world.prompts[2], /Available roles:/);
@@ -3122,13 +3127,14 @@ test('a changed lead profile rolls the session over to a new thread; an unchange
     assert.equal(rolled.rollovers, 1);
     assert.notEqual(rolled.profileSha256, first.profileSha256);
     // The same changed profile keeps the new thread.
+    await session.restart();
     await session.orchestrator.run({ goal: 'D', runId: 'run-4', contextId: SESSION });
     assert.deepEqual(world.threadArgs, [undefined, 'thread-1', undefined, 'thread-2']);
     assert.equal(session.sessions.get(SESSION).rollovers, 1);
-  }, { withSessions: true, orchestrator: { roleSource: overrideSource(file) } });
+  }, options);
 });
 
-test('an invalid or removed overrides file falls back to the profile defaults for the lead and the workers', async () => {
+test('an invalid overrides file falls back to the profile defaults for the lead and the workers', async () => {
   const file = overridesPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, '{ nope');
@@ -3139,7 +3145,7 @@ test('an invalid or removed overrides file falls back to the profile defaults fo
   await withSession(world, async (session) => {
     const outcome = (await session.orchestrator.run({ goal: 'Build', runId: RUN_ID })).assignments[0];
     assert.equal(outcome.contract.roleProfileSha256, profileHash(roles().get('orch-builder')));
-  }, { orchestrator: { roleSource: createRoleOverrideSource({ file, roles: roles(), leadRole: createLeadRole() }) } });
+  }, { orchestrator: loadEffective(file) });
   assert.equal(seen[0].model, createLeadRole().model);
   assert.equal(seen[0].effort, createLeadRole().effort);
 });

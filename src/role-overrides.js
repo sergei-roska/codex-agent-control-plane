@@ -1,8 +1,8 @@
 'use strict';
 
 // Per-project role overrides (model, reasoning effort, extra owner rules), kept in one JSON file per
-// project: `.runtime/projects/<id>/role-overrides.json`. The launcher is the only writer; the project
-// server re-reads the file whenever it changes. The profiles in profiles/agents stay untouched.
+// project: `.runtime/projects/<id>/role-overrides.json`. The launcher is the only writer and only while the
+// project server is stopped; the server reads the file once at startup. The profiles in profiles/agents stay untouched.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -134,54 +134,19 @@ function effectiveRole(baseRole, override) {
 }
 
 /**
- * Live view of the roles with the overrides file applied. The file is stat-ed on every call and re-read
- * only when it changed, so a change applies from the next dispatch or lead turn. `roles()` and
- * `leadRole()` always come from the same read. Without a file the base roles are returned as they are.
+ * Applies the overrides file to the roles once, at project server start. Overrides are edited only while
+ * the server is stopped, so nothing re-reads the file later. Without a file, a missing file, or an invalid
+ * one (a warning is passed to `warn`), the base roles are returned as they are.
  */
-function createRoleOverrideSource({ file = null, roles: baseRoles, leadRole: baseLead, warn = () => {} }) {
-  const knownNames = [...baseRoles.keys()].map(canonicalRoleId);
-  let key = null;
-  let current = { roles: baseRoles, leadRole: baseLead, overrides: {} };
-  const listeners = new Set();
-
-  function reload() {
-    if (!file) return current;
-    let next;
-    try {
-      const stat = fs.statSync(file);
-      next = `${stat.ino}:${stat.mtimeMs}:${stat.size}`;
-    } catch (_) {
-      next = 'none';
-    }
-    if (next === key) return current;
-    key = next;
-    let overrides = {};
-    if (next !== 'none') {
-      const result = readOverridesFile(file, knownNames);
-      if (result.warning) warn(result.warning);
-      overrides = result.roles;
-    }
-    if (Object.keys(overrides).length === 0) {
-      current = { roles: baseRoles, leadRole: baseLead, overrides };
-    } else {
-      const roles = new Map();
-      for (const [name, role] of baseRoles) roles.set(name, effectiveRole(role, overrides[canonicalRoleId(name)]));
-      current = { roles, leadRole: effectiveRole(baseLead, overrides[LEAD_ROLE_NAME]), overrides };
-    }
-    for (const listener of listeners) {
-      try { listener(current); } catch (_) { /* A listener never breaks a read. */ }
-    }
-    return current;
-  }
-
-  return {
-    file,
-    roles: () => reload().roles,
-    leadRole: () => reload().leadRole,
-    overrides: () => reload().overrides,
-    /** Calls `listener(snapshot)` after every reload (the first read included). */
-    onReload: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
-  };
+function loadEffectiveRoles({ file = null, roles: baseRoles, leadRole: baseLead, warn = () => {} }) {
+  if (!file) return { roles: baseRoles, leadRole: baseLead, overrides: {} };
+  const result = readOverridesFile(file, [...baseRoles.keys()].map(canonicalRoleId));
+  if (result.warning) warn(result.warning);
+  const overrides = result.roles;
+  if (Object.keys(overrides).length === 0) return { roles: baseRoles, leadRole: baseLead, overrides };
+  const roles = new Map();
+  for (const [name, role] of baseRoles) roles.set(name, effectiveRole(role, overrides[canonicalRoleId(name)]));
+  return { roles, leadRole: effectiveRole(baseLead, overrides[LEAD_ROLE_NAME]), overrides };
 }
 
 module.exports = {
@@ -195,5 +160,5 @@ module.exports = {
   readOverridesFile,
   writeOverridesFile,
   effectiveRole,
-  createRoleOverrideSource,
+  loadEffectiveRoles,
 };

@@ -9,7 +9,7 @@ const { createLeadRole, loadRoles } = require('../src/role-catalog');
 const {
   RULES_HEADING,
   RoleOverrideError,
-  createRoleOverrideSource,
+  loadEffectiveRoles,
   effectiveRole,
   normalizeOverride,
   readOverridesFile,
@@ -126,56 +126,43 @@ describe('file read and write', () => {
   });
 });
 
-describe('createRoleOverrideSource', () => {
+describe('loadEffectiveRoles', () => {
   it('without a file returns the base roles as they are', () => {
-    const source = createRoleOverrideSource({ roles: baseRoles, leadRole: baseLead });
-    assert.equal(source.roles(), baseRoles);
-    assert.equal(source.leadRole(), baseLead);
+    const loaded = loadEffectiveRoles({ roles: baseRoles, leadRole: baseLead });
+    assert.equal(loaded.roles, baseRoles);
+    assert.equal(loaded.leadRole, baseLead);
   });
 
-  it('applies the file to roles and the lead from one read and follows later changes', () => {
+  it('a missing file means the defaults without a warning', () => {
     const warnings = [];
-    const source = createRoleOverrideSource({ file, roles: baseRoles, leadRole: baseLead, warn: (m) => warnings.push(m) });
-    assert.equal(source.roles(), baseRoles);
-    writeOverridesFile(file, { architect: { model: 'gpt-6-luna' }, coordinator: { effort: 'high', extraRules: 'Lead rule.' } });
-    const roles = source.roles();
-    assert.notEqual(roles, baseRoles);
-    assert.equal(roles.get('architect').model, 'gpt-6-luna');
-    assert.equal(roles.get('engineer'), baseRoles.get('engineer'));
-    assert.equal(source.leadRole().effort, 'high');
-    assert.match(source.leadRole().instructions, /Lead rule\.$/);
-    assert.equal(source.roles(), roles, 'unchanged file is not re-read');
-    // The profile roles are never modified.
-    assert.equal(baseRoles.get('architect').model, loadRoles().get('architect').model);
-    writeOverridesFile(file, { architect: { effort: 'low' } });
-    assert.equal(source.roles().get('architect').model, baseRoles.get('architect').model);
-    assert.equal(source.roles().get('architect').effort, 'low');
-    assert.equal(source.leadRole(), baseLead);
+    const loaded = loadEffectiveRoles({ file, roles: baseRoles, leadRole: baseLead, warn: (m) => warnings.push(m) });
+    assert.equal(loaded.roles, baseRoles);
+    assert.equal(loaded.leadRole, baseLead);
     assert.deepEqual(warnings, []);
   });
 
-  it('falls back to defaults with one warning on an invalid file and recovers when fixed', () => {
-    const warnings = [];
-    const source = createRoleOverrideSource({ file, roles: baseRoles, leadRole: baseLead, warn: (m) => warnings.push(m) });
-    writeRaw('{ nope');
-    assert.equal(source.roles().get('architect'), baseRoles.get('architect'));
-    assert.equal(source.leadRole(), baseLead);
-    source.roles();
-    assert.equal(warnings.length, 1);
+  it('applies the file to the roles and the lead once and leaves the base roles untouched', () => {
+    writeOverridesFile(file, { architect: { model: 'gpt-6-luna' }, coordinator: { effort: 'high', extraRules: 'Lead rule.' } });
+    const loaded = loadEffectiveRoles({ file, roles: baseRoles, leadRole: baseLead });
+    assert.notEqual(loaded.roles, baseRoles);
+    assert.equal(loaded.roles.get('architect').model, 'gpt-6-luna');
+    assert.equal(loaded.roles.get('engineer'), baseRoles.get('engineer'));
+    assert.equal(loaded.leadRole.effort, 'high');
+    assert.match(loaded.leadRole.instructions, /Lead rule\.$/);
+    assert.equal(baseRoles.get('architect').model, loadRoles().get('architect').model);
+    // Load-once: a later edit of the file does not change what was loaded.
     writeOverridesFile(file, { architect: { effort: 'low' } });
-    assert.equal(source.roles().get('architect').effort, 'low');
-    fs.rmSync(file);
-    assert.equal(source.roles().get('architect'), baseRoles.get('architect'));
+    assert.equal(loaded.roles.get('architect').model, 'gpt-6-luna');
+    assert.equal(loaded.roles.get('architect').effort, baseRoles.get('architect').effort);
   });
 
-  it('notifies listeners after a reload with the new snapshot', () => {
-    const source = createRoleOverrideSource({ file, roles: baseRoles, leadRole: baseLead });
-    const seen = [];
-    source.onReload((snapshot) => seen.push(snapshot.leadRole.model));
-    source.roles();
-    writeOverridesFile(file, { coordinator: { model: 'gpt-6-luna' } });
-    source.roles();
-    source.roles();
-    assert.deepEqual(seen, [baseLead.model, 'gpt-6-luna']);
+  it('falls back to the defaults with one warning on an invalid file', () => {
+    const warnings = [];
+    writeRaw('{ nope');
+    const loaded = loadEffectiveRoles({ file, roles: baseRoles, leadRole: baseLead, warn: (m) => warnings.push(m) });
+    assert.equal(loaded.roles, baseRoles);
+    assert.equal(loaded.leadRole, baseLead);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /Role overrides ignored/);
   });
 });

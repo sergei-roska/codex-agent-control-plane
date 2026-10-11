@@ -151,6 +151,9 @@
         } else {
           renderProjectBar();
         }
+        // The team card is editable only while the project server is stopped: follow its status.
+        const cur = currentProject();
+        if (cur && teamData && (cur.status !== 'stopped') !== teamData.running) loadTeam();
       } catch (_) {}
     }
 
@@ -1354,10 +1357,15 @@
         if (token !== teamLoadToken) return;
         teamData = projectId ? data : null;
         errEl.classList.add('hidden');
+        // Roles are read when the project server starts, so they are editable only while it is stopped.
+        const editable = Boolean(projectId) && data.running !== true;
+        const note = document.getElementById('aboutTeamNote');
+        note.textContent = 'Stop the project server to change roles';
+        note.classList.toggle('hidden', !(projectId && data.running === true));
         const list = document.getElementById('aboutTeamList');
         list.textContent = '';
-        addAboutRow(list, data.lead, true, Boolean(projectId));
-        data.roles.forEach(function (r) { addAboutRow(list, r, false, Boolean(projectId)); });
+        addAboutRow(list, data.lead, true, editable);
+        data.roles.forEach(function (r) { addAboutRow(list, r, false, editable); });
         updateTeamLeds();
         document.getElementById('aboutTeamSummary').textContent = 'Team (' + (data.roles.length + 1) + ' agents)';
         if (data.warning) {
@@ -1375,6 +1383,7 @@
     const RULES_MAX = 4000;
     const EFFORT_CHOICES = ['low', 'medium', 'high', 'xhigh'];
     let roleModalAgent = null;
+    let roleModalProjectId = null;
     let roleModalOpener = null;
     let roleModalBusy = false;
 
@@ -1415,8 +1424,9 @@
     }
 
     function openRoleModal(agent, isLead, opener) {
-      if (!currentProjectId || !teamData) return;
+      if (!currentProjectId || !teamData || teamData.running === true) return;
       roleModalAgent = agent;
+      roleModalProjectId = currentProjectId;
       roleModalOpener = opener || null;
       const defaults = agent.defaults || { model: agent.model, effort: agent.effort };
       const override = agent.override || {};
@@ -1435,12 +1445,13 @@
     function closeRoleModal() {
       document.getElementById('roleModal').classList.add('hidden');
       roleModalAgent = null;
+      roleModalProjectId = null;
       if (roleModalOpener && document.body.contains(roleModalOpener)) roleModalOpener.focus();
       roleModalOpener = null;
     }
 
     function roleOverrideUrl() {
-      return projectUrl('/roles/' + encodeURIComponent(canonicalRoleId(roleModalAgent.name)) + '/override');
+      return '/api/projects/' + encodeURIComponent(roleModalProjectId) + '/roles/' + encodeURIComponent(canonicalRoleId(roleModalAgent.name)) + '/override';
     }
 
     async function sendRoleOverride(method, body) {
