@@ -1,8 +1,4 @@
 
-    function setGoal(text) {
-      document.getElementById('taskGoal').value = text;
-      document.getElementById('taskGoal').focus();
-    }
     function clearLogs() {
       document.getElementById('serverLogsBody').innerText = '';
     }
@@ -26,9 +22,141 @@
     let renderSignature = '';
     let initialSessionParam = new URLSearchParams(window.location.search).get('session');
 
+    // ---- Tooltips: one shared element; every [data-tooltip] trigger uses it (event delegation).
+    // data-tooltip-if-truncated: shown only while the trigger's text is cut off (ellipsis or line clamp).
+    const uiTip = document.getElementById('uiTooltip');
+    let uiTipTrigger = null;
+    let uiTipTimer = 0;
+
+    function setTooltip(el, text, ifTruncated) {
+      el.dataset.tooltip = text;
+      if (ifTruncated) el.setAttribute('data-tooltip-if-truncated', '');
+      else el.removeAttribute('data-tooltip-if-truncated');
+    }
+
+    function tooltipNeeded(el) {
+      if (!el.dataset.tooltip) return false;
+      if (!el.hasAttribute('data-tooltip-if-truncated')) return true;
+      return el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
+    }
+
+    // Above the trigger, centered; below it when there is no room above; kept 8px inside the viewport.
+    function positionUiTooltip(trigger) {
+      const gap = 8;
+      const r = trigger.getBoundingClientRect();
+      const w = uiTip.offsetWidth;
+      const h = uiTip.offsetHeight;
+      let top = r.top - h - gap;
+      if (top < 8) top = r.bottom + gap;
+      const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8));
+      uiTip.style.top = top + 'px';
+      uiTip.style.left = left + 'px';
+    }
+
+    function showUiTooltip(trigger) {
+      clearTimeout(uiTipTimer);
+      if (!trigger.isConnected || !tooltipNeeded(trigger)) return;
+      uiTipTrigger = trigger;
+      uiTip.textContent = trigger.dataset.tooltip;
+      positionUiTooltip(trigger);
+      uiTip.classList.add('is-visible');
+      trigger.setAttribute('aria-describedby', 'uiTooltip');
+    }
+
+    function hideUiTooltip() {
+      clearTimeout(uiTipTimer);
+      if (uiTipTrigger) uiTipTrigger.removeAttribute('aria-describedby');
+      uiTipTrigger = null;
+      uiTip.classList.remove('is-visible');
+    }
+
+    function tooltipTriggerOf(target) {
+      return target instanceof Element ? target.closest('[data-tooltip]') : null;
+    }
+
+    document.addEventListener('mouseover', function (ev) {
+      const trigger = tooltipTriggerOf(ev.target);
+      if (!trigger) {
+        clearTimeout(uiTipTimer);
+        if (uiTipTrigger && !uiTipTrigger.contains(ev.target)) hideUiTooltip();
+        return;
+      }
+      if (trigger === uiTipTrigger) return;
+      hideUiTooltip();
+      uiTipTimer = setTimeout(function () { showUiTooltip(trigger); }, 250);
+    });
+
+    document.addEventListener('mouseout', function (ev) {
+      const trigger = tooltipTriggerOf(ev.target);
+      if (!trigger || (ev.relatedTarget && trigger.contains(ev.relatedTarget))) return;
+      clearTimeout(uiTipTimer);
+      if (trigger === uiTipTrigger) hideUiTooltip();
+    });
+
+    // Keyboard focus shows the tooltip at once; mouse focus is covered by the hover delay.
+    document.addEventListener('focusin', function (ev) {
+      const trigger = tooltipTriggerOf(ev.target);
+      if (trigger && trigger.matches(':focus-visible')) showUiTooltip(trigger);
+    });
+    document.addEventListener('focusout', function (ev) {
+      if (ev.target === uiTipTrigger) hideUiTooltip();
+    });
+    document.addEventListener('mousedown', hideUiTooltip);
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') hideUiTooltip();
+    });
+    window.addEventListener('scroll', hideUiTooltip, true);
+
     // ---- Project binding: each tab is bound to one project (?project=<id>)
     let projectList = [];
     let currentProjectId = null;
+    // Token usage of the open session for the team band (contract: GET .../sessions/:contextId/usage)
+    let sessionUsage = null;      // last response for usageKey; null when unavailable (404, no endpoint)
+    let usageKey = '';
+    let usageFetchAt = 0;
+    let usageToken = 0;
+    let usageSawTerminal = false;
+
+    // Session situation panel (SIT-3): SIT-1 situation of the open session, SIT-2 git status of the project.
+    const SITUATION_STEPS = [
+      { phase: 'planning', label: 'Planning' },
+      { phase: 'working', label: 'Working' },
+      { phase: 'verifying', label: 'Verifying' },
+      { phase: 'done', label: 'Done' }
+    ];
+    const SITUATION_NODE_PHASE = {
+      intake: 'planning', decide: 'planning',
+      dispatch: 'working', collect: 'working',
+      verify: 'verifying', review_check: 'verifying', reconcile: 'verifying', accept: 'verifying'
+    };
+    const SITUATION_PHASE_LABELS = {
+      planning: 'Planning', working: 'Working', verifying: 'Verifying', waiting_owner: 'Waiting for you',
+      budget_pause: 'Budget pause', done: 'Done', failed: 'Failed', canceled: 'Canceled',
+      pausing: 'Pausing', paused: 'Paused'
+    };
+    const SITUATION_COLLAPSED_KEY = 'launcher.situationCollapsed';
+    let situationCollapsed = readSituationCollapsed();
+    let situation = null;            // SIT-1 body for situationKey; null when unavailable
+    let situationKey = '';
+    let situationFetchAt = 0;
+    let situationToken = 0;
+    let situationSignature = '';
+    let gitStatus = null;            // SIT-2 body for gitKey; null when unavailable
+    let gitKey = '';
+    let gitFetchAt = 0;
+    let gitToken = 0;
+    const situationOpen = new Set(); // expanded file lists, by row key
+    applySituationCollapsed();
+
+    // Scout asks (SIT-5): kept per project and session (newest last), mirrored in sessionStorage.
+    const ASK_STORE_PREFIX = 'launcher.asks.';
+    const ASK_POLL_MS = 1500;
+    const ASK_KEEP = 10;
+    const asksByKey = new Map();
+    let scoutChoice = null;      // null = automatic; 'lead' or 'scout' when the owner picked one
+    let leadWasActive = false;
+    let askSending = false;
+    let pauseBusy = false;       // owner pause request in flight (PAUSE-01)
 
     function projectUrl(suffix) {
       return '/api/projects/' + encodeURIComponent(currentProjectId) + suffix;
@@ -42,6 +170,15 @@
       if (status === 'running') return '[running]';
       if (status === 'starting') return '[starting]';
       return '[stopped]';
+    }
+
+    // Readable project name for the session title; the raw name stays in the title attribute.
+    function displayProjectName(name) {
+      return String(name)
+        .replace(/[-_]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/(^|\s)(\S)/g, (m, sep, ch) => sep + ch.toUpperCase());
     }
 
     function renderProjectBar() {
@@ -65,6 +202,10 @@
         removeBtn.disabled = true;
       }
       select.disabled = projectList.length === 0;
+      const sessionName = document.getElementById('sessionProjectName');
+      sessionName.textContent = cur ? displayProjectName(cur.name) : 'No project';
+      sessionName.classList.toggle('is-empty', !cur);
+      setTooltip(sessionName, cur ? cur.name : '', true);
       document.title = (cur ? cur.name : 'No project') + ' - Codex Control Plane';
     }
 
@@ -104,8 +245,12 @@
       pendingTurn = null;
       renderSignature = '';
       setSessionParam(id);
+      usageSawTerminal = false;
       renderTranscript();
       updateTeamLeds();
+      refreshSessionUsage(true);
+      refreshSituation(true);
+      refreshGitStatus(false);
     }
 
     function resetSessionView() {
@@ -182,7 +327,7 @@
       const saved = Array.from(container.childNodes);
       container.textContent = '';
       container.appendChild(textEl('span', 'limit-reset', question));
-      const yes = textEl('button', 'btn btn-danger-outline btn-sm', 'Yes');
+      const yes = textEl('button', 'btn btn-danger btn-sm', 'Yes');
       yes.addEventListener('click', function () { yes.disabled = true; onYes(); });
       const no = textEl('button', 'btn btn-secondary btn-sm', 'No');
       no.addEventListener('click', function () {
@@ -236,7 +381,7 @@
       if (!pid) {
         document.getElementById('serverDot').className = 'status-dot';
         document.getElementById('serverStatusText').textContent = 'No project selected';
-        document.getElementById('serverPill').style.borderColor = 'var(--border-subtle)';
+        document.getElementById('serverPill').style.borderColor = 'var(--border-hairline)';
         document.getElementById('startBtn').disabled = true;
         document.getElementById('stopBtn').disabled = true;
         serverRunning = false;
@@ -261,18 +406,18 @@
         if (data.status === 'running') {
           dot.classList.add('active');
           text.innerText = 'Orchestrator active';
-          pill.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+          pill.style.borderColor = 'var(--success-border)';
           startBtn.disabled = true;
           stopBtn.disabled = false;
         } else if (data.status === 'starting') {
           dot.classList.add('starting');
           text.innerText = 'Starting process...';
-          pill.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+          pill.style.borderColor = 'var(--warning-border)';
           startBtn.disabled = true;
           stopBtn.disabled = false;
         } else {
           text.innerText = 'Server stopped';
-          pill.style.borderColor = 'var(--border-subtle)';
+          pill.style.borderColor = 'var(--border-hairline)';
           startBtn.disabled = false;
           stopBtn.disabled = true;
         }
@@ -285,6 +430,7 @@
         }
 
         await pollSession();
+        pollAsks();
         const known = currentProject();
         if (known && known.status !== data.status) refreshProjects();
       } catch (_) {}
@@ -315,23 +461,55 @@
       const last = lastTurn();
       const lastTerminal = !!last && isTerminalState(last.state);
 
-      goalEl.placeholder = currentSessionId
-        ? 'Reply in this session'
-        : 'Describe the goal, for example: Analyze the project and fix validation error in src/...';
+      const active = leadActive();
+      if (active !== leadWasActive) {
+        leadWasActive = active;
+        if (scoutChoice === 'lead') scoutChoice = null;
+      }
+      const scoutMode = askMode() === 'scout';
+
+      const ownerPaused = ownerPhase() === 'paused';
+      if (scoutMode) goalEl.placeholder = 'Ask the scout about the project...';
+      else if (ownerPaused) {
+        goalEl.placeholder = pauseKindNow() === 'stopped'
+          ? 'Stopped - send a message or press Resume to continue'
+          : 'Paused - send a message or press Resume to continue';
+      }
+      else {
+        goalEl.placeholder = currentSessionId
+          ? 'Reply in this session'
+          : 'Describe the goal, for example: Analyze the project and fix validation error in src/...';
+      }
 
       let hintText = '';
-      if (!currentProjectId) hintText = 'Add or select a project first.';
-      else if (!serverRunning) hintText = 'Start the orchestrator to send messages.';
-      else if (sending || pendingTurn) hintText = 'Lead is working on your message...';
-      else if (last && isPausedState(last.state)) hintText = 'Lead is paused: answer through the decision card above.';
-      else if (last && !lastTerminal) hintText = 'Lead is working: wait for the answer before sending another message.';
+      let locked = false;
+      if (!currentProjectId) { hintText = 'Add or select a project first.'; locked = true; }
+      else if (!serverRunning) { hintText = 'Start the orchestrator to send messages.'; locked = true; }
+      else if (scoutMode) {
+        if (askSending) { hintText = 'Sending to the scout...'; locked = true; }
+        else if (active) hintText = 'Lead is working: your questions go to the scout.';
+      }
+      else if (sending || pendingTurn) { hintText = 'Lead is working on your message...'; locked = true; }
+      else if (!ownerPaused && last && isPausedState(last.state)) { hintText = 'Lead is paused: answer through the decision card above.'; locked = true; }
+      else if (last && !lastTerminal) { hintText = 'Lead is working: wait for the answer before sending another message.'; locked = true; }
 
-      const locked = hintText !== '';
       goalEl.disabled = locked;
       sendBtn.disabled = locked;
+      document.getElementById('sendLabel').textContent = scoutMode ? 'Ask' : 'Send';
       hint.textContent = hintText;
-      hint.classList.toggle('hidden', !locked);
+      hint.classList.toggle('hidden', hintText === '');
+      document.getElementById('composerBox').classList.toggle('is-scout', scoutMode);
+      const leadBtn = document.getElementById('modeLeadBtn');
+      const scoutBtn = document.getElementById('modeScoutBtn');
+      const scoutOk = serverRunning && !!currentProjectId;
+      leadBtn.setAttribute('aria-pressed', String(!scoutMode));
+      scoutBtn.setAttribute('aria-pressed', String(scoutMode));
+      scoutBtn.setAttribute('aria-disabled', String(!scoutOk));
+      scoutBtn.classList.toggle('is-disabled', !scoutOk);
+      if (scoutOk) delete scoutBtn.dataset.tooltip;
+      else setTooltip(scoutBtn, 'Start the project server to ask the scout', false);
       newBtn.disabled = !(currentSessionId && lastTerminal && !sending && !pendingTurn);
+      updatePauseButton();
       document.getElementById('activeTaskIdDisplay').textContent = currentSessionId
         ? 'session ' + currentSessionId.slice(0, 8)
         : 'no session';
@@ -470,7 +648,7 @@
       line.appendChild(textEl('span', 'phase-chip phase-' + (PHASE_LABELS[a.phase] ? a.phase : 'starting'), phaseLabel(a.phase)));
       if (a.summary) {
         const sum = textEl('span', 'act-summary', a.summary);
-        sum.title = a.summary;
+        setTooltip(sum, a.summary, true);
         line.appendChild(sum);
       }
       row.appendChild(line);
@@ -494,7 +672,7 @@
       if (active) {
         if (w.objective) {
           const obj = textEl('div', 'w-task', String(w.objective));
-          obj.title = String(w.objective);
+          setTooltip(obj, String(w.objective), true);
           row.appendChild(obj);
         }
         if (w.activity) activityLines(row, w.activity, now);
@@ -630,7 +808,7 @@
           row.className = 'acceptance-check-row';
           row.appendChild(textEl('span', 'acceptance-check-id', String(check.id ?? '')));
           const argvEl = textEl('span', 'acceptance-check-argv', argv);
-          argvEl.title = argv;
+          setTooltip(argvEl, argv, true);
           row.appendChild(argvEl);
           checksEl.appendChild(row);
         }
@@ -763,7 +941,9 @@
       const working = Boolean(lastTurnRow)
         && (lastTurnRow.leadTask.state === 'TASK_STATE_WORKING' || lastTurnRow.leadTask.state === 2);
       const tick = working ? Math.floor(Date.now() / 5000) : 0;
-      const signature = JSON.stringify([currentSessionId, sessionData, pendingTurn && pendingTurn.goal, tick]);
+      const asks = loadAsks(currentAskKey());
+      const askView = asks.map(function (a) { return [a.askId, a.state, a.answer, a.error, a.cancelRequested, a.finishedAt]; });
+      const signature = JSON.stringify([currentSessionId, sessionData, pendingTurn && pendingTurn.goal, tick, askView]);
       updateStatusBar();
       updateDecisionCard();
       updateComposer();
@@ -786,6 +966,8 @@
         wait.appendChild(textEl('div', '', 'Dispatching to the Lead...'));
         transcript.appendChild(wait);
       }
+      const askKeyNow = currentAskKey();
+      asks.forEach(function (ask) { transcript.appendChild(scoutAskNode(ask, askKeyNow)); });
       if (!transcript.firstChild) {
         transcript.appendChild(textEl('div', 'transcript-empty',
           'Send a message to start a session. Specialist reports and the final verdict will appear here.'));
@@ -797,6 +979,7 @@
       const pid = currentProjectId;
       const sid = currentSessionId;
       if (!pid || !sid) return;
+      tickSituationElapsed();
       try {
         const res = await fetch(projectUrl('/sessions/' + encodeURIComponent(sid)));
         if (pid !== currentProjectId || sid !== currentSessionId) return;
@@ -810,6 +993,13 @@
         if (pid !== currentProjectId || sid !== currentSessionId) return;
         sessionData = data;
         if (pendingTurn && data.turns.length > pendingTurn.baseTurns) pendingTurn = null;
+        const last = lastTurn();
+        const finished = !!last && isTerminalState(last.state);
+        const justFinished = finished && !usageSawTerminal;
+        usageSawTerminal = finished;
+        refreshSessionUsage(justFinished);
+        refreshSituation(justFinished);
+        refreshGitStatus(justFinished);
         renderTranscript();
         updateTeamLeds();
       } catch (_) {}
@@ -841,11 +1031,11 @@
       badge.textContent = String(state);
       if (state === 'TASK_STATE_WORKING' || state === 2) {
         badge.className = 'acceptance-pill';
-        badge.style.cssText = 'background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3);';
+        badge.style.cssText = 'background: var(--accent-soft); color: var(--accent-text); border: 1px solid var(--accent-border);';
         badge.textContent = 'In Progress';
       } else if (isPausedState(state)) {
         badge.className = 'acceptance-pill';
-        badge.style.cssText = 'background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);';
+        badge.style.cssText = 'background: var(--warning-bg); color: var(--warning-text); border: 1px solid var(--warning-border);';
         badge.textContent = 'Awaiting Decision';
       } else if (state === 'TASK_STATE_COMPLETED' || state === 3) {
         badge.className = 'acceptance-pill acceptance-accepted';
@@ -902,7 +1092,7 @@
           const actions = document.createElement('div');
           actions.className = 'history-item-actions';
           if (isTerminalState(s.state)) {
-            const delBtn = textEl('button', 'btn btn-danger-outline btn-sm', 'Delete');
+            const delBtn = textEl('button', 'btn btn-danger btn-sm', 'Delete');
             delBtn.addEventListener('click', () => deleteSessionItem(s.contextId, actions));
             actions.appendChild(delBtn);
           }
@@ -996,7 +1186,105 @@
       setTimeout(updateStatus, 500);
     }
 
+    // ---- Owner pause (PAUSE-01). POST .../pause, .../pause/cancel, .../resume. The state is the SIT-1 phase:
+    // 'pausing' while running workers finish their turn, 'paused' once the lead is parked.
+    function ownerPhase() {
+      const sit = situationKey === situationScope() ? situation : null;
+      return sit ? sit.phase : null;
+    }
+
+    // Phase 'paused' covers an owner pause and a resumable Stop; a missing pauseKind is an owner pause.
+    function pauseKindOf(sit) {
+      return sit && sit.pauseKind === 'stopped' ? 'stopped' : 'owner_pause';
+    }
+
+    function pauseKindNow() {
+      return pauseKindOf(situationKey === situationScope() ? situation : null);
+    }
+
+    function pauseLeadPhase(phase) {
+      return phase === 'planning' || phase === 'working' || phase === 'verifying';
+    }
+
+    async function postPauseControl(path, body, label) {
+      if (pauseBusy) return false;
+      const pid = currentProjectId;
+      pauseBusy = true;
+      updatePauseButton();
+      let res = null;
+      let data = {};
+      try {
+        res = await fetch(projectUrl(path), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body || {})
+        });
+        data = await res.json().catch(function () { return {}; });
+      } catch (_) {
+        res = null;
+      }
+      pauseBusy = false;
+      if (pid !== currentProjectId) return false;
+      if (res && res.ok && data.success !== false) {
+        situationFetchAt = 0;
+        refreshSituation(true);
+        pollSession();
+        return true;
+      }
+      let text = label + ' failed.';
+      if (res && res.status === 404) text = label + ' is not available on this launcher yet.';
+      else if (data && typeof data.error === 'string' && data.error) text = data.error;
+      showNotice('sendError', text);
+      updatePauseButton();
+      return false;
+    }
+
+    function onPauseButton() {
+      const phase = ownerPhase();
+      if (phase === 'pausing') return postPauseControl('/pause/cancel', {}, 'Cancel pause');
+      if (!serverRunning || !currentSessionId || !pauseLeadPhase(phase)) return false;
+      return postPauseControl('/pause', {}, 'Pause');
+    }
+
+    function resumeSession() {
+      if (!currentSessionId || ownerPhase() !== 'paused') return false;
+      return postPauseControl('/resume', { sessionContextId: currentSessionId }, 'Resume');
+    }
+
+    function updatePauseButton() {
+      const btn = document.getElementById('pauseBtn');
+      const phase = ownerPhase();
+      const sit = situationKey === situationScope() ? situation : null;
+      let text = 'Pause';
+      let tip = 'Pause after the running workers finish their turn.';
+      let enabled = false;
+      if (!currentProjectId || !serverRunning) tip = 'Start the project server to pause.';
+      else if (!currentSessionId) tip = 'Open a session to pause its lead.';
+      else if (phase === 'pausing') {
+        const running = sit ? situationBatch(sit).filter(function (a) { return a.state === 'running'; }).length : 0;
+        text = running ? 'Pausing... (' + running + ' running)' : 'Pausing...';
+        tip = 'Waiting for running workers to finish their turn. Click to cancel.';
+        enabled = true;
+      } else if (pauseLeadPhase(phase)) {
+        enabled = true;
+      } else if (phase === 'paused') {
+        tip = pauseKindNow() === 'stopped'
+          ? 'Stopped. Press Resume in the situation panel to continue.'
+          : 'Paused. Press Resume in the situation panel to continue.';
+      } else {
+        tip = 'Pause is available while the lead works.';
+      }
+      enabled = enabled && !pauseBusy;
+      document.getElementById('pauseLabel').textContent = text;
+      document.getElementById('pauseDot').classList.toggle('hidden', phase !== 'pausing');
+      btn.setAttribute('aria-disabled', String(!enabled));
+      btn.classList.toggle('is-disabled', !enabled);
+      btn.classList.toggle('is-pausing', phase === 'pausing');
+      setTooltip(btn, tip, false);
+    }
+
     async function sendMessage() {
+      if (askMode() === 'scout') return sendScoutAsk();
       const goal = document.getElementById('taskGoal').value.trim();
       if (!goal) return showNotice('sendError', 'Enter a message!');
 
@@ -1004,13 +1292,20 @@
       const last = lastTurn();
       const payload = { goal };
       if (currentSessionId) {
-        if (!last || !isTerminalState(last.state)) return;
-        payload.continueFrom = last.id;
+        if (ownerPhase() === 'paused' && last && isPausedState(last.state)) {
+          // The message continues the owner-paused lead task, as a decision answer does.
+          payload.taskId = last.id;
+        } else {
+          if (!last || !isTerminalState(last.state)) return;
+          payload.continueFrom = last.id;
+        }
       } else {
         setSession(newContextId());
         payload.contextId = currentSessionId;
       }
-      pendingTurn = { goal, baseTurns: sessionData ? sessionData.turns.length : 0 };
+      if (payload.taskId === undefined) {
+        pendingTurn = { goal, baseTurns: sessionData ? sessionData.turns.length : 0 };
+      }
       document.getElementById('taskGoal').value = '';
       await executeA2A(payload);
     }
@@ -1167,7 +1462,7 @@
       const actions = document.createElement('div');
       actions.className = 'account-actions';
       if (!account.active) {
-        const activate = textEl('button', 'terminal-btn', 'Activate');
+        const activate = textEl('button', 'btn btn-ghost btn-xs', 'Activate');
         activate.addEventListener('click', function () {
           accountsApi('POST', '/api/accounts/' + (isSystem ? 'system' : encodeURIComponent(account.name)) + '/activate')
             .then(function () { fetchAccounts(false); })
@@ -1176,18 +1471,18 @@
         actions.appendChild(activate);
       }
       if (!isSystem && !account.active) {
-        const remove = textEl('button', 'terminal-btn', 'Remove');
+        const remove = textEl('button', 'btn btn-ghost btn-xs', 'Remove');
         remove.addEventListener('click', function () {
           actions.textContent = '';
           actions.appendChild(textEl('span', 'limit-reset', 'Remove?'));
-          const yes = textEl('button', 'terminal-btn', 'Yes');
+          const yes = textEl('button', 'btn btn-danger btn-xs', 'Yes');
           yes.addEventListener('click', function () {
             yes.disabled = true;
             accountsApi('DELETE', '/api/accounts/' + encodeURIComponent(account.name))
               .then(function () { fetchAccounts(false); })
               .catch(function (e) { showAccountsError(e.message); fetchAccounts(false); });
           });
-          const no = textEl('button', 'terminal-btn', 'No');
+          const no = textEl('button', 'btn btn-ghost btn-xs', 'No');
           no.addEventListener('click', function () { fetchAccounts(false); });
           actions.appendChild(yes);
           actions.appendChild(no);
@@ -1226,7 +1521,8 @@
       stopAccountLoginPolling();
       const area = document.getElementById('accountAddArea');
       area.textContent = '';
-      const btn = textEl('button', 'terminal-btn', 'Add account');
+      const btn = textEl('button', 'btn btn-ghost btn-xs', 'Add account');
+      btn.insertAdjacentHTML('afterbegin', '<svg class="icon"><use href="#i-plus"/></svg> ');
       btn.id = 'accountAddBtn';
       btn.addEventListener('click', openAddRow);
       area.appendChild(btn);
@@ -1245,9 +1541,9 @@
       input.spellcheck = false;
       input.setAttribute('aria-label', 'Account name');
       row.appendChild(input);
-      const browser = textEl('button', 'terminal-btn', 'Sign in with browser');
-      const device = textEl('button', 'terminal-btn', 'Use device code');
-      const cancel = textEl('button', 'terminal-btn', 'Cancel');
+      const browser = textEl('button', 'btn btn-secondary btn-xs', 'Sign in with browser');
+      const device = textEl('button', 'btn btn-secondary btn-xs', 'Use device code');
+      const cancel = textEl('button', 'btn btn-ghost btn-xs', 'Cancel');
       browser.addEventListener('click', function () { startAccountLogin(input.value.trim(), 'browser'); });
       device.addEventListener('click', function () { startAccountLogin(input.value.trim(), 'device'); });
       cancel.addEventListener('click', resetAddArea);
@@ -1287,7 +1583,7 @@
       }
       const state = textEl('span', 'limit-reset', 'Waiting for sign-in...');
       box.appendChild(state);
-      const cancel = textEl('button', 'terminal-btn', 'Cancel');
+      const cancel = textEl('button', 'btn btn-ghost btn-xs', 'Cancel');
       cancel.addEventListener('click', function () {
         const id = accountLoginId;
         resetAddArea();
@@ -1327,13 +1623,20 @@
 
     function addAboutRow(list, agent, isLead, editable) {
       const row = document.createElement('div');
-      row.className = 'about-role';
+      row.className = 'about-role' + (isLead ? ' is-lead' : '');
       row.dataset.role = canonicalRoleId(agent.name);
+      row.dataset.roleKey = agent.name;
+      const displayName = agent.displayName || roleDisplayName(agent.name);
+      const tools = agent.tools || {};
+      const extra = [];
+      if (tools.mcpServers && tools.mcpServers.length > 0) extra.push('MCP: ' + tools.mcpServers.join(', '));
+      if (tools.skills) extra.push('skills');
+      if (extra.length) setTooltip(row, extra.join('; '), false);
       if (editable) {
         row.classList.add('is-editable');
         row.tabIndex = 0;
         row.setAttribute('role', 'button');
-        row.setAttribute('aria-label', 'Edit ' + (agent.displayName || roleDisplayName(agent.name)) + ' settings');
+        row.setAttribute('aria-label', 'Edit ' + displayName + ' settings');
         row.addEventListener('click', function () { openRoleModal(agent, isLead, row); });
         row.addEventListener('keydown', function (ev) {
           if (ev.key === 'Enter' || ev.key === ' ') {
@@ -1347,53 +1650,37 @@
       const led = document.createElement('span');
       led.className = 'agent-led';
       led.setAttribute('role', 'img');
-      led.title = 'idle';
+      setTooltip(led, 'idle', false);
       led.setAttribute('aria-label', 'idle');
       head.appendChild(led);
-      const name = document.createElement('span');
-      name.className = 'about-role-name';
-      name.textContent = agent.displayName || roleDisplayName(agent.name);
-      head.appendChild(name);
-      const id = document.createElement('span');
-      id.className = 'about-role-id';
-      id.textContent = canonicalRoleId(agent.name);
-      head.appendChild(id);
-      if (isLead) {
-        const lead = document.createElement('span');
-        lead.className = 'about-badge';
-        lead.textContent = 'lead';
-        head.appendChild(lead);
-      }
+      head.appendChild(textEl('span', 'about-role-name', displayName));
+      const roleId = textEl('span', 'about-role-id', canonicalRoleId(agent.name));
+      setTooltip(roleId, canonicalRoleId(agent.name), true);
+      head.appendChild(roleId);
+      if (isLead) head.appendChild(textEl('span', 'about-badge', 'lead'));
       const write = agent.sandbox === 'workspace-write';
-      const badge = document.createElement('span');
-      badge.className = 'about-badge' + (write ? ' write' : '');
-      badge.textContent = write ? 'write' : 'read';
-      head.appendChild(badge);
-      const model = document.createElement('span');
-      model.className = 'about-model';
-      model.textContent = agent.model + ' · ' + agent.effort;
-      head.appendChild(model);
-      if (agent.override) {
-        const over = document.createElement('span');
-        over.className = 'about-badge override';
-        over.textContent = 'override';
-        head.appendChild(over);
-      }
+      head.appendChild(textEl('span', 'about-badge' + (write ? ' write' : ''), write ? 'write' : 'read'));
       row.appendChild(head);
-      const desc = document.createElement('div');
-      desc.className = 'about-desc';
-      desc.textContent = agent.description;
-      row.appendChild(desc);
-      const tools = agent.tools || {};
-      const extra = [];
-      if (tools.mcpServers && tools.mcpServers.length > 0) extra.push('MCP: ' + tools.mcpServers.join(', '));
-      if (tools.skills) extra.push('skills');
-      if (extra.length > 0) {
-        const line = document.createElement('div');
-        line.className = 'about-extra';
-        line.textContent = extra.join(' · ');
-        row.appendChild(line);
+      if (agent.description) {
+        const desc = textEl('div', 'about-desc', agent.description);
+        setTooltip(desc, agent.description, true);
+        row.appendChild(desc);
       }
+      const override = agent.override || {};
+      const chips = document.createElement('div');
+      chips.className = 'about-chips';
+      const model = textEl('span', 'about-chip' + (override.model != null ? ' is-override' : ''), agent.model || '-');
+      const effort = textEl('span', 'about-chip' + (override.effort != null ? ' is-override' : ''), agent.effort || '-');
+      if (override.model != null) setTooltip(model, 'Overridden for this project', false);
+      if (override.effort != null) setTooltip(effort, 'Overridden for this project', false);
+      chips.appendChild(model);
+      chips.appendChild(effort);
+      row.appendChild(chips);
+      const tokens = document.createElement('div');
+      tokens.className = 'role-tokens hidden';
+      tokens.appendChild(textEl('span', 'role-tokens-total is-placeholder', '-'));
+      tokens.appendChild(textEl('span', 'role-tokens-split', ''));
+      row.appendChild(tokens);
       list.appendChild(row);
     }
 
@@ -1422,9 +1709,693 @@
         const on = activeRoles.has(row.dataset.role);
         led.classList.toggle('is-active', on);
         const label = on ? 'active' : 'idle';
-        led.title = label;
+        setTooltip(led, label, false);
         led.setAttribute('aria-label', label);
       });
+    }
+
+    // ---- Team band: token usage of the open session, per role
+    // Compact token count: 812, 1.2k, 12.3k, 123k, 1.24M, 1.2B; null shows as n/a.
+    function trimZeros(value, digits) {
+      const s = value.toFixed(digits);
+      return s.indexOf('.') < 0 ? s : s.replace(/0+$/, '').replace(/\.$/, '');
+    }
+
+    function formatTokenCount(n) {
+      if (n === null || n === undefined) return 'n/a';
+      if (n < 1000) return String(n);
+      if (n < 999500) return trimZeros(n / 1000, n < 100000 ? 1 : 0) + 'k';
+      if (n < 999500000) return trimZeros(n / 1000000, n < 10000000 ? 2 : (n < 100000000 ? 1 : 0)) + 'M';
+      return trimZeros(n / 1000000000, 2) + 'B';
+    }
+
+    // "-" when the session has no usage rows for the entry, "n/a" when rows exist without token data.
+    function tokenTotalLabel(entry) {
+      if (!entry || !entry.attempts) return '-';
+      return formatTokenCount(entry.totalTokens);
+    }
+
+    function tokenSplitLabel(entry) {
+      if (!entry || !entry.attempts || entry.totalTokens === null || entry.totalTokens === undefined) return '';
+      return 'in ' + formatTokenCount(entry.inputTokens) + ' / cached ' + formatTokenCount(entry.cachedInputTokens)
+        + ' / out ' + formatTokenCount(entry.outputTokens);
+    }
+
+    // The ledger role is the raw role name (the lead is "coordinator"); the canonical id is the fallback.
+    function roleUsageEntry(row) {
+      const byRole = (sessionUsage && sessionUsage.byRole) || {};
+      return byRole[row.dataset.roleKey] || byRole[row.dataset.role] || null;
+    }
+
+    function renderTeamTokens() {
+      const hasSession = Boolean(currentProjectId && currentSessionId);
+      document.getElementById('teamTokens').classList.toggle('hidden', !hasSession);
+      const total = sessionUsage ? sessionUsage.total : null;
+      document.getElementById('teamTokenTotal').textContent = sessionUsage ? tokenTotalLabel(total) : '-';
+      document.getElementById('teamTokenSplit').textContent = tokenSplitLabel(total);
+      document.querySelectorAll('#aboutTeamList .about-role').forEach(function (row) {
+        const block = row.querySelector('.role-tokens');
+        if (!block) return;
+        const entry = sessionUsage ? roleUsageEntry(row) : null;
+        block.classList.toggle('hidden', !hasSession);
+        const label = sessionUsage ? tokenTotalLabel(entry) : '-';
+        const totalEl = block.querySelector('.role-tokens-total');
+        totalEl.textContent = label;
+        totalEl.classList.toggle('is-placeholder', label === '-' || label === 'n/a');
+        block.querySelector('.role-tokens-split').textContent = tokenSplitLabel(entry);
+      });
+    }
+
+    // Forced on a session change and when a task of the session finishes; while the project
+    // server runs, at most once per 10 seconds. Stale responses are ignored.
+    async function refreshSessionUsage(force) {
+      const pid = currentProjectId;
+      const sid = currentSessionId;
+      const key = pid && sid ? pid + '/' + sid : '';
+      if (key !== usageKey) {
+        usageKey = key;
+        sessionUsage = null;
+        usageFetchAt = 0;
+        force = true;
+      }
+      if (!key) {
+        renderTeamTokens();
+        return;
+      }
+      const now = Date.now();
+      if (!force && (!serverRunning || now - usageFetchAt < 10000)) return;
+      usageFetchAt = now;
+      const token = ++usageToken;
+      let next = null;
+      try {
+        const res = await fetch(projectUrl('/sessions/' + encodeURIComponent(sid) + '/usage'));
+        if (res.ok) next = await res.json();
+      } catch (_) {}
+      if (token !== usageToken || pid !== currentProjectId || sid !== currentSessionId) return;
+      sessionUsage = next;
+      renderTeamTokens();
+    }
+
+    // ---- Session situation panel (SIT-3). Read-only contracts: GET .../sessions/:contextId/situation (SIT-1)
+    // and GET .../git-status (SIT-2). While the lead is active the situation is fetched at most every 2 seconds;
+    // otherwise once at the session switch and when a turn finishes. Git status: at most every 10 seconds and
+    // on turn finish. A 404 or a failed request shows a quiet line, never an error. Stale responses are dropped.
+    function readSituationCollapsed() {
+      try { return localStorage.getItem(SITUATION_COLLAPSED_KEY) === '1'; } catch (_) { return false; }
+    }
+
+    function writeSituationCollapsed(value) {
+      try { localStorage.setItem(SITUATION_COLLAPSED_KEY, value ? '1' : '0'); } catch (_) {}
+    }
+
+    function applySituationCollapsed() {
+      document.getElementById('situationPanel').classList.toggle('is-collapsed', situationCollapsed);
+      document.getElementById('situationToggle').setAttribute('aria-expanded', String(!situationCollapsed));
+    }
+
+    function toggleSituationPanel() {
+      situationCollapsed = !situationCollapsed;
+      writeSituationCollapsed(situationCollapsed);
+      applySituationCollapsed();
+    }
+
+    function situationScope() {
+      return currentProjectId && currentSessionId ? currentProjectId + '/' + currentSessionId : '';
+    }
+
+    // The lead works or waits for the owner: the latest turn is not terminal yet, or a dispatch is pending.
+    function leadActive() {
+      if (pendingTurn) return true;
+      const last = lastTurn();
+      return !!last && !isTerminalState(last.state);
+    }
+
+    async function refreshSituation(force) {
+      const pid = currentProjectId;
+      const sid = currentSessionId;
+      const key = situationScope();
+      if (key !== situationKey) {
+        situationKey = key;
+        situation = null;
+        situationFetchAt = 0;
+        force = true;
+        renderSituationPanel();
+      }
+      if (!key) return;
+      const now = Date.now();
+      if (!force && (!leadActive() || now - situationFetchAt < 2000)) return;
+      situationFetchAt = now;
+      const token = ++situationToken;
+      let next = null;
+      try {
+        const res = await fetch(projectUrl('/sessions/' + encodeURIComponent(sid) + '/situation'));
+        if (res.ok) next = await res.json();
+      } catch (_) {}
+      if (token !== situationToken || pid !== currentProjectId || sid !== currentSessionId) return;
+      situation = next;
+      renderSituationPanel();
+    }
+
+    async function refreshGitStatus(force) {
+      const pid = currentProjectId;
+      if (pid !== gitKey) {
+        gitKey = pid || '';
+        gitStatus = null;
+        gitFetchAt = 0;
+        force = true;
+      }
+      if (!pid || !currentSessionId) return;
+      const now = Date.now();
+      if (!force && now - gitFetchAt < 10000) return;
+      gitFetchAt = now;
+      const token = ++gitToken;
+      let next = null;
+      try {
+        const res = await fetch(projectUrl('/git-status'));
+        if (res.ok) next = await res.json();
+      } catch (_) {}
+      if (token !== gitToken || pid !== currentProjectId) return;
+      gitStatus = next;
+      renderSituationPanel();
+    }
+
+    function iconEl(id) {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('class', 'icon');
+      svg.setAttribute('aria-hidden', 'true');
+      const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+      use.setAttribute('href', '#' + id);
+      svg.appendChild(use);
+      return svg;
+    }
+
+    function startedMs(value) {
+      const t = typeof value === 'number' ? value : Date.parse(value);
+      return Number.isFinite(t) ? t : null;
+    }
+
+    function situationBatch(sit) {
+      return Array.isArray(sit.batch) ? sit.batch.filter(function (a) { return a && typeof a === 'object'; }) : [];
+    }
+
+    function situationStepIndex(sit) {
+      const direct = SITUATION_STEPS.findIndex(function (s) { return s.phase === sit.phase; });
+      if (direct >= 0) return direct;
+      if (sit.phase === 'waiting_owner' || sit.phase === 'budget_pause') {
+        const mapped = SITUATION_NODE_PHASE[sit.node];
+        return SITUATION_STEPS.findIndex(function (s) { return s.phase === mapped; });
+      }
+      // A pause keeps the step the lead was in: its node, or Working when the batch has assignments.
+      if (sit.phase === 'pausing' || sit.phase === 'paused') {
+        const mapped = SITUATION_STEPS.findIndex(function (s) { return s.phase === SITUATION_NODE_PHASE[sit.node]; });
+        if (mapped >= 0) return mapped;
+        return situationBatch(sit).length ? 1 : -1;
+      }
+      return -1;
+    }
+
+    // Last step the turn entered: its node's phase, or Working once the batch has assignments.
+    function situationReachedIndex(sit) {
+      const mapped = SITUATION_STEPS.findIndex(function (s) { return s.phase === SITUATION_NODE_PHASE[sit.node]; });
+      const reached = situationBatch(sit).length ? 1 : -1;
+      return Math.max(mapped, reached);
+    }
+
+    function situationSummaryText(sit) {
+      const label = sit.phase === 'paused' && pauseKindOf(sit) === 'stopped'
+        ? 'Stopped' : SITUATION_PHASE_LABELS[sit.phase] || String(sit.phase || '');
+      return Number.isFinite(sit.round) ? label + ', round ' + sit.round : label;
+    }
+
+    function situationBlock(title) {
+      const block = document.createElement('div');
+      block.className = 'situation-block';
+      block.appendChild(textEl('div', 'situation-block-title', title));
+      return block;
+    }
+
+    function situationTrack(sit) {
+      const wrap = document.createElement('div');
+      wrap.className = 'situation-track';
+      const list = document.createElement('ol');
+      list.className = 'situation-steps';
+      // A failed or canceled turn has no current step: the steps it entered keep their checks.
+      const stopped = sit.phase === 'failed' || sit.phase === 'canceled';
+      const reached = situationReachedIndex(sit);
+      const current = stopped ? -1 : situationStepIndex(sit);
+      SITUATION_STEPS.forEach(function (step, i) {
+        const item = document.createElement('li');
+        item.className = 'situation-step';
+        const passed = stopped ? i <= reached : i < current;
+        if (i === current) {
+          item.classList.add('is-current');
+          item.setAttribute('aria-current', 'step');
+        } else if (passed) {
+          item.classList.add('is-done');
+          item.appendChild(iconEl('i-check'));
+        }
+        item.appendChild(textEl('span', '', step.label));
+        list.appendChild(item);
+      });
+      wrap.appendChild(list);
+      if (sit.phase === 'waiting_owner') wrap.appendChild(textEl('span', 'situation-side is-waiting', 'Waiting for you'));
+      if (sit.phase === 'budget_pause') {
+        const side = textEl('span', 'situation-side is-budget', 'Budget pause');
+        side.prepend(iconEl('i-pause'));
+        wrap.appendChild(side);
+      }
+      if (sit.phase === 'pausing') wrap.appendChild(textEl('span', 'situation-side is-pausing', 'Pausing'));
+      if (sit.phase === 'paused') {
+        wrap.appendChild(pauseKindOf(sit) === 'stopped'
+          ? textEl('span', 'situation-side is-stopped', 'Stopped')
+          : textEl('span', 'situation-side is-paused', 'Paused'));
+      }
+      if (sit.phase === 'failed') wrap.appendChild(textEl('span', 'situation-side is-failed', 'Failed'));
+      if (sit.phase === 'canceled') wrap.appendChild(textEl('span', 'situation-side is-canceled', 'Canceled'));
+      return wrap;
+    }
+
+    function situationMeta(sit) {
+      const parts = [];
+      if (Number.isFinite(sit.round)) parts.push('Round ' + sit.round);
+      if (sit.budget && typeof sit.budget === 'object') {
+        parts.push(sit.budget.source ? 'usage limit (' + sit.budget.source + ')' : 'usage limit');
+      }
+      return parts.length ? textEl('div', 'situation-meta', parts.join(', ')) : null;
+    }
+
+    function situationNow(sit) {
+      const running = situationBatch(sit).filter(function (a) { return a.state === 'running'; });
+      if (!running.length) return null;
+      const block = situationBlock('Now');
+      running.forEach(function (a) {
+        const row = document.createElement('div');
+        row.className = 'situation-row';
+        row.appendChild(textEl('span', 'agent-led is-active', ''));
+        row.appendChild(textEl('span', 'situation-role', roleDisplayName(String(a.role || ''))));
+        const objective = String(a.objective || '');
+        const objectiveEl = textEl('span', 'situation-objective', objective);
+        setTooltip(objectiveEl, objective, true);
+        row.appendChild(objectiveEl);
+        const elapsed = textEl('span', 'situation-elapsed', '');
+        const started = startedMs(a.startedAt);
+        if (started !== null) elapsed.dataset.started = String(started);
+        row.appendChild(elapsed);
+        block.appendChild(row);
+      });
+      return block;
+    }
+
+    function situationFileList(key, summaryText, rows) {
+      const box = document.createElement('details');
+      box.className = 'situation-files';
+      box.open = situationOpen.has(key);
+      box.addEventListener('toggle', function () {
+        if (box.open) situationOpen.add(key);
+        else situationOpen.delete(key);
+      });
+      box.appendChild(textEl('summary', '', summaryText));
+      const list = document.createElement('ul');
+      list.className = 'situation-file-list';
+      rows.forEach(function (row) {
+        const item = document.createElement('li');
+        if (row.status !== undefined) item.appendChild(textEl('span', 'situation-file-status', row.status));
+        const path = textEl('span', 'situation-file-path', row.path);
+        setTooltip(path, row.path, true);
+        item.appendChild(path);
+        list.appendChild(item);
+      });
+      box.appendChild(list);
+      return box;
+    }
+
+    function situationDone(sit) {
+      const finished = situationBatch(sit).filter(function (a) { return a.state === 'done' || a.state === 'failed'; });
+      if (!finished.length) return null;
+      const block = situationBlock('Done this turn');
+      finished.forEach(function (a, i) {
+        const row = document.createElement('div');
+        row.className = 'situation-row situation-done';
+        const head = document.createElement('div');
+        head.className = 'situation-done-head';
+        head.appendChild(textEl('span', 'situation-role', roleDisplayName(String(a.role || ''))));
+        if (a.state === 'failed') head.appendChild(textEl('span', 'pill pill-failed', 'failed'));
+        row.appendChild(head);
+        const summary = String(a.summary || '');
+        if (summary) {
+          const line = textEl('div', 'situation-summary-line', summary);
+          setTooltip(line, summary, true);
+          row.appendChild(line);
+        } else {
+          row.appendChild(textEl('div', 'situation-summary-line situation-muted', 'No report'));
+        }
+        const files = Array.isArray(a.filesChanged) ? a.filesChanged.map(String) : [];
+        if (files.length) {
+          const count = files.length + (files.length === 1 ? ' file' : ' files');
+          row.appendChild(situationFileList('done:' + String(a.assignmentId || i), count,
+            files.map(function (path) { return { path: path }; })));
+        }
+        block.appendChild(row);
+      });
+      return block;
+    }
+
+    function situationFiles(git) {
+      if (!git) return null;
+      const files = Array.isArray(git.files) ? git.files : [];
+      const stat = git.diffstat || {};
+      const block = situationBlock('Changed files');
+      if (!files.length && !stat.files) {
+        block.appendChild(textEl('div', 'situation-meta', 'Working tree clean'));
+        return block;
+      }
+      // Status "??" is untracked; the diffstat covers tracked files only.
+      const untracked = files.filter(function (f) { return f.status === '??'; }).length;
+      const tracked = files.length - untracked;
+      const parts = [];
+      if (tracked) parts.push(tracked + ' modified (+' + (stat.insertions || 0) + ' -' + (stat.deletions || 0) + ')');
+      if (untracked) parts.push(untracked + ' untracked');
+      block.appendChild(textEl('div', 'situation-diffstat', files.length + ' changed: ' + parts.join(', ')));
+      if (files.length) {
+        const count = files.length + (files.length === 1 ? ' file' : ' files');
+        block.appendChild(situationFileList('git', 'Show ' + count, files.map(function (f) {
+          return { status: String(f.status || ''), path: String(f.path || '') };
+        })));
+      }
+      return block;
+    }
+
+    function situationAcceptance(sit) {
+      const acc = sit.acceptance;
+      if (!acc || typeof acc !== 'object') return null;
+      const block = situationBlock('Acceptance');
+      block.appendChild(textEl('div', 'situation-meta', String(acc.status || 'unknown')));
+      (Array.isArray(acc.checks) ? acc.checks : []).forEach(function (check) {
+        if (!check || typeof check !== 'object') return;
+        const row = document.createElement('div');
+        row.className = 'situation-row';
+        row.appendChild(textEl('span', 'situation-objective', String(check.name || '')));
+        row.appendChild(textEl('span', 'situation-elapsed', String(check.status || '')));
+        block.appendChild(row);
+      });
+      return block;
+    }
+
+    function situationStop(sit) {
+      const finished = sit.phase === 'done' || sit.phase === 'failed' || sit.phase === 'canceled';
+      const text = typeof sit.nextSteps === 'string' ? sit.nextSteps.trim() : '';
+      if (!finished || !text) return null;
+      const block = situationBlock('Where we stopped');
+      block.appendChild(textEl('div', 'situation-next', text));
+      return block;
+    }
+
+    // Rebuilds the body only when the data changes; the elapsed times tick through tickSituationElapsed.
+    function renderSituationPanel() {
+      const panel = document.getElementById('situationPanel');
+      const scope = situationScope();
+      const visible = !!scope && (!!sessionData || !!pendingTurn);
+      panel.classList.toggle('hidden', !visible);
+      const sit = visible && situationKey === scope ? situation : null;
+      // The old status bar repeats the panel; it stays only as the fallback while the situation is unavailable.
+      document.getElementById('taskMetaBar').classList.toggle('hidden', !!sit);
+      if (!visible) {
+        situationSignature = '';
+        return;
+      }
+      const git = gitKey === currentProjectId && gitStatus && gitStatus.available ? gitStatus : null;
+      const signature = JSON.stringify([scope, sit, git]);
+      if (signature !== situationSignature) {
+        situationSignature = signature;
+        const blocks = [];
+        if (sit) blocks.push(situationTrack(sit), situationMeta(sit), situationNow(sit), situationDone(sit), situationAcceptance(sit));
+        blocks.push(situationFiles(git));
+        if (sit) blocks.push(situationStop(sit));
+        const content = document.getElementById('situationContent');
+        content.replaceChildren(...blocks.filter(Boolean));
+        content.classList.toggle('hidden', content.childElementCount === 0);
+        document.getElementById('situationUnavailable').classList.toggle('hidden', !!sit);
+        document.getElementById('situationSummary').textContent = sit ? situationSummaryText(sit) : '';
+      }
+      const resumeBtn = document.getElementById('situationResume');
+      resumeBtn.classList.toggle('hidden', !sit || sit.phase !== 'paused' || !currentSessionId);
+      if (sit && sit.phase === 'paused' && pauseKindOf(sit) === 'stopped') setTooltip(resumeBtn, 'Continue the run that was stopped', false);
+      else delete resumeBtn.dataset.tooltip;
+      tickSituationElapsed();
+      updateComposer();
+    }
+
+    function tickSituationElapsed() {
+      const now = Date.now();
+      document.querySelectorAll('#situationContent .situation-elapsed[data-started]').forEach(function (el) {
+        el.textContent = fmtSpan(now - Number(el.dataset.started));
+      });
+    }
+
+    // ---- Scout asks (SIT-5). POST .../ask, GET and DELETE .../ask/:askId. Local to this page: they are not
+    // part of the lead's session. Running asks are polled every 1.5 seconds; stale responses are dropped.
+    function askKey(pid, sid) {
+      return pid + '/' + (sid || '-');
+    }
+
+    function currentAskKey() {
+      return askKey(currentProjectId, currentSessionId);
+    }
+
+    function makeAsk(fields) {
+      return Object.assign({
+        answer: null, error: null, finishedAt: null,
+        inFlight: false, polledAt: 0, cancelRequested: false
+      }, fields);
+    }
+
+    function loadAsks(key) {
+      if (!asksByKey.has(key)) {
+        let list = [];
+        try {
+          const parsed = JSON.parse(sessionStorage.getItem(ASK_STORE_PREFIX + key) || '[]');
+          if (Array.isArray(parsed)) {
+            list = parsed.filter(function (a) { return a && typeof a.askId === 'string'; }).map(makeAsk);
+          }
+        } catch (_) {}
+        asksByKey.set(key, list);
+      }
+      return asksByKey.get(key);
+    }
+
+    function saveAsks(key) {
+      const list = asksByKey.get(key) || [];
+      try {
+        sessionStorage.setItem(ASK_STORE_PREFIX + key, JSON.stringify(list.map(function (a) {
+          return {
+            askId: a.askId, projectId: a.projectId, sessionId: a.sessionId, question: a.question,
+            state: a.state, answer: a.answer, error: a.error, startedAt: a.startedAt, finishedAt: a.finishedAt
+          };
+        })));
+      } catch (_) {}
+    }
+
+    function addAsk(key, ask) {
+      const list = loadAsks(key);
+      list.push(ask);
+      if (list.length > ASK_KEEP) list.splice(0, list.length - ASK_KEEP);
+      saveAsks(key);
+    }
+
+    function askFailureText(res, data) {
+      if (res.status === 404) return 'Scout is not available on this launcher yet.';
+      if (data && typeof data.error === 'string' && data.error) return data.error;
+      return res.status === 409 ? 'The scout is busy or the project server is stopped.' : 'Scout request failed.';
+    }
+
+    // Mode: the owner's pick wins; otherwise Scout while the lead works, Lead when idle.
+    function askMode() {
+      const scoutOk = serverRunning && !!currentProjectId;
+      if (scoutChoice === 'scout') return scoutOk ? 'scout' : 'lead';
+      if (scoutChoice === 'lead') return 'lead';
+      // A parked owner pause is not work: the composer stays in Lead mode for the continue message.
+      return scoutOk && leadActive() && ownerPhase() !== 'paused' ? 'scout' : 'lead';
+    }
+
+    function setAskMode(mode) {
+      if (mode === 'scout' && !(serverRunning && currentProjectId)) return;
+      scoutChoice = mode === 'scout' ? 'scout' : 'lead';
+      updateComposer();
+    }
+
+    async function sendScoutAsk() {
+      const pid = currentProjectId;
+      const input = document.getElementById('taskGoal');
+      const question = input.value.trim();
+      if (!pid || askSending) return;
+      if (!question) return showNotice('sendError', 'Enter a question for the scout!');
+      const sid = currentSessionId;
+      const key = askKey(pid, sid);
+      const body = { question: question };
+      if (sid) body.sessionContextId = sid;
+      askSending = true;
+      updateComposer();
+      let res = null;
+      let data = {};
+      try {
+        res = await fetch('/api/projects/' + encodeURIComponent(pid) + '/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        data = await res.json().catch(function () { return {}; });
+      } catch (_) {}
+      askSending = false;
+      if (res && res.ok && data && typeof data.askId === 'string') {
+        addAsk(key, makeAsk({ askId: data.askId, projectId: pid, sessionId: sid, question: question, state: 'running', startedAt: Date.now() }));
+        if (key === currentAskKey()) input.value = '';
+        renderTranscript();
+      } else {
+        showNotice('sendError', res ? askFailureText(res, data) : 'Scout request failed.');
+      }
+      updateComposer();
+    }
+
+    function applyAskBody(ask, body) {
+      if (typeof body.state === 'string') ask.state = body.state;
+      ask.answer = typeof body.answer === 'string' ? body.answer : null;
+      ask.error = typeof body.error === 'string' && body.error ? body.error : null;
+      const started = startedMs(body.startedAt);
+      if (started !== null) ask.startedAt = started;
+      ask.finishedAt = startedMs(body.finishedAt);
+    }
+
+    function pollAsks() {
+      tickAskElapsed();
+      const now = Date.now();
+      asksByKey.forEach(function (list, key) {
+        list.forEach(function (ask) {
+          if (ask.state !== 'running' || ask.inFlight || now - ask.polledAt < ASK_POLL_MS) return;
+          ask.inFlight = true;
+          ask.polledAt = now;
+          fetch('/api/projects/' + encodeURIComponent(ask.projectId) + '/ask/' + encodeURIComponent(ask.askId))
+            .then(function (res) {
+              if (res.status === 404) return { state: 'failed', error: 'The server no longer knows this scout ask.' };
+              return res.ok ? res.json() : null;
+            })
+            .then(function (body) {
+              // An ask dropped from the list meanwhile is stale: ignore its answer.
+              if (body && list.indexOf(ask) !== -1) applyAskBody(ask, body);
+            })
+            .catch(function () {})
+            .then(function () {
+              ask.inFlight = false;
+              if (ask.state !== 'running') saveAsks(key);
+              if (key === currentAskKey()) renderTranscript();
+            });
+        });
+      });
+    }
+
+    async function cancelScoutAsk(key, askId) {
+      const ask = (asksByKey.get(key) || []).find(function (a) { return a.askId === askId; });
+      if (!ask || ask.state !== 'running' || ask.cancelRequested) return;
+      ask.cancelRequested = true;
+      renderTranscript();
+      let res = null;
+      try {
+        res = await fetch('/api/projects/' + encodeURIComponent(ask.projectId) + '/ask/' + encodeURIComponent(askId), { method: 'DELETE' });
+      } catch (_) {}
+      if (!res || !res.ok) {
+        ask.cancelRequested = false;
+        showNotice('sendError', 'Could not cancel the scout ask.');
+        renderTranscript();
+        return;
+      }
+      ask.polledAt = 0;
+      pollAsks();
+    }
+
+    function tickAskElapsed() {
+      const now = Date.now();
+      document.querySelectorAll('#transcript .ask-elapsed[data-started]').forEach(function (el) {
+        el.textContent = fmtSpan(now - Number(el.dataset.started));
+      });
+    }
+
+    const ASK_STATE_PILLS = {
+      running: ['running', 'running'], done: ['done', 'answered'], failed: ['failed', 'failed'],
+      canceled: ['canceled', 'canceled'], timeout: ['canceled', 'timeout']
+    };
+
+    // Answer text keeps its line breaks; file:line citations are set in mono.
+    function scoutAnswerNode(answer) {
+      const box = textEl('div', 'scout-answer', '');
+      const text = answer || 'The scout returned no answer.';
+      if (!answer) {
+        box.textContent = text;
+        return box;
+      }
+      const re = /[A-Za-z0-9_./-]+\.[A-Za-z0-9]+:\d+(?:-\d+)?/g;
+      let last = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > last) box.appendChild(document.createTextNode(text.slice(last, m.index)));
+        box.appendChild(textEl('code', 'scout-cite', m[0]));
+        last = m.index + m[0].length;
+      }
+      if (last < text.length) box.appendChild(document.createTextNode(text.slice(last)));
+      return box;
+    }
+
+    function scoutAskNode(ask, key) {
+      const wrap = document.createElement('div');
+      wrap.className = 'scout-ask';
+
+      const question = document.createElement('div');
+      question.className = 'bubble bubble-user scout-question';
+      question.appendChild(textEl('div', 'scout-to', 'To scout'));
+      question.appendChild(textEl('div', '', ask.question));
+      wrap.appendChild(question);
+
+      const bubble = document.createElement('div');
+      bubble.className = 'scout-bubble is-' + ask.state;
+      const head = document.createElement('div');
+      head.className = 'scout-head';
+      head.appendChild(iconEl('i-compass'));
+      head.appendChild(textEl('span', 'scout-label', 'Scout'));
+      const pill = ASK_STATE_PILLS[ask.state] || ['canceled', String(ask.state || '')];
+      head.appendChild(statePill(pill[0], pill[1]));
+      bubble.appendChild(head);
+
+      const started = startedMs(ask.startedAt);
+      if (ask.state === 'running') {
+        const row = document.createElement('div');
+        row.className = 'scout-running';
+        row.appendChild(textEl('span', 'scout-muted', 'Reading the project...'));
+        const elapsed = textEl('span', 'scout-meta ask-elapsed', '');
+        if (started !== null) {
+          elapsed.dataset.started = String(started);
+          elapsed.textContent = fmtSpan(Date.now() - started);
+        }
+        row.appendChild(elapsed);
+        if (ask.cancelRequested) {
+          row.appendChild(textEl('span', 'scout-muted', 'Canceling...'));
+        } else {
+          const cancel = textEl('button', 'btn btn-ghost btn-xs', 'Cancel');
+          cancel.type = 'button';
+          cancel.addEventListener('click', function () { cancelScoutAsk(key, ask.askId); });
+          row.appendChild(cancel);
+        }
+        bubble.appendChild(row);
+      } else if (ask.state === 'done') {
+        bubble.appendChild(scoutAnswerNode(ask.answer));
+        const finished = ask.finishedAt;
+        if (started !== null && finished !== null && finished >= started) {
+          bubble.appendChild(textEl('div', 'scout-meta', 'Answered in ' + fmtSpan(finished - started)));
+        }
+      } else {
+        const fallback = ask.state === 'timeout' ? 'The scout did not answer in time.'
+          : ask.state === 'canceled' ? 'Canceled.' : 'The scout failed.';
+        bubble.appendChild(textEl('div', ask.state === 'failed' ? 'scout-error' : 'scout-muted', ask.error || fallback));
+      }
+      wrap.appendChild(bubble);
+      return wrap;
     }
 
     // The team card shows the roles of the selected project with its overrides; without a project, the profiles.
@@ -1447,11 +2418,13 @@
         note.textContent = 'Stop the project server to change roles';
         note.classList.toggle('hidden', !(projectId && data.running === true));
         const list = document.getElementById('aboutTeamList');
+        hideUiTooltip();
         list.textContent = '';
         addAboutRow(list, data.lead, true, editable);
         data.roles.forEach(function (r) { addAboutRow(list, r, false, editable); });
         updateTeamLeds();
-        document.getElementById('aboutTeamSummary').textContent = 'Team (' + (data.roles.length + 1) + ' agents)';
+        renderTeamTokens();
+        document.getElementById('aboutTeamLabel').textContent = 'Team (' + (data.roles.length + 1) + ' agents)';
         if (data.warning) {
           errEl.textContent = data.warning;
           errEl.classList.remove('hidden');

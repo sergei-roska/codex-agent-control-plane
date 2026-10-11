@@ -10,181 +10,367 @@
   <link rel="stylesheet" href="/ui/styles.css">
 </head>
 <body>
+  <!-- Icons: Lucide (https://lucide.dev), ISC license -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+    <symbol id="i-zap" viewBox="0 0 24 24">
+      <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" />
+    </symbol>
+    <symbol id="i-play" viewBox="0 0 24 24">
+      <polygon points="6 3 20 12 6 21 6 3" />
+    </symbol>
+    <symbol id="i-square" viewBox="0 0 24 24">
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+    </symbol>
+    <symbol id="i-refresh-cw" viewBox="0 0 24 24">
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M8 16H3v5" />
+    </symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24">
+      <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+    </symbol>
+    <symbol id="i-users" viewBox="0 0 24 24">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </symbol>
+    <symbol id="i-bot" viewBox="0 0 24 24">
+      <path d="M12 8V4H8" />
+      <rect width="16" height="12" x="4" y="8" rx="2" />
+      <path d="M2 14h2" />
+      <path d="M20 14h2" />
+      <path d="M15 13v2" />
+      <path d="M9 13v2" />
+    </symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24">
+      <path d="M12 22v-5" />
+      <path d="M9 8V2" />
+      <path d="M15 8V2" />
+      <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
+    </symbol>
+    <symbol id="i-history" viewBox="0 0 24 24">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+      <path d="M12 7v5l4 2" />
+    </symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24">
+      <path d="M5 12h14" />
+      <path d="M12 5v14" />
+    </symbol>
+    <symbol id="i-triangle-alert" viewBox="0 0 24 24">
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </symbol>
+    <symbol id="i-send" viewBox="0 0 24 24">
+      <path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" />
+      <path d="m21.854 2.147-10.94 10.939" />
+    </symbol>
+    <symbol id="i-x" viewBox="0 0 24 24">
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </symbol>
+    <symbol id="i-info" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24">
+      <path d="m6 9 6 6 6-6" />
+    </symbol>
+    <symbol id="i-trash-2" viewBox="0 0 24 24">
+      <path d="M3 6h18" />
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+      <line x1="10" x2="10" y1="11" y2="17" />
+      <line x1="14" x2="14" y1="11" y2="17" />
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <path d="M20 6 9 17l-5-5" />
+    </symbol>
+    <symbol id="i-file-diff" viewBox="0 0 24 24">
+      <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" />
+      <path d="M9 10h6" />
+      <path d="M12 13V7" />
+      <path d="M9 17h6" />
+    </symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24">
+      <rect x="14" y="3" width="5" height="18" rx="1" />
+      <rect x="5" y="3" width="5" height="18" rx="1" />
+    </symbol>
+    <symbol id="i-compass" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
+      <path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z" />
+    </symbol>
+    <symbol id="i-search" viewBox="0 0 24 24">
+      <path d="m21 21-4.34-4.34" />
+      <circle cx="11" cy="11" r="8" />
+    </symbol>
+  </svg>
 
-  <!-- Navigation -->
-  <nav class="navbar">
+  <!-- Top Navigation Bar -->
+  <header class="navbar">
     <div class="brand">
-      <div class="brand-icon">⚡</div>
-      <span>Codex Control Plane</span>
-      <span class="brand-subtitle">Universal A2A</span>
-    </div>
-    
-    <div id="serverPill" class="server-status-pill">
-      <span id="serverDot" class="status-dot"></span>
-      <span id="serverStatusText">Checking connection...</span>
-    </div>
-  </nav>
-
-  <!-- Workspace -->
-  <main class="main-container">
-    
-    <!-- Panel 1: Environment and Server -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2 class="panel-title">
-          <span>📁</span> Workspace & Server
-        </h2>
+      <div class="brand-icon"><svg class="icon"><use href="#i-zap"/></svg></div>
+      <div class="brand-text">
+        <span class="brand-name">Codex Control Plane</span>
+        <span class="brand-subtitle">Universal A2A</span>
       </div>
+    </div>
 
-      <div class="field-group project-bar">
-        <label class="field-label" for="projectSelect">Project:</label>
-        <div class="project-row">
-          <select id="projectSelect" onchange="onProjectSelectChange()"></select>
-          <button id="removeProjectBtn" class="btn btn-secondary btn-sm" onclick="removeProject()" disabled>Remove</button>
-        </div>
-        <div id="projectMeta" class="project-meta"></div>
-        <div class="project-row">
-          <input type="text" id="projectPathInput" value="__DEFAULT_WORKSPACE__" spellcheck="false" aria-label="Project path to add">
-          <button id="addProjectBtn" class="btn btn-secondary btn-sm" onclick="addProject()">Add project</button>
-        </div>
-        <div id="projectNotice" class="inline-notice hidden" role="alert"></div>
+    <!-- Server status and controls in the navbar -->
+    <div class="navbar-actions">
+      <div id="serverPill" class="server-status-pill">
+        <span id="serverDot" class="status-dot"></span>
+        <span id="serverStatusText">Checking connection...</span>
       </div>
-
       <div class="btn-group">
-        <button id="startBtn" class="btn btn-success" onclick="startServer()">
-          <span>▶</span> Start Server
+        <button id="startBtn" class="btn btn-primary btn-sm" onclick="startServer()">
+          <svg class="icon"><use href="#i-play"/></svg> Start Server
         </button>
-        <button id="stopBtn" class="btn btn-danger" onclick="stopServer()" disabled>
-          <span>■</span> Stop
+        <button id="pauseBtn" class="btn btn-secondary btn-sm pause-btn" aria-disabled="true" onclick="onPauseButton()">
+          <svg class="icon"><use href="#i-pause"/></svg> <span id="pauseLabel">Pause</span><span id="pauseDot" class="pulse-dot pause-dot hidden" aria-hidden="true"></span>
+        </button>
+        <button id="stopBtn" class="btn btn-danger btn-sm" onclick="stopServer()" data-tooltip="Emergency stop: cancels running work" disabled>
+          <svg class="icon"><use href="#i-square"/></svg> Stop
         </button>
       </div>
+    </div>
+  </header>
 
-      <!-- Process log terminal -->
-      <div class="terminal-window">
-        <div class="terminal-bar">
-          <div class="terminal-dots">
-            <span class="terminal-dot dot-red"></span>
-            <span class="terminal-dot dot-yellow"></span>
-            <span class="terminal-dot dot-green"></span>
+  <!-- Workspace Container: Sidebar + Session Stage -->
+  <main class="main-layout">
+
+    <!-- Left Sidebar: Project, Accounts & Team -->
+    <aside class="sidebar">
+      <!-- Section: About (collapsed by default) -->
+      <section class="card sidebar-section">
+        <details class="about-details">
+          <summary class="card-title-summary">
+            <svg class="icon"><use href="#i-info"/></svg> About Orchestrator
+            <svg class="icon about-chevron"><use href="#i-chevron-down"/></svg>
+          </summary>
+          <p class="about-text">Local A2A server that executes tasks using a team of Codex agents. The lead analyzes goals, delegates bounded assignments to roles in parallel git worktrees, runs acceptance checks, and automatically resumes on budget return or connected accounts.</p>
+        </details>
+      </section>
+
+      <!-- Section: Project Management -->
+      <section class="card sidebar-section">
+        <div class="card-header">
+          <h2 class="card-title">
+            <svg class="icon"><use href="#i-folder"/></svg> Project
+          </h2>
+        </div>
+        <div class="field-group project-bar">
+          <div class="project-row">
+            <select id="projectSelect" onchange="onProjectSelectChange()"></select>
+            <button id="removeProjectBtn" class="btn btn-ghost project-remove-btn" onclick="removeProject()" disabled aria-label="Remove project" data-tooltip="Remove project"><svg class="icon"><use href="#i-trash-2"/></svg></button>
           </div>
-          <span class="terminal-title">orchestrator.stdout</span>
-          <div class="terminal-actions">
-            <button class="terminal-btn" onclick="clearLogs()">Clear</button>
+          <div id="projectMeta" class="project-meta"></div>
+          <div class="project-row">
+            <input type="text" id="projectPathInput" value="__DEFAULT_WORKSPACE__" spellcheck="false" aria-label="Project path to add" placeholder="Path to project...">
+            <button id="addProjectBtn" class="btn btn-secondary btn-sm" onclick="addProject()">Add</button>
+          </div>
+          <div id="projectNotice" class="inline-notice hidden" role="alert"></div>
+        </div>
+      </section>
+
+      <!-- Section: Codex Accounts & Limits -->
+      <section class="card sidebar-section" id="accountsCard">
+        <div class="card-header">
+          <div class="card-title">
+            <svg class="icon"><use href="#i-users"/></svg> Accounts
+          </div>
+          <button class="icon-btn" id="accountsRefreshBtn" aria-label="Refresh accounts & rate limits" data-tooltip="Refresh accounts & rate limits">
+            <svg class="icon"><use href="#i-refresh-cw"/></svg>
+          </button>
+        </div>
+        <div id="accountsList" class="accounts-list">Loading...</div>
+        <div class="limit-reset hidden" id="accountsError"></div>
+        <div id="accountAddArea" class="account-add">
+          <button class="btn btn-ghost btn-xs" id="accountAddBtn"><svg class="icon"><use href="#i-plus"/></svg> Add account</button>
+        </div>
+        <label class="account-toggle">
+          <input type="checkbox" id="autoSwitchToggle">
+          <span class="toggle-track" aria-hidden="true"></span>
+          <span>Auto-switch when limit reached</span>
+        </label>
+      </section>
+
+
+    </aside>
+
+    <!-- Main Content Area: Session & Console -->
+    <section class="session-container">
+
+      <!-- Session Panel -->
+      <div class="session-card">
+
+        <!-- Session Header Bar -->
+        <div class="session-header">
+          <div class="session-header-left">
+            <h2 class="session-title">
+              <svg class="icon"><use href="#i-folder"/></svg> <span id="sessionProjectName" class="session-project-name is-empty" data-tooltip-if-truncated>No project</span>
+            </h2>
+            <span id="activeTaskIdDisplay" class="session-task-id">no session</span>
+          </div>
+
+          <div class="session-header-actions">
+            <button class="btn btn-secondary btn-sm" onclick="openHistoryModal()">
+              <svg class="icon"><use href="#i-history"/></svg> History (<span id="historyCountBadge">0</span>)
+            </button>
+            <button id="newSessionBtn" class="btn btn-secondary btn-sm" onclick="newSession()" disabled>
+              <svg class="icon"><use href="#i-plus"/></svg> New session
+            </button>
+          </div>
+        </div>
+
+        <!-- Session Situation (SIT-3): where the lead is, what runs now, what changed -->
+        <section id="situationPanel" class="situation hidden" aria-label="Session situation">
+          <div class="situation-headrow">
+            <button type="button" id="situationToggle" class="situation-head" aria-expanded="true" aria-controls="situationBody" onclick="toggleSituationPanel()">
+              <span class="situation-title">Situation</span>
+              <span id="situationSummary" class="situation-summary"></span>
+              <svg class="icon situation-chevron"><use href="#i-chevron-down"/></svg>
+            </button>
+            <button type="button" id="situationResume" class="btn btn-primary btn-sm situation-resume hidden" onclick="resumeSession()">Resume</button>
+          </div>
+          <div id="situationBody" class="situation-body">
+            <div id="situationUnavailable" class="situation-unavailable hidden">Situation unavailable</div>
+            <div id="situationContent" class="situation-content hidden"></div>
+          </div>
+        </section>
+
+        <!-- Task Status & Acceptance Meta -->
+        <div id="taskMetaBar" class="task-meta-bar">
+          <div class="task-meta-status">
+            <span class="status-indicator-dot"></span>
+            <span id="taskStatusLabel">Status: waiting to start</span>
+          </div>
+          <span id="acceptanceBadge" class="acceptance-pill acceptance-none">no checks</span>
+        </div>
+        <div id="acceptanceChecks" class="acceptance-checks hidden"></div>
+
+        <!-- Transcript Window -->
+        <div class="transcript-wrapper">
+          <div class="task-viewer transcript" id="transcript" role="log" aria-live="polite" aria-label="Session transcript"></div>
+        </div>
+
+        <!-- Lead Decision Request Card (Interactive) -->
+        <div id="decisionCard" class="decision-banner hidden">
+          <div class="decision-header">
+            <h4><svg class="icon"><use href="#i-triangle-alert"/></svg> Lead requests human decision</h4>
+          </div>
+          <div id="decisionReasonRow" class="decision-meta hidden">
+            <span class="field-label">Reason:</span>
+            <span id="decisionReason" class="decision-reason"></span>
+          </div>
+          <p id="decisionQuestion" class="decision-question"></p>
+
+          <div id="decisionOptionsBlock" class="field-group">
+            <span id="decisionOptionsLabel" class="field-label">Choose one option:</span>
+            <div id="decisionOptionsList" class="decision-options" role="radiogroup" aria-labelledby="decisionOptionsLabel"></div>
+          </div>
+
+          <div id="decisionIndependentRow" class="decision-meta hidden">
+            <span class="field-label">Can proceed meanwhile:</span>
+            <span id="decisionIndependent" class="decision-independent-text"></span>
+          </div>
+
+          <details id="decisionEvidence" class="decision-evidence hidden">
+            <summary>Evidence the lead checked (<span id="decisionEvidenceCount">0</span>)</summary>
+            <ul id="decisionEvidenceList"></ul>
+          </details>
+
+          <input type="hidden" id="decisionId">
+          <div id="decisionIdRow" class="decision-id-row hidden">Decision ID: <code id="decisionIdText"></code></div>
+
+          <label class="field-label" for="decisionAnswer">Optional comment:</label>
+          <textarea id="decisionAnswer" rows="2" placeholder="Optional comment for the lead..." aria-label="Optional comment"></textarea>
+
+          <button id="decisionSubmit" class="btn btn-primary" onclick="submitDecision()">
+            Submit answer and continue
+          </button>
+        </div>
+
+        <!-- Composer Area -->
+        <div class="composer-container">
+          <div class="composer-box" id="composerBox">
+            <div class="composer-modebar">
+              <div class="mode-switch" role="group" aria-label="Message target">
+                <button type="button" id="modeLeadBtn" class="mode-option" aria-pressed="true" onclick="setAskMode('lead')">Lead</button>
+                <button type="button" id="modeScoutBtn" class="mode-option is-scout" aria-pressed="false" aria-disabled="false" onclick="setAskMode('scout')"><svg class="icon"><use href="#i-compass"/></svg> Scout</button>
+              </div>
+            </div>
+            <textarea id="taskGoal" rows="3" placeholder="Describe the goal for the lead agent (e.g., analyze architecture, run tests, fix errors)..."></textarea>
+            <div class="composer-footer">
+              <div class="composer-left">
+                <kbd class="shortcut-badge">Ctrl+Enter</kbd>
+                <div id="composerHint" class="composer-hint hidden"></div>
+                <div id="sendError" class="composer-error hidden" role="alert"></div>
+              </div>
+              <button id="sendBtn" class="btn btn-primary" onclick="sendMessage()" disabled>
+                <svg class="icon"><use href="#i-send"/></svg> <span id="sendLabel">Send</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Bottom Dock: Process Log Terminal -->
+      <div id="terminalDrawer" class="terminal-drawer">
+        <div class="terminal-bar" onclick="toggleLogsDrawer()">
+          <div class="terminal-bar-left">
+            <div class="terminal-dots">
+              <span class="terminal-dot dot-red"></span>
+              <span class="terminal-dot dot-yellow"></span>
+              <span class="terminal-dot dot-green"></span>
+            </div>
+            <span class="terminal-title">orchestrator.stdout</span>
+          </div>
+          <div class="terminal-actions" onclick="event.stopPropagation()">
+            <button class="btn btn-ghost btn-xs" onclick="clearLogs()">Clear</button>
+            <button id="terminalToggleBtn" class="btn btn-ghost btn-xs" onclick="toggleLogsDrawer()">Collapse</button>
           </div>
         </div>
         <div class="terminal-body" id="serverLogsBody">Orchestrator is not running.</div>
       </div>
 
-      <!-- Accounts card: one block per Codex account with 5h and weekly limits -->
-      <div class="limits-card" id="accountsCard">
-        <div class="limits-header">
-          <div class="limits-title">Accounts</div>
-          <button class="terminal-btn" id="accountsRefreshBtn" title="Refresh limits">Refresh</button>
-        </div>
-        <div id="accountsList" class="accounts-list">Loading...</div>
-        <div class="limit-reset hidden" id="accountsError"></div>
-        <div id="accountAddArea" class="account-add">
-          <button class="terminal-btn" id="accountAddBtn">Add account</button>
-        </div>
-        <label class="account-toggle">
-          <input type="checkbox" id="autoSwitchToggle">
-          <span class="toggle-track" aria-hidden="true"></span>
-          <span>Auto-switch when a limit is reached</span>
-        </label>
-      </div>
-      <div class="about-card">
-        <div class="limits-title">
-          <span>🧭</span> About Orchestrator
-        </div>
-        <p class="about-text">Local A2A server that executes tasks using a team of Codex agents. The lead operates in read-only mode: analyzes the goal, breaks down work into bounded assignments, and delegates them to roles over the A2A protocol. Each role is an independent Codex invocation with its own model, reasoning effort, and sandbox. Writer roles that the lead groups into one wave run in parallel, each in its own isolated git worktree; the server applies each writer's changes to the workspace when it finishes and tracks which files were actually modified. At the end, results undergo acceptance checks if specified. State is persisted in SQLite, so tasks survive restarts; a task paused by a usage limit resumes automatically when budget returns, optionally on another connected account.</p>
-        <details class="about-team" open>
-          <summary id="aboutTeamSummary">Team</summary>
-          <div class="about-list" id="aboutTeamList"></div>
-        </details>
-        <div class="limit-reset hidden" id="aboutTeamError"></div>
-        <div class="limit-reset hidden" id="aboutTeamNote"></div>
-      </div>
     </section>
 
-    <!-- Panel 2: Session (conversation with the Lead) -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2 class="panel-title">
-          <span>🚀</span> Session
+    <!-- Right Sidebar: Connectors (reserved) -->
+    <aside class="sidebar sidebar-right" id="connectorsSidebar" aria-label="Connectors">
+
+      <section class="card sidebar-section">
+        <div class="card-header">
+          <h2 class="card-title"><svg class="icon"><use href="#i-plug"/></svg> Connectors</h2>
+        </div>
+        <div class="connectors-slot" id="connectorsSlot">
+          <p class="connectors-empty">No connectors yet.</p>
+        </div>
+      </section>
+
+    </aside>
+
+    <!-- Team band: roles of the selected project with the token usage of the open session -->
+    <section class="card team-band" id="teamBand" aria-labelledby="aboutTeamLabel">
+      <div class="team-band-header">
+        <h2 class="card-title">
+          <svg class="icon"><use href="#i-bot"/></svg> <span id="aboutTeamLabel">Team & Roles</span>
         </h2>
-        <div style="display: flex; gap: 10px; align-items: center;">
-          <button class="btn btn-secondary btn-sm" onclick="openHistoryModal()">
-            <span>📜</span> History (<span id="historyCountBadge">0</span>)
-          </button>
-          <button id="newSessionBtn" class="btn btn-secondary btn-sm" onclick="newSession()" disabled>New session</button>
-          <span id="activeTaskIdDisplay" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim);">no session</span>
+        <div class="team-band-meta">
+          <div class="limit-reset hidden" id="aboutTeamNote">Stop the project server to change roles</div>
+          <div class="team-band-tokens hidden" id="teamTokens">
+            <span>Session tokens: <strong id="teamTokenTotal">-</strong></span>
+            <span class="team-band-split" id="teamTokenSplit"></span>
+          </div>
         </div>
       </div>
-
-      <!-- Transcript -->
-      <div class="field-group" style="flex-grow: 1;">
-        <div class="task-meta-bar">
-          <span id="taskStatusLabel">Status: waiting to start</span>
-          <span id="acceptanceBadge" class="acceptance-pill acceptance-none">no checks</span>
-        </div>
-        <div id="acceptanceChecks" class="acceptance-checks hidden"></div>
-        <div class="task-viewer transcript" id="transcript" role="log" aria-live="polite" aria-label="Session transcript"></div>
-      </div>
-
-      <!-- Lead decision request card -->
-      <div id="decisionCard" class="decision-banner hidden">
-        <h4>Lead requests human decision</h4>
-        <div id="decisionReasonRow" class="decision-meta hidden">
-          <span class="field-label">Reason:</span>
-          <span id="decisionReason" class="decision-reason"></span>
-        </div>
-        <p id="decisionQuestion" class="decision-question"></p>
-
-        <div id="decisionOptionsBlock" class="field-group">
-          <span id="decisionOptionsLabel" class="field-label">Choose one option:</span>
-          <div id="decisionOptionsList" class="decision-options" role="radiogroup" aria-labelledby="decisionOptionsLabel"></div>
-        </div>
-
-        <div id="decisionIndependentRow" class="decision-meta hidden">
-          <span class="field-label">Can proceed meanwhile:</span>
-          <span id="decisionIndependent" class="decision-independent-text"></span>
-        </div>
-
-        <details id="decisionEvidence" class="decision-evidence hidden">
-          <summary>Evidence the lead checked (<span id="decisionEvidenceCount">0</span>)</summary>
-          <ul id="decisionEvidenceList"></ul>
-        </details>
-
-        <input type="hidden" id="decisionId">
-        <div id="decisionIdRow" class="decision-id-row hidden">Decision ID: <code id="decisionIdText"></code></div>
-
-        <label class="field-label" for="decisionAnswer">Optional comment:</label>
-        <textarea id="decisionAnswer" rows="2" placeholder="Optional comment for the lead..." aria-label="Optional comment"></textarea>
-
-        <button id="decisionSubmit" class="btn btn-primary" onclick="submitDecision()" style="align-self: flex-start;">
-          Submit answer and continue
-        </button>
-      </div>
-
-      <!-- Composer -->
-      <div class="field-group">
-        <label class="field-label" for="taskGoal">
-          <span>Message:</span>
-          <kbd>Ctrl+Enter to send</kbd>
-        </label>
-        <textarea id="taskGoal" rows="3" placeholder="Describe the goal, for example: Analyze the project and fix validation error in src/..."></textarea>
-        <div class="chips-group">
-          <span class="chip" onclick="setGoal('Analyze project architecture and draft improvement plan')">Architecture analysis</span>
-          <span class="chip" onclick="setGoal('Run tests and fix failing errors')">Run & fix tests</span>
-          <span class="chip" onclick="setGoal('Review code for vulnerabilities and contract compliance')">Security audit</span>
-        </div>
-      </div>
-
-      <div id="composerHint" class="composer-hint hidden"></div>
-      <div id="sendError" class="composer-error hidden" role="alert"></div>
-      <button id="sendBtn" class="btn btn-primary" onclick="sendMessage()" disabled style="padding: 13px;">
-        <span>⚡</span> Send
-      </button>
+      <div class="limit-reset hidden" id="aboutTeamError"></div>
+      <div class="about-list" id="aboutTeamList"></div>
     </section>
 
   </main>
@@ -194,9 +380,9 @@
     <div class="modal-card">
       <div class="modal-header">
         <h3 class="modal-title">
-          <span>📜</span> Project sessions
+          <svg class="icon"><use href="#i-history"/></svg> Project sessions
         </h3>
-        <button class="modal-close-btn" onclick="closeHistoryModal()">✕</button>
+        <button class="modal-close-btn" onclick="closeHistoryModal()" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
       </div>
       <div id="historyNotice" class="inline-notice hidden" role="alert"></div>
       <div class="modal-body" id="historyListContainer">
@@ -210,7 +396,7 @@
     <div class="modal-card role-modal-card" role="dialog" aria-modal="true" aria-labelledby="roleModalTitle">
       <div class="modal-header">
         <h3 class="modal-title" id="roleModalTitle">Role</h3>
-        <button type="button" class="modal-close-btn" onclick="closeRoleModal()" aria-label="Close">&#10005;</button>
+        <button type="button" class="modal-close-btn" onclick="closeRoleModal()" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
       </div>
       <form id="roleForm" class="modal-body" onsubmit="event.preventDefault(); saveRoleOverride()">
         <div class="role-field">
@@ -237,6 +423,17 @@
     </div>
   </div>
 
+  <div id="uiTooltip" class="ui-tooltip" role="tooltip"></div>
+
+  <script>
+    function toggleLogsDrawer() {
+      const el = document.getElementById('terminalDrawer');
+      if (!el) return;
+      el.classList.toggle('collapsed');
+      const btn = document.getElementById('terminalToggleBtn');
+      if (btn) btn.textContent = el.classList.contains('collapsed') ? 'Expand' : 'Collapse';
+    }
+  </script>
   <script src="/ui/app.js"></script>
 </body>
 </html>
