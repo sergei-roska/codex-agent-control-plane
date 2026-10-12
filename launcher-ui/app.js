@@ -1684,6 +1684,13 @@
       list.appendChild(row);
     }
 
+    // LED state of one role row: 'idle' before intake (no turns in the shown session),
+    // otherwise 'active' while the role works in the latest turn, else 'available'.
+    function teamLedState(hasTurns, roleActive) {
+      if (!hasTurns) return 'idle';
+      return roleActive ? 'active' : 'available';
+    }
+
     // Light the LED of each agent that is active in the latest turn of the shown session.
     function updateTeamLeds() {
       const list = document.getElementById('aboutTeamList');
@@ -1706,9 +1713,10 @@
       list.querySelectorAll('.about-role').forEach(function (row) {
         const led = row.querySelector('.agent-led');
         if (!led) return;
-        const on = activeRoles.has(row.dataset.role);
-        led.classList.toggle('is-active', on);
-        const label = on ? 'active' : 'idle';
+        const state = teamLedState(Boolean(turn), activeRoles.has(row.dataset.role));
+        led.classList.toggle('is-active', state === 'active');
+        led.classList.toggle('is-available', state === 'available');
+        const label = state;
         setTooltip(led, label, false);
         led.setAttribute('aria-label', label);
       });

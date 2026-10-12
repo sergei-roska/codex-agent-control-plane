@@ -675,6 +675,7 @@ const LeadState = Annotation.Root({
  *   admission?: WriterAdmission, reconcileWaitMs?: number,
  *   sessionThreads?: SessionThreads, sessionDigest?({ contextId, runId, runIds, state }) -> string, rolloverTokens?: number,
  *   parallelWriters?: boolean, usageLedger?: UsageLedger, activityStore?: ActivityStore, evidenceStore?: EvidenceStore, runCheckImpl?, snapshot?,
+ *   acceptanceScratch?: { env: string[], baseDir: string } (owner setting),
  *   stagingLog?: StagingLog,
  * }
  * Returns the compiled graph when deps.checkpointer is given, else the StateGraph.
@@ -2779,6 +2780,7 @@ function buildLeadGraph(deps) {
       unresolvedWriterCount,
       admission: deps.admission,
       runCheckImpl: deps.runCheckImpl,
+      ...(deps.acceptanceScratch ? { acceptanceScratch: deps.acceptanceScratch } : {}),
       // Agent-proposed checks run only through the App Server sandbox.
       appServer,
       // LL-6: changes a review judged as weakening fail without a new review.

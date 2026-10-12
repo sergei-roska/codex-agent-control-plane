@@ -25,6 +25,7 @@ Implementation, isolated verification, and live qualification are separate.
 | 2026-10-11 | Owner questions go to the read-only scout role directly, bypassing the lead | docs/adr/launcher-scout-ask.md |
 | 2026-10-11 | Owner pause via an `owner_pause` interrupt at safe boundaries; Stop leaves the lead resumable | docs/adr/owner-pause-and-resumable-stop.md |
 | 2026-10-12 | The auditor runs at phase end, on risk-area changes before dependents, and for unsettled blockers, not every round; routine checks go to the verifier | docs/adr/auditor-dispatch-points.md |
+| 2026-10-12 | Sandboxed acceptance checks can get an owner-enabled per-run scratch directory outside the checkout, /tmp and $HOME | docs/adr/acceptance-per-run-scratch.md |
 | 2026-10-12 | Selective auditor dispatch with verifier acceptance, declared review gates, scoped receipts, and durable correlated evidence; implemented and independently accepted, live trial pending | docs/adr/auditor-dispatch-points.md |
 | unknown | Keep a shared App Server process; defer unqualified actor isolation and queue activation | docs/adr/phase-c-actor-topology.md |
 | unknown | Defer a mutation proxy without a proven mandatory enforcement route | docs/adr/phase-c-tool-boundary.md |
@@ -410,6 +411,19 @@ used approved host access for /var/tmp fixtures and disposable local HTTP
 services. No owner service or live model turn was started. Source-level and
 isolated verification do not establish a successful live task continuation or
 measured audit savings.
+
+### P-15 Acceptance checks had no writable scratch outside /tmp
+
+- Symptom: a mandatory pinned regression check (AC20/AC21 in
+  `codex_team_work`) could not pass; the lead escalated it as
+  `infeasible_requirement`.
+- Cause: the agent-check sandbox allowed writes only to /tmp, while the tests
+  require scratch outside the checkout, /tmp, TMPDIR and $HOME.
+- Model: owner opt-in per-run scratch directory
+  (`docs/adr/acceptance-per-run-scratch.md`).
+- Production: provide per-run, owner-controlled scratch storage for
+  sandboxed checks from the start, with real-path and ownership checks and
+  guaranteed cleanup.
 
 ### P-10 The worker report schema has no free-form details field
 

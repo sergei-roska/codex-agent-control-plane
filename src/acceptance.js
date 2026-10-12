@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
 const { takeSnapshot } = require('./workspace-snapshot');
 const { readProcessIdentity } = require('./process-quiescence');
+const { provisionScratch } = require('./acceptance-scratch');
 
 const MAX_CHECKS = 10;
 const MAX_ID = 64;
@@ -424,7 +425,7 @@ function runCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
  * pass); a check that outlives its timeoutMs is a timed-out failure, as with runCheck.
  */
 async function runSandboxedCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
-  appServer, cwd, signal, onCapture, graceMs = EXEC_GRACE_MS,
+  appServer, cwd, signal, onCapture, graceMs = EXEC_GRACE_MS, scratch = null,
 } = {}) {
   const started = Date.now();
   const stdout = new StreamCapture();
@@ -463,7 +464,12 @@ async function runSandboxedCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
       signal.addEventListener('abort', onAbort, { once: true });
     }
     Promise.resolve()
-      .then(() => appServer.execCommand({ command: [...argv], cwd, sandboxPolicy: { ...AGENT_CHECK_SANDBOX_POLICY }, timeoutMs }))
+      .then(() => appServer.execCommand(scratch
+        // Owner opt-in (src/acceptance-scratch.js): the run's scratch directory is the only writable root.
+        ? {
+          command: [...argv], cwd, sandboxPolicy: { ...scratch.policy, writableRoots: [...scratch.policy.writableRoots] }, env: { ...scratch.env }, timeoutMs,
+        }
+        : { command: [...argv], cwd, sandboxPolicy: { ...AGENT_CHECK_SANDBOX_POLICY }, timeoutMs }))
       .then((value) => resolve({ value }), (error) => resolve({ error }));
   });
   clearTimeout(timer);
@@ -505,6 +511,8 @@ const ISSUE_META = {
   check_changed: ['accept.checks', 'UNKNOWN', false],
   // LL-6: a reviewer judged that the change to a pinned check weakens its requirement: the check fails.
   check_weakened: ['accept.checks', 'FAIL', false],
+  // The per-run scratch directory could not be removed: recorded, advisory, never decides the disposition.
+  scratch_cleanup_failed: ['accept.scratch', 'UNKNOWN', true],
 };
 
 /** An acceptance issue as a violation record; keeps `code` and `detail` for existing consumers. */
@@ -638,6 +646,7 @@ function storeCheckStream(evidenceStore, runId, attemptId, check, result, stream
 async function runAcceptance({
   workspace, runId, attempt, contract, writers = [], unresolvedWriterCount = 0, admission, signal,
   snapshot = takeSnapshot, runCheckImpl = runCheck, evidenceStore = null, appServer = null, weakened = [],
+  acceptanceScratch = null, scratchForbiddenRoots,
 }) {
   const validated = validateAcceptanceContract(contract);
   const { requiredChecks } = validated;
@@ -653,14 +662,34 @@ async function runAcceptance({
       throw error;
     }
   }
+  // Owner opt-in only (server settings): sandboxed checks get a fresh scratch directory, removed after the run.
+  let scratch = null;
+  let scratchRecord = null;
+  const closeScratch = (acceptance) => {
+    if (!scratch) return acceptance;
+    if (!scratchRecord) {
+      const cleanup = scratch.cleanup();
+      scratchRecord = { dir: scratch.dir, cleaned: cleanup.cleaned, error: cleanup.error };
+    }
+    const out = { ...acceptance, scratch: scratchRecord };
+    if (!scratchRecord.cleaned) {
+      const issue = acceptanceIssue('scratch_cleanup_failed', `Scratch directory ${scratch.dir} was not removed: ${scratchRecord.error}`);
+      out.issues = [...out.issues, issue];
+      out.reasons = [...out.reasons, issue];
+    }
+    return out;
+  };
   try {
+    if (sandboxed && acceptanceScratch) {
+      scratch = provisionScratch(acceptanceScratch, { workspace, ...(scratchForbiddenRoots ? { forbiddenRoots: scratchForbiddenRoots } : {}) });
+    }
     const snapshotBefore = snapshot(workspace);
     const checks = [];
     const onSpawn = held
       ? (pid) => admission.recordTurnStart(held.executionId, { processIdentity: readProcessIdentity(pid), threadId: null })
       : undefined;
     for (const check of requiredChecks) {
-      if (signal?.aborted) return canceledAcceptance(requiredChecks, checks, Boolean(held));
+      if (signal?.aborted) return closeScratch(canceledAcceptance(requiredChecks, checks, Boolean(held)));
       // Crash window: a turn start without a proven identity keeps quiescence unproven until the real one is recorded.
       // A sandboxed check has no host process and cannot write the workspace, so it records none.
       if (held && !sandboxed) admission.recordTurnStart(held.executionId, { processIdentity: null, pending: true, threadId: null });
@@ -682,7 +711,7 @@ async function runAcceptance({
           detail: `Pinned acceptance check "${check.id}" was not run: ${changed.join(', ')} changed since it was pinned. Changing a pinned acceptance check needs the owner's decision.`,
         }
         : sandboxed
-        ? await runSandboxedCheck(check, { appServer, cwd: workspace, signal, onCapture })
+        ? await runSandboxedCheck(check, { appServer, cwd: workspace, signal, onCapture, scratch })
         : await runCheckImpl(check, { cwd: workspace, onSpawn, signal, onCapture });
       if (captured && result && typeof result === 'object') {
         const out = evidenceStore ? storeCheckStream(evidenceStore, runId, `${runId}:acceptance:${attempt}`, check, result, 'stdout', captured.stdout) : { ref: null, error: null };
@@ -693,13 +722,13 @@ async function runAcceptance({
         if (failure) result.evidenceError = failure;
       }
       checks.push(result);
-      if (signal?.aborted || result?.canceled) return canceledAcceptance(requiredChecks, checks, Boolean(held));
+      if (signal?.aborted || result?.canceled) return closeScratch(canceledAcceptance(requiredChecks, checks, Boolean(held)));
     }
     const snapshotAfter = snapshot(workspace);
     const { disposition, reasons, issues } = computeDisposition({
       requiredChecks, checkResults: checks, snapshotBefore, snapshotAfter, writers, unresolvedWriterCount,
     });
-    return {
+    return closeScratch({
       disposition,
       reasons,
       issues,
@@ -709,7 +738,14 @@ async function runAcceptance({
       requiredCheckIds: requiredChecks.map((check) => check.id),
       verifiedAt: new Date().toISOString(),
       admissionHeld: Boolean(held),
-    };
+    });
+  } catch (error) {
+    // A failure of the run itself still removes the directory; the cleanup outcome rides on the error.
+    if (scratch) {
+      const cleanup = scratch.cleanup();
+      if (!cleanup.cleaned && error && typeof error === 'object') error.scratchCleanupError = cleanup.error;
+    }
+    throw error;
   } finally {
     if (held) admission.release(held.executionId);
   }

@@ -669,14 +669,27 @@ html, body {
   box-sizing: border-box;
 }
 
+/* Available: session has turns, role idle. Dim green, off. */
+.agent-led.is-available {
+  background: rgba(63, 182, 139, 0.22);
+  box-shadow: inset 0 0 0 1px var(--success-border);
+}
+
+/* Active: role working in the latest turn. Light, saturated green core with a tight halo and a wide glow, pulsing. */
 .agent-led.is-active {
-  background: var(--success);
-  box-shadow: 0 0 6px var(--success-glow);
+  background: #74e8a8;
+  box-shadow: 0 0 4px 1px rgba(116, 232, 168, 0.7), 0 0 8px 2px rgba(116, 232, 168, 0.5);
   animation: agent-led-pulse 1.6s ease-in-out infinite;
 }
 
+/* Unavailable: red, lit, no pulse. Not set anywhere yet (no role-availability signal). */
+.agent-led.is-unavailable {
+  background: var(--danger);
+  box-shadow: 0 0 8px 2px rgba(229, 83, 75, 0.5);
+}
+
 @keyframes agent-led-pulse {
-  50% { box-shadow: 0 0 8px 1px var(--success-glow); }
+  50% { box-shadow: 0 0 6px 2px rgba(116, 232, 168, 0.85), 0 0 13px 4px rgba(116, 232, 168, 0.6); }
 }
 
 .about-role-name {

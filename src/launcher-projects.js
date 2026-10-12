@@ -255,6 +255,12 @@ function createProjectManager(options = {}) {
     return path.join(runtimeDir, 'projects', id, 'role-overrides.json');
   }
 
+  // Owner project settings (project-settings.json) live next to the role overrides.
+  function projectSettingsPath(id) {
+    findRecord(id);
+    return path.join(runtimeDir, 'projects', id, 'project-settings.json');
+  }
+
   async function touch(id) {
     return serialize(() => {
       const record = findRecord(id);
@@ -346,7 +352,8 @@ function createProjectManager(options = {}) {
           PORT: String(record.port),
           CODEX_WORKSPACE: record.path,
           CODEX_A2A_STATE_DB: record.stateDb,
-          CODEX_A2A_ROLE_OVERRIDES: roleOverrides
+          CODEX_A2A_ROLE_OVERRIDES: roleOverrides,
+          CODEX_A2A_PROJECT_SETTINGS: path.resolve(projectSettingsPath(id))
         }
       });
       rt.child = child;
@@ -437,7 +444,7 @@ function createProjectManager(options = {}) {
     await Promise.all(active.map((rt) => terminateChild(rt, killGraceMs + 500)));
   }
 
-  return { init, list, get, baseUrl, stateDbPath, roleOverridesPath, touch, add, remove, start, stop, refresh, status, stopAll };
+  return { init, list, get, baseUrl, stateDbPath, roleOverridesPath, projectSettingsPath, touch, add, remove, start, stop, refresh, status, stopAll };
 }
 
 module.exports = { createProjectManager, ProjectError, KILL_GRACE_MS };

@@ -1780,6 +1780,57 @@ test('role overrides from the project file reach the orchestrator and the roles;
   }
 });
 
+test('project settings enable the acceptance scratch opt-in once at start; a broken file enables nothing', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'server-settings-'));
+  const file = path.join(dir, 'projects', 'p1', 'project-settings.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const start = async (extra = {}) => {
+    let options;
+    const runtime = await startServer({
+      port: 0,
+      stateFile: ':memory:',
+      tokenFile: path.join(dir, 'a2a-token'),
+      appServer: CHATGPT_APP_SERVER(),
+      listen: false,
+      orchestratorFactory(received) {
+        options = received;
+        return { async run() { return { status: 'completed', text: 'ok' }; } };
+      },
+      ...extra,
+    });
+    return { runtime, options };
+  };
+  const warn = console.warn;
+  const warnings = [];
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const none = await start({ projectSettingsFile: file });
+    try {
+      assert.equal('acceptanceScratch' in none.options, false);
+    } finally {
+      await none.runtime.close();
+    }
+    fs.writeFileSync(file, JSON.stringify({ version: 1, acceptanceScratch: { env: ['TEAMWORK_TEST_SCRATCH_ROOT'] } }));
+    const on = await start({ projectSettingsFile: file });
+    try {
+      assert.deepEqual(on.options.acceptanceScratch, { env: ['TEAMWORK_TEST_SCRATCH_ROOT'], baseDir: path.join(path.dirname(file), 'acceptance-scratch') });
+    } finally {
+      await on.runtime.close();
+    }
+    fs.writeFileSync(file, JSON.stringify({ version: 1, acceptanceScratch: { env: ['PATH'] } }));
+    const bad = await start({ projectSettingsFile: file });
+    try {
+      assert.equal('acceptanceScratch' in bad.options, false);
+      assert.ok(warnings.some((message) => /\[settings\] Project settings ignored/.test(message)));
+    } finally {
+      await bad.runtime.close();
+    }
+  } finally {
+    console.warn = warn;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------- PAUSE-01 owner pause
 
 const OWNER_PAUSE = { kind: 'owner_pause', message: 'Paused by the owner' };

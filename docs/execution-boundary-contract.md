@@ -173,6 +173,36 @@ report of an out-of-scope change is the only signal for those cases. (Corrected
 | `accept.writers` | aggregates `settle.writer_settled`, `settle.attested_scope`, `settle.report_valid` over all writers of the run | outcomes | safety-critical |
 | `accept.run` | `acceptance_canceled`, `acceptance_error`, `acceptance_not_run` | lead graph (`src/lead-graph.js:950-989`) | safety-critical (UNKNOWN) |
 
+#### Opt-in acceptance scratch directory (owner-side)
+
+Sandboxed agent checks normally run with no writable root, /tmp writable, no
+network. A project owner can opt a project in to a per-run scratch directory in
+`<runtime>/projects/<id>/project-settings.json` (read once at server start; the
+launcher passes the path as `CODEX_A2A_PROJECT_SETTINGS`):
+
+```json
+{ "version": 1, "acceptanceScratch": { "env": ["TEAMWORK_TEST_SCRATCH_ROOT"], "baseDir": "/var/tmp/cp-acceptance-scratch" } }
+```
+
+- `env`: up to 8 extra variable names (`^[A-Z_][A-Z0-9_]*$`, reserved names such
+  as PATH, HOME, TMPDIR and the LD_/PYTHON/NODE_/GIT_/CODEX_ families refused)
+  that receive the scratch path. `baseDir` is optional (absolute); the default is
+  `<runtime>/projects/<id>/acceptance-scratch`, which lies under the owner's
+  home and is rejected by checks that treat home as protected, so set it
+  elsewhere in that case.
+- Each acceptance run creates `<baseDir>/run-XXXXXX` (0700, real path, outside
+  the workspace and /tmp) as the only writable root: `writableRoots: [run]`,
+  `excludeSlashTmp: true`, `excludeTmpdirEnvVar: true`, `networkAccess: false`.
+  Its sibling subdirectories `tmp/` (TMPDIR) and `scratch/` (each configured
+  variable) never nest. Variables travel in the `env` field of `command/exec`.
+- The directory is removed after the run, also after failure, timeout, cancel
+  and errors. A failed removal is recorded (`acceptance.scratch`, advisory issue
+  `scratch_cleanup_failed`) and never changes the disposition. If the directory
+  cannot be created the run is `acceptance_error` (UNKNOWN), never a run without it.
+- Disabled by default: policy and request are unchanged. Only the owner file
+  enables it; contracts and check proposals reject unknown fields. Owner
+  (`runCheck`) checks are unaffected.
+
 `contract_invalid` replaces the silent drop at `src/server.js:341`: a stored
 contract that fails validation on restart yields `unverifiable` with that code;
 the run never continues as if no checks were required.

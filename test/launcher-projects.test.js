@@ -130,6 +130,9 @@ describe('add', () => {
     assert.equal(other.roleOverridesPath(first.id), path.join(tmp, 'rt2', 'projects', first.id, 'role-overrides.json'));
     assert.equal(other.roleOverridesPath(second.id), path.join(tmp, 'rt2', 'projects', second.id, 'role-overrides.json'));
     assert.throws(() => other.roleOverridesPath('zzzzzzzzzz'), (e) => e.code === 'not_found');
+    assert.equal(other.projectSettingsPath(first.id), path.join(tmp, 'rt2', 'projects', first.id, 'project-settings.json'));
+    assert.equal(other.projectSettingsPath(second.id), path.join(tmp, 'rt2', 'projects', second.id, 'project-settings.json'));
+    assert.throws(() => other.projectSettingsPath('zzzzzzzzzz'), (e) => e.code === 'not_found');
   });
 });
 
@@ -188,6 +191,7 @@ describe('start', () => {
     assert.equal(s.opts.env.CODEX_A2A_STATE_DB, p.stateDb);
     assert.equal(s.opts.env.CODEX_A2A_ROLE_OVERRIDES, path.join(tmp, 'runtime', 'projects', p.id, 'role-overrides.json'));
     assert.ok(fs.existsSync(path.dirname(s.opts.env.CODEX_A2A_ROLE_OVERRIDES)));
+    assert.equal(s.opts.env.CODEX_A2A_PROJECT_SETTINGS, path.join(tmp, 'runtime', 'projects', p.id, 'project-settings.json'));
     assert.ok(fs.existsSync(path.dirname(p.stateDb)));
     assert.equal(manager.get(p.id).pid, s.child.pid);
     assert.match(manager.status(p.id).logs[0], /^\[LAUNCHER\] Starting orchestrator for workspace: .* on port \d+\n$/);

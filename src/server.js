@@ -12,6 +12,7 @@ const { createSwitchingAppServer } = require('./app-server-switch');
 const { CodexAppServer } = require('./codex-app-server');
 const { loadRoles, createLeadRole } = require('./role-catalog');
 const { loadEffectiveRoles } = require('./role-overrides');
+const { readSettingsFile, resolveAcceptanceScratch } = require('./project-settings');
 const { registerRoleAgents } = require('./a2a-role-service');
 const { LeadOrchestrator, ResumeInputError, renderRunDigest } = require('./lead-orchestrator');
 const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
@@ -676,6 +677,7 @@ async function startServer({
   listenImpl = (application, listenPort, host, callback) => application.listen(listenPort, host, callback),
   profilesDir,
   roleOverridesFile = process.env.CODEX_A2A_ROLE_OVERRIDES ? path.resolve(process.env.CODEX_A2A_ROLE_OVERRIDES) : null,
+  projectSettingsFile = process.env.CODEX_A2A_PROJECT_SETTINGS ? path.resolve(process.env.CODEX_A2A_PROJECT_SETTINGS) : null,
   tokenFile,
   orchestratorFactory = (options) => new LeadOrchestrator(options),
   stateFile,
@@ -747,6 +749,13 @@ async function startServer({
       leadRole: createLeadRole(profilesDir ? { profilesDir } : undefined),
       warn: (message) => console.warn(`[roles] ${message}`),
     });
+    // Owner project settings (opt-ins such as the acceptance scratch directory) are read once here as well.
+    let acceptanceScratch = null;
+    if (projectSettingsFile) {
+      const settings = readSettingsFile(projectSettingsFile);
+      if (settings.warning) console.warn(`[settings] ${settings.warning}`);
+      acceptanceScratch = resolveAcceptanceScratch(settings, projectSettingsFile);
+    }
     const usageLedger = new UsageLedger({ db: state.db });
     const stagingLog = new StagingLog({ db: state.db });
     const evidenceStore = createEvidenceStore(state.db);
@@ -756,6 +765,7 @@ async function startServer({
       appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog,
       checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, stagingLog, activityStore, evidenceStore, sessionThreads,
       parallelWriters: worktreeMode,
+      ...(acceptanceScratch ? { acceptanceScratch } : {}),
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {

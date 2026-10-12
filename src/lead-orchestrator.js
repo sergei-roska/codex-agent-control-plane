@@ -182,6 +182,7 @@ class LeadOrchestrator {
     evidenceStore = null,
     runCheckImpl,
     snapshot,
+    acceptanceScratch = null,
     skillCatalog = loadSkillCatalog(),
     sessionThreads = null,
     rolloverTokens = rolloverTokensFromEnv(),
@@ -231,6 +232,8 @@ class LeadOrchestrator {
       evidenceStore,
       runCheckImpl,
       snapshot,
+      // Owner-side setting (project-settings.json); never read from the lead's output.
+      acceptanceScratch,
       skillCatalog,
       sessionThreads,
       rolloverTokens,

@@ -3489,6 +3489,36 @@ test('a failing pinned agent check feeds the acceptance loop', async () => {
   }, { workspace, orchestrator: { runCheckImpl: hostRunRefused } });
 });
 
+test('the owner-side acceptanceScratch option reaches the sandboxed check; a proposal field cannot enable it', { skip: !fs.existsSync('/var/tmp') }, async () => {
+  const baseDir = fs.mkdtempSync('/var/tmp/lead-scratch-');
+  try {
+    const workspace = gitRepo();
+    const world = makeWorld({ script: [met('Done', { acceptanceChecks: [npmTest] })] });
+    const calls = withExec(world, { exitCode: 0, stdout: '', stderr: '' });
+    await withSession(world, async (session) => {
+      const result = await session.orchestrator.run({ goal: 'Ship', runId: RUN_ID });
+      assert.equal(result.acceptance.disposition, 'accepted');
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].sandboxPolicy.excludeSlashTmp, true);
+      assert.equal(path.dirname(calls[0].sandboxPolicy.writableRoots[0]), fs.realpathSync(baseDir));
+      assert.deepEqual(Object.keys(calls[0].env).sort(), ['SCRATCH_VAR', 'TMPDIR']);
+      assert.equal(result.acceptance.scratch.cleaned, true);
+    }, { workspace, orchestrator: { runCheckImpl: hostRunRefused, acceptanceScratch: { env: ['SCRATCH_VAR'], baseDir } } });
+
+    const refused = makeWorld({ script: [met('Done', { acceptanceChecks: [{ ...npmTest, acceptanceScratch: { env: ['SCRATCH_VAR'], baseDir } }] }), met('Done')] });
+    const plain = withExec(refused, { exitCode: 0, stdout: '', stderr: '' });
+    await withSession(refused, async (session) => {
+      const result = await session.orchestrator.run({ goal: 'Ship', runId: RUN_ID });
+      // The proposal with a scratch field is refused as invalid: nothing is pinned and nothing runs.
+      assert.equal(result.acceptance.disposition, 'not_required');
+      assert.equal('scratch' in result.acceptance, false);
+      assert.equal(plain.length, 0);
+          }, { workspace: gitRepo(), orchestrator: { runCheckImpl: hostRunRefused } });
+  } finally {
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test('an agent check whose execCommand throws is unverifiable, never accepted', async () => {
   const workspace = gitRepo();
   const world = makeWorld({ script: [met('Done', { acceptanceChecks: [npmTest] })] });
