@@ -15,6 +15,7 @@ const { invalidAcceptanceContract } = require('../src/acceptance');
 const { createEvidenceStore } = require('../src/evidence-store');
 const { createActivityStore } = require('../src/activity-store');
 const { SessionThreads } = require('../src/session-threads');
+const { InMemoryStagingLog } = require('../src/staging-log');
 const { boundedOutcomes } = require('../src/lead-graph');
 const {
   DispatchJournal, openStateDatabase, assignmentId, attemptId, deterministicContextId,
@@ -76,6 +77,7 @@ const roles = () => new Map([
   ['orch-builder', role('orch-builder', 'workspace-write')],
   ['orch-explorer', role('orch-explorer', 'read-only')],
   ['orch-architect', role('orch-architect', 'read-only')],
+  ['orch-verifier', role('orch-verifier', 'workspace-write')],
   ['orch-auditor', role('orch-auditor', 'read-only')],
 ]);
 
@@ -147,8 +149,53 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
     })),
     admission: makeFakeAdmission(),
   };
+  const attachReviewMetadata = (task, final) => {
+    if (!task.input?.review || final.state !== TaskState.TASK_STATE_COMPLETED) return final;
+    const review = task.input.review;
+    const reportArtifact = (final.artifacts || []).find((artifact) => artifact.name === 'report');
+    let parsed = null;
+    const artifactText = (reportArtifact?.parts || []).map((part) => part?.content?.value || part?.text || '').join('\n');
+    try { parsed = JSON.parse(artifactText); } catch (_) { /* report parsing is tested separately */ }
+    const summary = parsed?.summary || '';
+    const pinnedVerdict = /^VERDICT: (preserve|weaken)$/.exec(summary.split(/\r?\n/, 1)[0])?.[1] || null;
+    const auditorVerdict = /^VERDICT: (pass|fail|inconclusive)$/.exec(summary.split(/\r?\n/, 1)[0])?.[1] || null;
+    const isPinned = review.kind === 'pinned_check';
+    const accepted = isPinned ? pinnedVerdict === 'preserve'
+      : task.role === 'orch-auditor' ? auditorVerdict === 'pass' : true;
+    const valid = isPinned ? Boolean(pinnedVerdict)
+      : task.role === 'orch-auditor' ? Boolean(auditorVerdict)
+        : parsed?.outcome === 'completed' && Array.isArray(parsed.checks) && parsed.checks.length > 0 && parsed.checks.every((check) => check.result === 'passed');
+    const metadata = {
+      reviewCoverage: { targetKnown: true, targetIdentity: 'direct-test-target', stable: true, reason: null },
+      review: {
+        policyId: 'auditor-routing/v1',
+        kind: review.kind,
+        checkpointId: review.checkpointId,
+        status: valid ? (accepted ? 'accepted' : (pinnedVerdict || auditorVerdict || 'failed')) : 'inconclusive',
+        accepted,
+        valid,
+        verdict: pinnedVerdict || auditorVerdict,
+        reason: valid ? null : 'test_service_review_invalid',
+      },
+    };
+    const message = final.message ? {
+      ...final.message,
+      metadata: {
+        ...(final.message.metadata || {}),
+        ...Object.fromEntries(Object.entries(metadata).filter(([key]) => !Object.hasOwn(final.message.metadata || {}, key))),
+      },
+    } : null;
+    return {
+      ...final,
+      artifacts: (final.artifacts || []).map((artifact) => ({
+        ...artifact,
+        metadata: { ...(artifact.metadata || {}), ...Object.fromEntries(Object.entries(metadata).filter(([key]) => !Object.hasOwn(artifact.metadata || {}, key))) },
+      })),
+      ...(message ? { message } : {}),
+    };
+  };
   const view = (task, done) => {
-    const final = done ? world.workerFinal(task.role, task.contextId) : { state: TaskState.TASK_STATE_WORKING };
+    const final = done ? attachReviewMetadata(task, world.workerFinal(task.role, task.contextId, task.input)) : { state: TaskState.TASK_STATE_WORKING };
     return {
       id: task.id,
       contextId: task.contextId,
@@ -180,8 +227,9 @@ function makeWorld({ script, workerFinal, pollsNeeded = 0, getTaskFault }) {
         async sendMessage(params) {
           const contextId = params.message.contextId;
           world.sends.push(contextId);
-          world.dispatchInputs.push(JSON.parse(params.message.parts[0].content.value));
-          const task = { id: `task-${contextId}`, contextId, role: roleName };
+          const input = JSON.parse(params.message.parts[0].content.value);
+          world.dispatchInputs.push(input);
+          const task = { id: `task-${contextId}`, contextId, role: roleName, input };
           world.tasks.set(contextId, task);
           return { task: view(task, false) };
         },
@@ -302,6 +350,18 @@ test('restart after each dispatch-path node boundary yields the same result with
       });
     });
   }
+});
+
+test('LeadOrchestrator uses the injected staging log for durable runtime records', async () => {
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({ script: [dispatch(brief('orch-builder')), finish('Implemented')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const events = stagingLog.list({ runId: RUN_ID });
+    assert.ok(events.some((event) => event.type === 'assignment_selected'));
+    assert.ok(events.some((event) => event.type === 'worker_result'));
+  }, { orchestrator: { stagingLog } });
 });
 
 test('lead advertises bounded skill metadata and pins selected skill hashes on dispatch', async (t) => {
@@ -1223,6 +1283,488 @@ test('the round limit pauses for the owner instead of ending with max_rounds, an
   }, { workspace: gitRepo(), orchestrator: { maxRounds: 1 } });
 });
 
+test('owner accept_as_is cannot make a pending critical review gate accepted', async (t) => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const review = { kind: 'risk_change', checkpointId: 'critical-1', reason: 'Change a trust boundary', paths: ['src/file.js'], evidenceIds: ['issue-1'] };
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch(brief('orch-explorer', [])),
+    ],
+  });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({
+      goal: 'Change a trust boundary', runId: RUN_ID,
+      contract: contractOf(nodeCheck('ok', 'process.exit(0)')),
+    });
+    assert.equal(paused.status, 'input_required');
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Accept current result', choice: 'accept_as_is' } });
+    assert.equal(result.status, 'completed');
+    assert.notEqual(result.acceptance.disposition, 'accepted');
+    assert.ok(result.acceptance.issues.some((issue) => issue.code === 'review_gate_pending'));
+  }, {
+    workspace,
+    orchestrator: {
+      maxRounds: 1,
+      runCheckImpl: async (check) => ({ id: check.id, argv: check.argv, exitCode: 0, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'passed' }),
+    },
+  });
+});
+
+test('resumed finalization rechecks critical receipts against the current target', async (t) => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate one');
+  const review = { kind: 'risk_change', checkpointId: 'critical-2', reason: 'Change a trust boundary', paths: ['src/file.js'], evidenceIds: ['issue-2'] };
+  const world = makeWorld({
+    script: [
+      dispatch(
+        { ...brief('orch-builder', ['src/file.js']), review },
+        { ...brief('orch-verifier', ['test']), review },
+        { ...brief('orch-auditor', []), review },
+      ),
+      finish('Implemented and reviewed'),
+    ],
+    workerFinal(roleName) {
+      const auditor = roleName === 'orch-auditor';
+      const writer = roleName === 'orch-builder';
+      const summary = auditor ? 'VERDICT: pass\nThe scoped change preserves the trust boundary.' : 'Focused evidence is sufficient.';
+      const inspected = writer ? [] : ['src/file.js'];
+      const checks = writer ? [] : [{ command: 'node --test test/review.test.js', result: 'passed', detail: 'passed' }];
+      return {
+        state: TaskState.TASK_STATE_COMPLETED,
+        artifacts: [{ name: 'report', parts: textParts(report(summary, { filesInspected: inspected, checks })), metadata: { writerExecution: releasedWriter(writer ? ['src/file.js'] : []) } }],
+      };
+    },
+  });
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({
+      goal: 'Change a trust boundary', runId: RUN_ID, interruptAfter: ['accept'],
+      contract: contractOf(nodeCheck('ok', 'process.exit(0)')),
+    });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    const before = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(before.values.acceptance.disposition, 'accepted');
+    fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate two');
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.acceptance.disposition, 'unverifiable');
+    assert.ok(result.acceptance.issues.some((issue) => issue.code === 'review_gate_pending'));
+  }, {
+    workspace,
+    orchestrator: {
+      runCheckImpl: async (check) => ({ id: check.id, argv: check.argv, exitCode: 0, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'passed' }),
+    },
+  });
+});
+
+const reviewWorkerFinal = (roleName) => {
+  const writer = roleName === 'orch-builder';
+  const auditor = roleName === 'orch-auditor';
+  const summary = writer ? 'Implementation complete.'
+    : auditor ? 'VERDICT: pass\nThe declared scope is safe.' : 'Focused verification passed.';
+  return {
+    state: TaskState.TASK_STATE_COMPLETED,
+    artifacts: [{
+      name: 'report',
+      parts: textParts(report(summary, {
+        filesChanged: writer ? ['src/file.js'] : [],
+        filesInspected: writer ? [] : ['src/file.js'],
+        checks: writer ? [] : [{ command: 'node --test test/review.test.js', result: 'passed', detail: 'passed' }],
+      })),
+      metadata: { writerExecution: releasedWriter(writer ? ['src/file.js'] : []) },
+    }],
+  };
+};
+
+test('matching verifier and auditor receipts are reused without another model call', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const review = { kind: 'risk_change', checkpointId: 'critical-reuse', reason: 'Review the boundary', paths: ['src/file.js'], evidenceIds: ['issue-reuse'] };
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Reviewed'),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-verifier', 'orch-auditor']);
+    const reused = stagingLog.list({ runId: RUN_ID, type: 'review_evidence_reused' });
+    assert.deepEqual(new Set(reused.map((event) => event.role)), new Set(['verifier', 'auditor']));
+    const neutralReviewEvents = stagingLog.list({ runId: RUN_ID }).filter((event) => [
+      'review_selected', 'review_target', 'review_result', 'review_evidence_reused',
+    ].includes(event.type));
+    assert.ok(neutralReviewEvents.length > 0);
+    assert.ok(neutralReviewEvents.every((event) => event.problemId === null));
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('routine material work gets a verifier without a periodic auditor', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const review = { kind: 'routine', checkpointId: 'routine-check', reason: 'Implement a bounded change', paths: ['src/file.js'], evidenceIds: ['issue-routine'] };
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      finish('Routine work verified'),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Implement a bounded change', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-verifier']);
+  }, { workspace });
+});
+
+test('structured problem and architecture records are written to the semantic event log', async () => {
+  const problem = { id: 'problem-graph-1', kind: 'problem', status: 'open', summary: 'The review path was not logged.', evidenceIds: ['test/lead-graph.test.js'], relatedIds: [], adrPath: null };
+  const architecture = { id: 'architecture-graph-1', kind: 'architecture', status: 'accepted', summary: 'Keep review receipts tied to current scoped content.', evidenceIds: ['test/lead-graph.test.js'], relatedIds: ['problem-graph-1'], adrPath: 'docs/adr/review-receipts.md' };
+  const remedy = { id: 'remedy-graph-1', kind: 'remedy', status: 'implemented', summary: 'Persist the scope identity.', evidenceIds: ['test/lead-graph.test.js'], relatedIds: ['problem-graph-1'], adrPath: null };
+  const verification = { id: 'verification-graph-1', kind: 'verification', status: 'tested', summary: 'Verify old IDs resolve across runs.', evidenceIds: ['test/lead-graph.test.js'], relatedIds: ['problem-graph-1'], adrPath: null };
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({ script: [
+    decision({ action: 'finish', final: 'Recorded the decision', records: [problem, architecture] }),
+    decision({ action: 'finish', final: 'Recorded the remedy and verification', records: [remedy, verification] }),
+  ] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Record a review decision', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const recorded = stagingLog.list({ runId: RUN_ID });
+    assert.deepEqual(recorded.map((event) => event.type), ['problem_recorded', 'architecture_decision']);
+    assert.equal(recorded[1].decisionId, architecture.id);
+    assert.equal(recorded[1].payload.adrPath, architecture.adrPath);
+    const followUp = await session.orchestrator.run({ goal: 'Verify the recorded review decision', runId: 'run-follow-up' });
+    assert.equal(followUp.status, 'completed');
+    const linked = stagingLog.list({ runId: 'run-follow-up' });
+    assert.deepEqual(linked.map((event) => event.type), ['remedy_recorded', 'verification_recorded']);
+    assert.ok(linked.every((event) => event.problemId === problem.id));
+  }, { orchestrator: { stagingLog } });
+});
+
+test('malformed semantic records are rejected and reprompted before history lookup', async (t) => {
+  const malformed = [
+    ['object', {}],
+    ['string', 'not an array'],
+    ['null', null],
+    ['null entry', [null]],
+    ['invalid related ID type', [{ id: 'bad-ref', kind: 'remedy', status: 'implemented', summary: 'Bad reference', evidenceIds: [], relatedIds: [42], adrPath: null }]],
+    ['credential-like record ID', [{ id: 'token=probe-secret', kind: 'problem', status: 'open', summary: 'Unsafe identity', evidenceIds: [], relatedIds: [], adrPath: null }]],
+    ['credential-like related ID', [{ id: 'bad-related-ref', kind: 'remedy', status: 'implemented', summary: 'Unsafe related identity', evidenceIds: [], relatedIds: ['token=probe-secret'], adrPath: null }]],
+    ['oversized related IDs', [{ id: 'too-many-refs', kind: 'remedy', status: 'implemented', summary: 'Too many references', evidenceIds: [], relatedIds: Array.from({ length: 21 }, (_, index) => `problem-${index}`), adrPath: null }]],
+    ['oversized record list', Array.from({ length: 21 }, (_, index) => ({ id: `problem-${index}`, kind: 'problem', status: 'open', summary: 'Bounded problem record', evidenceIds: [], relatedIds: [], adrPath: null }))],
+  ];
+  for (const [label, records] of malformed) {
+    await t.test(label, async () => {
+      const storage = new InMemoryStagingLog();
+      let historyQueries = 0;
+      const stagingLog = {
+        record: (event) => storage.record(event),
+        list: (filter) => {
+          if (filter?.type === 'problem_recorded') historyQueries += 1;
+          return storage.list(filter);
+        },
+      };
+      const world = makeWorld({ script: [decision({ records }), finish('Recovered after the invalid record proposal')] });
+      await withSession(world, async (session) => {
+        const result = await session.orchestrator.run({ goal: 'Record a decision', runId: RUN_ID });
+        assert.equal(result.status, 'completed');
+        assert.equal(world.leadTurns, 2);
+        assert.match(world.prompts[1], /decision\.records records_invalid/);
+        assert.equal(historyQueries, 0);
+      }, { orchestrator: { stagingLog } });
+    });
+  }
+});
+
+test('a scoped content change invalidates matching receipts before reuse', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const sourcePath = path.join(workspace, 'src', 'file.js');
+  fs.writeFileSync(sourcePath, 'candidate one');
+  const review = { kind: 'risk_change', checkpointId: 'critical-invalidate', reason: 'Review the boundary', paths: ['src/file.js'], evidenceIds: ['issue-invalidate'] };
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      async () => {
+        fs.writeFileSync(sourcePath, 'candidate two');
+        return dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review });
+      },
+      finish('Reviewed the updated target'),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), [
+      'orch-builder', 'orch-verifier', 'orch-auditor', 'orch-verifier', 'orch-auditor',
+    ]);
+  }, { workspace });
+});
+
+test('a same-checkpoint repair cannot let an unrelated writer pass a pending critical gate', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const review = { kind: 'risk_change', checkpointId: 'critical-3', reason: 'Change a trust boundary', paths: ['src/file.js'], evidenceIds: ['issue-3'] };
+  const unrelated = { ...brief('orch-builder', ['src/other.js']), objective: 'Handle unrelated cleanup' };
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }, unrelated),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Reviewed'),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Change a trust boundary', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-verifier', 'orch-auditor']);
+    assert.match(world.prompts[2], /Critical review checkpoint critical-3 remains pending/);
+  }, { workspace });
+});
+
+test('a pending critical checkpoint cannot be downgraded or narrowed during repair', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const review = { kind: 'risk_change', checkpointId: 'critical-4', reason: 'Change a trust boundary', paths: ['src/file.js'], evidenceIds: ['issue-4'] };
+  const downgraded = { ...review, kind: 'routine', paths: ['src'] };
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-builder', ['src']), review: downgraded }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Reviewed'),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Change a trust boundary', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-verifier', 'orch-auditor']);
+    assert.match(world.prompts[2], /already has a pending or completed review context/);
+  }, { workspace });
+});
+
+test('a rejected role-service audit result cannot become a graph receipt', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const review = { kind: 'risk_change', checkpointId: 'critical-service', reason: 'Review the boundary', paths: ['src/file.js'], evidenceIds: ['issue-service'] };
+  let auditorCalls = 0;
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Reviewed'),
+    ],
+    workerFinal(roleName, contextId, input) {
+      const final = reviewWorkerFinal(roleName, contextId, input);
+      if (roleName !== 'orch-auditor' || auditorCalls++ > 0) return final;
+      final.message = {
+        messageId: 'review-result',
+        role: 2,
+        parts: textParts('Audit service metadata reported a stale reservation.'),
+        metadata: {
+          review: {
+          policyId: 'auditor-routing/v1', kind: review.kind, checkpointId: review.checkpointId,
+          status: 'failed', accepted: false, valid: false, verdict: 'pass', reason: 'review reservation failed',
+          },
+        },
+      };
+      return final;
+    },
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const auditorResults = stagingLog.list({ runId: RUN_ID, type: 'review_result' }).filter((event) => event.role === 'auditor');
+    assert.deepEqual(auditorResults.map((event) => event.status), ['failed', 'accepted']);
+    assert.equal(auditorResults[0].payload.serviceReviewAccepted, false);
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-verifier', 'orch-auditor', 'orch-auditor']);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('a review receipt persistence failure fails the graph closed', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const review = { kind: 'risk_change', checkpointId: 'critical-log', reason: 'Review the boundary', paths: ['src/file.js'], evidenceIds: ['issue-log'] };
+  const persisted = new InMemoryStagingLog();
+  const stagingLog = {
+    record(event) {
+      if (event.type === 'review_result') throw new Error('review result persistence failed');
+      return persisted.record(event);
+    },
+    list(options) { return persisted.list(options); },
+  };
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Must not accept'),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    await assert.rejects(session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID }), /review result persistence failed/);
+    assert.equal(persisted.list({ runId: RUN_ID, type: 'review_result' }).length, 0);
+    const state = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(state.values.result, null);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('a legacy pending batch resumes without review metadata and its old report does not satisfy a new gate', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const review = { kind: 'risk_change', checkpointId: 'critical-5', reason: 'Change a trust boundary', paths: ['src/file.js'], evidenceIds: ['issue-5'] };
+  const world = makeWorld({
+    script: [
+      dispatch(brief('orch-builder')),
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      finish('The old outcome is enough'),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Reviewed'),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({ goal: 'Change a trust boundary', runId: RUN_ID, interruptAfter: ['dispatch'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    const { batch } = (await session.orchestrator.graph.getState(config)).values;
+    const items = batch.items.map((item) => {
+      const { review: _review, ...assignment } = item.assignment;
+      return { ...item, assignment };
+    });
+    await session.orchestrator.graph.updateState(config, { batch: { ...batch, items }, reviewObligations: [] });
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-builder', 'orch-verifier', 'orch-auditor']);
+    assert.match(world.prompts[3], /review_receipt_missing/);
+    assert.equal(result.acceptance.disposition, 'unverified');
+  }, { workspace });
+});
+
+test('verifier test writes can settle a review, while product and unknown mutations cannot', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const testPath = path.join(workspace, 'test', 'review.test.js');
+  const colocatedTestPath = path.join(workspace, 'src', 'review.test.js');
+  const review = {
+    kind: 'risk_change', checkpointId: 'critical-6', reason: 'Change a trust boundary',
+    paths: ['src/file.js', 'src/review.test.js', 'test/review.test.js'], evidenceIds: ['issue-6'],
+  };
+  const stagingLog = new InMemoryStagingLog();
+  let verifierCalls = 0;
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-verifier', ['test/review.test.js']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Try to finish'),
+      dispatch({ ...brief('orch-verifier', ['src']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Try broad product scope'),
+      dispatch({ ...brief('orch-verifier', ['test/review.test.js']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Try again'),
+      dispatch({ ...brief('orch-verifier', ['src/review.test.js']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Reviewed with colocated verification'),
+    ],
+    workerFinal(roleName, _contextId, input) {
+      const writer = roleName === 'orch-builder';
+      if (roleName === 'orch-verifier') verifierCalls += 1;
+      const auditor = roleName === 'orch-auditor';
+      let changedPaths = [];
+      let known = true;
+      let summary = 'Focused verification passed.';
+      let filesChanged = [];
+      let coverage = { targetKnown: true, targetIdentity: 'direct-review-target', stable: true, status: 'accepted', reason: null };
+      if (writer) {
+        changedPaths = ['src/file.js'];
+        filesChanged = changedPaths;
+        summary = 'Implementation complete.';
+        coverage = undefined;
+      } else if (roleName === 'orch-verifier' && verifierCalls === 1) {
+        changedPaths = ['src/product.js'];
+        filesChanged = changedPaths;
+        coverage = { targetKnown: true, targetIdentity: 'direct-review-target', stable: false, status: 'inconclusive', reason: 'product path changed' };
+      } else if (roleName === 'orch-verifier' && verifierCalls === 2) {
+        changedPaths = ['src/review.test.js'];
+        filesChanged = changedPaths;
+        coverage = { targetKnown: true, targetIdentity: 'direct-review-target', stable: false, status: 'inconclusive', reason: 'broad product scope' };
+      } else if (roleName === 'orch-verifier' && verifierCalls === 3) {
+        known = false;
+        coverage = { targetKnown: true, targetIdentity: 'direct-review-target', stable: false, status: 'inconclusive', reason: 'delta unavailable' };
+      } else if (roleName === 'orch-verifier') {
+        const allowedTest = input.allowedFiles.includes('src/review.test.js') ? 'src/review.test.js' : 'test/review.test.js';
+        fs.writeFileSync(allowedTest === 'src/review.test.js' ? colocatedTestPath : testPath, 'assert.equal(1, 1);\n');
+        changedPaths = [allowedTest];
+        filesChanged = changedPaths;
+        coverage = { targetKnown: true, targetIdentity: 'direct-post-review-target', stable: false, status: 'accepted', reason: 'verifier test write' };
+      } else if (auditor) {
+        summary = 'VERDICT: pass\nThe final target is safe.';
+      }
+      return {
+        state: TaskState.TASK_STATE_COMPLETED,
+        artifacts: [{
+          name: 'report',
+          parts: textParts(report(summary, {
+            filesChanged,
+            filesInspected: writer ? [] : ['src/file.js'],
+            checks: writer ? [] : [{ command: 'node --test test/review.test.js', result: 'passed', detail: 'passed' }],
+          })),
+          metadata: {
+            writerExecution: { ...releasedWriter(changedPaths), delta: { ...releasedWriter(changedPaths).delta, known } },
+            ...(coverage ? { reviewCoverage: coverage } : {}),
+          },
+        }],
+      };
+    },
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Change a trust boundary', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(verifierCalls, 4);
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), [
+      'orch-builder', 'orch-verifier', 'orch-verifier', 'orch-verifier', 'orch-verifier', 'orch-auditor',
+    ]);
+    const verifierResults = stagingLog.list({ runId: RUN_ID, type: 'review_result' }).filter((event) => event.role === 'verifier');
+    assert.deepEqual(verifierResults.map((event) => event.status), ['inconclusive', 'inconclusive', 'inconclusive', 'accepted']);
+    assert.equal(verifierResults[3].payload.verifierTestWrite, true);
+    assert.ok(world.prompts.some((prompt) => prompt.includes('needs a passing verifier receipt')));
+    assert.ok(world.dispatchInputs.some((input) => input.allowedFiles.length === 1 && input.allowedFiles[0] === 'src/review.test.js'));
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
 test('finish decision restart: accept runs once, the contract survives, and resume input cannot change it', async () => {
   const workspace = gitRepo();
   let runs = 0;
@@ -1476,6 +2018,131 @@ test('a rejection retry keeps the current thread and feeds the violations in a d
     assert.match(world.prompts[2], /Worker outcomes since your last turn/);
     assert.equal(session.sessions.get(SESSION).rollovers, 0);
   }, { withSessions: true });
+});
+
+test('verifier scope rejection explains recovery and accepts an explicit existing test path', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  fs.writeFileSync(path.join(workspace, 'test', 'review.test.js'), "const test = require('node:test');\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\ntest('source file exists', () => assert.ok(fs.existsSync('src/file.js')));\n");
+  const review = {
+    kind: 'routine',
+    checkpointId: 'verifier-scope-recovery',
+    reason: 'Verify the changed source',
+    paths: ['src/file.js'],
+    evidenceIds: ['issue-verifier-scope'],
+  };
+  const world = sessionWorld([
+    dispatch({ ...brief('orch-verifier', []), review }),
+    dispatch({ ...brief('orch-verifier', ['test/review.test.js']), review }),
+    finish('Verified the scoped change'),
+  ]);
+  world.workerFinal = reviewWorkerFinal;
+  const stagingLog = new InMemoryStagingLog();
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({
+      goal: 'Verify the changed source', runId: RUN_ID, contextId: SESSION,
+    });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.acceptance.disposition, 'unverified');
+    assert.deepEqual(world.threadArgs, [undefined, 'thread-1', 'thread-1']);
+    assert.equal(world.leadTurns, 3);
+    assert.equal(world.sends.length, 1);
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-verifier']);
+    assert.deepEqual(world.dispatchInputs[0].allowedFiles, ['test/review.test.js']);
+
+    assert.match(world.prompts[0], /Available roles:/);
+    assert.match(world.prompts[0], /Use exact role IDs shown in Available roles, not display labels/);
+    assert.match(world.prompts[0], /Every writable role, including orch-verifier, requires explicit allowedFiles/);
+    assert.match(world.prompts[0], /writable roles need 1-20 entries/);
+    assert.match(world.prompts[0], /without '\.', '\.\.', globs/);
+
+    assert.match(world.prompts[1], /Rejected decision:/);
+    assert.match(world.prompts[1], /assignment\.writer_scope writer_scope_missing/);
+    assert.match(world.prompts[1], /Writable role orch-verifier requires explicit allowedFiles/);
+    assert.match(world.prompts[1], /choose 1-20 bounded existing test\/check paths/);
+    assert.match(world.prompts[1], /allowedFiles grants write permission but does not require edits/);
+    assert.match(world.prompts[1], /Do not use \[\] or guess\/expand paths/);
+    assert.match(world.prompts[1], /dispatch a read-only explorer first if those paths are unknown/);
+
+    assert.match(world.prompts[2], /Every writable role, including orch-verifier, requires explicit allowedFiles/);
+    assert.match(world.prompts[2], /writable roles need 1-20 entries/);
+    const reviewResults = stagingLog.list({ runId: RUN_ID, type: 'review_result' });
+    assert.equal(reviewResults.length, 1);
+    assert.equal(reviewResults[0].role, 'verifier');
+    assert.equal(reviewResults[0].status, 'accepted');
+  }, { workspace, withSessions: true, orchestrator: { stagingLog } });
+});
+
+test('resuming a rejected verifier decision reuses or rolls over the session thread by profile', async (t) => {
+  const runCase = async (profileChanged) => {
+    const workspace = gitRepo();
+    fs.mkdirSync(path.join(workspace, 'src'));
+    fs.mkdirSync(path.join(workspace, 'test'));
+    fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+    fs.writeFileSync(path.join(workspace, 'test', 'review.test.js'), "const test = require('node:test');\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\ntest('source file exists', () => assert.ok(fs.existsSync('src/file.js')));\n");
+    const review = {
+      kind: 'routine',
+      checkpointId: `resumed-verifier-scope-${profileChanged ? 'changed' : 'same'}`,
+      reason: 'Verify the changed source',
+      paths: ['src/file.js'],
+      evidenceIds: ['issue-resumed-verifier-scope'],
+    };
+    const world = sessionWorld([
+      dispatch({ ...brief('orch-verifier', []), review }),
+      dispatch({ ...brief('orch-verifier', ['test/review.test.js']), review }),
+      finish('Verified the scoped change'),
+    ]);
+    world.workerFinal = reviewWorkerFinal;
+    const stagingLog = new InMemoryStagingLog();
+    const baseLead = createLeadRole();
+    const options = {
+      withSessions: true,
+      orchestrator: { leadRole: baseLead, stagingLog },
+    };
+    await withSession(world, async (session) => {
+      const stopped = await session.orchestrator.run({
+        goal: 'Verify the changed source', runId: RUN_ID, contextId: SESSION, interruptAfter: ['decide'],
+      });
+      assert.equal(stopped.status, 'interrupted_for_test');
+      assert.equal(world.leadTurns, 1);
+      const checkpoint = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+      assert.equal(checkpoint.values.retryDecide, true);
+
+      if (profileChanged) {
+        options.orchestrator.leadRole = {
+          ...baseLead,
+          instructions: `${baseLead.instructions}\nChanged lead profile for resume test.`,
+        };
+      }
+      await session.restart();
+      const result = await session.orchestrator.resume({ runId: RUN_ID, contextId: SESSION });
+      assert.equal(result.status, 'completed');
+      assert.equal(result.acceptance.disposition, 'unverified');
+      assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-verifier']);
+      assert.deepEqual(world.dispatchInputs[0].allowedFiles, ['test/review.test.js']);
+      const reviewResults = stagingLog.list({ runId: RUN_ID, type: 'review_result' });
+      assert.equal(reviewResults.length, 1);
+      assert.equal(reviewResults[0].role, 'verifier');
+      assert.equal(reviewResults[0].status, 'accepted');
+
+      if (profileChanged) {
+        assert.deepEqual(world.threadArgs, [undefined, undefined, 'thread-2']);
+        assert.match(world.prompts[1], /Available roles:/);
+      } else {
+        assert.deepEqual(world.threadArgs, [undefined, 'thread-1', 'thread-1']);
+        assert.doesNotMatch(world.prompts[1], /Available roles:/);
+      }
+      assert.match(world.prompts[1], /Rejected decision:/);
+      assert.match(world.prompts[1], /assignment\.writer_scope writer_scope_missing/);
+      assert.match(world.prompts[1], /Every writable role, including orch-verifier, requires explicit allowedFiles/);
+      assert.match(world.prompts[1], /writable roles need 1-20 entries/);
+    }, { workspace, ...options });
+  };
+
+  await t.test('unchanged profile resumes the rejected decision on its existing thread', () => runCase(false));
+  await t.test('changed profile gets a new thread and the full rejected decision guidance', () => runCase(true));
 });
 
 test('without a contextId the lead behaves as before: no session row, a fresh thread per round', async () => {
@@ -2240,7 +2907,7 @@ test('the decision prompt describes waves according to parallelWriters', async (
       await session.orchestrator.run({ goal: 'Plan', runId: RUN_ID });
       assert.match(world.prompts[0], pattern);
       assert.match(world.prompts[0], /Waves: assignment\.wave/);
-      assert.match(world.prompts[0], /skills, wave, and continueFrom/);
+      assert.match(world.prompts[0], /skills, wave, continueFrom, and review/);
       assert.match(world.prompts[0], /directory prefixes that cover the module and its tests/);
       assert.match(world.prompts[0], /scopeExpansion[^\n]*continueFrom[^\n]*expanded allowedFiles/);
     }, options);
@@ -2447,6 +3114,44 @@ test('a usage-limited writer is continued after the budget resume without a lead
   });
 });
 
+test('a usage-limited auditor cannot continue across a changed target and a fresh audit is dispatched', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const sourcePath = path.join(workspace, 'src', 'file.js');
+  fs.writeFileSync(sourcePath, 'candidate one');
+  const review = { kind: 'risk_change', checkpointId: 'critical-usage', reason: 'Review a trust boundary', paths: ['src/file.js'], evidenceIds: ['issue-usage'] };
+  let auditorCalls = 0;
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Reviewed the current target'),
+    ],
+    workerFinal(roleName, contextId, input) {
+      if (roleName === 'orch-auditor' && auditorCalls++ === 0) return limitedTask(1);
+      return reviewWorkerFinal(roleName, contextId, input);
+    },
+  });
+  const stagingLog = new InMemoryStagingLog();
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Review a trust boundary', runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    fs.writeFileSync(sourcePath, 'candidate two');
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), [
+      'orch-builder', 'orch-verifier', 'orch-auditor', 'orch-verifier', 'orch-auditor',
+    ]);
+    assert.equal(world.sends.length, 5, 'the stale limited continuation was skipped before submission');
+    assert.ok(stagingLog.list({ runId: RUN_ID, type: 'review_gate_skipped' })
+      .some((event) => event.status === 'stale_review_continuation'));
+    assert.ok(stagingLog.list({ runId: RUN_ID, type: 'review_target' })
+      .some((event) => event.status === 'stale' && event.payload.phase === 'before_continuation'));
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
 test('limited items of one wave are continued concurrently under parallelWriters', async () => {
   const seen = [];
   const limitedContexts = new Set([0, 1].map((index) => contextOfAssignment(assignmentId(RUN_ID, 1, index))));
@@ -2576,7 +3281,7 @@ test('a second unmet-goal finish pauses only with a cited investigation from aft
     const paused = await session.orchestrator.run({ goal: 'Close M3', runId: RUN_ID });
     assert.equal(paused.status, 'input_required');
     assert.match(world.prompts[3], /decision\.investigate_first investigation_missing: A repeated finish with goalAchieved false needs a finished read-only investigation from a round after 0/);
-    assert.match(world.prompts[3], /Investigate first: dispatch a read-only explorer or auditor/);
+    assert.match(world.prompts[3], /Investigate first: dispatch a read-only explorer first; use auditor only for a concrete risk-boundary question/);
     const { pause } = paused;
     assert.equal(pause.kind, 'human_decision');
     assert.equal(pause.escalation, 'goal_not_achieved');
@@ -2699,7 +3404,7 @@ test('the decision prompt carries the investigate-first, owner-only, goalAchieve
     assert.match(prompt, /Investigate first: never ask the owner what investigation can answer/);
     assert.match(prompt, /Owner-only decisions are a closed list \(humanInput\.reason\): paid_resources \(spending money or paid resources beyond the run\), credentials_or_access \(credentials and access grants\), external_write \(publishing or writing to external systems\), irreversible_operation, prd_requirement_change \(removing or weakening a requirement the PRD states\), and infeasible_requirement \(an investigation proved that a requirement cannot be met because a dependency or the environment lacks a capability; cite the exact version or setting and the evidence; options must include substitute evidence, changing the dependency or environment, and deferring the requirement\)\. Interpreting the PRD, choosing an implementation, and expanding file scope are your decisions after investigation\. Fixing evidence tooling means collecting or presenting evidence the platform already provides; building a substitute for a capability the platform lacks is scope expansion that needs the owner\./);
     assert.match(prompt, /request_human_input is accepted only for an owner-only decision and only after an investigation of that blocker: An investigation is a finished read-only outcome/);
-    assert.match(prompt, /A blocker that persists needs its root cause located \(an explorer or auditor with the concrete question\)\. Once an investigation locates it outside what the team may change \(a missing capability of a dependency or the environment, or the requirement itself\), stop investigating that blocker and escalate it\./);
+    assert.match(prompt, /A blocker that persists needs its root cause located \(an explorer first; use an auditor only for a concrete risk-boundary question, or scout\/architect when appropriate\)\. Once an investigation locates it outside what the team may change \(a missing capability of a dependency or the environment, or the requirement itself\), stop investigating that blocker and escalate it\./);
     assert.match(prompt, /Worker decision requests are open decisions: resolve each one yourself .*investigating first.*Never leave one unanswered\./);
     assert.match(prompt, /The first finish with false does not end the run: you get 3 extra rounds/);
     assert.match(prompt, /the budget grows by 6 rounds automatically, up to 18 rounds; beyond that the owner decides\./);

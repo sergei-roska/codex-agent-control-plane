@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const { canonicalRoleId, getRole } = require('./role-names');
+const { isSafeIdentity } = require('./staging-log');
 
 const MAX_ASSIGNMENTS = 4;
 const MAX_ITEMS = 20;
@@ -9,15 +10,19 @@ const MAX_CHARS = 3_000;
 const TRUNCATION_SUFFIX = '... [truncated]';
 const WORKER_REPORT_CONTRACT = 'worker-report/v1';
 const ASSIGNMENT_FIELDS = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
-const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom'];
+const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom', 'review'];
 const DECISION_BASE_KEYS = ['action', 'assignments', 'final', 'resolutions', 'humanInput'];
-const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks'];
+const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks', 'records'];
 const ASSIGNMENT_ARRAY_FIELDS = ASSIGNMENT_FIELDS.filter((field) => field !== 'role' && field !== 'objective');
 const REPORT_OUTCOMES = ['completed', 'blocked', 'needs_decision', 'failed'];
 const CHECK_RESULTS = ['passed', 'failed', 'not_run'];
 // LL-6: the closed list of decisions only the owner may take (humanInput.reason). Interpreting the PRD,
 // fixing evidence tooling, choosing an implementation, and expanding file scope are the lead's decisions.
 const HUMAN_REASONS = ['paid_resources', 'credentials_or_access', 'external_write', 'irreversible_operation', 'prd_requirement_change', 'infeasible_requirement'];
+const REVIEW_KINDS = ['routine', 'risk_change', 'performance', 'component_complete', 'investigation', 'owner_request', 'pinned_check'];
+const REVIEW_GATED_KINDS = ['risk_change', 'performance', 'component_complete', 'owner_request', 'pinned_check'];
+const RECORD_KINDS = ['problem', 'remedy', 'architecture', 'verification', 'decision'];
+const RECORD_STATUSES = ['proposed', 'accepted', 'implemented', 'tested', 'open', 'resolved', 'rejected', 'failed', 'reopened', 'deferred', 'unknown'];
 const USAGE_LIMIT_NAMES = new Set(['usageLimitExceeded', 'rateLimitExceeded']);
 const MAX_CAUSE_DEPTH = 5;
 
@@ -28,12 +33,19 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'decision.goal': Object.freeze(['goal_unstated']),
   'decision.investigate_first': Object.freeze(['investigation_missing']),
   'decision.acceptance_checks': Object.freeze(['acceptance_checks_invalid']),
+  'decision.records': Object.freeze(['records_invalid']),
+  'decision.review_gate': Object.freeze(['review_receipt_missing', 'review_checkpoint_pending', 'review_context_mismatch', 'verifier_receipt_missing']),
+  'review.continuation': Object.freeze(['review_origin_unknown', 'review_origin_stale']),
+  'review.concurrent_writer': Object.freeze(['review_writer_unsettled']),
+  'review.reservation': Object.freeze(['review_reservation_unavailable']),
+  'review.target': Object.freeze(['review_target_unknown']),
   'assignment.shape': Object.freeze(['assignment_shape_invalid', 'role_unknown', 'field_invalid']),
   'assignment.writer_scope': Object.freeze(['writer_scope_missing']),
   'assignment.paths': Object.freeze(['path_unsafe', 'path_glob_unsupported']),
   'assignment.skills': Object.freeze(['skill_invalid']),
   'assignment.wave': Object.freeze(['wave_invalid', 'wave_scope_overlap']),
   'assignment.continue_from': Object.freeze(['continue_from_unknown', 'continue_from_role', 'continue_from_duplicate']),
+  'assignment.review': Object.freeze(['review_context_invalid', 'review_context_missing', 'review_wave_conflict']),
   'dispatch.skill_pins': Object.freeze(['skill_pin_drift']),
   'dispatch.writer_admission': Object.freeze(['fenced', 'admission_blocked']),
   'assignment.role_ladder': Object.freeze(['role_ladder_violation', 'architect_constraint']),
@@ -121,7 +133,7 @@ const WORKER_REPORT_SCHEMA = {
 const DECISION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks'],
+  required: ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks', 'records'],
   properties: {
     action: { type: 'string', enum: ['dispatch', 'finish', 'request_human_input'] },
     assignments: {
@@ -142,6 +154,22 @@ const DECISION_SCHEMA = {
           skills: { type: 'array', items: { type: 'string' }, maxItems: 5 },
           wave: { type: ['integer', 'null'], minimum: 1 },
           continueFrom: { type: ['string', 'null'] },
+          review: {
+            anyOf: [
+              {
+                type: 'object', additionalProperties: false,
+                required: ['kind', 'checkpointId', 'reason', 'paths', 'evidenceIds'],
+                properties: {
+                  kind: { type: 'string', enum: REVIEW_KINDS },
+                  checkpointId: { type: 'string', minLength: 1, maxLength: 160 },
+                  reason: { type: 'string', minLength: 1, maxLength: MAX_CHARS },
+                  paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: MAX_ITEMS },
+                  evidenceIds: { type: 'array', items: { type: 'string' }, maxItems: MAX_ITEMS },
+                },
+              },
+              { type: 'null' },
+            ],
+          },
         },
       },
     },
@@ -189,6 +217,22 @@ const DECISION_SCHEMA = {
         },
         { type: 'null' },
       ],
+    },
+    records: {
+      type: 'array', maxItems: 20,
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['id', 'kind', 'status', 'summary', 'evidenceIds', 'relatedIds', 'adrPath'],
+        properties: {
+          id: { type: 'string', minLength: 1, maxLength: 160 },
+          kind: { type: 'string', enum: RECORD_KINDS },
+          status: { type: 'string', enum: RECORD_STATUSES },
+          summary: { type: 'string', minLength: 1, maxLength: MAX_CHARS },
+          evidenceIds: { type: 'array', items: { type: 'string' }, maxItems: MAX_ITEMS },
+          relatedIds: { type: 'array', items: { type: 'string' }, maxItems: MAX_ITEMS },
+          adrPath: { type: ['string', 'null'], maxLength: 240 },
+        },
+      },
     },
   },
 };
@@ -242,6 +286,106 @@ function boundedString(value, label, { allowEmpty = false } = {}) {
   if (!allowEmpty && !value.trim()) return `${label} must not be empty`;
   if (value.length > MAX_CHARS) return `${label} exceeds the size limit`;
   return null;
+}
+
+function checkReviewContext(value, label, { required = false, auditor = false, writable = false } = {}) {
+  if (value === null || value === undefined) {
+    if (required) throw violation('assignment.review', 'review_context_missing', `${label} requires review metadata`);
+    return null;
+  }
+  const fields = ['kind', 'checkpointId', 'reason', 'paths', 'evidenceIds'];
+  if (!isPlainObject(value) || !sameKeys(value, fields)) {
+    throw violation('assignment.review', 'review_context_invalid', `${label}.review must contain exactly ${fields.join(', ')}`);
+  }
+  if (!REVIEW_KINDS.includes(value.kind)) {
+    throw violation('assignment.review', 'review_context_invalid', `${label}.review.kind must be one of ${REVIEW_KINDS.join(', ')}`);
+  }
+  const textProblem = boundedString(value.checkpointId, `${label}.review.checkpointId`)
+    || (value.checkpointId.length > 160 ? `${label}.review.checkpointId exceeds 160 characters` : null)
+    || boundedString(value.reason, `${label}.review.reason`);
+  if (textProblem) throw violation('assignment.review', 'review_context_invalid', textProblem);
+  const pathsProblem = checkStringArray(value.paths, `${label}.review.paths`, { allowEmpty: false });
+  const evidenceProblem = checkStringArray(value.evidenceIds, `${label}.review.evidenceIds`);
+  if (pathsProblem || evidenceProblem) {
+    throw violation('assignment.review', 'review_context_invalid', pathsProblem || evidenceProblem);
+  }
+  if (value.paths.some((file) => !safeRelativePath(file) || /[*?[]/.test(file))) {
+    throw violation('assignment.review', 'review_context_invalid', `${label}.review.paths must contain safe workspace-relative paths without globs`);
+  }
+  if (new Set(value.paths).size !== value.paths.length || new Set(value.evidenceIds).size !== value.evidenceIds.length) {
+    throw violation('assignment.review', 'review_context_invalid', `${label}.review paths and evidenceIds must be unique`);
+  }
+  if (auditor && value.kind === 'routine') {
+    throw violation('assignment.review', 'review_context_invalid', 'Routine work is not an auditor trigger');
+  }
+  if (writable && !['routine', 'risk_change', 'performance', 'component_complete'].includes(value.kind)) {
+    throw violation('assignment.review', 'review_context_invalid', `Writable assignments cannot use review kind ${value.kind}`);
+  }
+  return {
+    kind: value.kind,
+    checkpointId: value.checkpointId,
+    reason: value.reason,
+    paths: [...value.paths],
+    evidenceIds: [...value.evidenceIds],
+  };
+}
+
+function checkDecisionRecordsShape(value) {
+  if (!Array.isArray(value) || value.length > 20) {
+    throw violation('decision.records', 'records_invalid', 'records must be an array of at most 20 structured records');
+  }
+  const ids = new Set();
+  const normalized = value.map((entry, index) => {
+    const label = `records[${index}]`;
+    const fields = ['id', 'kind', 'status', 'summary', 'evidenceIds', 'relatedIds', 'adrPath'];
+    if (!isPlainObject(entry) || !sameKeys(entry, fields)) {
+      throw violation('decision.records', 'records_invalid', `${label} must contain exactly ${fields.join(', ')}`);
+    }
+    if (boundedString(entry.id, `${label}.id`) || entry.id.length > 160 || !isSafeIdentity(entry.id)) {
+      throw violation('decision.records', 'records_invalid', `${label}.id must be a safe non-empty staging identity of at most 160 characters`);
+    }
+    if (ids.has(entry.id)) throw violation('decision.records', 'records_invalid', `${label}.id must be unique in this decision`);
+    ids.add(entry.id);
+    if (!RECORD_KINDS.includes(entry.kind) || !RECORD_STATUSES.includes(entry.status)) {
+      throw violation('decision.records', 'records_invalid', `${label} has an unsupported kind or status`);
+    }
+    if (boundedString(entry.summary, `${label}.summary`)) {
+      throw violation('decision.records', 'records_invalid', `${label}.summary must be a non-empty string of at most ${MAX_CHARS} characters`);
+    }
+    const evidenceProblem = checkStringArray(entry.evidenceIds, `${label}.evidenceIds`);
+    const relatedProblem = checkStringArray(entry.relatedIds, `${label}.relatedIds`);
+    if (evidenceProblem || relatedProblem) {
+      throw violation('decision.records', 'records_invalid', evidenceProblem || relatedProblem);
+    }
+    if (entry.relatedIds.some((relatedId) => !isSafeIdentity(relatedId))) {
+      throw violation('decision.records', 'records_invalid', `${label}.relatedIds must use safe staging identity values`);
+    }
+    if (new Set(entry.evidenceIds).size !== entry.evidenceIds.length || new Set(entry.relatedIds).size !== entry.relatedIds.length) {
+      throw violation('decision.records', 'records_invalid', `${label} evidenceIds and relatedIds must be unique`);
+    }
+    if (entry.kind === 'architecture') {
+      if (!isNonEmptyString(entry.adrPath) || entry.adrPath.length > 240
+        || !safeRelativePath(entry.adrPath) || !entry.adrPath.endsWith('.md') || /[*?[]/.test(entry.adrPath)) {
+        throw violation('decision.records', 'records_invalid', `${label}.adrPath must be a safe workspace-relative .md path`);
+      }
+    } else if (entry.adrPath !== null) {
+      throw violation('decision.records', 'records_invalid', `${label}.adrPath must be null unless kind is architecture`);
+    }
+    return { ...entry, evidenceIds: [...entry.evidenceIds], relatedIds: [...entry.relatedIds] };
+  });
+  return normalized;
+}
+
+function checkDecisionRecords(value, priorProblemIds = []) {
+  const normalized = checkDecisionRecordsShape(value);
+  const knownProblems = new Set([...priorProblemIds, ...normalized.filter((entry) => entry.kind === 'problem').map((entry) => entry.id)]);
+  for (const [index, entry] of normalized.entries()) {
+    if (!['remedy', 'verification'].includes(entry.kind)) continue;
+    if (entry.relatedIds.length === 0 || entry.relatedIds.some((id) => !knownProblems.has(id))) {
+      throw violation('decision.records', 'records_invalid', `records[${index}] ${entry.kind} must relate to an existing problem record ID`);
+    }
+  }
+  return normalized;
 }
 
 /** Validate a parsed worker report. Returns { ok, report, errors[] }; never throws. */
@@ -365,12 +509,23 @@ function checkAssignment(assignment, decision, ctx) {
   if (!keys.includes('skills')) assignment.skills = [];
   if (!keys.includes('wave')) assignment.wave = null;
   if (!keys.includes('continueFrom')) assignment.continueFrom = null;
+  if (!keys.includes('review')) assignment.review = null;
   if (assignment.wave !== null && !(Number.isInteger(assignment.wave) && assignment.wave >= 1)) {
     throw violation('assignment.wave', 'wave_invalid', `Assignment wave must be an integer >= 1 or null, got ${JSON.stringify(assignment.wave)}`);
   }
   const role = getRole(ctx.roles, assignment.role);
   if (!role) throw violation('assignment.shape', 'role_unknown', `Unknown role: ${String(assignment.role)}`);
   assignment.role = role.name;
+  const canonicalRole = canonicalRoleId(role.name);
+  const reviewRequired = canonicalRole === 'auditor' || canonicalRole === 'verifier';
+  assignment.review = checkReviewContext(assignment.review, `Assignment for ${role.name}`, {
+    required: reviewRequired,
+    auditor: canonicalRole === 'auditor',
+    writable: role.sandbox !== 'read-only' && canonicalRole !== 'verifier',
+  });
+  if (assignment.review && role.sandbox === 'read-only' && canonicalRole !== 'auditor') {
+    throw violation('assignment.review', 'review_context_invalid', `Only the auditor may receive explicit read-only review metadata; ${role.name} should receive an investigation without it`);
+  }
   checkContinueFrom(assignment, role, decision, ctx);
   if (!isNonEmptyString(assignment.objective)) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} needs an objective`);
   if (assignment.objective.length > MAX_CHARS) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} exceeds the size limit for objective`);
@@ -396,7 +551,10 @@ function checkAssignment(assignment, decision, ctx) {
   if (assignment.inputs.length === 0) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} requires bounded inputs`);
   if (assignment.evidence.length === 0) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} requires prior evidence`);
   if (role.sandbox !== 'read-only' && assignment.allowedFiles.length === 0) {
-    throw violation('assignment.writer_scope', 'writer_scope_missing', `Writable role ${role.name} requires explicit allowedFiles`);
+    const guidance = canonicalRole === 'verifier'
+      ? '; choose 1-20 bounded existing test/check paths from workspace evidence. allowedFiles grants write permission but does not require edits'
+      : '';
+    throw violation('assignment.writer_scope', 'writer_scope_missing', `Writable role ${role.name} requires explicit allowedFiles${guidance}`);
   }
   for (const file of assignment.allowedFiles) {
     if (/[*?[]/.test(file)) {
@@ -408,7 +566,6 @@ function checkAssignment(assignment, decision, ctx) {
     throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} requires acceptanceCriteria, checks, and stopConditions`);
   }
   const attemptedRoles = new Set([...ctx.attemptedRoles].map(canonicalRoleId));
-  const canonicalRole = canonicalRoleId(role.name);
   if (canonicalRole === 'recovery-engineer' && !attemptedRoles.has('engineer')) {
     throw violation('assignment.role_ladder', 'role_ladder_violation', 'recovery-engineer can only be dispatched after an engineer attempt');
   }
@@ -421,12 +578,16 @@ function checkAssignment(assignment, decision, ctx) {
       throw violation('assignment.role_ladder', 'architect_constraint', 'orch-architect must receive one narrowly framed decision');
     }
   }
+  if (canonicalRole === 'verifier' && assignment.review
+    && !['routine', ...REVIEW_GATED_KINDS].includes(assignment.review.kind)) {
+    throw violation('assignment.review', 'review_context_invalid', 'Verifier assignments must declare a routine or gated review context');
+  }
 }
 
 const SPECIALIST_REQUIRED_KEYS = ['objective', 'allowedFiles'];
 const SPECIALIST_OPTIONAL_KEYS = [
   'role', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions',
-  'skills', 'wave', 'skillPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance', 'continuation',
+  'skills', 'wave', 'skillPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance', 'continuation', 'review',
 ];
 const SPECIALIST_ARRAY_KEYS = ['inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
 
@@ -471,6 +632,14 @@ function checkSpecialistRequest(request, role, { workspace } = {}) {
     out.skillPins = request.skillPins.slice();
   }
   const readOnly = role?.sandbox === 'read-only';
+  const canonicalRole = canonicalRoleId(role?.name || role?.id);
+  const reviewRequired = canonicalRole === 'auditor';
+  if (request.review !== undefined || reviewRequired) {
+    out.review = checkReviewContext(request.review, `Request for ${label}`, {
+      required: reviewRequired,
+      auditor: canonicalRole === 'auditor',
+    });
+  }
   if (readOnly) out.allowedFiles = out.allowedFiles.filter((file) => file !== '.' && file !== './');
   else if (out.allowedFiles.length === 0) {
     throw violation('assignment.writer_scope', 'writer_scope_missing', `Writable role ${label} requires explicit allowedFiles`);
@@ -607,8 +776,20 @@ function scopesOverlap(a, b) {
 }
 
 function checkWaveScopes(assignments, ctx) {
-  for (const group of executionGroups(assignments)) {
+  const groups = executionGroups(assignments);
+  const groupOf = new Map();
+  groups.forEach((members, groupIndex) => members.forEach((index) => groupOf.set(index, groupIndex)));
+  for (const group of groups) {
     const writers = group.filter((index) => getRole(ctx.roles, assignments[index].role)?.sandbox !== 'read-only');
+    const reviewers = group.filter((index) => ['auditor', 'verifier'].includes(canonicalRoleId(assignments[index].role)));
+    for (const reviewerIndex of reviewers) {
+      const concurrentWriter = writers.find((index) => index !== reviewerIndex);
+      if (concurrentWriter !== undefined) {
+        const reviewer = assignments[reviewerIndex];
+        throw violation('assignment.review', 'review_wave_conflict',
+          `Review assignment #${reviewerIndex} (${reviewer.role}) cannot share a wave with writer assignment #${concurrentWriter} (${assignments[concurrentWriter].role})`);
+      }
+    }
     for (let i = 0; i < writers.length; i += 1) {
       for (let j = i + 1; j < writers.length; j += 1) {
         const first = assignments[writers[i]];
@@ -619,6 +800,32 @@ function checkWaveScopes(assignments, ctx) {
           throw violation('assignment.wave', 'wave_scope_overlap',
             `Wave ${first.wave}: writers #${writers[i]} (${first.role}) and #${writers[j]} (${second.role}) have overlapping allowedFiles: ${left} vs ${right}`);
         }
+      }
+    }
+  }
+  for (let index = 0; index < assignments.length; index += 1) {
+    const reviewer = assignments[index];
+    const reviewerRole = canonicalRoleId(reviewer.role);
+    if (!['auditor', 'verifier'].includes(reviewerRole) || !reviewer.review) continue;
+    const sameCheckpoint = assignments.map((entry, candidateIndex) => ({ entry, candidateIndex }))
+      .filter(({ entry }) => entry.review?.checkpointId === reviewer.review.checkpointId);
+    for (const { entry, candidateIndex } of sameCheckpoint) {
+      if (entry.review.kind !== reviewer.review.kind || entry.review.reason !== reviewer.review.reason
+        || JSON.stringify([...entry.review.paths].sort()) !== JSON.stringify([...reviewer.review.paths].sort())
+        || JSON.stringify([...entry.review.evidenceIds].sort()) !== JSON.stringify([...reviewer.review.evidenceIds].sort())) {
+        throw violation('assignment.review', 'review_context_invalid', 'Assignments for the same checkpoint must cite the same review kind, reason, scope, and evidence IDs');
+      }
+      if (getRole(ctx.roles, entry.role)?.sandbox !== 'read-only' && canonicalRoleId(entry.role) !== 'verifier'
+        && groupOf.get(candidateIndex) >= groupOf.get(index)) {
+        throw violation('assignment.review', 'review_wave_conflict', `${reviewer.role} must follow all same-checkpoint writers in the decision`);
+      }
+    }
+    if (reviewerRole !== 'auditor') continue;
+    const matchingVerifier = assignments.findIndex((entry) => canonicalRoleId(entry.role) === 'verifier'
+      && entry.review?.checkpointId === reviewer.review.checkpointId);
+    if (matchingVerifier >= 0) {
+      if (groupOf.get(matchingVerifier) >= groupOf.get(index)) {
+        throw violation('assignment.review', 'review_wave_conflict', 'Run the verifier before the auditor in separate execution groups');
       }
     }
   }
@@ -634,7 +841,7 @@ function validateDecision(decision, ctx) {
   const openIds = ctx.openDecisionIds || new Set();
   const keys = Object.keys(decision);
   if (!DECISION_BASE_KEYS.every((key) => keys.includes(key)) || keys.some((key) => !DECISION_KEYS.includes(key))) {
-    throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead decision must contain only action, assignments, final, resolutions, and humanInput, plus goalAchieved and acceptanceChecks');
+    throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead decision contains an unsupported field');
   }
   // Older callers and replays predate goalAchieved and acceptanceChecks: both default to null, and a
   // legacy finish without the key keeps finishing as before.
@@ -648,6 +855,8 @@ function validateDecision(decision, ctx) {
   if (typeof decision.final !== 'string') throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead final must be a string');
   if (!Array.isArray(decision.resolutions)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead resolutions must be an array');
   if (decision.humanInput !== null && !isPlainObject(decision.humanInput)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead humanInput must be null or an object');
+  if (!keys.includes('records')) decision.records = [];
+  decision.records = checkDecisionRecords(decision.records, ctx.knownProblemIds || []);
 
   const resolved = new Set();
   for (const resolution of decision.resolutions) {
@@ -742,6 +951,13 @@ module.exports = {
   pathsOutsideAllowed,
   ASSIGNMENT_FIELDS,
   DECISION_ASSIGNMENT_FIELDS,
+  REVIEW_KINDS,
+  REVIEW_GATED_KINDS,
+  RECORD_KINDS,
+  RECORD_STATUSES,
+  checkReviewContext,
+  checkDecisionRecordsShape,
+  checkDecisionRecords,
   MAX_ASSIGNMENTS,
   executionGroups,
   HUMAN_REASONS,

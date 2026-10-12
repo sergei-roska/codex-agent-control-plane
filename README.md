@@ -138,6 +138,25 @@ The task stays `COMPLETED`; the result text starts with `Acceptance: <dispositio
 
 ## Usage
 
+Material routine changes are independently checked by `verifier` after
+integration. `auditor` is selected for a recorded critical change, performance
+requirement, completed component, bounded investigation, or owner request.
+Changed pinned acceptance scripts retain their separate read-only integrity
+review. A round ending alone does not trigger either review. Declared review
+checkpoints bind their evidence to scoped content, including uncommitted files;
+model risk classification remains a lead responsibility.
+
+Staging problems, attempted remedies, review results, and explicit architectural
+decisions are retained in an append-only state-database log. Read its bounded
+history without starting the server:
+
+```bash
+npm run staging:report -- --state <project-state.sqlite> --run <runId> --json
+```
+
+The report distinguishes unavailable, partial, and complete history. ADRs and
+qualified production actions are indexed in `docs/production-transfer.md`.
+
 Every Codex turn (worker and lead) is recorded in the state database with model, effort, elapsed time, and tokens where known (unknown stays empty, never 0). Cost is not measured: it is subscription usage.
 
 ```bash

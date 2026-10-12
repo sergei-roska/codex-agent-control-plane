@@ -9,6 +9,7 @@ const {
 const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
 const {
   DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, BoundaryViolation, parseWorkerReport, classifyCodexError, executionGroups,
+  checkDecisionRecordsShape,
 } = require('./contracts');
 const {
   runAcceptance, assessWithoutChecks, unrunAcceptance, validateAgentChecks, AGENT_CHECK_TOOLS, currentPins, repinChecks, describePinChanges,
@@ -16,6 +17,10 @@ const {
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
 const { loadSkillCatalog, findSkillCandidates, resolveSkillSelection } = require('./skill-catalog');
 const { canonicalRoleId, getRole, roleDisplayName } = require('./role-names');
+const { InMemoryStagingLog } = require('./staging-log');
+const {
+  POLICY_ID, isGatedReview, sameReviewScope, computeReviewTarget, reviewResult,
+} = require('./review-policy');
 
 const DEFAULT_RECONCILE_WAIT_MS = 30_000;
 const MAX_OUTCOME_TEXT_CHARS = 12_000;
@@ -27,7 +32,9 @@ const MAX_PROMPT_OUTCOMES_CHARS = 60_000;
 // SES-01: context size (input of the last model request) above which the session starts a new lead thread.
 const DEFAULT_LEAD_ROLLOVER_TOKENS = 150_000;
 const ROLLOVER_WINDOW_FRACTION = 0.6;
-const DELTA_REMINDER = 'The rules, roles, and output format from the start of this thread still apply. Return only one JSON object matching the supplied schema. Give workers exact paths with line ranges and established facts in inputs/evidence; do not read large files yourself, dispatch an explorer for broad reading.';
+const PATH_RULE = "allowedFiles entries are repository-relative paths or directory prefixes without '.', '..', globs, absolute paths, or a leading '/'; writable roles need 1-20 entries, read-only roles may use []. Each assignment list has at most 20 entries and each string is at most 3000 characters. Skills are limited to 5 IDs.";
+const ASSIGNMENT_SCOPE_RULE = 'Use exact role IDs shown in Available roles, not display labels. Every writable role, including orch-verifier, requires explicit allowedFiles even when it only inspects files or runs checks. allowedFiles grants write permission; it does not require edits. For a verifier, choose a bounded set of existing test/check files or the narrowest existing test/check directory supported by workspace evidence. Do not use [] or guess/expand paths; dispatch a read-only explorer first if those paths are unknown. The verifier may inspect the declared review paths but can only write within allowedFiles.';
+const DELTA_REMINDER = `The rules, roles, and output format from the start of this thread still apply. Return only one JSON object matching the supplied schema. ${ASSIGNMENT_SCOPE_RULE} ${PATH_RULE} Give workers exact paths with line ranges and established facts in inputs/evidence; do not read large files yourself, dispatch an explorer for broad reading.`;
 const TEXT_PROJECTION_HEAD = 6000;
 const TEXT_PROJECTION_TAIL = 2000;
 const TEXT_EVIDENCE_THRESHOLD = TEXT_PROJECTION_HEAD + TEXT_PROJECTION_TAIL;
@@ -161,6 +168,37 @@ function assignmentResult(task, { onOversize } = {}) {
   // The thread data of a finished turn: failure metadata, else the result artifact's metadata.
   const continuation = status?.message?.metadata?.continuation
     ?? artifacts.map((artifact) => artifact.metadata?.continuation).find((entry) => entry && typeof entry === 'object');
+  const metadataValues = (field) => [
+    ...artifacts.map((artifact) => artifact.metadata?.[field]),
+    status?.message?.metadata?.[field],
+  ].filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
+  const coverageValues = metadataValues('reviewCoverage');
+  const reviewValues = metadataValues('review');
+  const reviewCoverage = coverageValues.length > 0 ? {
+    targetKnown: coverageValues.every((entry) => entry.targetKnown === true || entry.known === true),
+    stable: coverageValues.every((entry) => entry.stable === true),
+    identityPresent: coverageValues.every((entry) => typeof entry.targetIdentity === 'string' && entry.targetIdentity.length > 0)
+      && new Set(coverageValues.map((entry) => entry.targetIdentity)).size === 1,
+    status: coverageValues.find((entry) => typeof entry.status === 'string' && entry.status !== 'accepted')?.status?.slice(0, 64)
+      || coverageValues.find((entry) => typeof entry.status === 'string')?.status?.slice(0, 64) || null,
+    reason: coverageValues.find((entry) => typeof entry.reason === 'string' && entry.reason)?.reason?.slice(0, 300) || null,
+  } : null;
+  const consistentField = (field, max) => {
+    const values = reviewValues.map((entry) => entry[field]);
+    if (values.length === 0 || values.some((value) => typeof value !== 'string') || new Set(values).size !== 1) return null;
+    return values[0].slice(0, max);
+  };
+  const reviewResultMetadata = reviewValues.length > 0 ? {
+    policyId: consistentField('policyId', 64),
+    kind: consistentField('kind', 64),
+    checkpointId: consistentField('checkpointId', 128),
+    status: reviewValues.find((entry) => typeof entry.status === 'string' && entry.status !== 'accepted')?.status?.slice(0, 64)
+      || consistentField('status', 64),
+    accepted: reviewValues.every((entry) => entry.accepted === true),
+    valid: reviewValues.every((entry) => entry.valid === true),
+    verdict: consistentField('verdict', 64),
+    reason: reviewValues.find((entry) => typeof entry.reason === 'string' && entry.reason)?.reason?.slice(0, 300) || null,
+  } : null;
   const stateName = taskStateName(status?.state);
   const extras = typeof onOversize === 'function' && (artifactTexts.some((value) => value.length > MAX_REPORT_CHARS) || text.length > MAX_REPORT_CHARS)
     ? onOversize({ artifactTexts, joined: text, parseText: artifactTexts[0] || text, completed: stateName === 'TASK_STATE_COMPLETED', lanePath: lanePathOf(writerExecution) })
@@ -177,6 +215,8 @@ function assignmentResult(task, { onOversize } = {}) {
     ...(writerExecution ? { writerExecution } : {}),
     ...(typeof effects === 'string' ? { effects } : {}),
     ...(continuation && typeof continuation === 'object' && !Array.isArray(continuation) ? { continuation } : {}),
+    ...(reviewCoverage ? { reviewCoverage } : {}),
+    ...(reviewResultMetadata ? { reviewResult: reviewResultMetadata } : {}),
     ...(extras || {}),
   };
 }
@@ -275,6 +315,15 @@ function outsideAllowed(files, allowedFiles, workspace, lanePath = null) {
     const rel = normalizeRel(file, workspace, lanePath);
     return !allowed.some((entry) => rel === entry || rel.startsWith(`${entry}/`));
   });
+}
+
+function isTestCheckPath(file, workspace) {
+  const relative = normalizeRel(file, workspace);
+  const parts = relative.split('/').filter(Boolean);
+  const testDirectory = parts.some((part) => /^(?:__tests__|__checks__|test|tests|spec|specs|check|checks)$/i.test(part));
+  const name = parts.at(-1) || '';
+  const testFile = /\.(?:test|spec)\.[^./]+$/i.test(name) || /(?:^|[._-])(?:test|check|spec)(?:[._-]|$)/i.test(name);
+  return testDirectory || testFile;
 }
 
 // Reported filesChanged outside allowedFiles.
@@ -534,7 +583,7 @@ const ROUND_CAP = 18;
 const GOAL_INVESTIGATION_ROUNDS = 3;
 const MAX_PROGRESS_ENTRIES = 50;
 const OWNER_ONLY_RULE = 'Owner-only decisions are a closed list (humanInput.reason): paid_resources (spending money or paid resources beyond the run), credentials_or_access (credentials and access grants), external_write (publishing or writing to external systems), irreversible_operation, prd_requirement_change (removing or weakening a requirement the PRD states), and infeasible_requirement (an investigation proved that a requirement cannot be met because a dependency or the environment lacks a capability; cite the exact version or setting and the evidence; options must include substitute evidence, changing the dependency or environment, and deferring the requirement). Interpreting the PRD, choosing an implementation, and expanding file scope are your decisions after investigation. Fixing evidence tooling means collecting or presenting evidence the platform already provides; building a substitute for a capability the platform lacks is scope expansion that needs the owner.';
-const INVESTIGATION_RULE = 'An investigation is a finished read-only outcome (explorer, auditor, scout, or architect) with a valid report from a round after the blocker first appeared (after the latest related open worker decision; for a repeated unmet-goal finish, after the first one); cite its assignmentId in humanInput.evidenceChecked or relatedDecisionIds (in final for a finish).';
+const INVESTIGATION_RULE = 'An investigation is a finished read-only outcome (explorer first; use auditor only for a concrete risk-boundary question, or scout/architect when appropriate) with a valid report from a round after the blocker first appeared (after the latest related open worker decision; for a repeated unmet-goal finish, after the first one); cite its assignmentId in humanInput.evidenceChecked or relatedDecisionIds (in final for a finish).';
 // LL-6 check_changed review: a read-only reviewer judges a changed pinned check against the PRD.
 const REVIEW_ROLES = ['auditor', 'architect', 'explorer', 'scout'];
 const CHECK_CHANGE_OPTIONS = [
@@ -542,19 +591,20 @@ const CHECK_CHANGE_OPTIONS = [
   { id: 'keep_requirement', description: 'Keep the requirement: the changed check fails and the lead fixes the cause' },
 ];
 const CHECK_RULE = `acceptanceChecks entries are { id, argv, timeoutMs } (at most 10, timeoutMs null for the default); argv[0] is a script path inside the workspace or one of ${AGENT_CHECK_TOOLS.join(', ')}; bash and sh need a workspace script as argv[1]; inline code (-c, -e, --eval, -p) and echo, true, false, test, [, yes are refused.`;
-const PATH_RULE = "allowedFiles entries are repository-relative paths or directory prefixes without '.', '..', globs, or a leading '/'; read-only roles may use [].";
 const RULE_REMINDERS = {
   'assignment.paths': PATH_RULE,
-  'assignment.writer_scope': 'Writable roles require explicit allowedFiles; read-only roles may use [].',
+  'assignment.writer_scope': `${ASSIGNMENT_SCOPE_RULE} ${PATH_RULE}`,
   'decision.parse': 'Return only one JSON object matching the supplied schema.',
-  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, humanInput, goalAchieved, and acceptanceChecks, with unused fields empty or null. A dispatch needs 1 to 4 assignments. If there is nothing to dispatch, use finish or request_human_input instead of an empty dispatch.',
+  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, and records, with unused fields empty or null. A dispatch needs 1 to 4 assignments. If there is nothing to dispatch, use finish or request_human_input instead of an empty dispatch.',
   'decision.goal': 'finish requires goalAchieved true or false: true only when the goal is met, false with the blockers named in final. Use null for dispatch and request_human_input.',
-  'decision.investigate_first': `Investigate first: dispatch a read-only explorer or auditor with the concrete question about the blocker before asking the owner. ${INVESTIGATION_RULE} ${OWNER_ONLY_RULE}`,
+  'decision.investigate_first': `Investigate first: dispatch a read-only explorer first; use auditor only for a concrete risk-boundary question. ${INVESTIGATION_RULE} ${OWNER_ONLY_RULE}`,
   'decision.acceptance_checks': `${CHECK_RULE} Use null to propose nothing.`,
   'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds when it is owner-only; a dispatch of only read-only roles may leave them open while you investigate them.',
-  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, and continueFrom; role must be an available role id.',
+  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, continueFrom, and review; role must be an available role id.',
+  'assignment.review': 'Use review:null for unrelated read-only or non-material administrative/document work. Material implementation declares {kind, checkpointId, reason, paths, evidenceIds}. Verifier and auditor must cite the same checkpoint, scope, reason, and evidence IDs. Routine material work needs verifier evidence; critical work needs verifier then auditor evidence.',
+  'decision.review_gate': 'A required review receipt is missing, failed, stale, or has unknown target identity. Dispatch the verifier first; for critical work dispatch the auditor after a passing verifier. Repair may continue under the same checkpoint; unrelated writers wait for critical audit completion.',
   'assignment.continue_from': 'continueFrom is null or the assignmentId of a finished outcome of this run with the same role; each such id may be used by one assignment of a decision.',
-  'assignment.wave': 'wave is an integer >= 1 or null; consecutive assignments with the same wave run concurrently, and writers in one wave need pairwise disjoint allowedFiles; use null for sequential steps.',
+  'assignment.wave': 'wave is an integer >= 1 or null; consecutive assignments with the same wave run concurrently, and writers in one wave need pairwise disjoint allowedFiles. Reviewers cannot share a wave with writers; run verifier before auditor in successive execution groups of the same decision when possible.',
   'assignment.skills': 'Select at most 5 unique skill IDs from the trusted listed skill IDs; use [] when none apply.',
   'assignment.role_ladder': 'Respect the role ladder: recovery-engineer follows an engineer attempt, senior-engineer follows recovery-engineer, and architect needs prior evidence and one narrow decision.',
   'dispatch.writer_unresolved': 'Do not dispatch writable roles while writer outcomes are unresolved; use read-only roles.',
@@ -571,6 +621,7 @@ const LeadState = Annotation.Root({
   attemptedRoles: last(() => []),
   outcomes: last(() => []),
   pendingAssignments: last(() => null),
+  reviewObligations: last(() => []),
   batch: last(() => null),
   openDecisions: last(() => []),
   closedDecisions: last(() => []),
@@ -624,6 +675,7 @@ const LeadState = Annotation.Root({
  *   admission?: WriterAdmission, reconcileWaitMs?: number,
  *   sessionThreads?: SessionThreads, sessionDigest?({ contextId, runId, runIds, state }) -> string, rolloverTokens?: number,
  *   parallelWriters?: boolean, usageLedger?: UsageLedger, activityStore?: ActivityStore, evidenceStore?: EvidenceStore, runCheckImpl?, snapshot?,
+ *   stagingLog?: StagingLog,
  * }
  * Returns the compiled graph when deps.checkpointer is given, else the StateGraph.
  */
@@ -633,6 +685,7 @@ function buildLeadGraph(deps) {
   } = deps;
   const skillCatalog = deps.skillCatalog || loadSkillCatalog();
   const { admission } = deps;
+  const stagingLog = deps.stagingLog || new InMemoryStagingLog();
   const reconcileWaitMs = Number.isFinite(deps.reconcileWaitMs) ? deps.reconcileWaitMs : DEFAULT_RECONCILE_WAIT_MS;
 
   // Threshold: the explicit setting, else 60% of the known context window, else the default.
@@ -640,6 +693,230 @@ function buildLeadGraph(deps) {
     : Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow * ROLLOVER_WINDOW_FRACTION : DEFAULT_LEAD_ROLLOVER_TOKENS);
   const runtimeOf = (config) => deps.runtimeFor(config?.configurable?.thread_id) || {};
   const requestOptions = (signal) => ({ ...(signal ? { signal } : {}), ...deps.authOptions() });
+
+  function recordStage(type, event) {
+    const base = { type, ...event };
+    const eventId = `stage:v1:${sha256(JSON.stringify(base))}`;
+    return stagingLog.record({ eventId, ...base });
+  }
+
+  function targetForReview(state, review) {
+    return computeReviewTarget({
+      workspace,
+      review,
+      runId: state.runId,
+      goal: state.goalOverride || state.goal,
+      checks: state.contract?.requiredChecks || [],
+    });
+  }
+
+  function activeObligation(state, review) {
+    return (state.reviewObligations || []).find((entry) => entry.checkpointId === review?.checkpointId) || null;
+  }
+
+  function obligationMatches(obligation, review) {
+    return Boolean(obligation && sameReviewScope(obligation.review, review));
+  }
+
+  function matchingReceipt(obligation, role, target) {
+    if (!obligation || !target?.known) return null;
+    return (obligation.receipts || []).find((receipt) => receipt.role === role
+      && receipt.status === 'accepted' && receipt.targetIdentity === target.identity) || null;
+  }
+
+  function currentGateState(state, obligation) {
+    const review = obligation?.review;
+    if (!review) return { target: null, verifier: null, auditor: null };
+    const target = targetForReview(state, review);
+    return {
+      target,
+      verifier: matchingReceipt(obligation, 'verifier', target),
+      auditor: matchingReceipt(obligation, 'auditor', target),
+    };
+  }
+
+  function gateFailure(state, { forFinish = false, assignments = [] } = {}) {
+    const obligations = (state.reviewObligations || []).filter((entry) => isGatedReview(entry.review));
+    for (const obligation of obligations) {
+      const gate = currentGateState(state, obligation);
+      const pending = (obligation.pendingAssignmentIds || []).length > 0;
+      const complete = !pending && Boolean(gate.verifier && gate.auditor);
+      if (!forFinish && !complete) {
+        const unrelatedWriter = assignments.find((assignment) => getRole(roles, assignment.role)?.sandbox !== 'read-only'
+          && assignment.review?.checkpointId !== obligation.checkpointId);
+        if (unrelatedWriter) {
+          return `Critical review checkpoint ${obligation.checkpointId} remains pending; writable assignments must stay under that checkpoint until its audit is accepted`;
+        }
+      }
+      if (!forFinish) continue;
+      if (pending) return `Review checkpoint ${obligation.checkpointId} still has an assignment whose effects are not integrated`;
+      if (!gate.verifier) return `Review checkpoint ${obligation.checkpointId} needs a passing verifier receipt for the current target`;
+      if (!gate.auditor) return `Critical review checkpoint ${obligation.checkpointId} needs a passing auditor receipt for the current target`;
+    }
+    const ordinary = (state.reviewObligations || []).filter((entry) => entry.review?.kind === 'routine');
+    if (forFinish) {
+      for (const obligation of ordinary) {
+        if ((obligation.pendingAssignmentIds || []).length > 0) {
+          return `Review checkpoint ${obligation.checkpointId} still has an assignment whose effects are not integrated`;
+        }
+        const gate = currentGateState(state, obligation);
+        if (!gate.verifier) return `Routine review checkpoint ${obligation.checkpointId} needs a passing verifier receipt for the current target`;
+      }
+    }
+    return null;
+  }
+
+  function enforceReviewAcceptance(state, acceptance) {
+    const failure = gateFailure(state, { forFinish: true });
+    if (!failure) return acceptance;
+    const issue = {
+      code: 'review_gate_pending',
+      detail: String(failure).slice(0, 500),
+      predicate: 'accept.review_gate',
+      result: 'UNKNOWN',
+      boundary: 'acceptance',
+      advisory: false,
+      evidence: [],
+    };
+    return {
+      ...acceptance,
+      disposition: 'unverifiable',
+      reasons: [...(acceptance.reasons || []), issue],
+      issues: [...(acceptance.issues || []), issue],
+    };
+  }
+
+  function reviewObligationsForDispatch(state, assignments, round) {
+    const next = [...(state.reviewObligations || [])];
+    assignments.forEach((assignment, index) => {
+      const review = assignment.review;
+      const assignmentId = makeAssignmentId(state.runId, round, index);
+      const target = review ? targetForReview(state, review) : null;
+      recordStage('assignment_selected', {
+        runId: state.runId,
+        assignmentId,
+        role: canonicalRoleId(assignment.role),
+        target: target?.identity || null,
+        status: 'selected',
+        payload: {
+          policyId: POLICY_ID,
+          objective: String(assignment.objective || '').slice(0, 500),
+          review: review ? {
+            kind: review.kind,
+            checkpointId: review.checkpointId,
+            reason: review.reason,
+            paths: review.paths,
+            evidenceIds: review.evidenceIds,
+            targetKnown: target.known,
+            targetReason: target.reason,
+          } : null,
+        },
+      });
+      if (!review || (!isGatedReview(review) && review.kind !== 'routine')) return;
+      let position = next.findIndex((entry) => entry.checkpointId === review.checkpointId);
+      const prior = position < 0 ? null : next[position];
+      const isCodeVerifier = canonicalRoleId(assignment.role) === 'verifier';
+      const isAuditor = canonicalRoleId(assignment.role) === 'auditor';
+      const pendingAssignmentIds = [...(obligationMatches(prior, review) ? prior.pendingAssignmentIds || [] : [])];
+      if (!isCodeVerifier && !isAuditor && getRole(roles, assignment.role)?.sandbox !== 'read-only') {
+        if (!pendingAssignmentIds.includes(assignmentId)) pendingAssignmentIds.push(assignmentId);
+      }
+      const entry = {
+        checkpointId: review.checkpointId,
+        review,
+        targetIdentity: obligationMatches(prior, review) ? prior.targetIdentity || null : null,
+        pendingAssignmentIds,
+        receipts: obligationMatches(prior, review) ? [...(prior.receipts || [])] : [...(prior?.receipts || [])],
+      };
+      if (position < 0) next.push(entry);
+      else next[position] = entry;
+      recordStage('review_selected', {
+        runId: state.runId,
+        assignmentId,
+        role: canonicalRoleId(assignment.role),
+        target: target.identity,
+        status: review.kind,
+        payload: {
+          policyId: POLICY_ID,
+          checkpointId: review.checkpointId,
+          reason: review.reason,
+          paths: review.paths,
+          evidenceIds: review.evidenceIds,
+          targetKnown: target.known,
+          targetReason: target.reason,
+          phase: 'dispatch_planned',
+        },
+      });
+    });
+    return next;
+  }
+
+  function logGateReuse(state, obligations) {
+    for (const obligation of obligations) {
+      const gate = currentGateState(state, obligation);
+      for (const [role, receipt] of [['verifier', gate.verifier], ['auditor', gate.auditor]]) {
+        if (!receipt) continue;
+        recordStage('review_evidence_reused', {
+          runId: state.runId,
+          assignmentId: receipt.assignmentId,
+          attemptId: receipt.attemptId,
+          role,
+          target: gate.target.identity,
+          status: 'reused',
+          payload: { policyId: POLICY_ID, checkpointId: obligation.checkpointId, receiptStatus: receipt.status },
+        });
+      }
+    }
+  }
+
+  function recordSemanticRecords(state, records) {
+    const eventTypes = {
+      problem: 'problem_recorded',
+      remedy: 'remedy_recorded',
+      architecture: 'architecture_decision',
+      verification: 'verification_recorded',
+      decision: 'decision_recorded',
+    };
+    for (const entry of records || []) {
+      recordStage(eventTypes[entry.kind], {
+        runId: state.runId,
+        problemId: entry.kind === 'problem' ? entry.id : (entry.relatedIds[0] || null),
+        decisionId: entry.kind === 'decision' || entry.kind === 'architecture' ? entry.id : null,
+        status: entry.status,
+        payload: {
+          id: entry.id,
+          kind: entry.kind,
+          summary: entry.summary,
+          evidenceIds: entry.evidenceIds,
+          relatedIds: entry.relatedIds,
+          adrPath: entry.adrPath,
+        },
+      });
+    }
+  }
+
+  function knownProblemIdsForDecision(records) {
+    const checked = checkDecisionRecordsShape(records === undefined ? [] : records);
+    const ids = new Set(checked.filter((entry) => entry.kind === 'problem').map((entry) => entry.id));
+    const relatedIds = new Set(checked.filter((entry) => ['remedy', 'verification'].includes(entry.kind))
+      .flatMap((entry) => entry.relatedIds).filter((problemId) => !ids.has(problemId)));
+    for (const problemId of relatedIds) {
+      const history = stagingLog.list({ problemId, type: 'problem_recorded', limit: 1 });
+      if (history.some((event) => event.problemId === problemId || event.payload?.id === problemId)) ids.add(problemId);
+    }
+    return [...ids];
+  }
+
+  function recordLeadResolutions(state, resolutions) {
+    for (const entry of resolutions || []) {
+      recordStage('worker_decision_resolved', {
+        runId: state.runId,
+        decisionId: entry.decisionId,
+        status: 'resolved',
+        payload: { choice: entry.choice, rationale: entry.rationale.slice(0, 1000) },
+      });
+    }
+  }
 
   // Evidence writes never fail a run: a store error becomes { ref: null, error }.
   function putEvidence(input) {
@@ -731,8 +1008,34 @@ function buildLeadGraph(deps) {
     const role = changedIds.size > 0 ? reviewRole() : null;
     if (!role) return null;
     const checks = (state.contract?.requiredChecks || []).filter((check) => changedIds.has(check.id));
+    const ids = checks.map((check) => check.id).join(', ');
+    const review = {
+      kind: 'pinned_check',
+      checkpointId: `pinned-check:${sha256(ids).slice(0, 24)}`,
+      reason: `Pinned acceptance check scripts changed: ${ids}`,
+      paths: [...new Set(checks.flatMap((check) => (check.pins || []).map((pin) => pin.path)))],
+      evidenceIds: checks.map((check) => check.id),
+    };
+    const target = targetForReview(state, review);
     const assignmentId = `${state.runId}:r${state.round}:review${(state.checkReviews || []).length + 1}`;
     const attemptId = makeAttemptId(assignmentId);
+    recordStage('review_selected', {
+      runId: state.runId,
+      assignmentId,
+      attemptId,
+      role: canonicalRoleId(role.name),
+      target: target.identity,
+      status: review.kind,
+      payload: {
+        policyId: POLICY_ID,
+        reason: review.reason,
+        paths: review.paths,
+        evidenceIds: review.evidenceIds,
+        targetKnown: target.known,
+        targetReason: target.reason,
+        phase: 'pinned_check_changed',
+      },
+    });
     const inputs = [];
     for (const check of checks) {
       inputs.push(`Pinned acceptance check "${check.id}": argv ${JSON.stringify(check.argv)}`);
@@ -742,7 +1045,6 @@ function buildLeadGraph(deps) {
       }
     }
     inputs.push(`Run goal (context): ${(state.goalOverride || state.goal).slice(0, 1500)}`);
-    const ids = checks.map((check) => check.id).join(', ');
     const assignment = {
       role: role.name,
       objective: `Independent read-only review of changed pinned acceptance check(s) ${ids}: the files behind them changed after they were pinned. Find the requirement each check enforces in the project's PRD (or its release or gate documents) and judge whether the change preserves it (for example, measuring from real output instead of hard-coded numbers) or weakens it (for example, lower thresholds, skipped cases, or a hard-coded pass). Do not edit files. Reply with outcome completed and decisionRequest null; the first line of summary must be exactly "VERDICT: preserve" or "VERDICT: weaken", followed by the PRD requirement and your evidence. Add a line "PRD_CHANGE_REQUIRED: <reason>" only if the PRD requirement itself must change.`,
@@ -752,6 +1054,7 @@ function buildLeadGraph(deps) {
       acceptanceCriteria: ['The first summary line is VERDICT: preserve or VERDICT: weaken', 'The verdict names the PRD requirement and cites the changed lines'],
       checks: ['Compare the change with the PRD requirement the check enforces'],
       stopConditions: ['Do not edit any file', 'Stop after giving the verdict'],
+      review,
       skills: [],
       wave: null,
       skillPins: [],
@@ -764,6 +1067,7 @@ function buildLeadGraph(deps) {
       role: role.name,
       sandbox: role.sandbox,
       assignment,
+      reviewTarget: { known: target.known, identity: target.identity, reason: target.reason },
       group: 0,
       contract: {
         id: BOUNDARY_CONTRACT_ID, reportContract: 'worker-report/v1', allowedFiles: [], sandbox: role.sandbox, roleProfileSha256: roleProfileSha256(role), skillPins: [],
@@ -774,7 +1078,8 @@ function buildLeadGraph(deps) {
     };
     return {
       checkReview: {
-        assignmentId, round: state.round, final: state.text, checks: checks.map((check) => ({ id: check.id, pins: currentPins(check, workspace) })),
+        assignmentId, round: state.round, final: state.text, review, reviewTarget: { known: target.known, identity: target.identity, reason: target.reason },
+        checks: checks.map((check) => ({ id: check.id, pins: currentPins(check, workspace) })),
       },
       batch: { round: state.round, parallel: true, review: true, items: [item] },
     };
@@ -911,6 +1216,8 @@ function buildLeadGraph(deps) {
       ...(analysis.report ? {} : { text: analysis.text ?? '' }),
       failureKind: result.failureKind || null,
       ...(result.continuation ? { continuation: result.continuation } : {}),
+      ...(result.reviewCoverage ? { reviewCoverage: result.reviewCoverage } : {}),
+      ...(result.reviewResult ? { reviewResult: result.reviewResult } : {}),
       scopeViolations: violations,
       ...(violationCount > violations.length ? { scopeViolationCount: violationCount } : {}),
       writerExecution,
@@ -926,6 +1233,196 @@ function buildLeadGraph(deps) {
       ...(omitted.length > 0 ? { projection: { omitted } } : {}),
       ...(evidenceError ? { evidenceError } : {}),
     };
+  }
+
+  function logicalAssignmentId(id) {
+    return String(id || '').replace(/:c\d+$/, '');
+  }
+
+  function stageWorkerOutcome(item, summary) {
+    const report = summary.report;
+    const failures = (summary.boundary?.results || []).filter((entry) => entry.result !== 'PASS');
+    recordStage('worker_result', {
+      runId: item.runId,
+      assignmentId: item.assignmentId,
+      attemptId: item.attemptId,
+      role: canonicalRoleId(item.role),
+      decisionId: report?.decisionRequest ? item.attemptId : null,
+      target: item.reviewTarget?.identity || null,
+      status: summary.status || 'unknown',
+      payload: {
+        checkpointId: item.assignment?.review?.checkpointId || null,
+        outcome: report?.outcome || null,
+        failureKind: summary.failureKind || null,
+        summary: String(report?.summary || '').slice(0, 500),
+        filesChanged: (report?.filesChanged || []).slice(0, 30),
+        filesInspected: (report?.filesInspected || []).slice(0, 30),
+        checks: (report?.checks || []).map((check) => ({
+          commandSha256: sha256(String(check.command || '')),
+          result: check.result,
+          detail: String(check.detail || '').slice(0, 300),
+        })),
+        boundaryFailures: failures.map((entry) => ({ code: entry.code, result: entry.result, detail: entry.detail })).slice(0, 20),
+        evidenceIds: (summary.evidence || []).map((entry) => entry.id).filter(Boolean).slice(0, 30),
+        ...(summary.reviewCoverage ? { reviewCoverage: summary.reviewCoverage } : {}),
+      },
+    });
+    for (const [index, finding] of (report?.risks || []).entries()) {
+      recordStage('worker_finding', {
+        runId: item.runId,
+        assignmentId: item.assignmentId,
+        attemptId: item.attemptId,
+        role: canonicalRoleId(item.role),
+        target: item.reviewTarget?.identity || null,
+        status: 'reported',
+        payload: { checkpointId: item.assignment?.review?.checkpointId || null, findingIndex: index, summary: String(finding).slice(0, 500) },
+      });
+    }
+    for (const [index, check] of (report?.checks || []).entries()) {
+      if (check.result === 'passed') continue;
+      recordStage('worker_check_failed', {
+        runId: item.runId,
+        assignmentId: item.assignmentId,
+        attemptId: item.attemptId,
+        role: canonicalRoleId(item.role),
+        target: item.reviewTarget?.identity || null,
+        status: check.result,
+        payload: { checkpointId: item.assignment?.review?.checkpointId || null, checkIndex: index, commandSha256: sha256(String(check.command || '')), detail: String(check.detail || '').slice(0, 500) },
+      });
+    }
+    if (report?.decisionRequest) {
+      recordStage('worker_decision_opened', {
+        runId: item.runId,
+        assignmentId: item.assignmentId,
+        attemptId: item.attemptId,
+        role: canonicalRoleId(item.role),
+        decisionId: item.attemptId,
+        status: 'open',
+        payload: { question: String(report.decisionRequest.question || '').slice(0, 500), options: report.decisionRequest.options.map(({ id }) => id) },
+      });
+    }
+  }
+
+  function integrateFinishedGroup(state, batch) {
+    const obligations = [...(state.reviewObligations || [])];
+    const items = batch.items.map((original) => {
+      if (original.state !== 'finished' || original.stagingProcessed) return original;
+      const summary = original.reviewSummary || outcomeSummary(original);
+      stageWorkerOutcome(original, summary);
+      const review = original.assignment?.review;
+      if (review && (isGatedReview(review) || review.kind === 'routine')) {
+        const position = obligations.findIndex((entry) => entry.checkpointId === review.checkpointId);
+        if (position >= 0 && sameReviewScope(obligations[position].review, review)) {
+          const obligation = obligations[position];
+          const role = canonicalRoleId(original.role);
+          const target = targetForReview(state, review);
+          const pendingAssignmentIds = (obligation.pendingAssignmentIds || []).filter((id) => logicalAssignmentId(id) !== logicalAssignmentId(original.assignmentId));
+          let receipts = [...(obligation.receipts || [])];
+          if (['verifier', 'auditor'].includes(role) && !original.reviewSkipped && !original.reviewReused) {
+            const captured = original.reviewTarget || null;
+            const evidence = reviewResult({
+              status: summary.status,
+              report: summary.report,
+              boundary: summary.boundary,
+              sandbox: summary.sandbox,
+              writerExecution: summary.writerExecution,
+            }, role, review);
+            const delta = summary.writerExecution?.delta;
+            const changedPaths = Array.isArray(delta?.changedPaths) ? delta.changedPaths : [];
+            const verifierTestWrite = role === 'verifier'
+              && summary.sandbox !== 'read-only'
+              && delta?.known === true
+              && changedPaths.length > 0
+              && (original.assignment?.allowedFiles || []).length > 0
+              && original.assignment.allowedFiles.every((file) => isTestCheckPath(file, workspace))
+              && changedPaths.every((file) => isTestCheckPath(file, workspace))
+              && (delta.changedPathCount ?? changedPaths.length) === changedPaths.length
+              && ['released', 'reconciled'].includes(summary.writerExecution?.state)
+              && !isUnintegratedLane(summary.writerExecution)
+              && summary.attestedDeltaKnown === true
+              && (summary.scopeViolations || []).length === 0
+              && (summary.attestedScopeViolations || []).length === 0
+              && outsideAllowed(changedPaths, original.assignment?.allowedFiles || [], workspace).length === 0;
+            const coverageUnknown = !summary.reviewCoverage || (
+              summary.reviewCoverage.targetKnown !== true
+              || summary.reviewCoverage.identityPresent !== true
+              || ['unknown', 'unstable', 'inconclusive'].includes(summary.reviewCoverage.status)
+              || (summary.reviewCoverage.stable !== true && (role === 'auditor' || !verifierTestWrite))
+            );
+            const serviceReview = summary.reviewResult || null;
+            const serviceReviewRejected = !serviceReview || (
+              serviceReview.policyId !== POLICY_ID
+              || serviceReview.kind !== review.kind
+              || serviceReview.checkpointId !== review.checkpointId
+              || serviceReview.status !== 'accepted'
+              || serviceReview.accepted !== true
+              || serviceReview.valid !== true
+              || (role === 'auditor' && serviceReview.verdict !== 'pass')
+            );
+            let status = 'failed';
+            let reason = evidence.reason;
+            if (coverageUnknown) {
+              status = 'inconclusive';
+              reason = summary.reviewCoverage?.reason || 'role_service_review_coverage_unknown';
+            } else if (serviceReviewRejected) {
+              status = serviceReview.status === 'stale' ? 'stale' : 'failed';
+              reason = serviceReview.reason || 'role_service_review_rejected';
+            } else if (!captured?.known || !target.known) {
+              status = 'inconclusive';
+              reason = captured?.reason || target.reason || 'review_target_unknown';
+            } else if (captured.identity !== target.identity && !verifierTestWrite) {
+              status = 'stale';
+              reason = 'review_target_changed_during_review';
+            } else if (evidence.valid) {
+              status = 'accepted';
+              reason = null;
+            }
+            const receipt = {
+              assignmentId: original.assignmentId,
+              attemptId: original.attemptId,
+              role,
+              status,
+              targetIdentity: target.known ? target.identity : null,
+              verdict: evidence.verdict,
+              reason,
+            };
+            receipts.push(receipt);
+            recordStage('review_result', {
+              runId: original.runId,
+              assignmentId: original.assignmentId,
+              attemptId: original.attemptId,
+              role,
+              target: receipt.targetIdentity,
+              status,
+              payload: {
+                policyId: POLICY_ID,
+                checkpointId: review.checkpointId,
+                targetKnown: Boolean(captured?.known && target.known),
+                currentTargetMatches: Boolean(captured?.known && target.known && captured.identity === target.identity),
+                verifierTestWrite: Boolean(verifierTestWrite),
+                serviceReviewStatus: serviceReview?.status || null,
+                serviceReviewAccepted: serviceReview?.accepted ?? null,
+                verdict: evidence.verdict,
+                reason,
+                reportOutcome: summary.report?.outcome || null,
+              },
+            });
+          }
+          obligations[position] = {
+            ...obligation,
+            targetIdentity: target.known ? target.identity : null,
+            pendingAssignmentIds,
+            receipts,
+          };
+        }
+      }
+      return {
+        ...original,
+        stagingProcessed: true,
+        reviewSummary: summary,
+      };
+    });
+    return { batch: { ...batch, items }, reviewObligations: obligations };
   }
 
   const roundsLine = (state) => {
@@ -944,6 +1441,23 @@ function buildLeadGraph(deps) {
   };
 
   const openDecisionsSection = (state) => 'Open worker decisions (resolve each in resolutions, or list it in humanInput.relatedDecisionIds when owner-only; a dispatch of only read-only roles may keep them open while you investigate):\n' + JSON.stringify(state.openDecisions.map(({ id, role, request }) => ({ id, role, request })));
+
+  function reviewObligationsSection(state) {
+    const entries = (state.reviewObligations || []).map((obligation) => {
+      const gate = currentGateState(state, obligation);
+      return {
+        checkpointId: obligation.checkpointId,
+        kind: obligation.review.kind,
+        reason: obligation.review.reason,
+        paths: obligation.review.paths,
+        targetKnown: gate.target?.known === true,
+        pendingAssignments: obligation.pendingAssignmentIds || [],
+        verifier: gate.verifier?.assignmentId || null,
+        auditor: gate.auditor?.assignmentId || null,
+      };
+    });
+    return `Checkpoint review obligations (a receipt counts only for current content, pins, policy, and run context; legacy outcomes without metadata are not receipts):\n${JSON.stringify(entries)}`;
+  }
 
   // Optional notes shared by the full and the delta prompt (acceptance, goal investigation, human answers, rejection).
   function stateNotes(state) {
@@ -977,6 +1491,7 @@ function buildLeadGraph(deps) {
       else sections.push(`New goal from the owner (authoritative):\n${state.goal}`);
     }
     sections.push(roundsLine(state), checksLine(state));
+    sections.push(reviewObligationsSection(state));
     if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
     if (extras.goalChanged) sections.push(`Available skill candidates (choose 0-5 relevant IDs for each assignment; no skill is required for unrelated work):\n${JSON.stringify(extras.skillCandidates)}`);
     sections.push(openDecisionsSection(state));
@@ -1001,6 +1516,7 @@ function buildLeadGraph(deps) {
       ...goal,
       roundsLine(state),
       checksLine(state),
+      reviewObligationsSection(state),
       'Available roles:\n' + JSON.stringify([...roles.values()].map(({ name, displayName, description, sandbox, model, effort }) => ({ id: canonicalRoleId(name), name: displayName || roleDisplayName(name), description, sandbox, model, effort }))),
       `Available skill candidates (choose 0-5 relevant IDs for each assignment; no skill is required for unrelated work):\n${JSON.stringify(extras.skillCandidates)}`,
       `Available skill IDs and names (trusted selectable IDs):\n${JSON.stringify(extras.skillNames)}`,
@@ -1013,17 +1529,19 @@ function buildLeadGraph(deps) {
     // The objective is kept for the run digest only; the bounded prompt stays as before.
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(outcomesForPrompt(state.outcomes)));
     sections.push([
-      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, and continueFrom (null unless continuing a worker). Set assignment.role to one of the available roles id values; their name values are human labels. Select 0-5 unique skills from the trusted listed skill IDs; use [] when none apply. Writable roles require one or more explicit safe relative allowedFiles; read-only roles may use allowedFiles []. allowedFiles entries are exact paths or directory prefixes; globs are not supported. Keep each brief bounded with at most 20 items per array field (use directory prefixes instead of long file lists).',
+      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, continueFrom, and review. Use review:null for unrelated read-only work and non-material administrative or document-only changes. For material implementation set review to {kind,checkpointId,reason,paths,evidenceIds}; use routine for ordinary material changes, risk_change for trust-boundary/security/authority/recovery/concurrency/migration/public-contract changes, performance for performance requirements, component_complete for an integrated independently usable component, investigation for diagnostic audit only, and owner_request for an explicit owner audit. Do not classify risk by filenames. Routine material changes need a verifier after integration; they do not trigger an auditor. Critical changes need a passing verifier first and then a bounded auditor before dependent writes or finish. Verifier and auditor must use the same kind, checkpointId, reason, paths, and evidenceIds. A checkpoint review context is immutable: do not downgrade its kind or narrow its paths during repair or review; create a new checkpoint for a new scope. Repairs may continue under their checkpoint; unrelated writes wait for a critical audit. The verifier and auditor may run in successive execution groups of one decision after verifier evidence is evaluated. An investigation never satisfies acceptance.',
+      `${ASSIGNMENT_SCOPE_RULE} ${PATH_RULE}`,
+      'Record durable semantic lessons in records (max 20): {id,kind,status,summary,evidenceIds,relatedIds,adrPath}. Use stable IDs for problems/decisions, relate remedies and verification records to problem IDs, and keep proposed, accepted, implemented, and tested states distinct. Architecture records require a safe workspace-relative Markdown ADR path; all other records use adrPath:null. Use records:[] when there is nothing material to record. Do not claim a fix or verification that the evidence does not establish.',
       'Briefing rules: in each assignment inputs and evidence, give exact file paths with line ranges and the facts already established, so workers do not re-explore; reuse explorer findings by quoting the relevant paths and ranges. Do not read large files yourself: read at most a few narrow ranges and dispatch an explorer for broad reading.',
       deps.parallelWriters
         ? 'Waves: assignment.wave is an integer >= 1 or null. Consecutive assignments sharing the same wave run concurrently. Writers in one wave each work in an isolated copy of the workspace made from the same starting state and do not see each other\'s changes; their changes are integrated into the shared workspace as each finishes. A later wave (or a null-wave assignment after them), for example a verifier, sees the integrated result. Writers in one wave must own disjoint allowedFiles. Use null for strictly sequential steps.'
         : 'Waves: assignment.wave may be used to group read-only work that runs concurrently. Writers always run one at a time in array order regardless of wave. Use null otherwise.',
-      'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, humanInput, goalAchieved, and acceptanceChecks. Use empty arrays, an empty string, or null for unused fields.',
+      'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, and records. Use empty arrays, an empty string, or null for unused fields.',
       'Repair and debugging assignments should use directory prefixes that cover the module and its tests, not single files. When a worker reports scopeExpansion or asks for a scope decision, prefer re-dispatching with continueFrom set to that outcome\'s assignmentId (same role) and the expanded allowedFiles over a fresh assignment: the worker continues its own thread instead of re-discovering its context.',
       'Worker decision requests are open decisions: resolve each one yourself (resolutions: decisionId, choice, rationale), investigating first when the evidence does not settle it; list one in humanInput.relatedDecisionIds only when it is an owner-only decision. Never leave one unanswered. Worker reports are self-reported; check scopeViolations and reportError.',
       `Investigate first: never ask the owner what investigation can answer; the owner has no one to ask either. ${OWNER_ONLY_RULE}`,
       `request_human_input is accepted only for an owner-only decision and only after an investigation of that blocker: ${INVESTIGATION_RULE} Give options, a recommendation, the evidence checked, and the independent work that can proceed.`,
-      'A blocker that persists needs its root cause located (an explorer or auditor with the concrete question). Once an investigation locates it outside what the team may change (a missing capability of a dependency or the environment, or the requirement itself), stop investigating that blocker and escalate it.',
+      'A blocker that persists needs its root cause located (an explorer first; use an auditor only for a concrete risk-boundary question, or scout/architect when appropriate). Once an investigation locates it outside what the team may change (a missing capability of a dependency or the environment, or the requirement itself), stop investigating that blocker and escalate it.',
       `goalAchieved: on finish set it honestly, true only when the goal is met; false names the blockers in final. The first finish with false does not end the run: you get ${GOAL_INVESTIGATION_ROUNDS} extra rounds to investigate the root cause of each blocker or fix it. A later finish with false pauses for the owner only when final cites a read-only investigation finished since then and states why each remaining blocker is owner-only, with evidence. Use null for dispatch and request_human_input.`,
       `Round budget: when the last two rounds made progress (an integrated change, a newly passing acceptance check, or a resolved worker decision), the budget grows by ${maxRounds} rounds automatically, up to ${ROUND_CAP} rounds; beyond that the owner decides.`,
       `acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks derived from the project's PRD, release or gate documents and its test commands; the first valid proposal is pinned for the run and runs at finish in a sandbox with a read-only workspace and no network. ${CHECK_RULE} Otherwise use null. A check that cannot pass is a blocker to investigate; only an owner-only cause is escalated. A changed pinned check script is reviewed by a read-only auditor against the PRD: preserved requirements are re-pinned, weakened ones keep failing.`,
@@ -1123,8 +1641,8 @@ function buildLeadGraph(deps) {
     const skillCandidates = findSkillCandidates(skillCatalog, [state.goal, ...priorSkillContext.map((item) => item.summary)].join('\n'), { limit: 12 });
     const skillNames = [...skillCatalog.values()].map(({ id, name }) => ({ id, name }));
     const candidateIds = skillNames.map(({ id }) => id);
-    // SES-01: one lead thread per session. A rejection retry keeps the current thread; otherwise the
-    // session thread is resumed when it is in the current Codex home and still small enough.
+    // SES-01: one lead thread per session. An in-run rejection retry keeps its current thread;
+    // resumed runs re-check the persisted profile hash before reusing a session thread.
     const contextId = runtime.contextId ?? state.contextId ?? null;
     const sessions = contextId ? deps.sessionThreads : null;
     const codexHome = appServer.getCodexHome?.() ?? null;
@@ -1134,7 +1652,8 @@ function buildLeadGraph(deps) {
     const leadProfileSha256 = roleProfileSha256(leadRole);
     let threadId = null;
     let rolledOver = false;
-    if (state.retryDecide && state.threadId) threadId = state.threadId;
+    const retrySameThread = update.retryDecide ?? state.retryDecide;
+    if (retrySameThread && state.threadId) threadId = state.threadId;
     else if (session?.threadId) {
       const sameProfile = !session.profileSha256 || session.profileSha256 === leadProfileSha256;
       if (sameProfile && session.codexHome === codexHome && (session.lastInputTokens == null || session.lastInputTokens <= rolloverThreshold(session.contextWindow))) threadId = session.threadId;
@@ -1241,11 +1760,38 @@ function buildLeadGraph(deps) {
         continuable: new Map(state.outcomes.filter((outcome) => !outcome.kind && outcome.assignmentId).map((outcome) => [outcome.assignmentId, outcome.role])),
         skillCatalog,
         skillCandidateIds: candidateIds,
+        knownProblemIds: knownProblemIdsForDecision(decision.records),
         // LL-6 investigate first.
         investigations: investigationsOf(state),
         openDecisionRounds: new Map(state.openDecisions.map((entry) => [entry.id, roundOf(entry.assignmentId) ?? 0])),
         goalInvestigationRound: state.goalInvestigation ? state.goalInvestigation.round : null,
       });
+      if (decision.action === 'finish') {
+        const blocked = gateFailure(state, { forFinish: true });
+        if (blocked) throw new BoundaryViolation('decision.review_gate', 'review_receipt_missing', blocked);
+      } else if (decision.action === 'dispatch') {
+        const blocked = gateFailure(state, { assignments: decision.assignments });
+        if (blocked) throw new BoundaryViolation('decision.review_gate', 'review_checkpoint_pending', blocked);
+        for (const assignment of decision.assignments) {
+          const prior = activeObligation(state, assignment.review);
+          if (prior && !obligationMatches(prior, assignment.review)) {
+            throw new BoundaryViolation('decision.review_gate', 'review_context_mismatch',
+              `Checkpoint ${prior.checkpointId} already has a pending or completed review context; keep its kind, reason, paths, and evidence IDs unchanged or use a new checkpoint ID`);
+          }
+        }
+        for (const assignment of decision.assignments) {
+          if (canonicalRoleId(assignment.role) !== 'auditor' || !isGatedReview(assignment.review)) continue;
+          const obligation = activeObligation(state, assignment.review);
+          const priorReceipt = obligationMatches(obligation, assignment.review)
+            ? matchingReceipt(obligation, 'verifier', targetForReview(state, assignment.review)) : null;
+          const earlierVerifier = decision.assignments.some((candidate, candidateIndex) => candidateIndex < decision.assignments.indexOf(assignment)
+            && canonicalRoleId(candidate.role) === 'verifier' && sameReviewScope(candidate.review, assignment.review));
+          if (!priorReceipt && !earlierVerifier) {
+            throw new BoundaryViolation('decision.review_gate', 'verifier_receipt_missing',
+              `Auditor checkpoint ${assignment.review.checkpointId} needs a passing current-target verifier receipt or an earlier verifier group in this decision`);
+          }
+        }
+      }
       proposal = Array.isArray(decision.acceptanceChecks) && decision.acceptanceChecks.length > 0 ? decision.acceptanceChecks : null;
       if (proposal && proposalsOpen) agentContract = agentChecksContract(proposal);
     } catch (error) {
@@ -1270,6 +1816,8 @@ function buildLeadGraph(deps) {
     update.consecutiveRejections = 0;
     update.retryDecide = false;
     deps.emit(runtime.onEvent, { type: 'decision', round: state.round + 1, action: decision.action });
+    recordSemanticRecords(state, decision.records);
+    recordLeadResolutions(state, decision.resolutions);
     if (agentContract) {
       // Pinned in graph state (checkpointed with this step); the server mirrors it into task metadata.
       update.contract = agentContract;
@@ -1286,6 +1834,11 @@ function buildLeadGraph(deps) {
     }
 
     if (decision.action === 'finish') {
+      const completeObligations = (state.reviewObligations || []).filter((entry) => {
+        const gate = currentGateState(state, entry);
+        return gate.verifier && (!isGatedReview(entry.review) || gate.auditor);
+      });
+      logGateReuse(state, completeObligations);
       const final = decision.final.trim();
       if (decision.goalAchieved === false) {
         // LL-6: the first unmet-goal finish is not a pause: the lead investigates the blockers with extra rounds.
@@ -1305,6 +1858,17 @@ function buildLeadGraph(deps) {
     }
     if (decision.action === 'request_human_input') {
       const decisionId = `${state.runId}:h${state.humanCount + 1}`;
+      recordStage('owner_decision_required', {
+        runId: state.runId,
+        decisionId,
+        status: 'open',
+        payload: {
+          reason: decision.humanInput.reason,
+          question: String(decision.humanInput.question || '').slice(0, 1000),
+          recommendation: decision.humanInput.recommendation,
+          relatedDecisionIds: decision.humanInput.relatedDecisionIds,
+        },
+      });
       return { ...update, humanCount: state.humanCount + 1, humanRequest: { decisionId, ...decision.humanInput } };
     }
     const limit = roundLimit(state);
@@ -1322,6 +1886,17 @@ function buildLeadGraph(deps) {
         round: state.round, by: 'auto', rounds: grant, reason: [...new Set(recent.map((entry) => entry.kind))].join(', '),
       }];
     }
+    const dispatchRound = state.round + 1;
+    const dependsOnCompletedGate = decision.assignments.some((assignment) => {
+      if (getRole(roles, assignment.role)?.sandbox === 'read-only') return false;
+      return (state.reviewObligations || []).some((entry) => isGatedReview(entry.review)
+        && entry.checkpointId !== assignment.review?.checkpointId);
+    });
+    if (dependsOnCompletedGate) {
+      logGateReuse(state, (state.reviewObligations || []).filter((entry) => isGatedReview(entry.review)
+        && currentGateState(state, entry).verifier && currentGateState(state, entry).auditor));
+    }
+    update.reviewObligations = reviewObligationsForDispatch(state, decision.assignments, dispatchRound);
     const pendingAssignments = decision.assignments.map((assignment) => {
       const selected = resolveSkillSelection(skillCatalog, assignment.skills || []);
       return { ...assignment, skills: selected.map(({ id }) => id), skillPins: selected.map(({ id, sha256: hash }) => ({ id, sha256: hash })) };
@@ -1433,12 +2008,12 @@ function buildLeadGraph(deps) {
           contextId: item.contextId,
           role: A2ARole.ROLE_USER,
           parts: [{ content: { $case: 'text', value: text }, mediaType: 'text/plain' }],
-          metadata: {},
+          metadata: { runId: item.runId, assignmentId: item.assignmentId, attemptId: item.attemptId },
           extensions: [],
           referenceTaskIds: [],
         },
         configuration: { returnImmediately: true, acceptedOutputModes: ['text/plain', 'application/json'] },
-        metadata: {},
+        metadata: { runId: item.runId, assignmentId: item.assignmentId, attemptId: item.attemptId },
       }, requestOptions(signal)), signal);
     } catch (error) {
       // Leave the item submitted with an unknown task ID; collect cancels it by contextId.
@@ -1483,7 +2058,10 @@ function buildLeadGraph(deps) {
     const update = {};
     if (!batch) {
       const round = state.round + 1;
-      const parallel = state.pendingAssignments.every((assignment) => getRole(roles, assignment.role).sandbox === 'read-only');
+      const allReadOnly = state.pendingAssignments.every((assignment) => getRole(roles, assignment.role).sandbox === 'read-only');
+      const hasReviewRole = state.pendingAssignments.some((assignment) => ['auditor', 'verifier'].includes(canonicalRoleId(assignment.role)));
+      const hasExplicitWave = state.pendingAssignments.some((assignment) => assignment.wave !== null && assignment.wave !== undefined);
+      const parallel = allReadOnly && !hasReviewRole && !hasExplicitWave;
       const groupOf = new Map();
       executionGroups(state.pendingAssignments).forEach((members, groupIndex) => members.forEach((index) => groupOf.set(index, groupIndex)));
       batch = {
@@ -1534,6 +2112,12 @@ function buildLeadGraph(deps) {
       update.pendingAssignments = null;
     }
 
+    if (batch.items.some((item) => item.state === 'finished' && !item.stagingProcessed)) {
+      const integrated = integrateFinishedGroup({ ...state, reviewObligations: update.reviewObligations || state.reviewObligations }, batch);
+      batch = integrated.batch;
+      update.reviewObligations = integrated.reviewObligations;
+    }
+
     // Serial batch: once a finished writer of this batch is not provably settled, no further writer
     // is submitted. Its workspace effects are unknown, so the rest are skipped and reconcile runs.
     if (!batch.parallel && batch.items.some((item) => item.state === 'finished' && item.sandbox !== 'read-only' && !isSettledWriter(item.result))) {
@@ -1574,15 +2158,158 @@ function buildLeadGraph(deps) {
     if (state.unresolvedWriters.length > 0 && targets.some((item) => item.sandbox !== 'read-only')) {
       throw new Error(`Writable dispatch refused: ${state.unresolvedWriters.length} writer outcome(s) are unresolved`);
     }
+
+    const obligations = update.reviewObligations || state.reviewObligations || [];
+    const gateState = { ...state, reviewObligations: obligations };
+    const latestItems = new Map(batch.items.map((item) => [item.assignmentId, item]));
+    const runnable = [];
+    const skip = (item, code, message, reason) => {
+      const row = journal.get(item.attemptId);
+      if (!row) {
+        journal.recordSubmitting({
+          attemptId: item.attemptId,
+          runId: item.runId,
+          assignmentId: item.assignmentId,
+          role: item.role,
+          sandbox: item.sandbox,
+          contextId: item.contextId,
+          objectiveSha256: sha256(String(item.assignment?.objective ?? '')),
+        });
+      }
+      recordStage('review_gate_skipped', {
+        runId: item.runId,
+        assignmentId: item.assignmentId,
+        attemptId: item.attemptId,
+        role: canonicalRoleId(item.role),
+        target: item.reviewTarget?.identity || null,
+        status: code,
+        payload: { policyId: POLICY_ID, checkpointId: item.assignment?.review?.checkpointId || null, reason: String(reason || code).slice(0, 400) },
+      });
+      latestItems.set(item.assignmentId, finishItem({ ...item, reviewSkipped: true }, {
+        ...syntheticResult(code, message, { contextId: item.contextId }),
+        effects: 'none',
+      }));
+    };
+
+    for (const original of targets) {
+      let item = original;
+      const review = item.assignment?.review || null;
+      const role = canonicalRoleId(item.role);
+      const isVerifier = role === 'verifier';
+      const isAuditor = role === 'auditor';
+      const tracked = review && (isGatedReview(review) || review.kind === 'routine');
+      const target = review ? targetForReview(gateState, review) : null;
+      if (review) {
+        const captured = item.reviewTarget || (target ? { known: target.known, identity: target.identity, reason: target.reason } : null);
+        item = { ...item, reviewTarget: captured };
+        recordStage('review_target', {
+          runId: item.runId,
+          assignmentId: item.assignmentId,
+          attemptId: item.attemptId,
+          role,
+          target: captured?.identity || null,
+          status: !target?.known || !captured?.known ? 'unknown'
+            : target.identity === captured.identity ? 'known' : 'stale',
+          payload: {
+            policyId: POLICY_ID,
+            checkpointId: review.checkpointId,
+            reason: target?.reason || captured?.reason || null,
+            phase: item.continuation ? 'before_continuation' : 'before_submit',
+            currentTargetMatches: Boolean(target?.known && captured?.known && target.identity === captured.identity),
+          },
+        });
+      }
+
+      let blocked = null;
+      if (tracked && item.reviewTarget?.known && target?.known && item.reviewTarget.identity !== target.identity) {
+        blocked = item.continuation
+          ? { code: 'stale_review_continuation', reason: 'The review target changed while the prior role turn was usage-limited; start a fresh review of the current target.' }
+          : { code: 'stale_review_target', reason: 'The review target changed after this assignment was checkpointed; start a fresh review of the current target.' };
+      }
+      if ((isVerifier || isAuditor) && state.unresolvedWriters.length > 0) {
+        blocked ||= { code: 'skipped_unresolved_writer', reason: 'A writer outcome is unresolved; review cannot begin until its effects are settled.' };
+      }
+      if (!blocked && tracked && !target?.known) {
+        blocked = { code: 'review_target_unknown', reason: target?.reason || 'The current review target identity is unavailable.' };
+      }
+      if (!blocked && tracked && isAuditor && review.kind !== 'pinned_check') {
+        const obligation = activeObligation(gateState, review);
+        const verifierReceipt = obligationMatches(obligation, review) ? matchingReceipt(obligation, 'verifier', target) : null;
+        const unfinishedWriter = batch.items.some((candidate) => (candidate.state !== 'finished' || !isSettledWriter(candidate.result))
+          && candidate.assignment?.review?.checkpointId === review.checkpointId
+          && getRole(roles, candidate.role)?.sandbox !== 'read-only'
+          && canonicalRoleId(candidate.role) !== 'verifier');
+        if (!verifierReceipt) blocked = { code: 'skipped_verifier_gate', reason: 'No accepted verifier receipt covers the current target.' };
+        else if (unfinishedWriter) blocked = { code: 'skipped_review_pending_writer', reason: 'A same-checkpoint writer has not finished and integrated.' };
+      }
+      if (!blocked && tracked && isVerifier) {
+        const unfinishedWriter = batch.items.some((candidate) => (candidate.state !== 'finished' || !isSettledWriter(candidate.result))
+          && candidate.assignment?.review?.checkpointId === review.checkpointId
+          && getRole(roles, candidate.role)?.sandbox !== 'read-only'
+          && canonicalRoleId(candidate.role) !== 'verifier');
+        if (unfinishedWriter) blocked = { code: 'skipped_review_pending_writer', reason: 'A same-checkpoint writer has not finished and integrated.' };
+      }
+      if (!blocked && item.sandbox !== 'read-only') {
+        for (const obligation of obligations.filter((entry) => isGatedReview(entry.review))) {
+          const gate = currentGateState(gateState, obligation);
+          const complete = (obligation.pendingAssignmentIds || []).length === 0 && gate.verifier && gate.auditor;
+          if (!complete && review?.checkpointId !== obligation.checkpointId) {
+            blocked = {
+              code: 'skipped_critical_review_gate',
+              reason: `Critical checkpoint ${obligation.checkpointId} still requires current verifier and auditor receipts.`,
+            };
+            break;
+          }
+        }
+      }
+
+      if (blocked) {
+        skip(item, blocked.code, `Not submitted: ${blocked.reason}`, blocked.reason);
+        continue;
+      }
+
+      if (tracked && (isVerifier || isAuditor)) {
+        const obligation = activeObligation(gateState, review);
+        const receipt = obligationMatches(obligation, review) ? matchingReceipt(obligation, role, target) : null;
+        if (receipt) {
+          recordStage('review_evidence_reused', {
+            runId: item.runId,
+            assignmentId: item.assignmentId,
+            attemptId: item.attemptId,
+            role,
+            target: target.identity,
+            status: 'reused',
+            payload: { policyId: POLICY_ID, checkpointId: review.checkpointId, receiptStatus: receipt.status },
+          });
+          const row = journal.get(item.attemptId);
+          if (!row) journal.recordSubmitting({
+            attemptId: item.attemptId,
+            runId: item.runId,
+            assignmentId: item.assignmentId,
+            role: item.role,
+            sandbox: item.sandbox,
+            contextId: item.contextId,
+            objectiveSha256: sha256(String(item.assignment?.objective ?? '')),
+          });
+          latestItems.set(item.assignmentId, finishItem({ ...item, reviewReused: true }, {
+            ...syntheticResult('review_receipt_reused', 'An accepted receipt already covers the current target.', { contextId: item.contextId }),
+            effects: 'none',
+          }));
+          continue;
+        }
+      }
+      runnable.push(item);
+    }
+
     // An abort during submit leaves the item submitted with an unknown task so collect can cancel it.
-    const settled = await Promise.allSettled(targets.map((item) => submitItem(item, signal).catch((error) => {
+    const settled = await Promise.allSettled(runnable.map((item) => submitItem(item, signal).catch((error) => {
       if (error?.name === 'AbortError') return { ...item, state: 'submitted', taskId: null };
       throw error;
     })));
     const failure = settled.find((entry) => entry.status === 'rejected');
     if (failure) throw failure.reason;
-    const byId = new Map(settled.map((entry) => [entry.value.assignmentId, entry.value]));
-    return { ...update, batch: { ...batch, items: batch.items.map((item) => byId.get(item.assignmentId) || item) } };
+    for (const entry of settled) latestItems.set(entry.value.assignmentId, entry.value);
+    return { ...update, batch: { ...batch, items: batch.items.map((item) => latestItems.get(item.assignmentId) || item) } };
   }
 
   async function pollItem(item, runtime) {
@@ -1637,16 +2364,18 @@ function buildLeadGraph(deps) {
 
   async function verify(state, config) {
     const runtime = runtimeOf(config);
-    const finished = state.batch.items.filter((item) => item.state === 'finished');
-    const summaries = finished.map((item) => outcomeSummary(item));
+    const integrated = integrateFinishedGroup(state, state.batch);
+    const batch = integrated.batch;
+    const finished = batch.items.filter((item) => item.state === 'finished');
+    const summaries = finished.map((item) => item.reviewSummary || outcomeSummary(item));
     const open = [...state.openDecisions];
     for (const outcome of summaries) {
       if (outcome.report?.outcome === 'needs_decision' && !open.some((entry) => entry.id === outcome.attemptId)) {
         open.push({ id: outcome.attemptId, role: outcome.role, assignmentId: outcome.assignmentId, request: outcome.report.decisionRequest });
       }
     }
-    for (const outcome of summaries) deps.emit(runtime.onEvent, { type: 'assignment', round: state.batch.round, ...outcome });
-    deps.emit(runtime.onEvent, { type: 'round', round: state.batch.round, outcomes: summaries });
+    for (const outcome of summaries) deps.emit(runtime.onEvent, { type: 'assignment', round: batch.round, ...outcome });
+    deps.emit(runtime.onEvent, { type: 'round', round: batch.round, outcomes: summaries });
     const unresolvedWriters = [...state.unresolvedWriters];
     for (const item of finished) {
       if (item.sandbox === 'read-only' || isSettledWriter(item.result)) continue;
@@ -1676,6 +2405,7 @@ function buildLeadGraph(deps) {
           role: item.role,
           sandbox: item.sandbox,
           assignment: item.assignment,
+          ...(item.reviewTarget ? { reviewTarget: item.reviewTarget } : {}),
           ...(item.contract ? { contract: item.contract } : {}),
         },
         continuation: item.result.continuation,
@@ -1683,9 +2413,10 @@ function buildLeadGraph(deps) {
     const changes = summaries.filter((outcome) => integratedChange(outcome));
     return {
       outcomes: [...state.outcomes, ...summaries],
-      ...(changes.length > 0 ? { progress: addProgress(state, changes.map((outcome) => ({ round: state.batch.round, kind: 'integrated_change', detail: outcome.assignmentId }))) } : {}),
+      ...(changes.length > 0 ? { progress: addProgress(state, changes.map((outcome) => ({ round: batch.round, kind: 'integrated_change', detail: outcome.assignmentId }))) } : {}),
       openDecisions: open,
       unresolvedWriters,
+      reviewObligations: integrated.reviewObligations,
       batch: null,
       continuable,
       ...(limited ? { budget: { source: 'worker' } } : {}),
@@ -1814,6 +2545,7 @@ function buildLeadGraph(deps) {
         role: origin.role,
         sandbox: origin.sandbox,
         assignment: origin.assignment,
+        ...(origin.reviewTarget ? { reviewTarget: origin.reviewTarget } : {}),
         group: 0,
         ...(origin.contract ? { contract: origin.contract } : {}),
         continuation: {
@@ -1836,10 +2568,34 @@ function buildLeadGraph(deps) {
     const request = state.humanRequest;
     const { final: _final, review: _review, ...shown } = request;
     const answer = interrupt({ kind: 'human_decision', ...shown });
-    if (request.escalation === 'check_changed') return resolveCheckChange(state, request, answer, runtimeOf(config));
-    if (request.escalation) return resolveEscalation(state, request, answer);
+    if (request.escalation === 'check_changed') {
+      const update = resolveCheckChange(state, request, answer, runtimeOf(config));
+      recordStage('owner_decision_resolved', {
+        runId: state.runId,
+        decisionId: request.decisionId,
+        status: answer.choice === 'approve_change' ? 'accepted' : 'rejected',
+        payload: { reason: request.reason, choice: answer.choice === 'approve_change' ? 'approve_change' : 'keep_requirement' },
+      });
+      return update;
+    }
+    if (request.escalation) {
+      const update = resolveEscalation(state, request, answer);
+      recordStage('owner_decision_resolved', {
+        runId: state.runId,
+        decisionId: request.decisionId,
+        status: answer.choice === 'accept_as_is' ? 'accepted' : 'resolved',
+        payload: { reason: request.escalation, choice: ESCALATION_CHOICES.includes(answer.choice) ? answer.choice : 'continue' },
+      });
+      return update;
+    }
     // relatedDecisionIds may also cite an investigation (LL-6); only open decisions are closed.
     const related = new Set((request.relatedDecisionIds || []).filter((id) => state.openDecisions.some((entry) => entry.id === id)));
+    recordStage('owner_decision_resolved', {
+      runId: state.runId,
+      decisionId: request.decisionId,
+      status: 'resolved',
+      payload: { choice: answer.choice || 'continue', relatedDecisionIds: [...related] },
+    });
     return {
       humanAnswers: [...state.humanAnswers, {
         decisionId: request.decisionId,
@@ -1900,7 +2656,44 @@ function buildLeadGraph(deps) {
     const review = state.checkReview;
     // The latest attempt of the review (a usage-limited review continues as <id>:c<n>).
     const outcome = state.outcomes.filter((entry) => !entry.kind && (entry.assignmentId === review.assignmentId || String(entry.assignmentId).startsWith(`${review.assignmentId}:c`))).at(-1) || null;
-    const { verdict, prdChange, parsed } = parseVerdict(outcome);
+    let { verdict, prdChange, parsed } = parseVerdict(outcome);
+    const currentTarget = review.review ? targetForReview(state, review.review) : null;
+    const coverage = outcome?.reviewCoverage || null;
+    const serviceReview = outcome?.reviewResult || null;
+    const serviceUnstable = !coverage || (coverage.targetKnown !== true || coverage.identityPresent !== true || coverage.stable !== true
+      || ['unknown', 'unstable', 'inconclusive'].includes(coverage.status));
+    const serviceRejected = !serviceReview || serviceReview.policyId !== POLICY_ID
+      || serviceReview.kind !== review.review?.kind
+      || serviceReview.checkpointId !== review.review?.checkpointId
+      || serviceReview.valid !== true
+      || !['preserve', 'weaken'].includes(serviceReview.verdict);
+    const graphUnstable = !review.reviewTarget?.known || !currentTarget?.known
+      || review.reviewTarget.identity !== currentTarget.identity;
+    if (serviceUnstable || serviceRejected || graphUnstable) {
+      verdict = 'weaken';
+      prdChange = null;
+      parsed = false;
+    }
+    recordStage('pinned_check_review_result', {
+      runId: state.runId,
+      assignmentId: review.assignmentId,
+      attemptId: outcome?.attemptId || null,
+      role: outcome?.role || 'auditor',
+      target: review.reviewTarget?.identity || null,
+      status: verdict,
+      payload: {
+        policyId: POLICY_ID,
+        checkpointId: review.review?.checkpointId || null,
+        targetKnown: Boolean(review.reviewTarget?.known && currentTarget?.known),
+        targetStable: Boolean(review.reviewTarget?.known && currentTarget?.known && review.reviewTarget.identity === currentTarget.identity),
+        serviceCoverageKnown: coverage ? coverage.targetKnown === true && coverage.identityPresent === true : null,
+        serviceReviewValid: serviceReview?.valid === true,
+        reason: serviceUnstable ? coverage?.reason || 'role_service_review_coverage_unknown'
+          : serviceRejected ? serviceReview?.reason || 'pinned_check_service_review_rejected'
+            : graphUnstable ? 'pinned_check_target_changed_or_unavailable' : null,
+        parsed,
+      },
+    });
     // A decision request of the reviewer is not a decision for the lead.
     const openDecisions = state.openDecisions.filter((entry) => entry.assignmentId !== review.assignmentId && !String(entry.assignmentId).startsWith(`${review.assignmentId}:c`));
     const by = `${outcome?.role || 'reviewer'} review ${review.assignmentId}${parsed ? '' : ' (no parseable verdict)'}`;
@@ -2008,6 +2801,7 @@ function buildLeadGraph(deps) {
       if (error?.name === 'AbortError') throw error;
       acceptance = unrunAcceptance('acceptance_error', errorText(error), (state.contract?.requiredChecks || []).map((check) => check.id));
     }
+    acceptance = enforceReviewAcceptance(state, acceptance);
     deps.emit(runtime.onEvent, { type: 'acceptance', round: state.round, disposition: acceptance.disposition, reasons: acceptance.reasons });
     const runs = { acceptance, acceptanceRuns: (state.acceptanceRuns || 0) + 1 };
     // LL-6 progress: a check that passes now and did not pass in the previous acceptance run.
@@ -2047,6 +2841,7 @@ function buildLeadGraph(deps) {
         });
       }
     }
+    acceptance = enforceReviewAcceptance(state, acceptance);
     return {
       result: {
         runId: state.runId,

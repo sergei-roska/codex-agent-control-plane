@@ -9,7 +9,7 @@ const { execFileSync } = require('node:child_process');
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 
 function runGit(workspace, args) {
-  return execFileSync('git', ['-C', workspace, ...args], {
+  return execFileSync('git', ['--no-optional-locks', '-C', workspace, ...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
     maxBuffer: GIT_MAX_BUFFER,

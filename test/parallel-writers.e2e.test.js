@@ -18,6 +18,13 @@ const { sh, write, probeExec } = require('./helpers/lane-fixtures');
 process.env.CODEX_A2A_WORKSPACE_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-ws-lock-'));
 
 const decision = (fields) => ({ action: 'finish', assignments: [], final: '', resolutions: [], humanInput: null, ...fields });
+const parallelReview = {
+  kind: 'routine',
+  checkpointId: 'parallel-writers-e2e',
+  reason: 'Verify both integrated source updates',
+  paths: ['src/a.txt', 'src/b.txt'],
+  evidenceIds: ['src/a.txt', 'src/b.txt'],
+};
 const assignment = (role, allowedFiles, wave) => ({
   role,
   objective: `Do the ${role} work`,
@@ -28,9 +35,10 @@ const assignment = (role, allowedFiles, wave) => ({
   checks: ['none'],
   stopConditions: ['blocked'],
   wave,
+  review: parallelReview,
 });
-const report = (summary, filesChanged) => JSON.stringify({
-  outcome: 'completed', summary, filesChanged, filesInspected: [], checks: [], risks: [], scopeExpansion: [], decisionRequest: null,
+const report = (summary, filesChanged, evidence = {}) => JSON.stringify({
+  outcome: 'completed', summary, filesChanged, filesInspected: [], checks: [], risks: [], scopeExpansion: [], decisionRequest: null, ...evidence,
 });
 const read = (dir, rel) => fs.readFileSync(path.join(dir, rel), 'utf8');
 
@@ -185,7 +193,10 @@ test('parallel writers e2e', async (suite) => {
       verifier: async ({ cwd }) => {
         verifierView = { a: read(cwd, 'src/a.txt'), b: read(cwd, 'src/b.txt'), readme: read(cwd, 'README.md') };
         fs.writeFileSync(path.join(cwd, 'tests/check.txt'), 'c1\n');
-        return report('checked', ['tests/check.txt']);
+        return report('checked', ['tests/check.txt'], {
+          filesInspected: ['src/a.txt', 'src/b.txt'],
+          checks: [{ command: 'verify integrated source contents', result: 'passed', detail: 'Read both declared source paths after integration.' }],
+        });
       },
     };
     await withRun({ leadScript: script(), writers }, async ({ task, workspace, before, appServer, db }) => {
@@ -207,7 +218,8 @@ test('parallel writers e2e', async (suite) => {
       const after = repoState(workspace);
       assert.equal(after.head, before.head);
       assert.equal(after.refs, before.refs);
-      assert.ok(after.index.equals(before.index));
+      const indexMatches = after.index.equals(before.index);
+      assert.ok(indexMatches, indexMatches ? undefined : `Git index changed: status=${sh(workspace, 'status', '--short').trim() || '(clean)'}; staged=${sh(workspace, 'diff', '--cached', '--name-status').trim() || '(none)'}`);
       assert.deepEqual(db.prepare('SELECT state FROM writer_executions').all().map((row) => row.state), ['released', 'released', 'released']);
       const lanes = db.prepare('SELECT state, path FROM writer_lanes').all();
       assert.equal(lanes.length, 3);
@@ -234,10 +246,14 @@ test('parallel writers e2e', async (suite) => {
         return report('wrote b', ['src/b.txt']);
       },
       verifier: async ({ cwd }) => {
-        assert.equal(read(cwd, 'src/a.txt'), 'a1\n');
-        assert.equal(read(cwd, 'src/b.txt'), 'b0\n');
+        const inspected = { a: read(cwd, 'src/a.txt'), b: read(cwd, 'src/b.txt') };
+        assert.equal(inspected.a, 'a1\n');
+        assert.equal(inspected.b, 'b0\n');
         fs.writeFileSync(path.join(cwd, 'tests/check.txt'), 'c1\n');
-        return report('checked', ['tests/check.txt']);
+        return report('checked', ['tests/check.txt'], {
+          filesInspected: ['src/a.txt', 'src/b.txt'],
+          checks: [{ command: 'verify integrated source contents', result: 'passed', detail: 'Read both declared source paths after integration.' }],
+        });
       },
     };
     await withRun({ leadScript: script(), writers }, async ({ task, workspace, appServer, db }) => {

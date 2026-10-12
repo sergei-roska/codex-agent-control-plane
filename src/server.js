@@ -22,6 +22,7 @@ const { UsageLedger } = require('./usage-ledger');
 const { SessionThreads } = require('./session-threads');
 const { createActivityStore } = require('./activity-store');
 const { createEvidenceStore } = require('./evidence-store');
+const { StagingLog } = require('./staging-log');
 const { validateAcceptanceContract, formatAcceptance, invalidAcceptanceContract } = require('./acceptance');
 const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
 const { loadSkillCatalog } = require('./skill-catalog');
@@ -747,17 +748,19 @@ async function startServer({
       warn: (message) => console.warn(`[roles] ${message}`),
     });
     const usageLedger = new UsageLedger({ db: state.db });
+    const stagingLog = new StagingLog({ db: state.db });
     const evidenceStore = createEvidenceStore(state.db);
     const activityStore = createActivityStore(state.db);
     const sessionThreads = new SessionThreads({ db: state.db });
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog,
-      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, activityStore, evidenceStore, sessionThreads,
+      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, stagingLog, activityStore, evidenceStore, sessionThreads,
       parallelWriters: worktreeMode,
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
       roles, appServer, workspace, baseUrl, admission, usageLedger, activityStore, skillCatalog,
+      stagingLog,
       lanes: worktreeMode ? lanes : null,
       taskStoreFactory: (roleId) => createTaskStore(state, roleId),
     });

@@ -374,6 +374,9 @@ test('startup passes checkpointer and journal to the orchestrator factory', asyn
   try {
     assert.ok(options.checkpointer);
     assert.equal(typeof options.journal.recordSubmitting, 'function');
+    assert.equal(typeof options.stagingLog.record, 'function');
+    assert.equal(options.stagingLog.db, runtime.state.db);
+    assert.deepEqual(options.stagingLog.list(), []);
     assert.equal(options.leadRole.name, 'coordinator');
     assert.ok(options.skillCatalog instanceof Map);
   } finally {

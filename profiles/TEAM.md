@@ -31,14 +31,63 @@ Ask the user only when authority is missing, an external or irreversible action 
 | Lead, main session | Selected by the host | Scope, architecture, dispatch, integration, final judgment |
 | `explorer` | GPT-6 Luna, high | Read-only repository and interface mapping |
 | `engineer` | GPT-6 Luna, high | Bounded implementation and focused verification |
-| `verifier` | GPT-6 Luna, high | Independent focused tests and reproducible checks within assigned test files |
-| `auditor` | GPT-6.1 Sol, high | Independent read-only flow, regression, and trust-boundary audit |
+| `verifier` | GPT-6 Luna, high | Routine independent acceptance: inspect actual changes and run focused checks within assigned test files |
+| `auditor` | GPT-6.1 Sol, high | Selective read-only security, performance, flow, regression, and trust-boundary audit |
 | `recovery-engineer` | GPT-6 Luna, xhigh | Harder bounded retry after a concrete Luna failure |
 | `senior-engineer` | GPT-6.1 Sol, medium | Escalation after Luna still cannot complete correctly |
 | `architect` | GPT-6.1 Sol, xhigh | Rare read-only second opinion on a narrow consequential decision |
 | `scout` | GPT-6 Luna, medium | Mechanical, uniform read-only inventory when scale warrants it |
 
 Keep short or dependent work in the lead. Delegate only when separate context or parallel work materially helps. Use `engineer` first for implementation. Inspect its actual evidence before escalating to `recovery-engineer`, then to `senior-engineer` if needed. The lead decides even after an architect opinion.
+
+Give material implementation a review checkpoint and explicit relevant paths.
+Use `verifier` for routine independent acceptance after integration. It reads
+the actual changes and verifies requirements; the lead decides whether the
+evidence is sufficient. Batch related changes into one verification task.
+Investigation or an unchanged candidate does not need a standing review task.
+Verifier is workspace-write: always assign explicit safe relative test/check
+paths in allowedFiles, including when it only reads and runs existing checks.
+Allowed paths are a permission bound, not a request to edit those files.
+Use [] only for roles whose effective sandbox is read-only. Never invent a
+broad write scope to repair a rejected assignment; use known project paths.
+
+Dispatch `auditor` with a bounded reason and checkpoint only for:
+
+1. Critical changes in permissions, credentials, trust boundaries, authoritative state, concurrency, recovery, migrations, or public contracts, before dependent work.
+2. Performance-sensitive changes or a performance requirement, with measurements supplied by the verifier.
+3. Completion of an independently usable component or material milestone, on the integrated candidate.
+4. A concrete blocker question that explorer investigation could not settle, a security/integrity incident, or an explicit owner audit request.
+5. The independent read-only integrity review of changed pinned acceptance scripts.
+
+An ordinary round ending is not an audit trigger. Reuse matching review evidence;
+recheck only when relevant content, check pins, or requirements changed. Put
+review in a later wave than the changes it accepts. Repair a failed routine
+candidate before its checkpoint audit; a bounded incident investigation may
+proceed while checks fail. Risk-heavy projects can need consecutive audits.
+Historical reports without a matching target identity do not establish coverage.
+
+Investigate ordinary blockers with `explorer` first. Use auditor only when its
+specific expertise is needed. The auditor does not replace routine verifier
+acceptance, and a positive model verdict cannot override failed deterministic
+checks, unresolved writers, or owner approval requirements.
+
+## Staging evidence and decisions
+
+This is a staging team whose qualified behavior will be transferred to a
+production orchestrator. Record every discovered problem, attempted remedy,
+failed attempt, verification result, and architectural decision. Use stable
+problem/decision IDs, bounded summaries, and evidence references; preserve the
+history of unresolved and reopened problems. Distinguish proposed, accepted,
+implemented, and verified behavior. Do not claim live verification from static
+inspection or isolated tests.
+
+Include explicit problem/remedy/architecture/verification/decision entries in
+the lead decision's `records` array. Architecture decisions name
+their ADR path. Assign document updates to a scoped writer and keep the
+production transfer index current. Log rationale for selecting an audit or
+reusing its evidence. Include failed fixes, not only the accepted result.
+Never copy credentials, environment secrets, full prompts, or raw tool outputs
+into the lesson log; refer to bounded evidence artifacts instead.
 
 ## Work contract
 

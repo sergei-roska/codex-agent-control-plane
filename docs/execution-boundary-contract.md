@@ -1,8 +1,10 @@
 # Execution boundary contract (DBC-01)
 
-Status: frozen for Phase A, contract `boundary-contract/v1`. A change reopens
-DBC-01 and marks DBC-02..DBC-04 stale. Facts below were verified at revision
-`db61957`.
+Status: Phase A record frozen as `boundary-contract/v1`; historical facts below
+were verified at `db61957`. The additive selective-review extension dated
+2026-10-12 reopens related runtime qualification without changing
+`worker-report/v1`. Its focused/full-suite and independent review evidence is
+recorded in `docs/auditor-routing-plan.md`.
 
 ## Purpose and limits
 
@@ -28,6 +30,32 @@ Not claimed: per-tool prevention (assignment-level checks constrain what is
 dispatched and what is accepted, not each tool call inside a turn), proof of
 agent correctness, or safety of effects the snapshot cannot see (see "Snapshot
 limits").
+
+## Selective review extension, 2026-10-12
+
+Policy `auditor-routing/v1` adds bounded nullable assignment review context and
+bounded decision `records`. Legacy values remain readable; absent old review
+metadata does not prove current-target coverage. Semantic risk classification
+belongs to the lead. The runtime evaluates declared obligations and never
+evaluates a model-authored predicate expression.
+
+| Registry ID | Codes |
+| --- | --- |
+| `assignment.review` | `review_context_invalid`, `review_context_missing`, `review_wave_conflict` |
+| `decision.records` | `records_invalid` |
+| `decision.review_gate` | `review_receipt_missing`, `review_checkpoint_pending`, `review_context_mismatch`, `verifier_receipt_missing` |
+| `review.continuation` | `review_origin_unknown`, `review_origin_stale` |
+| `review.concurrent_writer` | `review_writer_unsettled` |
+| `review.reservation` | `review_reservation_unavailable` |
+| `review.target` | `review_target_unknown` |
+
+Declarations cannot downgrade an existing checkpoint. Required verifier/auditor
+receipts bind scoped content and check/requirement context. Critical audit and
+read-only pinned-check review reserve the workspace against managed writers
+without receiving filesystem write authority. Unknown/stale receipts and failed
+durable recording cannot authorize acceptance, including alternate finish paths.
+Full metadata, cleanup, mutation exception, and record semantics are frozen in
+`docs/auditor-routing-contract.md`.
 
 ## Result model
 

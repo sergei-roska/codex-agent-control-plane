@@ -46,6 +46,20 @@ test('snapshot records head, dirty entries with content hashes and a stable fing
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('snapshot status does not refresh the shared physical index', () => {
+  const dir = makeRepo();
+  try {
+    const tracked = path.join(dir, 'tracked.txt');
+    fs.utimesSync(tracked, new Date('2001-01-01T00:00:00Z'), new Date('2001-01-01T00:00:00Z'));
+    const indexPath = path.join(dir, '.git', 'index');
+    const before = fs.readFileSync(indexPath);
+    const snapshot = takeSnapshot(dir);
+    assert.equal(snapshot.kind, 'git');
+    assert.deepEqual(snapshot.entries, []);
+    assert.ok(fs.readFileSync(indexPath).equals(before));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('diff reports a modified tracked file', () => {
   const dir = makeRepo();
   try {

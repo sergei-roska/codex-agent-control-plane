@@ -38,10 +38,10 @@ test('schemas satisfy strict structured output rules', () => {
   assert.equal(WORKER_REPORT_SCHEMA.properties.decisionRequest.anyOf[1].type, 'null');
   assert.equal(DECISION_SCHEMA.properties.humanInput.anyOf[1].type, 'null');
   assert.deepEqual(DECISION_SCHEMA.properties.action.enum, ['dispatch', 'finish', 'request_human_input']);
-  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom']);
+  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom', 'review']);
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.continueFrom, { type: ['string', 'null'] });
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.wave, { type: ['integer', 'null'], minimum: 1 });
-  assert.deepEqual(DECISION_SCHEMA.required, ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks']);
+  assert.deepEqual(DECISION_SCHEMA.required, ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks', 'records']);
   assert.deepEqual(DECISION_SCHEMA.properties.goalAchieved, { type: ['boolean', 'null'] });
   const [checks, none] = DECISION_SCHEMA.properties.acceptanceChecks.anyOf;
   assert.equal(none.type, 'null');
@@ -73,7 +73,7 @@ test('goalAchieved: finish needs a boolean, legacy decisions get null injected, 
   assert.equal(asked.goalAchieved, null);
   throws(finish({ goalAchieved: 'yes' }), ctx(), /goalAchieved must be true, false, or null/);
   throws(finish({ goalAchieved: true, acceptanceChecks: {} }), ctx(), /acceptanceChecks must be an array or null/);
-  throws(finish({ goalAchieved: true, other: 1 }), ctx(), /plus goalAchieved and acceptanceChecks/);
+  throws(finish({ goalAchieved: true, other: 1 }), ctx(), /unsupported field/);
   assert.ok(BOUNDARY_PREDICATES['decision.acceptance_checks'].includes('acceptance_checks_invalid'));
 });
 
@@ -176,9 +176,11 @@ test('parseWorkerReport never throws', () => {
 const roles = new Map([
   ['orch-planner', { name: 'orch-planner', sandbox: 'read-only' }],
   ['orch-builder', { name: 'orch-builder', sandbox: 'workspace-write' }],
+  ['orch-verifier', { name: 'orch-verifier', sandbox: 'workspace-write' }],
   ['orch-repair-xhigh', { name: 'orch-repair-xhigh', sandbox: 'workspace-write' }],
   ['orch-repair-sol', { name: 'orch-repair-sol', sandbox: 'workspace-write' }],
   ['orch-architect', { name: 'orch-architect', sandbox: 'read-only' }],
+  ['orch-auditor', { name: 'orch-auditor', sandbox: 'read-only' }],
 ]);
 const INVESTIGATION = { assignmentId: 'run:r1:a0', round: 1 };
 function ctx(overrides = {}) {
@@ -217,8 +219,8 @@ test('validateDecision accepts valid finish, dispatch, and request_human_input',
 
 test('validateDecision enforces shape and action rules', () => {
   throws(null, ctx(), /JSON object/);
-  throws({ action: 'finish', assignments: [], final: 'x' }, ctx(), /only action, assignments, final, resolutions, and humanInput/);
-  throws({ ...finish(), extra: 1 }, ctx(), /only action/);
+  throws({ action: 'finish', assignments: [], final: 'x' }, ctx(), /unsupported field/);
+  throws({ ...finish(), extra: 1 }, ctx(), /unsupported field/);
   throws(finish({ action: 'stop' }), ctx(), /Unsupported lead action/);
   throws(finish({ assignments: 'x' }), ctx(), /assignments must be an array/);
   throws(finish({ final: 1 }), ctx(), /final must be a string/);
@@ -268,6 +270,24 @@ test('validateDecision enforces assignment rules', () => {
   validateDecision(dispatch([assignment({ role: 'orch-architect', objective: 'x'.repeat(240) })]), ctx());
 });
 
+test('verifier remains a writable role and reports its bounded test scope requirement', () => {
+  const review = { kind: 'routine', checkpointId: 'verifier-scope', reason: 'Verify the change', paths: ['src/file.js'], evidenceIds: ['issue-scope'] };
+  assert.throws(() => validateDecision(dispatch([assignment({ role: 'orch-verifier', allowedFiles: [], review })]), ctx()), (error) => {
+    assert.equal(error.violations[0].predicate, 'assignment.writer_scope');
+    assert.equal(error.violations[0].code, 'writer_scope_missing');
+    assert.match(error.message, /Writable role orch-verifier requires explicit allowedFiles/);
+    assert.match(error.message, /1-20 bounded existing test\/check paths/);
+    assert.match(error.message, /grants write permission but does not require edits/);
+    return true;
+  });
+  assert.throws(() => validateDecision(dispatch([assignment({ role: 'orch-builder', allowedFiles: [] })]), ctx()), (error) => {
+    assert.equal(error.violations[0].predicate, 'assignment.writer_scope');
+    assert.equal(error.violations[0].code, 'writer_scope_missing');
+    assert.doesNotMatch(error.message, /orch-verifier/);
+    return true;
+  });
+});
+
 test('canonical role IDs and legacy assignment IDs resolve to the same escalation gates', () => {
   const canonicalRoles = new Map([
     ['engineer', { name: 'engineer', sandbox: 'workspace-write' }],
@@ -284,7 +304,10 @@ test('canonical role IDs and legacy assignment IDs resolve to the same escalatio
 });
 
 test('assignment skills are bounded, unique, catalog-selectable, and legacy decisions remain valid', () => {
-  validateDecision(dispatch(), ctx()); // Older runtime callers omit skills.
+  const legacy = dispatch(); // Older runtime callers omit skills and review metadata.
+  validateDecision(legacy, ctx());
+  assert.equal(legacy.assignments[0].review, null);
+  assert.deepEqual(legacy.records, []);
   const candidateCtx = ctx({ skillCandidateIds: new Set(['design', 'testing']), skillCatalog: new Map([['design', {}], ['testing', {}]]) });
   validateDecision(dispatch([assignment({ skills: ['design', 'testing'] })]), candidateCtx);
   throws(dispatch([assignment({ skills: ['design', 'design'] })]), ctx(), /skills must be unique/);
@@ -292,6 +315,31 @@ test('assignment skills are bounded, unique, catalog-selectable, and legacy deci
   throws(dispatch([assignment({ skills: ['unknown'] })]), candidateCtx, /not advertised/);
   throws(dispatch([assignment({ skills: ['not-catalogued'] })]), ctx({ skillCatalog: new Map() }), /Unknown skill/);
   throws(dispatch([{ ...assignment(), skills: [], skillPins: [] }]), ctx(), /optionally skills/);
+});
+
+test('structured records require safe architecture paths and correlate remedies to problems', () => {
+  const problem = { id: 'problem-1', kind: 'problem', status: 'open', summary: 'A boundary check is missing.', evidenceIds: ['test-a'], relatedIds: [], adrPath: null };
+  const remedy = { id: 'remedy-1', kind: 'remedy', status: 'implemented', summary: 'Added the check.', evidenceIds: ['test-b'], relatedIds: ['problem-1'], adrPath: null };
+  const architecture = { id: 'architecture-1', kind: 'architecture', status: 'accepted', summary: 'Keep scope identity path-bound.', evidenceIds: ['decision-1'], relatedIds: [], adrPath: 'architecture/review-policy.md' };
+  const accepted = finish({ records: [problem, remedy, architecture] });
+  validateDecision(accepted, ctx());
+  assert.deepEqual(accepted.records.map((record) => record.id), ['problem-1', 'remedy-1', 'architecture-1']);
+  throws(finish({ records: [remedy] }), ctx(), /relate to an existing problem record ID/);
+  throws(finish({ records: [{ ...architecture, adrPath: '../adr.md' }] }), ctx(), /safe workspace-relative \.md path/);
+  throws(finish({ records: [{ ...problem, adrPath: 'problem.md' }] }), ctx(), /adrPath must be null/);
+  throws(finish({ records: Array.from({ length: 21 }, (_, index) => ({ ...problem, id: `p-${index}` })) }), ctx(), /at most 20/);
+});
+
+test('reviewers need matching contexts and ordered non-concurrent execution groups', () => {
+  const review = { kind: 'risk_change', checkpointId: 'cp-1', reason: 'Trust boundary', paths: ['src/file.js'], evidenceIds: ['e-1'] };
+  const writer = assignment({ role: 'orch-builder', allowedFiles: ['src/file.js'], review });
+  const verifier = assignment({ role: 'orch-verifier', allowedFiles: ['test'], review });
+  const auditor = assignment({ role: 'orch-auditor', allowedFiles: [], review });
+  validateDecision(dispatch([writer, verifier, auditor]), ctx());
+  throws(dispatch([{ ...writer, wave: 1 }, { ...verifier, wave: 1 }, auditor]), ctx(), /cannot share a wave with writer/);
+  throws(dispatch([writer, auditor, verifier]), ctx(), /Run the verifier before the auditor/);
+  throws(dispatch([writer, { ...verifier, review: { ...review, paths: ['src'] } }, auditor]), ctx(), /same review kind, reason, scope, and evidence IDs/);
+  throws(dispatch([assignment({ role: 'orch-auditor', allowedFiles: [] })]), ctx(), /requires review metadata/);
 });
 
 test('validateDecision enforces humanInput rules', () => {
@@ -551,6 +599,16 @@ test('executionGroups groups consecutive equal non-null waves; null is a group o
 
 test('assignment.wave is a known predicate with both codes', () => {
   assert.deepEqual([...BOUNDARY_PREDICATES['assignment.wave']], ['wave_invalid', 'wave_scope_overlap']);
+});
+
+test('review gate and direct review guards have registered stable boundary codes', () => {
+  assert.deepEqual([...BOUNDARY_PREDICATES['decision.review_gate']], [
+    'review_receipt_missing', 'review_checkpoint_pending', 'review_context_mismatch', 'verifier_receipt_missing',
+  ]);
+  assert.deepEqual([...BOUNDARY_PREDICATES['review.continuation']], ['review_origin_unknown', 'review_origin_stale']);
+  assert.deepEqual([...BOUNDARY_PREDICATES['review.concurrent_writer']], ['review_writer_unsettled']);
+  assert.deepEqual([...BOUNDARY_PREDICATES['review.reservation']], ['review_reservation_unavailable']);
+  assert.deepEqual([...BOUNDARY_PREDICATES['review.target']], ['review_target_unknown']);
 });
 
 test('a legacy assignment gets wave null injected', () => {

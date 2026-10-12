@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const { AgentEvent, InMemoryTaskStore, DefaultRequestHandler } = require('@a2a-js/sdk/server');
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
 const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/server/express');
@@ -13,6 +14,8 @@ const { WriterAdmission } = require('./writer-admission');
 const { loadSkillCatalog, resolveSkillSelection } = require('./skill-catalog');
 const { canonicalRoleId, legacyRoleId, roleDisplayName } = require('./role-names');
 const { deterministicContextId } = require('./durable-store');
+const { POLICY_ID, computeReviewTarget, reviewResult } = require('./review-policy');
+const { InMemoryStagingLog } = require('./staging-log');
 
 function displayRoleName(roleId, role) {
   return role.displayName || (canonicalRoleId(roleId) === roleId && role.name !== roleId ? role.name : roleDisplayName(roleId));
@@ -80,6 +83,7 @@ function assignmentSkillSelection(text, skillCatalog) {
 }
 
 const BOUNDARY_CONTRACT = 'boundary-contract/v1';
+const PINNED_CHECK_READ_ONLY_ROLES = new Set(['architect', 'explorer', 'scout']);
 
 // A structured request is a JSON object carrying both objective and allowedFiles, or requireAcceptance; returns it or null.
 function parseStructuredRequest(text) {
@@ -262,9 +266,44 @@ function activityRunId(requestContext, input) {
   }
 }
 
+function stagingEventId(event) {
+  const digest = crypto.createHash('sha256').update(JSON.stringify(event)).digest('hex');
+  return `role-event:v1:${digest}`;
+}
+
+function stagingReportPayload(report) {
+  if (!report) return { reportValid: false };
+  const checks = (Array.isArray(report.checks) ? report.checks : []).slice(0, 50)
+    .map((check, index) => ({ index, result: check?.result || 'unknown' }));
+  const findings = (Array.isArray(report.risks) ? report.risks : []).slice(0, 20)
+    .map((finding) => String(finding).slice(0, 500));
+  return {
+    reportValid: true,
+    outcome: report.outcome,
+    summary: String(report.summary || '').slice(0, 1200),
+    findings,
+    failedChecks: checks.filter((check) => check.result === 'failed'),
+    unrunChecks: checks.filter((check) => check.result === 'not_run' || check.result === 'unknown'),
+    attemptedRemedies: (Array.isArray(report.filesChanged) ? report.filesChanged : []).slice(0, 20).map((file) => String(file).slice(0, 300)),
+  };
+}
+
+function messageCorrelations(requestContext) {
+  const metadata = requestContext?.userMessage?.metadata || {};
+  const taskId = typeof requestContext?.taskId === 'string' ? requestContext.taskId : null;
+  const contextId = typeof requestContext?.contextId === 'string' ? requestContext.contextId : null;
+  return {
+    runId: typeof metadata.runId === 'string' && metadata.runId ? metadata.runId : null,
+    assignmentId: typeof metadata.assignmentId === 'string' && metadata.assignmentId ? metadata.assignmentId : taskId,
+    attemptId: typeof metadata.attemptId === 'string' && metadata.attemptId ? metadata.attemptId : contextId || taskId,
+    taskId,
+    contextId,
+  };
+}
+
 function makeExecutor({
   roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, activityStore = null, skillCatalog,
-  lanes = null,
+  lanes = null, stagingLog,
 }) {
   const writable = role.sandbox !== 'read-only';
   const reservations = new Map();
@@ -306,6 +345,11 @@ function makeExecutor({
   const executor = {
     async execute(requestContext, eventBus) {
       const { taskId, contextId } = requestContext;
+      const canonicalRole = canonicalRoleId(roleId);
+      const auditRole = canonicalRole === 'auditor';
+      const verifierRole = canonicalRole === 'verifier';
+      const reviewRole = auditRole || verifierRole;
+      const stagingIds = messageCorrelations(requestContext);
       let activeTask = reservations.get(taskId);
       if (activeTask?.entered) {
         throw new Error(`Task "${taskId}" already has an active Codex run.`);
@@ -348,6 +392,15 @@ function makeExecutor({
       let laneDone = false;
       // Set once appServer.run was reached: { usage, permissionEvents, provenance }.
       let telemetry = null;
+      let reviewContext = null;
+      let reviewTargetBefore = null;
+      let reviewOriginTarget = null;
+      let pinnedCheckReviewer = false;
+      let reviewExecution = null;
+      let reviewExecutionSettled = false;
+      let reviewOutcomeMetadata = null;
+      let stagingWriteFailed = false;
+      let stagingStarted = false;
       let selectedSkills = [];
       // BUD-2: how a continuation request was served ({ laneAdopted, laneFallback, threadResumed }), else null.
       let continued = null;
@@ -369,7 +422,103 @@ function makeExecutor({
           ...(continued ? { continued } : {}),
           ...(writer ? { writerExecution: writer } : {}),
           ...(telemetry ? telemetry : {}),
+          ...(reviewOutcomeMetadata ? { reviewCoverage: reviewOutcomeMetadata.reviewCoverage, review: reviewOutcomeMetadata } : {}),
         };
+      };
+      const writeStaging = (type, status, payload = {}, { target = reviewTargetBefore?.identity || null, problemId = null, required = auditRole || pinnedCheckReviewer || (verifierRole && Boolean(reviewContext)) } = {}) => {
+        if (!stagingLog) {
+          if (required) {
+            stagingWriteFailed = true;
+            throw new Error('staging log unavailable');
+          }
+          return true;
+        }
+        const event = {
+          type,
+          ...stagingIds,
+          role: canonicalRole,
+          problemId,
+          target,
+          status,
+          payload: { policyId: POLICY_ID, ...payload },
+        };
+        delete event.taskId;
+        delete event.contextId;
+        event.eventId = stagingEventId(event);
+        try {
+          stagingLog.record(event);
+          return true;
+        } catch (error) {
+          if (required) {
+            stagingWriteFailed = true;
+            throw error;
+          }
+          return false;
+        }
+      };
+      const targetForDirectReview = (review, structuredRequest) => computeReviewTarget({
+        workspace,
+        review,
+        runId: stagingIds.runId,
+        goal: structuredRequest?.objective || '',
+        checks: [],
+      });
+      const originatingReviewTarget = (ofAttemptId, review, isPinnedCheck) => {
+        if (!stagingLog || typeof stagingLog.list !== 'function') return null;
+        const type = isPinnedCheck ? 'pinned_check_started' : 'audit_started';
+        const events = stagingLog.list({
+          ...(stagingIds.runId ? { runId: stagingIds.runId } : {}),
+          type,
+          limit: 10000,
+        }).filter((event) => event.attemptId === ofAttemptId
+          && event.payload?.checkpointId === review.checkpointId
+          && typeof event.target === 'string');
+        const targets = [...new Set(events.map((event) => event.target))];
+        return targets.length === 1 ? targets[0] : null;
+      };
+      const setReviewOutcome = ({ status, accepted = false, valid = false, verdict = null, reason, targetAfter = null, targetIdentity, stable = false } = {}) => {
+        const known = Boolean(reviewTargetBefore?.known && targetAfter?.known);
+        reviewOutcomeMetadata = {
+          policyId: POLICY_ID,
+          kind: reviewContext?.kind || null,
+          checkpointId: reviewContext?.checkpointId || null,
+          status: status || 'inconclusive',
+          accepted: Boolean(accepted),
+          valid: Boolean(valid),
+          verdict,
+          reason: reason || null,
+          reviewCoverage: {
+            targetKnown: known,
+            targetIdentity: known ? (targetIdentity || reviewTargetBefore.identity) : null,
+            stable: Boolean(stable),
+            reason: !known ? (reviewTargetBefore?.reason || targetAfter?.reason || 'review_target_unknown') : stable ? null : (reason || 'review_target_changed'),
+          },
+        };
+        return reviewOutcomeMetadata;
+      };
+      const externalWriterHolder = () => {
+        const holder = admission.holder();
+        return holder && ['active', 'unresolved'].includes(holder.state)
+          && holder.executionId !== reviewExecution?.executionId ? holder : null;
+      };
+      const settleReviewReservation = async (known, reason) => {
+        if (!reviewExecution || reviewExecutionSettled) return true;
+        let result;
+        try {
+          result = await settleWriter(reviewExecution.executionId, known, reason);
+        } catch (_) {
+          result = { state: admission.get(reviewExecution.executionId)?.state || 'unresolved' };
+        }
+        reviewExecutionSettled = true;
+        if (['released', 'reconciled'].includes(result.state)) return true;
+        const targetAfter = reviewContext && structured ? targetForDirectReview(reviewContext, structured) : null;
+        setReviewOutcome({
+          status: 'inconclusive', accepted: false, valid: false,
+          reason: 'review_reservation_unsettled', targetAfter,
+          targetIdentity: targetAfter?.known ? targetAfter.identity : null,
+          stable: false,
+        });
+        return false;
       };
       const executeStartedAt = new Date().toISOString();
       const executeStartMs = performance.now();
@@ -424,16 +573,67 @@ function makeExecutor({
           }
         }
       };
+      let structured = null;
       try {
         let input;
-        let structured = null;
         let rejection = null;
         try {
+          writeStaging('role_selected', 'selected', { requestMode: 'pending' });
           input = extractText(requestContext.userMessage);
           const raw = parseStructuredRequest(input);
+          if (auditRole && !raw) {
+            throw new BoundaryViolation('assignment.review', 'review_context_missing', 'Auditor requests must be structured and include non-routine review context.');
+          }
           if (raw) {
             try {
-              structured = checkSpecialistRequest(raw, { id: roleId, name: role.name, sandbox: role.sandbox }, { workspace });
+              structured = checkSpecialistRequest(raw, {
+                id: roleId,
+                name: auditRole ? 'auditor' : role.name,
+                sandbox: role.sandbox,
+              }, { workspace });
+              const pinnedFallbackCandidate = role.sandbox === 'read-only'
+                && PINNED_CHECK_READ_ONLY_ROLES.has(canonicalRole)
+                && structured.review?.kind === 'pinned_check';
+              if (structured.review && (reviewRole || pinnedFallbackCandidate)) {
+                reviewContext = structured.review;
+                pinnedCheckReviewer = pinnedFallbackCandidate;
+                if ((auditRole || pinnedCheckReviewer) && structured.continuation) {
+                  reviewOriginTarget = originatingReviewTarget(
+                    structured.continuation.ofAttemptId,
+                    reviewContext,
+                    pinnedCheckReviewer,
+                  );
+                  if (!reviewOriginTarget) {
+                    throw new BoundaryViolation('review.continuation', 'review_origin_unknown', 'The originating review target is unavailable; start a fresh review.');
+                  }
+                }
+                if (auditRole || pinnedCheckReviewer) {
+                  const holder = externalWriterHolder();
+                  if (holder && ['active', 'unresolved'].includes(holder.state)) {
+                    throw new BoundaryViolation('review.concurrent_writer', 'review_writer_unsettled', 'A pinned review cannot start while a workspace writer is active or unresolved.');
+                  }
+                  try {
+                    reviewExecution = await admission.acquire({ role: canonicalRole, taskId, contextId, signal: controller.signal });
+                  } catch (error) {
+                    throw new BoundaryViolation('review.reservation', 'review_reservation_unavailable', `Review reservation could not be acquired: ${error?.code || 'admission_blocked'}`);
+                  }
+                }
+                reviewTargetBefore = targetForDirectReview(reviewContext, structured);
+                if (!reviewTargetBefore.known) {
+                  throw new BoundaryViolation('review.target', 'review_target_unknown', `Review target identity is unavailable: ${reviewTargetBefore.reason}`);
+                }
+                if (reviewOriginTarget && reviewOriginTarget !== reviewTargetBefore.identity) {
+                  throw new BoundaryViolation('review.continuation', 'review_origin_stale', 'The review target changed since the originating attempt; start a fresh review.');
+                }
+                writeStaging(auditRole ? 'audit_selected' : pinnedCheckReviewer ? 'pinned_check_selected' : 'verifier_selected', 'selected', {
+                  kind: reviewContext.kind,
+                  checkpointId: reviewContext.checkpointId,
+                  reason: reviewContext.reason,
+                  paths: reviewContext.paths,
+                  evidenceIds: reviewContext.evidenceIds,
+                  targetKnown: true,
+                });
+              }
               try {
                 selectedSkills = assignmentSkillSelection(input, skillCatalog);
               } catch (skillError) {
@@ -452,6 +652,21 @@ function makeExecutor({
             selectedSkills = assignmentSkillSelection(input, skillCatalog);
           }
         } catch (error) {
+          if (auditRole && error instanceof BoundaryViolation) rejection = error;
+          if (auditRole || pinnedCheckReviewer) {
+            const code = error?.violations?.[0]?.code || (stagingWriteFailed ? 'staging_log_unavailable' : 'review_preflight_failed');
+            setReviewOutcome({ status: 'rejected', reason: code, targetAfter: reviewTargetBefore, stable: false });
+            try {
+              writeStaging(auditRole ? 'audit_failure' : 'pinned_check_failure', 'failed', {
+                stage: 'preflight',
+                reason: code,
+                checkpointId: reviewContext?.checkpointId || null,
+                targetKnown: Boolean(reviewTargetBefore?.known),
+              });
+            } catch (_) { stagingWriteFailed = true; }
+          } else {
+            writeStaging('role_failure', 'failed', { stage: 'input', failureKind: rejection?.violations?.[0]?.code || 'input_error' });
+          }
           if (rejection) {
             recordPreTurn('input_error');
             const results = rejection.violations.map((entry) => ({ ...entry, evidence: [], advisory: false }));
@@ -467,6 +682,7 @@ function makeExecutor({
                 codexErrorInfo: null,
                 effects: 'none',
                 boundary: { contract: BOUNDARY_CONTRACT, results },
+                ...(reviewOutcomeMetadata ? { reviewCoverage: reviewOutcomeMetadata.reviewCoverage, review: reviewOutcomeMetadata } : {}),
               },
             });
             return;
@@ -478,7 +694,10 @@ function makeExecutor({
             taskId,
             role: 2,
             parts: [{ content: { $case: 'text', value: error.message } }],
-            metadata: { failureKind: 'other', codexErrorInfo: null },
+            metadata: {
+              failureKind: 'other', codexErrorInfo: null,
+              ...(reviewOutcomeMetadata ? { reviewCoverage: reviewOutcomeMetadata.reviewCoverage, review: reviewOutcomeMetadata } : {}),
+            },
           });
           return;
         }
@@ -504,6 +723,7 @@ function makeExecutor({
             }
           } catch (error) {
             recordPreTurn('failed');
+            writeStaging('role_failure', 'failed', { stage: 'lane_prepare', failureKind: 'lane_prepare_failed' }, { required: false });
             publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
               messageId: `${taskId}-error`,
               contextId,
@@ -517,6 +737,7 @@ function makeExecutor({
           if (prepared.refused) {
             // Fenced at prepare (R10): the same outcome as a fenced admission, nothing created.
             recordPreTurn('refused');
+            writeStaging('role_failure', 'failed', { stage: 'lane_prepare', failureKind: prepared.refused.code }, { required: false });
             publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
               messageId: `${taskId}-error`,
               contextId,
@@ -556,11 +777,13 @@ function makeExecutor({
             queueWaitMs = Math.round(performance.now() - admissionRequestedMs);
             if (controller.signal.aborted) {
               recordPreTurn('canceled');
+              writeStaging('role_failure', 'canceled', { stage: 'admission' }, { required: false });
               publishTerminalStatus(TaskState.TASK_STATE_CANCELED);
               return;
             }
             if (error?.code !== 'fenced' && error?.code !== 'admission_blocked') throw error;
             recordPreTurn('refused');
+            writeStaging('role_failure', 'failed', { stage: 'admission', failureKind: error.code }, { required: false });
             publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
               messageId: `${taskId}-error`,
               contextId,
@@ -596,6 +819,9 @@ function makeExecutor({
             laneDone = true;
           }
           recordPreTurn('canceled');
+          if (auditRole) writeStaging('audit_failure', 'canceled', { stage: 'pre_run', reason: 'canceled' });
+          else if (verifierRole && reviewContext) writeStaging('verifier_failure', 'canceled', { stage: 'pre_run', reason: 'canceled' });
+          else writeStaging('role_failure', 'canceled', { stage: 'pre_run' }, { required: false });
           publishTerminalStatus(TaskState.TASK_STATE_CANCELED);
           return;
         }
@@ -604,18 +830,34 @@ function makeExecutor({
         const activity = activityStore?.begin({
           key: taskId, runId: activityRunId(requestContext, input), role: canonicalRoleId(roleId),
         });
-        const callRun = (threadId, text) => appServer.run({
-          role: { id: roleId, ...role },
-          cwd: lane ? lane.workspacePath : workspace,
-          input: lane ? lanes.laneInput(lane, text) : text,
-          ...(threadId ? { threadId } : {}),
-          selectedSkills,
-          outputSchema: WORKER_REPORT_SCHEMA,
-          signal: controller.signal,
-          ...(execution ? { onTurnStart: (info) => admission.recordTurnStart(execution.executionId, info) } : {}),
-          ...(lane ? { sandboxPolicy: lanes.sandboxPolicy(lane), onTurnStart: (info) => lanes.recordTurnStart(lane, info) } : {}),
-          ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
-        });
+        const callRun = (threadId, text) => {
+          if (auditRole || pinnedCheckReviewer) {
+            const holder = externalWriterHolder();
+            if (holder) {
+              throw new BoundaryViolation('review.concurrent_writer', 'review_writer_unsettled', 'A pinned review cannot run while another workspace writer is active or unresolved.');
+            }
+          }
+          if (!stagingStarted) {
+            stagingStarted = true;
+            writeStaging(auditRole ? 'audit_started' : pinnedCheckReviewer ? 'pinned_check_started' : verifierRole && reviewContext ? 'verifier_started' : 'role_started', 'started', {
+              ...(reviewContext ? { kind: reviewContext.kind, checkpointId: reviewContext.checkpointId, reason: reviewContext.reason } : {}),
+              targetKnown: Boolean(reviewTargetBefore?.known),
+            });
+          }
+          return appServer.run({
+            role: { id: roleId, ...role },
+            cwd: lane ? lane.workspacePath : workspace,
+            input: lane ? lanes.laneInput(lane, text) : text,
+            ...(threadId ? { threadId } : {}),
+            selectedSkills,
+            outputSchema: WORKER_REPORT_SCHEMA,
+            signal: controller.signal,
+            ...(reviewExecution ? { onTurnStart: (info) => admission.recordTurnStart(reviewExecution.executionId, info) }
+              : execution ? { onTurnStart: (info) => admission.recordTurnStart(execution.executionId, info) } : {}),
+            ...(lane ? { sandboxPolicy: lanes.sandboxPolicy(lane), onTurnStart: (info) => lanes.recordTurnStart(lane, info) } : {}),
+            ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
+          });
+        };
         try {
           if (lane) lanes.markRunning(lane);
           const continuation = structured?.continuation ?? null;
@@ -692,8 +934,131 @@ function makeExecutor({
         // A lane that went through integration reports that outcome even if a cancel arrived meanwhile.
         const canceled = lane ? laneCanceled : controller.signal.aborted;
         const completed = result?.status === 'completed';
+        const parsedReport = completed ? parseWorkerReport(resultText) : { report: null, error: null };
+        let effectiveCompleted = completed;
+        if ((auditRole || pinnedCheckReviewer) && !canceled) {
+          const targetAfter = targetForDirectReview(reviewContext, structured);
+          const writerClear = !externalWriterHolder();
+          const stable = Boolean(reviewTargetBefore?.known && targetAfter.known
+            && reviewTargetBefore.identity === targetAfter.identity && writerClear);
+          let decision = { valid: false, accepted: false, verdict: null, reason: 'review_report_invalid_or_incomplete' };
+          if (reviewContext.kind === 'pinned_check') {
+            const firstLine = String(parsedReport.report?.summary || '').split(/\r?\n/, 1)[0];
+            const match = /^VERDICT: (preserve|weaken)$/.exec(firstLine);
+            const valid = Boolean(parsedReport.report && !parsedReport.error
+              && parsedReport.report.outcome === 'completed' && !parsedReport.report.decisionRequest && match);
+            decision = {
+              valid,
+              accepted: valid && match[1] === 'preserve',
+              verdict: match?.[1] || null,
+              reason: valid ? null : 'pinned_check_verdict_or_report_invalid',
+            };
+          } else if (reviewContext.kind === 'investigation') {
+            const valid = Boolean(parsedReport.report && !parsedReport.error
+              && parsedReport.report.outcome === 'completed' && !parsedReport.report.decisionRequest);
+            decision = { valid, accepted: false, verdict: null, reason: valid ? 'diagnostic_only' : 'investigation_report_invalid' };
+          } else {
+            decision = reviewResult({
+              status: completed ? 'TASK_STATE_COMPLETED' : 'TASK_STATE_FAILED',
+              report: parsedReport.report,
+              boundary: { results: [] },
+              sandbox: role.sandbox,
+              writerExecution: writer,
+            }, 'auditor', reviewContext);
+            decision.accepted = decision.valid && decision.verdict === 'pass';
+          }
+          const reason = !writerClear ? 'review_writer_unsettled'
+            : !stable ? (reviewTargetBefore?.known && targetAfter.known ? 'review_target_changed' : targetAfter.reason || 'review_target_unknown')
+              : decision.reason;
+          setReviewOutcome({
+            status: stable ? (decision.valid ? (decision.accepted ? 'accepted' : decision.verdict || 'diagnostic') : 'inconclusive') : 'inconclusive',
+            accepted: stable && decision.accepted,
+            valid: stable && decision.valid,
+            verdict: decision.verdict,
+            reason,
+            targetAfter,
+            stable,
+          });
+          effectiveCompleted = stable && (reviewContext.kind === 'investigation' || decision.valid);
+          if (reviewExecution && !await settleReviewReservation(true, 'review_completed')) effectiveCompleted = false;
+          try {
+            writeStaging(auditRole
+              ? (effectiveCompleted ? 'audit_result' : 'audit_failure')
+              : (effectiveCompleted ? 'pinned_check_result' : 'pinned_check_failure'), effectiveCompleted ? 'completed' : 'failed', {
+              kind: reviewContext.kind,
+              checkpointId: reviewContext.checkpointId,
+              reason: reviewOutcomeMetadata.reason,
+              verdict: reviewOutcomeMetadata.verdict,
+              accepted: reviewOutcomeMetadata.accepted,
+              reviewCoverage: reviewOutcomeMetadata.reviewCoverage,
+              ...stagingReportPayload(parsedReport.report),
+            }, { target: reviewOutcomeMetadata.reviewCoverage.targetIdentity });
+          } catch (_) {
+            stagingWriteFailed = true;
+            effectiveCompleted = false;
+            setReviewOutcome({ status: 'inconclusive', reason: 'staging_log_unavailable', targetAfter, stable: false });
+          }
+          if (stagingWriteFailed) {
+            effectiveCompleted = false;
+            setReviewOutcome({ status: 'inconclusive', reason: 'staging_log_unavailable', targetAfter, stable: false });
+          }
+        } else if (verifierRole && reviewContext && !canceled) {
+          const targetAfter = targetForDirectReview(reviewContext, structured);
+          const holder = admission.holder();
+          const writerClear = !(holder && ['active', 'unresolved'].includes(holder.state));
+          const stable = Boolean(reviewTargetBefore?.known && targetAfter.known
+            && reviewTargetBefore.identity === targetAfter.identity && writerClear);
+          const decision = reviewResult({
+            status: completed ? 'TASK_STATE_COMPLETED' : 'TASK_STATE_FAILED',
+            report: parsedReport.report,
+            boundary: { results: [] },
+            sandbox: role.sandbox,
+            writerExecution: writer,
+          }, 'verifier', reviewContext);
+          const reason = !writerClear ? 'review_writer_unsettled'
+            : !targetAfter.known ? targetAfter.reason || 'review_target_unknown'
+              : stable ? decision.reason : 'verifier_target_changed_during_review';
+          setReviewOutcome({
+            status: decision.valid ? 'accepted' : 'inconclusive',
+            accepted: decision.valid,
+            valid: decision.valid,
+            verdict: decision.verdict,
+            reason,
+            targetAfter,
+            targetIdentity: targetAfter.known ? targetAfter.identity : null,
+            stable,
+          });
+          try {
+            writeStaging(decision.valid ? 'verifier_result' : 'verifier_failure', decision.valid ? 'completed' : 'failed', {
+              kind: reviewContext.kind,
+              checkpointId: reviewContext.checkpointId,
+              reason: reviewOutcomeMetadata.reason,
+              valid: reviewOutcomeMetadata.valid,
+              reviewCoverage: reviewOutcomeMetadata.reviewCoverage,
+              ...stagingReportPayload(parsedReport.report),
+            }, { target: reviewOutcomeMetadata.reviewCoverage.targetIdentity });
+          } catch (_) {
+            stagingWriteFailed = true;
+            effectiveCompleted = false;
+            setReviewOutcome({ status: 'inconclusive', reason: 'staging_log_unavailable', targetAfter, targetIdentity: targetAfter.identity, stable: false });
+          }
+          if (stagingWriteFailed) {
+            effectiveCompleted = false;
+            setReviewOutcome({
+              status: 'inconclusive', reason: 'staging_log_unavailable', targetAfter,
+              targetIdentity: targetAfter.known ? targetAfter.identity : null, stable: false,
+            });
+          }
+        } else if (auditRole || pinnedCheckReviewer) {
+          writeStaging(auditRole ? 'audit_failure' : 'pinned_check_failure', 'failed', { stage: 'execution', reason: 'review_canceled' });
+        } else if (verifierRole && reviewContext) {
+          writeStaging('verifier_failure', 'failed', { stage: 'execution', reason: 'verification_canceled' });
+        } else if (!reviewRole) {
+          writeStaging(completed && !canceled ? 'role_result' : 'role_failure', completed && !canceled ? 'completed' : 'failed', {
+            stage: 'execution', ...stagingReportPayload(parsedReport.report),
+          }, { required: false });
+        }
         if (!canceled && completed) {
-          const parsedReport = parseWorkerReport(resultText);
           let boundary = { contract: 'legacy' };
           if (structured) {
             const results = [];
@@ -744,6 +1109,7 @@ function makeExecutor({
             ...(selectedSkills.length ? { selectedSkills: selectedSkills.map(({ id, sha256 }) => ({ id, sha256 })) } : {}),
                 ...(writer ? { writerExecution: writer } : {}),
                 ...(telemetry ? telemetry : {}),
+                ...(reviewOutcomeMetadata ? { reviewCoverage: reviewOutcomeMetadata.reviewCoverage, review: reviewOutcomeMetadata } : {}),
               },
               extensions: [],
             },
@@ -753,8 +1119,8 @@ function makeExecutor({
           }));
         }
         publishTerminalStatus(
-          canceled ? TaskState.TASK_STATE_CANCELED : completed ? TaskState.TASK_STATE_COMPLETED : TaskState.TASK_STATE_FAILED,
-          !canceled && !completed ? {
+          canceled ? TaskState.TASK_STATE_CANCELED : effectiveCompleted ? TaskState.TASK_STATE_COMPLETED : TaskState.TASK_STATE_FAILED,
+          !canceled && !effectiveCompleted ? {
             messageId: `${taskId}-error`,
             contextId,
             taskId,
@@ -773,6 +1139,51 @@ function makeExecutor({
           laneDone = true;
           try { writer = lanes.abandon(lane); } catch (_) { /* keep the original error */ }
         }
+        if (auditRole || pinnedCheckReviewer) {
+          const reason = error?.violations?.[0]?.code || (stagingWriteFailed ? 'staging_log_unavailable' : 'audit_execution_failed');
+          if (!reviewOutcomeMetadata) {
+            const targetAfter = reviewContext && structured ? targetForDirectReview(reviewContext, structured) : null;
+            setReviewOutcome({ status: 'inconclusive', reason, targetAfter, targetIdentity: targetAfter?.known ? targetAfter.identity : null, stable: false });
+          }
+          if (reviewExecution && !reviewExecutionSettled) {
+            const turnStarted = Boolean(admission.get(reviewExecution.executionId)?.turnStart);
+            const known = error?.outcomeUnknown !== true
+              && (error?.execution?.turnTerminal === true || error?.execution?.turnStartRejected === true || !turnStarted);
+            await settleReviewReservation(known, error?.outcomeUnknown === true ? 'outcome_unknown' : 'review_failed');
+          }
+          try {
+            writeStaging(auditRole ? 'audit_failure' : 'pinned_check_failure', 'failed', {
+              stage: 'execution',
+              reason: stagingWriteFailed ? 'staging_log_unavailable' : reason,
+              checkpointId: reviewContext?.checkpointId || null,
+              reviewCoverage: reviewOutcomeMetadata.reviewCoverage,
+            });
+          } catch (_) { stagingWriteFailed = true; }
+          if (stagingWriteFailed) setReviewOutcome({ status: 'inconclusive', reason: 'staging_log_unavailable', stable: false });
+        } else if (verifierRole && reviewContext) {
+          const targetAfter = structured ? targetForDirectReview(reviewContext, structured) : null;
+          if (!reviewOutcomeMetadata) setReviewOutcome({
+            status: 'inconclusive',
+            reason: error?.violations?.[0]?.code || 'verification_execution_failed',
+            targetAfter,
+            targetIdentity: targetAfter?.known ? targetAfter.identity : null,
+            stable: false,
+          });
+          try {
+            writeStaging('verifier_failure', 'failed', {
+              stage: 'execution',
+              reason: stagingWriteFailed ? 'staging_log_unavailable' : (error?.violations?.[0]?.code || 'verification_execution_failed'),
+              checkpointId: reviewContext.checkpointId,
+              reviewCoverage: reviewOutcomeMetadata.reviewCoverage,
+            }, { target: reviewOutcomeMetadata.reviewCoverage.targetIdentity });
+          } catch (_) { stagingWriteFailed = true; }
+          if (stagingWriteFailed) setReviewOutcome({
+            status: 'inconclusive', reason: 'staging_log_unavailable', targetAfter,
+            targetIdentity: targetAfter?.known ? targetAfter.identity : null, stable: false,
+          });
+        } else {
+          writeStaging('role_failure', 'failed', { stage: 'execution', failureKind: 'role_execution_failed' }, { required: false });
+        }
         const canceled = controller.signal.aborted;
         publishTerminalStatus(
           canceled ? TaskState.TASK_STATE_CANCELED : TaskState.TASK_STATE_FAILED,
@@ -786,6 +1197,10 @@ function makeExecutor({
           },
         );
       } finally {
+        if (reviewExecution && !reviewExecutionSettled) {
+          const turnStarted = Boolean(admission.get(reviewExecution.executionId)?.turnStart);
+          await settleReviewReservation(!turnStarted, controller.signal.aborted ? 'review_canceled' : 'review_exit');
+        }
         releaseReservation(taskId, activeTask);
       }
     },
@@ -845,7 +1260,7 @@ function rejectOverlappingTask(executor) {
 /** Mount one independently stored A2A JSON-RPC agent per role. */
 function registerRoleAgents(app, {
   roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger, activityStore,
-  skillCatalog = loadSkillCatalog(), lanes = null,
+  skillCatalog = loadSkillCatalog(), lanes = null, stagingLog = new InMemoryStagingLog(),
 }) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
     throw new TypeError('app must be an Express application');
@@ -869,7 +1284,7 @@ function registerRoleAgents(app, {
     const endpoint = new URL(route, `${origin.origin}/`).toString();
     const card = makeRoleCard({ roleId, role, endpoint });
     const executor = makeExecutor({
-      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, lanes,
+      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, lanes, stagingLog,
     });
     const handler = new DefaultRequestHandler(
       card,

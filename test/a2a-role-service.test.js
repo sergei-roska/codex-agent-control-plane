@@ -14,6 +14,8 @@ const { registerRoleAgents } = require('../src/a2a-role-service');
 const { WriterAdmission } = require('../src/writer-admission');
 const { UsageLedger } = require('../src/usage-ledger');
 const { WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT } = require('../src/contracts');
+const { InMemoryStagingLog, StagingLog } = require('../src/staging-log');
+const { buildReport } = require('../src/staging-report');
 
 const roles = new Map([
   ['orch-planner', { name: 'Planner', description: 'Plans work.', instructions: 'Plan.', model: 'test', effort: 'low', sandbox: 'read-only' }],
@@ -39,11 +41,12 @@ function makeService(appServer, options = {}) {
   return { agents, context, mounted };
 }
 
-function message(text, parts) {
+function message(text, parts, metadata) {
   return {
     messageId: `message-${Math.random()}`,
     role: 1,
     parts: parts || [{ content: { $case: 'text', value: text } }],
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -1095,4 +1098,495 @@ test('effective roles with a project override reach appServer.run and the base r
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+const auditorRoles = new Map([
+  ['auditor', { name: 'auditor', description: 'Checks scoped changes.', instructions: 'Review only.', model: 'test', effort: 'low', sandbox: 'read-only' }],
+]);
+const verifierRoles = new Map([
+  ['verifier', { name: 'verifier', description: 'Checks integrated work.', instructions: 'Verify assigned tests.', model: 'test', effort: 'low', sandbox: 'workspace-write' }],
+]);
+const pinnedFallbackRoles = new Map([
+  ['explorer', { name: 'explorer', description: 'Explores read-only context.', instructions: 'Investigate.', model: 'test', effort: 'low', sandbox: 'read-only' }],
+  ['scout', { name: 'scout', description: 'Explores read-only context.', instructions: 'Investigate.', model: 'test', effort: 'low', sandbox: 'read-only' }],
+]);
+
+function auditReview(kind = 'risk_change', paths = ['src/a2a-role-service.js']) {
+  return { kind, checkpointId: 'checkpoint-1', reason: 'Check the changed role boundary.', paths, evidenceIds: ['artifact-1'] };
+}
+
+function auditRequest(review = auditReview()) {
+  return structured({ objective: 'Review the declared checkpoint.', allowedFiles: [], review });
+}
+
+function auditReport(summary = 'VERDICT: pass', overrides = {}) {
+  return JSON.stringify(validReport({
+    summary,
+    filesInspected: ['src/a2a-role-service.js'],
+    checks: [{ command: 'inspect', result: 'passed', detail: 'Scoped review completed.' }],
+    ...overrides,
+  }));
+}
+
+test('auditor refuses plain text and missing or routine review context before model execution', async () => {
+  let calls = 0;
+  const admission = makeAdmission({});
+  const { agents, context } = makeService({ async run() { calls += 1; return okResult(auditReport()); } }, { roles: auditorRoles, admission });
+  for (const input of ['please review this', structured({ objective: 'Review', allowedFiles: [] }), auditRequest(auditReview('routine'))]) {
+    const failed = taskResult(await agents.get('auditor').handler.sendMessage(sendParams(message(input)), context));
+    assert.equal(failed.status.state, 4);
+    assert.equal(failed.status.message.metadata.effects, 'none');
+    assert.ok(failed.status.message.metadata.boundary?.results?.length || failed.status.message.metadata.review);
+  }
+  assert.equal(calls, 0);
+  assert.equal(admission.db.prepare('SELECT COUNT(*) AS count FROM writer_executions').get().count, 0);
+
+  const aliases = new Map([['orch-auditor', { ...auditorRoles.get('auditor'), name: 'Code Auditor' }]]);
+  const aliasService = makeService({ async run() { calls += 1; return okResult(auditReport()); } }, { roles: aliases });
+  const aliasFailed = taskResult(await aliasService.agents.get('orch-auditor').handler.sendMessage(
+    sendParams(message('plain audit request')), aliasService.context,
+  ));
+  assert.equal(aliasFailed.status.state, 4);
+  assert.equal(calls, 0);
+});
+
+test('auditor accepts a stable scoped owner review; investigation and pinned checks preserve their distinct semantics', async () => {
+  const run = async ({ input, summary }) => {
+    const { agents, context } = makeService({ async run() { return okResult(auditReport(summary)); } }, { roles: auditorRoles });
+    return taskResult(await agents.get('auditor').handler.sendMessage(sendParams(message(input)), context));
+  };
+  const owner = await run({ input: auditRequest(auditReview('owner_request')), summary: 'VERDICT: pass' });
+  assert.equal(owner.status.state, 3);
+  assert.deepEqual(owner.artifacts[0].metadata.reviewCoverage, {
+    targetKnown: true,
+    targetIdentity: owner.artifacts[0].metadata.reviewCoverage.targetIdentity,
+    stable: true,
+    reason: null,
+  });
+  assert.equal(owner.artifacts[0].metadata.review.accepted, true);
+
+  const investigation = await run({ input: auditRequest(auditReview('investigation')), summary: 'Found a possible edge case.' });
+  assert.equal(investigation.status.state, 3);
+  assert.equal(investigation.artifacts[0].metadata.review.accepted, false);
+  assert.equal(investigation.artifacts[0].metadata.review.reason, 'diagnostic_only');
+
+  const pinned = await run({ input: auditRequest(auditReview('pinned_check')), summary: 'VERDICT: preserve' });
+  assert.equal(pinned.status.state, 3);
+  assert.equal(pinned.artifacts[0].metadata.review.verdict, 'preserve');
+  assert.equal(pinned.artifacts[0].metadata.review.accepted, true);
+  const weakened = await run({ input: auditRequest(auditReview('pinned_check')), summary: 'VERDICT: weaken' });
+  assert.equal(weakened.status.state, 3);
+  assert.equal(weakened.artifacts[0].metadata.review.verdict, 'weaken');
+  assert.equal(weakened.artifacts[0].metadata.review.accepted, false);
+});
+
+test('auditor rejects escaped targets and a scope changed during the read-only turn', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-auditor-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-auditor-outside-'));
+  try {
+    fs.writeFileSync(path.join(root, 'scope.txt'), 'before');
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'outside');
+    fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(root, 'escape.txt'));
+    let calls = 0;
+    let service = makeService({ async run() { calls += 1; return okResult(auditReport()); } }, { roles: auditorRoles, workspace: root });
+    const escaped = taskResult(await service.agents.get('auditor').handler.sendMessage(
+      sendParams(message(auditRequest(auditReview('risk_change', ['escape.txt'])))), service.context,
+    ));
+    assert.equal(escaped.status.state, 4);
+    assert.equal(calls, 0);
+
+    service = makeService({
+      async run() {
+        fs.writeFileSync(path.join(root, 'scope.txt'), 'changed during review');
+        return okResult(auditReport());
+      },
+    }, { roles: auditorRoles, workspace: root });
+    const changed = taskResult(await service.agents.get('auditor').handler.sendMessage(
+      sendParams(message(auditRequest(auditReview('risk_change', ['scope.txt'])))), service.context,
+    ));
+    assert.equal(changed.status.state, 4);
+    assert.equal(changed.artifacts[0].metadata.reviewCoverage.targetKnown, true);
+    assert.equal(changed.artifacts[0].metadata.reviewCoverage.stable, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('exclusive auditor reservation blocks an attempted change-and-restore during the review turn', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-audit-exclusive-'));
+  const target = path.join(root, 'scope.txt');
+  fs.writeFileSync(target, 'original');
+  const auditGate = deferred();
+  let signalAuditStarted;
+  const auditStarted = new Promise((resolve) => { signalAuditStarted = resolve; });
+  let writerCalls = 0;
+  const admission = new WriterAdmission({
+    db: new Database(':memory:'),
+    workspace: root,
+    snapshot: () => ({ kind: 'unavailable', reason: 'test' }),
+    quiescence: {},
+    settleMs: 0,
+  });
+  const roles = new Map([
+    ['auditor', auditorRoles.get('auditor')],
+    ['writer', { name: 'Writer', description: 'Writes scoped work.', instructions: 'Write.', model: 'test', effort: 'low', sandbox: 'workspace-write' }],
+  ]);
+  try {
+    const { agents, context } = makeService({
+      async run({ role }) {
+        if (role.id === 'auditor') {
+          signalAuditStarted();
+          await auditGate.promise;
+          return okResult(auditReport('VERDICT: pass', { filesInspected: ['scope.txt'] }));
+        }
+        writerCalls += 1;
+        fs.writeFileSync(target, 'temporary mutation');
+        fs.writeFileSync(target, 'original');
+        return okResult(JSON.stringify(validReport()));
+      },
+    }, { roles, workspace: root, admission });
+    const auditPromise = agents.get('auditor').handler.sendMessage(sendParams(message(
+      auditRequest(auditReview('risk_change', ['scope.txt'])),
+    )), context);
+    await auditStarted;
+    const writerPromise = agents.get('writer').handler.sendMessage(sendParams(message(structured({
+      objective: 'Change and restore the reviewed file.', allowedFiles: ['scope.txt'],
+    }))), context);
+    await tick(20);
+    assert.equal(writerCalls, 0, 'the writer must wait while the audit reservation is held');
+    assert.equal(admission.holder()?.role, 'auditor');
+    assert.equal(fs.readFileSync(target, 'utf8'), 'original');
+
+    auditGate.resolve();
+    const audit = taskResult(await auditPromise);
+    assert.equal(audit.status.state, 3, JSON.stringify(audit.status.message));
+    assert.equal(audit.artifacts[0].metadata.reviewCoverage.stable, true);
+    assert.equal(audit.artifacts[0].metadata.review.accepted, true);
+    const writer = taskResult(await writerPromise);
+    assert.equal(writer.status.state, 3);
+    assert.equal(writerCalls, 1);
+    assert.equal(fs.readFileSync(target, 'utf8'), 'original');
+    assert.equal(admission.holder(), null);
+  } finally {
+    auditGate.resolve();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('auditor continuations require a known unchanged originating review target', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-audit-continuation-'));
+  const target = path.join(root, 'scope.txt');
+  fs.writeFileSync(target, 'original');
+  const stagingLog = new InMemoryStagingLog();
+  const metadata = { runId: 'continuation-run', assignmentId: 'reviewer-1', attemptId: 'attempt-1' };
+  const request = JSON.parse(auditRequest(auditReview('risk_change', ['scope.txt'])));
+  const report = auditReport('VERDICT: pass', { filesInspected: ['scope.txt'] });
+  let calls = 0;
+  try {
+    const firstService = makeService({ async run() { calls += 1; return okResult(report); } }, {
+      roles: auditorRoles, workspace: root, stagingLog,
+    });
+    const first = taskResult(await firstService.agents.get('auditor').handler.sendMessage(
+      sendParams(message(JSON.stringify(request), undefined, metadata)), firstService.context,
+    ));
+    assert.equal(first.status.state, 3);
+
+    const unchangedService = makeService({ async run() { calls += 1; return okResult(report); } }, {
+      roles: auditorRoles, workspace: root, stagingLog,
+    });
+    const continued = taskResult(await unchangedService.agents.get('auditor').handler.sendMessage(
+      sendParams(message(JSON.stringify({ ...request, continuation: { ofAttemptId: 'attempt-1', threadId: null, laneId: null, codexHome: null } }), undefined, {
+        ...metadata, attemptId: 'attempt-2',
+      })), unchangedService.context,
+    ));
+    assert.equal(continued.status.state, 3);
+    assert.equal(calls, 2);
+
+    fs.writeFileSync(target, 'changed after the originating review');
+    const staleService = makeService({ async run() { calls += 1; return okResult(report); } }, {
+      roles: auditorRoles, workspace: root, stagingLog,
+    });
+    const stale = taskResult(await staleService.agents.get('auditor').handler.sendMessage(
+      sendParams(message(JSON.stringify({ ...request, continuation: { ofAttemptId: 'attempt-1', threadId: null, laneId: null, codexHome: null } }), undefined, {
+        ...metadata, attemptId: 'attempt-3',
+      })), staleService.context,
+    ));
+    assert.equal(stale.status.state, 4);
+    assert.equal(stale.status.message.metadata.review.reason, 'review_origin_stale');
+    assert.equal(calls, 2, 'stale continuations must not invoke Codex');
+
+    const unknownService = makeService({ async run() { calls += 1; return okResult(report); } }, {
+      roles: auditorRoles, workspace: root, stagingLog,
+    });
+    const unknown = taskResult(await unknownService.agents.get('auditor').handler.sendMessage(
+      sendParams(message(JSON.stringify({ ...request, continuation: { ofAttemptId: 'missing-attempt', threadId: null, laneId: null, codexHome: null } }), undefined, {
+        ...metadata, attemptId: 'attempt-4',
+      })), unknownService.context,
+    ));
+    assert.equal(unknown.status.state, 4);
+    assert.equal(unknown.status.message.metadata.review.reason, 'review_origin_unknown');
+    assert.equal(calls, 2, 'unknown continuations must not invoke Codex');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('successful audit events retain checkpoint correlation without creating problem entries', async () => {
+  const db = new Database(':memory:');
+  const stagingLog = new StagingLog({ db });
+  try {
+    const { agents, context } = makeService({ async run() { return okResult(auditReport()); } }, {
+      roles: auditorRoles, stagingLog,
+    });
+    const result = taskResult(await agents.get('auditor').handler.sendMessage(sendParams(message(auditRequest(), undefined, {
+      runId: 'problem-separation-run', assignmentId: 'reviewer-1', attemptId: 'problem-separation-attempt',
+    })), context));
+    assert.equal(result.status.state, 3);
+    const events = stagingLog.list({ runId: 'problem-separation-run' });
+    assert.ok(events.every((event) => event.problemId === null));
+    assert.ok(events.some((event) => event.type === 'audit_started' && event.payload.checkpointId === 'checkpoint-1'));
+    assert.deepEqual(buildReport(db, { runId: 'problem-separation-run' }).problems, []);
+  } finally {
+    db.close();
+  }
+});
+
+test('pinned-check fallback continuations fail closed when origin evidence is missing', async () => {
+  const stagingLog = new InMemoryStagingLog();
+  let calls = 0;
+  const { agents, context } = makeService({ async run() { calls += 1; return okResult(auditReport('VERDICT: preserve')); } }, {
+    roles: pinnedFallbackRoles, stagingLog,
+  });
+  const request = structured({
+    objective: 'Review the pinned check.',
+    allowedFiles: [],
+    review: auditReview('pinned_check'),
+    continuation: { ofAttemptId: 'missing-pinned-attempt', threadId: null, laneId: null, codexHome: null },
+  });
+  const failed = taskResult(await agents.get('explorer').handler.sendMessage(sendParams(message(request, undefined, {
+    runId: 'pinned-continuation-run', assignmentId: 'reviewer-1', attemptId: 'pinned-attempt-2',
+  })), context));
+  assert.equal(failed.status.state, 4);
+  assert.equal(failed.status.message.metadata.review.reason, 'review_origin_unknown');
+  assert.equal(calls, 0);
+  assert.equal(stagingLog.list({ type: 'pinned_check_started' }).length, 0);
+});
+
+test('verifier binds coverage to the post-verification target after an authorized test-file write', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-verifier-'));
+  try {
+    fs.mkdirSync(path.join(root, 'tests'));
+    fs.writeFileSync(path.join(root, 'tests/check.test.js'), 'before');
+    let snapshots = 0;
+    const admission = new WriterAdmission({
+      db: new Database(':memory:'),
+      workspace: root,
+      snapshot: () => {
+        snapshots += 1;
+        return snapshots % 2 === 1
+          ? { kind: 'git', head: 'h', entries: [], fingerprint: 'before' }
+          : { kind: 'git', head: 'h', entries: [{ path: 'tests/check.test.js', status: 'M', sha256: 'after' }], fingerprint: 'after' };
+      },
+      quiescence: {},
+      settleMs: 0,
+    });
+    const review = auditReview('routine', ['tests']);
+    const { agents, context } = makeService({
+      async run() {
+        fs.writeFileSync(path.join(root, 'tests/check.test.js'), 'after');
+        return okResult(JSON.stringify(validReport({
+          summary: 'Tests pass against the integrated candidate.',
+          filesChanged: ['tests/check.test.js'],
+          filesInspected: ['tests/check.test.js'],
+          checks: [{ command: 'node --test tests/check.test.js', result: 'passed', detail: '1 test passed.' }],
+        })));
+      },
+    }, { roles: verifierRoles, workspace: root, admission });
+    const result = taskResult(await agents.get('verifier').handler.sendMessage(
+      sendParams(message(structured({ objective: 'Verify the integrated test candidate.', allowedFiles: ['tests'], review }))), context,
+    ));
+    assert.equal(result.status.state, 3);
+    const { reviewCoverage } = result.artifacts[0].metadata;
+    assert.equal(reviewCoverage.targetKnown, true);
+    assert.ok(reviewCoverage.targetIdentity.startsWith('review-target/v1:'));
+    assert.equal(reviewCoverage.stable, false);
+    assert.equal(reviewCoverage.reason, 'verifier_target_changed_during_review');
+    assert.equal(result.artifacts[0].metadata.review.accepted, true);
+    assert.deepEqual(result.artifacts[0].metadata.writerExecution.delta.changedPaths, ['tests/check.test.js']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('pinned-check fallback reviewer holds the workspace exclusively while ordinary explorer remains concurrent', async () => {
+  const gate = deferred();
+  let started;
+  const runStarted = new Promise((resolve) => { started = resolve; });
+  const admission = makeAdmission({});
+  const { agents, context } = makeService({
+    async run({ role }) {
+      if (role.id === 'explorer') {
+        started();
+        await gate.promise;
+        return okResult(auditReport('VERDICT: preserve'));
+      }
+      return okResult('ordinary read-only result');
+    },
+  }, { roles: pinnedFallbackRoles, admission });
+  const review = auditReview('pinned_check');
+  const pinnedPromise = agents.get('explorer').handler.sendMessage(
+    sendParams(message(structured({ objective: 'Review the pinned check.', allowedFiles: [], review }))), context,
+  );
+  await runStarted;
+  assert.equal(admission.holder()?.role, 'explorer');
+  const ordinary = taskResult(await agents.get('scout').handler.sendMessage(sendParams(message('inspect without a review')), context));
+  assert.equal(ordinary.status.state, 3);
+  assert.equal(ordinary.artifacts[0].parts[0].content.value, 'ordinary read-only result');
+  assert.equal(admission.holder()?.role, 'explorer');
+  gate.resolve();
+  const pinned = taskResult(await pinnedPromise);
+  assert.equal(pinned.status.state, 3);
+  assert.equal(pinned.artifacts[0].metadata.review.verdict, 'preserve');
+  assert.equal(pinned.artifacts[0].metadata.reviewCoverage.stable, true);
+  assert.equal(admission.holder(), null);
+});
+
+test('pinned-check fallback exposes reservation refusal as unknown coverage', async () => {
+  const admission = makeAdmission({});
+  await admission.acquire({ role: 'worker', taskId: 'held-task', contextId: 'held-context' });
+  let calls = 0;
+  const { agents, context } = makeService({ async run() { calls += 1; return okResult(auditReport('VERDICT: preserve')); } }, {
+    roles: pinnedFallbackRoles, admission,
+  });
+  const failed = taskResult(await agents.get('explorer').handler.sendMessage(sendParams(message(structured({
+    objective: 'Review the pinned check.', allowedFiles: [], review: auditReview('pinned_check'),
+  }))), context));
+  assert.equal(failed.status.state, 4);
+  assert.equal(calls, 0);
+  assert.equal(failed.status.message.metadata.reviewCoverage.targetKnown, false);
+  assert.equal(failed.status.message.metadata.reviewCoverage.stable, false);
+  assert.equal(failed.status.message.metadata.review.reason, 'review_writer_unsettled');
+});
+
+test('canceling an auditor turn reconciles and releases its exclusive reservation', async () => {
+  const admission = new WriterAdmission({
+    db: new Database(':memory:'),
+    workspace: process.cwd(),
+    snapshot: () => ({ kind: 'unavailable', reason: 'test' }),
+    quiescence: { isProcessGroupGone: () => true },
+    settleMs: 0,
+  });
+  let started;
+  const runStarted = new Promise((resolve) => { started = resolve; });
+  const { agents, context } = makeService({
+    run({ signal, onTurnStart }) {
+      onTurnStart({ processIdentity: { pid: 321 }, threadId: 'audit-thread' });
+      started();
+      return new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      });
+    },
+  }, { roles: auditorRoles, admission });
+  const handler = agents.get('auditor').handler;
+  const taskPromise = handler.sendMessage(sendParams(message(auditRequest()), { returnImmediately: true }), context);
+  const submitted = taskResult(await taskPromise);
+  await runStarted;
+  assert.equal(admission.holder()?.role, 'auditor');
+  await handler.cancelTask({ id: submitted.id }, context);
+  for (let attempt = 0; attempt < 30 && admission.holder(); attempt += 1) await tick(10);
+  assert.equal(admission.holder(), null);
+  assert.equal(admission.findByContextId(submitted.contextId)?.state, 'reconciled');
+});
+
+test('auditor refuses an active writer and required staging log failures cannot accept a review', async () => {
+  const admission = makeAdmission({});
+  await admission.acquire({ role: 'worker', taskId: 'writer-task', contextId: 'writer-context' });
+  let calls = 0;
+  let service = makeService({ async run() { calls += 1; return okResult(auditReport()); } }, { roles: auditorRoles, admission });
+  let failed = taskResult(await service.agents.get('auditor').handler.sendMessage(
+    sendParams(message(auditRequest())), service.context,
+  ));
+  assert.equal(failed.status.state, 4);
+  assert.equal(calls, 0);
+  assert.equal(failed.status.message.metadata.review.reason, 'review_writer_unsettled');
+
+  const unresolvedAdmission = makeAdmission({});
+  const writer = await unresolvedAdmission.acquire({ role: 'worker', taskId: 'writer-task-2', contextId: 'writer-context-2' });
+  unresolvedAdmission.markUnresolved(writer.executionId, 'test');
+  service = makeService({ async run() { calls += 1; return okResult(auditReport()); } }, {
+    roles: auditorRoles, admission: unresolvedAdmission,
+  });
+  failed = taskResult(await service.agents.get('auditor').handler.sendMessage(
+    sendParams(message(auditRequest())), service.context,
+  ));
+  assert.equal(failed.status.state, 4);
+  assert.equal(failed.status.message.metadata.review.reason, 'review_writer_unsettled');
+
+  let logCalls = 0;
+  const failedLogAdmission = makeAdmission({});
+  service = makeService({ async run() { calls += 1; return okResult(auditReport()); } }, {
+    roles: auditorRoles,
+    admission: failedLogAdmission,
+    stagingLog: { record() { logCalls += 1; if (logCalls === 2) throw new Error('log unavailable'); } },
+  });
+  failed = taskResult(await service.agents.get('auditor').handler.sendMessage(
+    sendParams(message(auditRequest())), service.context,
+  ));
+  assert.equal(failed.status.state, 4);
+  assert.equal(failed.status.message.metadata.review.reason, 'staging_log_unavailable');
+  assert.equal(calls, 0);
+  assert.equal(failedLogAdmission.holder(), null, 'a result-log failure releases the audit reservation');
+});
+
+test('staging events correlate direct audits and store bounded redacted report summaries', async () => {
+  const stagingLog = new InMemoryStagingLog();
+  const { agents, context } = makeService({ async run() { return okResult(auditReport('VERDICT: pass\nBearer abcdefghijklmnop')); } }, {
+    roles: auditorRoles, stagingLog,
+  });
+  const result = taskResult(await agents.get('auditor').handler.sendMessage(sendParams(message(auditRequest(), undefined, {
+    runId: 'run-7', assignmentId: 'assignment-8', attemptId: 'attempt-9',
+  })), context));
+  assert.equal(result.status.state, 3);
+  const events = stagingLog.list({ runId: 'run-7' });
+  assert.deepEqual(events.map((event) => event.type), ['role_selected', 'audit_selected', 'audit_started', 'audit_result']);
+  assert.ok(events.every((event) => event.assignmentId === 'assignment-8' && event.attemptId === 'attempt-9'));
+  const payload = events.at(-1).payload;
+  assert.match(payload.summary, /Bearer \[REDACTED\]/);
+  assert.doesNotMatch(payload.summary, /abcdefghijklmnop/);
+
+  const failingService = makeService({ async run() { throw new Error('model unavailable'); } }, { roles: auditorRoles, stagingLog });
+  const failed = taskResult(await failingService.agents.get('auditor').handler.sendMessage(sendParams(message(auditRequest(), undefined, {
+    runId: 'run-10', assignmentId: 'assignment-11', attemptId: 'attempt-12',
+  })), failingService.context));
+  assert.equal(failed.status.state, 4);
+  const failureEvents = stagingLog.list({ runId: 'run-10', type: 'audit_failure' });
+  assert.equal(failureEvents.length, 1);
+  assert.equal(failureEvents[0].assignmentId, 'assignment-11');
+  assert.equal(failureEvents[0].attemptId, 'attempt-12');
+});
+
+test('non-auditor direct calls retain plain-text support and emit best-effort role telemetry', async () => {
+  const stagingLog = new InMemoryStagingLog();
+  const { agents, context } = makeService({ async run() { return okResult('plain result'); } }, { stagingLog });
+  const result = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('legacy plain request')), context));
+  assert.equal(result.status.state, 3);
+  assert.equal(result.artifacts[0].parts[0].content.value, 'plain result');
+  assert.deepEqual(stagingLog.list().map((event) => event.type), ['role_selected', 'role_started', 'role_result']);
 });
