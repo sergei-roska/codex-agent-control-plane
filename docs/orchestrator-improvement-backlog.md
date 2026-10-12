@@ -607,6 +607,22 @@ command (stop at `&&`, `||`, `;`, `|`), and match only real in-place flags
 `perl -pi -e` blocked. Cost of the defect: wasted lead turns and a failed plan
 write attempt per false block.
 
+#### OPS-04 - A writable verifier that changes nothing still gets a receipt [P0]
+
+Executor: worker-sonnet (review gate is a risk area). Proposed write scope:
+`src/review-policy.js`, `src/lead-graph.js`, their tests. Found live 2026-10-12
+(codex_team_work M4, runtime a1efa03): a verifier on a writable sandbox that
+makes no edits ends with its lane `not_integrated` / `no_changes`
+(`src/writer-lanes.js:380`); `reviewResult` (`src/review-policy.js` ~:196)
+accepts only `released`/`reconciled` and returns `review_writer_unsettled`, so
+no passing receipt is ever recorded. The critical checkpoint then blocks the
+commit and all writers, and verifier retries cannot help. Fix: treat a
+`no_changes` lane with a known empty delta and an unchanged target identity as
+settled for review (equivalent to read-only), still rejecting unknown deltas,
+scope violations, and other unintegrated reasons. Tests: writable verifier
+with no edits gets an accepted receipt; `lane_unsafe`, `canceled`, unknown
+delta, and target change stay rejected.
+
 ## Verification and rollout policy
 
 1. Run focused tests in implementation tasks, then the existing project checks at
