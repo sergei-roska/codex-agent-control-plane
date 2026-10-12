@@ -593,6 +593,20 @@ contract from the stored first user message, or mark it invalid
 (`contract_invalid`, UNKNOWN) when it cannot be recovered. Belongs with WAL-01's
 crash-window matrix; fix it there at the latest.
 
+#### OPS-03 - The lead write guard does not block read-only `sed -n` [P1]
+
+Executor: worker. Proposed write scope: `~/.codex/hooks/guard.py` and its tests
+(guard edits need owner approval). Found live 2026-10-12: the lead's read-only
+`sed -n '9,18p' ... && rg -n -i ...` was blocked as `lead_write: in-place
+editor`. `guard.py:170` checks every later token of the whole command
+(`tokens[i + 1:]`), so `rg -i` (or any `-i...` flag in another chained command)
+is attributed to `sed`. Limit the scan to the arguments of the same simple
+command (stop at `&&`, `||`, `;`, `|`), and match only real in-place flags
+(`-i`, `-i.bak`, `--in-place`, and for perl `-i`/`-pi`), not `-n`. Tests:
+`sed -n ... && rg -i` allowed; `sed -i`, `sed -i.bak`, `sed --in-place`,
+`perl -pi -e` blocked. Cost of the defect: wasted lead turns and a failed plan
+write attempt per false block.
+
 ## Verification and rollout policy
 
 1. Run focused tests in implementation tasks, then the existing project checks at
