@@ -111,10 +111,14 @@ evaluated. Ids and codes are part of the contract.
 | `decision.acceptance_checks` | proposal refusals (vacuous or unsafe argv, invalid check) | decision JSON, `validateAgentChecks` in `src/acceptance.js` (LL-4) | safety-critical |
 | `decision.investigate_first` | `investigation_missing` | `request_human_input` (owner-only reasons: `paid_resources`, `credentials_or_access`, `external_write`, `irreversible_operation`, `prd_requirement_change`) or a repeated unmet-goal finish must cite a read-only investigation finished after the blocker appeared (LL-6) | gate |
 
-Lead loop fixes (2026-10-10, [design](lead-loop-fixes-design.md)): `finish` with
-`goalAchieved: false` and reaching the round limit no longer end the run; they pause
-as an owner decision (`pause.escalation`: `goal_not_achieved` or `round_limit`; options
-`continue`, `accept_as_is`, `change_goal`). Worker decision requests with a
+Lead loop fixes ([design](lead-loop-fixes-design.md)): `finish` with
+`goalAchieved: false` requires investigation before an owner decision. LL-8
+(2026-10-12) removes the default dispatch-round limit. Only an explicitly
+configured positive `maxRounds` can cause a `round_limit` pause. A repeated-work
+warning followed by an unchanged recurrence, or exhausted invalid-decision
+corrections, produces a `loop_detected` owner decision. These pauses use options
+`continue`, `accept_as_is`, `change_goal`; they never satisfy an acceptance or
+review gate themselves. Worker decision requests with a
 recommendation outside the option ids, and over-long report strings, are normalized
 (`report.normalizations`) instead of invalidating the report.
 

@@ -21,6 +21,9 @@ const { InMemoryStagingLog } = require('./staging-log');
 const {
   POLICY_ID, isGatedReview, sameReviewScope, computeReviewTarget, reviewResult,
 } = require('./review-policy');
+const {
+  makeObservation, observeLoopGuard, resetLoopGuard, reportEvidenceIdentity, warningText,
+} = require('./loop-guard');
 
 const DEFAULT_RECONCILE_WAIT_MS = 30_000;
 const MAX_OUTCOME_TEXT_CHARS = 12_000;
@@ -46,6 +49,10 @@ const CANCELED_TEXT = 'Canceled after all active A2A tasks were confirmed stoppe
 const REPORT_CONTRACT_LINE = `Reply with a single JSON object matching the ${WORKER_REPORT_CONTRACT} report schema `
   + '(outcome, summary, filesChanged, filesInspected, checks, risks, scopeExpansion, decisionRequest). '
   + 'Use outcome needs_decision with a decisionRequest only after checking the evidence yourself.';
+const ACCEPTANCE_AUDIT_REPORT_LINE = 'For an acceptance audit, the summary first line must be exactly VERDICT: pass, VERDICT: fail, or VERDICT: inconclusive, with no added text or punctuation. '
+  + 'The checks array records only required checks actually performed or explicit validation of cited prior evidence; each detail says what was actually validated. Never describe reused tests as freshly executed. '
+  + 'Put supplemental diagnostic commands, forbidden or unrun excluded tests, and reused verifier evidence in risks with a command/result or evidence reference and its limitation. '
+  + 'Keep assigned failed or unrun checks in checks; they prevent acceptance. Do not invent runs.';
 
 const TERMINAL_STATES = new Set([
   TaskState.TASK_STATE_COMPLETED,
@@ -388,7 +395,9 @@ function analyzeWorker(parsed, ctx) {
   let report = null;
   let violations = { paths: [], count: 0 };
   let text;
+  let loopEvidenceIdentity = null;
   if (parsed.report) {
+    loopEvidenceIdentity = reportEvidenceIdentity(parsed.report, { role: canonicalRoleId(ctx.role) });
     const full = scopeViolations(parsed.report, ctx.allowedFiles, ctx.workspace, ctx.lanePath || null);
     violations = capPaths(full, 'scopeViolations', omitted);
     report = projectReport(parsed.report, omitted);
@@ -410,6 +419,7 @@ function analyzeWorker(parsed, ctx) {
   }
   return {
     report, reportError: parsed.error, ...(text !== undefined ? { text } : {}),
+    ...(loopEvidenceIdentity ? { loopEvidenceIdentity } : {}),
     scopeViolations: violations.paths, scopeViolationCount: violations.count, omitted, evidence,
     ...(errors.length > 0 ? { evidenceError: errors[0] } : {}),
   };
@@ -573,14 +583,11 @@ const MAX_CONTINUATIONS = 2;
 const MAX_ESCALATION_QUESTION_CHARS = 3000;
 // LL-1: owner choices when the lead finishes without reaching the goal or the round limit is reached.
 const ESCALATION_OPTIONS = [
-  { id: 'continue', description: 'Continue: another bounded attempt, with your answer as a note to the lead' },
+  { id: 'continue', description: 'Continue: another attempt using this run\'s configured round allowance, with your answer as a note to the lead' },
   { id: 'accept_as_is', description: 'Accept as is: finish now with the current result (acceptance still runs)' },
   { id: 'change_goal', description: 'Change goal: your answer replaces the goal, with a fresh round budget' },
 ];
 const ESCALATION_CHOICES = ESCALATION_OPTIONS.map((option) => option.id);
-// LL-6: automatic round extensions never take the limit past this cap; beyond it the owner decides.
-const ROUND_CAP = 18;
-const GOAL_INVESTIGATION_ROUNDS = 3;
 const MAX_PROGRESS_ENTRIES = 50;
 const OWNER_ONLY_RULE = 'Owner-only decisions are a closed list (humanInput.reason): paid_resources (spending money or paid resources beyond the run), credentials_or_access (credentials and access grants), external_write (publishing or writing to external systems), irreversible_operation, prd_requirement_change (removing or weakening a requirement the PRD states), and infeasible_requirement (an investigation proved that a requirement cannot be met because a dependency or the environment lacks a capability; cite the exact version or setting and the evidence; options must include substitute evidence, changing the dependency or environment, and deferring the requirement). Interpreting the PRD, choosing an implementation, and expanding file scope are your decisions after investigation. Fixing evidence tooling means collecting or presenting evidence the platform already provides; building a substitute for a capability the platform lacks is scope expansion that needs the owner.';
 const INVESTIGATION_RULE = 'An investigation is a finished read-only outcome (explorer first; use auditor only for a concrete risk-boundary question, or scout/architect when appropriate) with a valid report from a round after the blocker first appeared (after the latest related open worker decision; for a repeated unmet-goal finish, after the first one); cite its assignmentId in humanInput.evidenceChecked or relatedDecisionIds (in final for a finish).';
@@ -663,6 +670,8 @@ const LeadState = Annotation.Root({
   leadSeenGoal: last(() => null),
   // Usage-limited attempts of the latest batch that can be continued after the budget resume (BUD-2).
   continuable: last(() => []),
+  // LL-8: bounded checkpointed observations and the current repeated-work episode.
+  loopGuard: last(() => null),
 });
 
 /**
@@ -931,8 +940,8 @@ function buildLeadGraph(deps) {
 
   const allowedFilesOf = (item) => item.contract?.allowedFiles || item.assignment.allowedFiles;
 
-  // LL-1: the owner extends the budget by maxRounds per continue or change_goal.
-  const roundLimit = (state) => maxRounds + (state.extraRounds || 0);
+  // LL-8: null means the caller requested unlimited dispatch rounds. Legacy grants remain readable.
+  const roundLimit = (state) => Number.isInteger(maxRounds) ? maxRounds + (state.extraRounds || 0) : null;
 
   // LL-1: a human-decision pause raised by the server, not by the lead. `final` is the text an
   // accept_as_is finishes with; it stays out of the pause value.
@@ -1128,6 +1137,7 @@ function buildLeadGraph(deps) {
       const parsed = completed ? parseWorkerReport(parseText) : { report: null, error: null };
       const reportAnalysis = analyzeWorker(parsed, {
         fullText: joined, allowedFiles: allowedFilesOf(item), workspace, store, textRef: stored.get(parseText) || stored.get(joined) || null, lanePath,
+        role: item.role, failed: !completed,
       });
       // The refs (including the parse source) already live on the analysis or the result; keep one list.
       const evidence = [...refs, ...reportAnalysis.evidence.filter((ref) => !refs.some((known) => known.id === ref.id))];
@@ -1156,7 +1166,10 @@ function buildLeadGraph(deps) {
       analysis = { ...analysis, omitted: [...(analysis.omitted || [])] };
     } else {
       const parsed = completed ? parseWorkerReport(result.artifacts?.[0]?.text || result.text) : { report: null, error: null };
-      analysis = analyzeWorker(parsed, { fullText: result.text || '', allowedFiles, workspace, textRef: null, store: workerStore(item), lanePath: lanePathOf(result.writerExecution) });
+      analysis = analyzeWorker(parsed, {
+        fullText: result.text || '', allowedFiles, workspace, textRef: null, store: workerStore(item),
+        lanePath: lanePathOf(result.writerExecution), role: item.role, failed: !completed || Boolean(result.failureKind),
+      });
       evidence = analysis.evidence;
       evidenceError = analysis.evidenceError || evidenceError;
     }
@@ -1211,6 +1224,7 @@ function buildLeadGraph(deps) {
       taskId: result.taskId || item.taskId || null,
       status: result.status,
       report: analysis.report,
+      ...(analysis.loopEvidenceIdentity ? { loopEvidenceIdentity: analysis.loopEvidenceIdentity } : {}),
       reportError: analysis.reportError,
       ...(Array.isArray(analysis.report?.normalizations) && analysis.report.normalizations.length > 0
         ? { normalizations: analysis.report.normalizations.map((entry) => `${entry.field}: ${entry.action}`) } : {}),
@@ -1327,6 +1341,9 @@ function buildLeadGraph(deps) {
               boundary: summary.boundary,
               sandbox: summary.sandbox,
               writerExecution: summary.writerExecution,
+              reviewCoverage: summary.reviewCoverage,
+              scopeViolations: summary.scopeViolations,
+              attestedScopeViolations: summary.attestedScopeViolations,
             }, role, review);
             const delta = summary.writerExecution?.delta;
             const changedPaths = Array.isArray(delta?.changedPaths) ? delta.changedPaths : [];
@@ -1427,6 +1444,7 @@ function buildLeadGraph(deps) {
   }
 
   const roundsLine = (state) => {
+    if (roundLimit(state) === null) return `Dispatch rounds already used: ${state.round}. Dispatch rounds are unlimited; the count is for ordering only.`;
     const extensions = (state.roundExtensions || []).length === 0 ? ''
       : ` Budget extensions: ${state.roundExtensions.map((entry) => `+${entry.rounds} at round ${entry.round} (${entry.by}${entry.reason ? `: ${entry.reason}` : ''})`).join('; ')}.`;
     return `Dispatch rounds already used: ${state.round}/${roundLimit(state)}. A dispatch decision consumes one round.${extensions}`;
@@ -1468,7 +1486,7 @@ function buildLeadGraph(deps) {
       sections.push(`Acceptance note: the deterministic acceptance run for your finish decision was rejected (disposition ${state.acceptance.disposition}). You may dispatch fixes within the round limits, then finish again; a second rejection ends the run as rejected. Your final text never changes the disposition.\nIssues:\n${issues.map((line) => `- ${line}`).join('\n')}`);
     }
     if (state.goalInvestigation) {
-      sections.push(`Goal investigation (requested in round ${state.goalInvestigation.round}): your finish with goalAchieved false named these blockers:\n${state.goalInvestigation.final}\nInvestigate the root cause of each one (explorer or auditor with the concrete question) or fix it. A later finish with goalAchieved false pauses for the owner only when final cites the assignmentId of a read-only investigation finished after round ${state.goalInvestigation.round} and states why each remaining blocker is owner-only, with evidence.`);
+      sections.push(`Goal investigation (requested in round ${state.goalInvestigation.round}): your finish with goalAchieved false named these blockers:\n${state.goalInvestigation.final}\nInvestigate the root cause of each one (explorer or auditor with the concrete question) or fix it. Dispatch rounds remain ${Number.isInteger(maxRounds) ? 'bounded by the configured caller limit' : 'unlimited'}; do not request extra rounds. A later finish with goalAchieved false pauses for the owner only when final cites the assignmentId of a read-only investigation finished after round ${state.goalInvestigation.round} and states why each remaining blocker is owner-only, with evidence.`);
     }
     if (state.humanAnswers.length > 0) sections.push('Human answers (authoritative):\n' + JSON.stringify(state.humanAnswers));
     if (state.retryDecide && state.rejections?.length > 0) {
@@ -1478,10 +1496,12 @@ function buildLeadGraph(deps) {
         ...violations.map((entry) => `- ${entry.predicate} ${entry.code}: ${entry.detail}`),
         ...reminders].join('\n'));
     }
+    const loopNote = warningText(state.loopGuard);
+    if (loopNote) sections.push(loopNote);
     return sections;
   }
 
-  const outcomesForPrompt = (outcomes) => boundedOutcomes(outcomes.map(({ objective: _objective, continuation: _continuation, ...outcome }) => outcome));
+  const outcomesForPrompt = (outcomes) => boundedOutcomes(outcomes.map(({ objective: _objective, continuation: _continuation, loopEvidenceIdentity: _identity, ...outcome }) => outcome));
 
   // SES-01: the lead thread already holds the rules and roles; send only what is new since its last turn.
   function deltaPrompt(state, extras) {
@@ -1543,8 +1563,8 @@ function buildLeadGraph(deps) {
       `Investigate first: never ask the owner what investigation can answer; the owner has no one to ask either. ${OWNER_ONLY_RULE}`,
       `request_human_input is accepted only for an owner-only decision and only after an investigation of that blocker: ${INVESTIGATION_RULE} Give options, a recommendation, the evidence checked, and the independent work that can proceed.`,
       'A blocker that persists needs its root cause located (an explorer first; use an auditor only for a concrete risk-boundary question, or scout/architect when appropriate). Once an investigation locates it outside what the team may change (a missing capability of a dependency or the environment, or the requirement itself), stop investigating that blocker and escalate it.',
-      `goalAchieved: on finish set it honestly, true only when the goal is met; false names the blockers in final. The first finish with false does not end the run: you get ${GOAL_INVESTIGATION_ROUNDS} extra rounds to investigate the root cause of each blocker or fix it. A later finish with false pauses for the owner only when final cites a read-only investigation finished since then and states why each remaining blocker is owner-only, with evidence. Use null for dispatch and request_human_input.`,
-      `Round budget: when the last two rounds made progress (an integrated change, a newly passing acceptance check, or a resolved worker decision), the budget grows by ${maxRounds} rounds automatically, up to ${ROUND_CAP} rounds; beyond that the owner decides.`,
+      `goalAchieved: on finish set it honestly, true only when the goal is met; false names the blockers in final. The first finish with false does not end the run: investigate the root cause of each blocker or fix it${Number.isInteger(maxRounds) ? ' within the caller-granted round allowance' : ' while dispatch rounds remain unlimited'}. A later finish with false pauses for the owner only when final cites a read-only investigation finished since then and states why each remaining blocker is owner-only, with evidence. Use null for dispatch and request_human_input.`,
+      ...(Number.isInteger(maxRounds) ? [`Dispatch rounds are capped at ${maxRounds} per caller-granted allowance. Reaching the cap pauses for the owner; only owner continue or change_goal grants another allowance.`] : ['Dispatch rounds are unlimited by default. A round number is for ordering only, not a spending authorization.']),
       `acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks derived from the project's PRD, release or gate documents and its test commands; the first valid proposal is pinned for the run and runs at finish in a sandbox with a read-only workspace and no network. ${CHECK_RULE} Otherwise use null. A check that cannot pass is a blocker to investigate; only an owner-only cause is escalated. A changed pinned check script is reviewed by a read-only auditor against the PRD: preserved requirements are re-pinned, weakened ones keep failing.`,
       ...(deps.parallelWriters ? ['A writer outcome can be not_integrated (the lane field gives the reason and the lane path, which is kept): its changes never reached the shared workspace. You may re-dispatch with corrected allowedFiles, or resolve a conflict with a follow-up assignment.'] : []),
       'Writer reconciliation is mechanical: before you decide, the server reconciles every writable outcome whose effects were unknown and lists the result as an outcome of kind reconciliation, with the attested changedPaths. attestedScopeViolations are changes the server observed outside allowedFiles; a report filesChanged list is self-reported and advisory. A writable dispatch is refused while any writer outcome is unresolved. For a read-only role, dispatch_error means the submission could not be matched to a task at lookup time; such a role cannot have workspace write effects.',
@@ -1805,7 +1825,14 @@ function buildLeadGraph(deps) {
       });
       if (consecutive > MAX_AUTO_REJECTIONS) {
         const codes = [...new Set([...(state.retryDecide ? (state.rejections.at(-1)?.violations || []) : []), ...error.violations].map((entry) => entry.code))];
-        throw new Error(`Lead decision rejected ${consecutive} times in a row (${codes.join(', ')}): ${error.message}`, { cause: error });
+        const question = `The lead decision failed validation ${consecutive} times in a row (${codes.join(', ')}): ${error.message}. Continue to replan with a note, change the goal, or accept the current result as is.`;
+        return {
+          ...update,
+          rejections: [...(state.rejections || []), { round: state.round + 1, at: new Date().toISOString(), violations: error.violations }].slice(-5),
+          consecutiveRejections: consecutive,
+          retryDecide: false,
+          ...escalate(state, 'loop_detected', question, 'The lead could not produce a valid decision after two correction reminders.'),
+        };
       }
       return {
         ...update,
@@ -1842,13 +1869,11 @@ function buildLeadGraph(deps) {
       logGateReuse(state, completeObligations);
       const final = decision.final.trim();
       if (decision.goalAchieved === false) {
-        // LL-6: the first unmet-goal finish is not a pause: the lead investigates the blockers with extra rounds.
+        // The first unmet-goal finish is not a pause: the lead investigates within the configured allowance.
         if (!state.goalInvestigation) {
           return {
             ...update,
             goalInvestigation: { round: state.round, final: final.slice(0, MAX_ESCALATION_QUESTION_CHARS) },
-            extraRounds: (state.extraRounds || 0) + GOAL_INVESTIGATION_ROUNDS,
-            roundExtensions: [...(state.roundExtensions || []), { round: state.round, by: 'goal_investigation', rounds: GOAL_INVESTIGATION_ROUNDS }],
             redecide: true,
           };
         }
@@ -1873,19 +1898,9 @@ function buildLeadGraph(deps) {
       return { ...update, humanCount: state.humanCount + 1, humanRequest: { decisionId, ...decision.humanInput } };
     }
     const limit = roundLimit(state);
-    if (state.round >= limit) {
-      // LL-6: progress in the last two rounds (state.round - 1 and state.round, this decision's resolutions
-      // included) extends the budget by maxRounds automatically, but never past ROUND_CAP.
-      const recent = (update.progress || state.progress || []).filter((entry) => entry.round >= state.round - 1);
-      if (recent.length === 0 || limit >= ROUND_CAP) {
-        const question = `Dispatch round limit reached: ${state.round} of ${limit} rounds used and the lead has not finished${limit >= ROUND_CAP ? ` (automatic extensions stop at ${ROUND_CAP} rounds)` : ' and the last two rounds made no progress'}. Continue with another ${maxRounds} rounds, accept the current result as is, or change the goal?`;
-        return { ...update, ...escalate(state, 'round_limit', question, `Stopped after reaching the limit of ${limit} dispatch rounds.`) };
-      }
-      const grant = Math.min(limit + maxRounds, ROUND_CAP) - limit;
-      update.extraRounds = (state.extraRounds || 0) + grant;
-      update.roundExtensions = [...(state.roundExtensions || []), {
-        round: state.round, by: 'auto', rounds: grant, reason: [...new Set(recent.map((entry) => entry.kind))].join(', '),
-      }];
+    if (limit !== null && state.round >= limit) {
+      const question = `Dispatch round limit reached: ${state.round} of ${limit} rounds used and the lead has not finished. Continue with another ${maxRounds} rounds, accept the current result as is, or change the goal?`;
+      return { ...update, ...escalate(state, 'round_limit', question, `Stopped after reaching the caller-configured limit of ${limit} dispatch rounds.`) };
     }
     const dispatchRound = state.round + 1;
     const dependsOnCompletedGate = decision.assignments.some((assignment) => {
@@ -1994,11 +2009,15 @@ function buildLeadGraph(deps) {
     }
 
     const { continueFrom: _continueFrom, ...assignmentFields } = item.assignment || {};
+    const reportContract = canonicalRoleId(item.role) === 'auditor' && isGatedReview(item.assignment?.review)
+      && item.assignment?.review?.kind !== 'pinned_check'
+      ? `${REPORT_CONTRACT_LINE} ${ACCEPTANCE_AUDIT_REPORT_LINE}`
+      : REPORT_CONTRACT_LINE;
     const text = JSON.stringify({
       ...assignmentFields,
       assignmentId: item.assignmentId,
       workspace,
-      reportContract: REPORT_CONTRACT_LINE,
+      reportContract,
       ...(item.continuation ? { continuation: item.continuation } : {}),
     });
     let submitted;
@@ -2411,15 +2430,58 @@ function buildLeadGraph(deps) {
         },
         continuation: item.result.continuation,
       }));
+    const batchSettled = batch.items.length > 0
+      && batch.items.every((item) => item.state === 'finished')
+      && batch.items.every((item) => item.sandbox === 'read-only' || isSettledWriter(item.result));
+    let loopGuard = state.loopGuard || null;
+    if (batchSettled && !limited && state.status !== 'canceled') {
+      const observations = batch.items.map((item) => {
+        const outcome = item.reviewSummary || outcomeSummary(item);
+        let contentIdentity = null;
+        const delta = outcome.writerExecution?.delta;
+        const targetPaths = integratedChange(outcome) && delta?.known === true && outcome.attestedDeltaKnown === true
+          && Array.isArray(delta.changedPaths) && delta.changedPaths.length > 0 && delta.changedPaths.length <= 20
+          && (delta.changedPathCount ?? delta.changedPaths.length) === delta.changedPaths.length
+          ? delta.changedPaths
+          : (item.assignment?.review?.paths || []);
+        if (targetPaths.length > 0 && targetPaths.length <= 20) {
+          const target = computeReviewTarget({
+            workspace,
+            review: {
+              kind: 'loop_target',
+              checkpointId: `loop:${sha256([...targetPaths].sort().join('\n')).slice(0, 24)}`,
+              reason: 'bounded scoped content identity',
+              paths: [...new Set(targetPaths)].sort(),
+              evidenceIds: [],
+            },
+            runId: state.runId,
+            goal: state.goalOverride || state.goal,
+          });
+          if (target.known) contentIdentity = target.identity;
+        }
+        return makeObservation({ item, outcome, contentIdentity });
+      });
+      loopGuard = observeLoopGuard(state.loopGuard, batch.round, observations);
+    }
+    const loopPause = loopGuard?.pause || null;
+    const loopReferences = (loopPause?.references || []).map((entry) => entry.attemptId || entry.assignmentId).filter(Boolean).join(', ');
+    if (loopGuard?.pause) {
+      const { pause: _pause, ...persistedGuard } = loopGuard;
+      loopGuard = persistedGuard;
+    }
     const changes = summaries.filter((outcome) => integratedChange(outcome));
     return {
-      outcomes: [...state.outcomes, ...summaries],
+      outcomes: [...state.outcomes, ...summaries.map(({ loopEvidenceIdentity: _identity, ...outcome }) => outcome)],
       ...(changes.length > 0 ? { progress: addProgress(state, changes.map((outcome) => ({ round: batch.round, kind: 'integrated_change', detail: outcome.assignmentId }))) } : {}),
       openDecisions: open,
       unresolvedWriters,
       reviewObligations: integrated.reviewObligations,
       batch: null,
       continuable,
+      ...(loopGuard ? { loopGuard } : {}),
+      ...(loopPause ? {
+        ...escalate(state, 'loop_detected', `Repeated work paused after ${loopPause.attempts} completed rounds with unchanged evidence: ${loopPause.description}${loopReferences ? ` (attempts: ${loopReferences})` : ''}. Continue with a different approach, change the goal, or accept the current result as is.`, `The same scoped work repeated ${loopPause.attempts} times without relevant new evidence.`),
+      } : {}),
       ...(limited ? { budget: { source: 'worker' } } : {}),
     };
   }
@@ -2618,10 +2680,13 @@ function buildLeadGraph(deps) {
       humanRequest: null,
     };
     if (choice === 'accept_as_is') return { ...update, status: 'completed', text: request.final };
-    const extraRounds = (state.extraRounds || 0) + maxRounds;
-    const roundExtensions = [...(state.roundExtensions || []), { round: state.round, by: 'owner', rounds: maxRounds }];
-    if (choice === 'change_goal') return { ...update, extraRounds, roundExtensions, goalOverride: String(answer.answer).trim() };
-    return { ...update, extraRounds, roundExtensions };
+    const budget = Number.isInteger(maxRounds) ? {
+      extraRounds: (state.extraRounds || 0) + maxRounds,
+      roundExtensions: [...(state.roundExtensions || []), { round: state.round, by: 'owner', rounds: maxRounds }],
+    } : {};
+    const loopReset = request.escalation === 'loop_detected' ? { loopGuard: resetLoopGuard() } : {};
+    if (choice === 'change_goal') return { ...update, ...budget, ...loopReset, goalOverride: String(answer.answer).trim() };
+    return { ...update, ...budget, ...loopReset };
   }
 
   // LL-6: verdict on a changed pinned check. preserve re-pins the reviewed content and records who
@@ -2884,6 +2949,7 @@ function buildLeadGraph(deps) {
     if (state.status === 'canceled') return 'finish';
     if (state.unresolvedWriters.length > 0) return 'reconcile';
     if (state.budget) return 'budget_pause';
+    if (state.humanRequest) return 'human_input';
     if (state.checkReview) return 'review_check';
     return 'decide';
   };
@@ -2924,7 +2990,7 @@ function buildLeadGraph(deps) {
     .addEdge('dispatch', 'collect')
     .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify', 'owner_pause'])
     .addConditionalEdges('owner_pause', collectRoute, ['dispatch', 'verify'])
-    .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'review_check', 'decide'])
+    .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'human_input', 'review_check', 'decide'])
     .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'decide'])
     .addConditionalEdges('human_input', afterHumanInput, ['accept', 'decide'])
     .addEdge('budget_pause', 'continue_limited')

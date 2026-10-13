@@ -116,6 +116,26 @@ sending a message still resumes at once. `CODEX_A2A_AUTO_RESUME=0` turns it off.
 
 After a batch, the lead graph settles every writable outcome that is not provably finished, without asking a model. If quiescence cannot be proven, the lead task is `INPUT_REQUIRED` with pause `writer_unresolved`. Send any message to the task to retry once the earlier writer is stopped. Writable dispatch is refused while a writer is unresolved, and in a serial batch the remaining writers are skipped (`skipped_unresolved_writer`) after an unsettled one.
 
+### Long runs and repeated work
+
+Dispatch rounds have no default limit. Healthy implementation and research can
+continue across short or long rounds; the counter is retained for reporting.
+Callers may explicitly set a positive `maxRounds` when constructing the
+orchestrator to impose their own cap. Progress does not extend an explicit cap;
+owner `continue` or `change_goal` grants another configured allowance.
+
+A bounded, checkpointed loop detector warns the lead after three equivalent
+outcomes with unchanged relevant evidence. Another unchanged recurrence pauses
+the run with `loop_detected` and evidence of the repeated work. The lead gets
+the warning in its ordinary turn, without an extra model call. Owner `continue`
+or `change_goal` starts a new detection episode; restart and usage-limit resume
+retain the history. `accept_as_is` still runs all acceptance and review gates.
+
+The detector is a heuristic over available evidence, not a guarantee that every
+semantic loop is recognized. Per-invocation graph step limits resume from an
+advanced checkpoint instead of exhausting the run's dispatch allowance. See
+[LL-8](docs/lead-loop-fixes-design.md#ll-8-healthy-long-runs-and-repeated-work-recovery-2026-10-12).
+
 ## Acceptance
 
 Finishing a workflow is not acceptance. When the lead decides to finish, the server computes a disposition in code; the lead's final text never changes it.
@@ -145,6 +165,19 @@ Changed pinned acceptance scripts retain their separate read-only integrity
 review. A round ending alone does not trigger either review. Declared review
 checkpoints bind their evidence to scoped content, including uncommitted files;
 model risk classification remains a lead responsibility.
+
+Acceptance audit reports use an exact standalone first summary line, such as
+`VERDICT: pass`. `checks` records required executions or explicit validation
+of cited prior evidence. Supplemental diagnostics, excluded tests and reused
+verifier evidence go in `risks` with their result and limitation; reused tests
+are never described as fresh runs. Failed or unrun assigned checks still
+prevent a passing receipt. See the
+[report contract](docs/auditor-routing-contract.md).
+
+After the launcher confirms an owner Pause or Stop and running workers have
+finished, **New session** opens a fresh context. The old session remains in
+the session list and can be resumed. A pending pause or message keeps the
+button disabled.
 
 Staging problems, attempted remedies, review results, and explicit architectural
 decisions are retained in an append-only state-database log. Read its bounded

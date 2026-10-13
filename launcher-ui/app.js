@@ -452,6 +452,17 @@
       return turns && turns.length ? turns[turns.length - 1].leadTask : null;
     }
 
+    function canStartNewSession() {
+      if (!currentSessionId || !sessionData || sending || pendingTurn || askSending || pauseBusy) return false;
+      const last = lastTurn();
+      if (isTerminalState(last && last.state)) return true;
+      if (!isPausedState(last && last.state)) return false;
+      const sit = situationKey === situationScope() ? situation : null;
+      return !!sit && sit.phase === 'paused' && (sit.pauseKind === 'owner_pause' || sit.pauseKind === 'stopped')
+        && sit.leadTaskId === last.id
+        && !situationBatch(sit).some(function (item) { return item.state === 'running'; });
+    }
+
     // ---- Composer and session controls
     function updateComposer() {
       const goalEl = document.getElementById('taskGoal');
@@ -508,7 +519,7 @@
       scoutBtn.classList.toggle('is-disabled', !scoutOk);
       if (scoutOk) delete scoutBtn.dataset.tooltip;
       else setTooltip(scoutBtn, 'Start the project server to ask the scout', false);
-      newBtn.disabled = !(currentSessionId && lastTerminal && !sending && !pendingTurn);
+      newBtn.disabled = !canStartNewSession();
       updatePauseButton();
       document.getElementById('activeTaskIdDisplay').textContent = currentSessionId
         ? 'session ' + currentSessionId.slice(0, 8)
@@ -516,12 +527,21 @@
     }
 
     function newSession() {
+      if (!canStartNewSession()) return false;
       setSession(null);
       autoOpenLatest = false;
+      decisionCardKey = '';
+      selectedDecisionOption = '';
+      decisionOptionIds = [];
       document.getElementById('decisionCard').classList.add('hidden');
+      document.getElementById('decisionOptionsList').textContent = '';
+      document.getElementById('decisionId').value = '';
+      document.getElementById('decisionIdText').textContent = '';
+      document.getElementById('decisionAnswer').value = '';
       document.getElementById('sendError').classList.add('hidden');
       updateComposer();
       document.getElementById('taskGoal').focus();
+      return true;
     }
 
     // ---- Transcript
@@ -840,6 +860,7 @@
       infeasible_requirement: 'Infeasible requirement',
       round_limit: 'Round limit reached',
       goal_not_achieved: 'Goal not achieved',
+      loop_detected: 'Repeated work detected',
       check_changed: 'Acceptance check changed',
       error: 'Error'
     };

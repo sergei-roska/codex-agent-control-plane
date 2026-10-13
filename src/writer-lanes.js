@@ -377,7 +377,19 @@ class LaneManager {
       return refuse('lane_unsafe', { unsafePaths: error?.code === 'lane_unsafe' && Array.isArray(error.paths) ? error.paths : [] });
     }
     const attemptedPaths = collected.changes.map((change) => change.path);
-    if (!collected.patch.length || !attemptedPaths.length) return refuse('no_changes');
+    if (!collected.patch.length || !attemptedPaths.length) {
+      const refused = refuse('no_changes');
+      if (collected.patch.length === 0 && attemptedPaths.length === 0) {
+        refused.writerExecution.delta = {
+          known: true,
+          headChanged: false,
+          changedPaths: [],
+          changedPathCount: 0,
+          source: 'lane_collection',
+        };
+      }
+      return refused;
+    }
     // Scope gate (R7): one path outside allowedFiles refuses the whole patch.
     const outside = pathsOutsideAllowed(attemptedPaths, allowedFiles, this.workspace);
     if (outside.length) return refuse('lane_scope_refused', { attemptedPaths, scopeViolations: outside });

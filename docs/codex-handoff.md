@@ -1,4 +1,58 @@
-# Codex handoff: finish M2, then Phase C
+# Current handoff: audit loop and session repairs (2026-10-13)
+
+The current local work map is `.agents/teamwork/PROJECT.md`; read the lead's
+handoff linked there before broad exploration. Root `AGENTS.md` defines the
+succession protocol. Local teamwork is ignored by Git and may be absent in a
+fresh checkout, so this section is the fallback. Historical sections below do
+not authorize new M2/Phase C work.
+
+## Current behavior
+
+- Healthy runs have no default dispatch-round limit. Explicit `maxRounds`
+  remains a caller allowance; only an owner decision extends that allowance.
+- A bounded checkpointed detector warns after three unchanged results, then
+  pauses a continued cycle with `loop_detected`. Same-work novelty clears its
+  warnings; unrelated work does not. Mixed batch order does not affect novelty.
+- Owner loop decisions can reset detection. Budget/restart recovery retains
+  history. Writer reconciliation, review gates and acceptance remain required.
+- LangGraph step-limit rollover requires advanced checkpoint identity and step;
+  original inputs and resume commands are not replayed.
+- Equivalent review work is identified by role, checkpoint and declared scope.
+  Paraphrased instructions and incidental evidence IDs do not reset detection;
+  scoped content and performed-check changes remain relevant evidence.
+- Acceptance auditor reports use an exact standalone verdict line. Required
+  executions or explicit prior-evidence validations go in checks; supplemental
+  diagnostics, excluded tests and cited prior evidence go in risks. Required
+  failed/unrun checks still block acceptance. Pinned checks retain preserve/weaken.
+- Confirmed owner Pause/Stop enables New session after running workers finish.
+  The old durable session remains selectable and resumable; in-flight controls
+  and stale situation data cannot unlock the action.
+- The earlier independently accepted OPS-04 no-change verifier receipt fix is
+  retained in the same working tree. Baseline HEAD is `e5f5c6f`.
+
+## Qualification and activation
+
+Independent review approved these repairs. The full suite passed: 1,077 tests,
+1,076 passed, 0 failed, 1 optional live confinement probe skipped. Focused
+detector/graph/orchestrator checks passed (17/195/22), as did seven session
+control cases and ten disposable-server pause cases. Read-only replay of actual
+production rounds r33-r37 warned at r36 and paused at r37; the interleaved
+explorer and paraphrased instructions did not erase the repeated audit history.
+Run tests with `env -u NODE_TEST_CONTEXT`; inherited Node test context can report
+only wrapper counts. Existing `/var/tmp` and HTTP fixtures may require normal
+sandbox escalation. Do not weaken their expectations to avoid permission errors.
+
+The running server and paused task have not been restarted or resumed. Loading
+this code into a running service remains a separate activation step. No real
+10-hour run has been performed; complete outcome/checkpoint history still grows
+with run length. The detector is a bounded heuristic, not a semantic proof.
+
+The user requested a local commit after qualification. No push or deployment
+was performed.
+
+---
+
+# Historical handoff: finish M2, then Phase C
 
 Written 2026-10-05 by the Claude lead session that implemented Phase A and
 Phase B. You are the lead of this repository's team (`profiles/TEAM.md`); follow

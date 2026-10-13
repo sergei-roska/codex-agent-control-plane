@@ -196,8 +196,32 @@ function reviewResult(outcome, role, review = null) {
   if (failures.length > 0) return { ...base, reason: 'review_boundary_failed' };
   if (outcome.sandbox !== 'read-only') {
     const writer = outcome.writerExecution;
-    if (!writer || !['released', 'reconciled'].includes(writer.state) || writer.delta?.known !== true) {
+    const delta = writer?.delta;
+    const emptyLaneReview = role === 'verifier'
+      && writer?.state === null
+      && writer?.lane?.state === 'not_integrated'
+      && writer.lane.reason === 'no_changes'
+      && delta?.known === true
+      && delta.source === 'lane_collection'
+      && delta.headChanged === false
+      && Array.isArray(delta.changedPaths)
+      && delta.changedPaths.length === 0
+      && delta.changedPathCount === 0;
+    if (!writer || (!(['released', 'reconciled'].includes(writer.state) && delta?.known === true) && !emptyLaneReview)) {
       return { ...base, reason: 'review_writer_unsettled' };
+    }
+    if (emptyLaneReview) {
+      const coverage = outcome.reviewCoverage;
+      const identityKnown = (typeof coverage?.targetIdentity === 'string' && coverage.targetIdentity.length > 0)
+        || coverage?.identityPresent === true;
+      if (coverage?.targetKnown !== true || !identityKnown || coverage.stable !== true) {
+        return { ...base, reason: 'review_target_unknown_or_changed' };
+      }
+      const scopeFailures = (outcome.boundary?.results || []).filter((entry) => /scope|lane_scope/.test(String(entry.code || '')));
+      if (scopeFailures.length > 0 || (outcome.scopeViolations || []).length > 0
+        || (outcome.attestedScopeViolations || []).length > 0) {
+        return { ...base, reason: 'review_scope_violation' };
+      }
     }
   }
   if (role === 'auditor') {

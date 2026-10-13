@@ -4,7 +4,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { ClientFactory } = require('@a2a-js/sdk/client');
 const { TaskState } = require('@a2a-js/sdk');
-const { Command, MemorySaver } = require('@langchain/langgraph');
+const { Command, GraphRecursionError, MemorySaver } = require('@langchain/langgraph');
 const { createLeadRole } = require('./role-catalog');
 const { DECISION_SCHEMA, safeRelativePath } = require('./contracts');
 const { InMemoryDispatchJournal } = require('./durable-store');
@@ -12,11 +12,11 @@ const { validateAcceptanceContract } = require('./acceptance');
 const { buildLeadGraph, isTerminalTask, pauseMessage } = require('./lead-graph');
 const { loadSkillCatalog } = require('./skill-catalog');
 
-const DEFAULT_MAX_ROUNDS = 6;
+const DEFAULT_MAX_ROUNDS = null;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_CANCEL_TIMEOUT_MS = 30_000;
 const DEFAULT_CANCEL_RETRY_INTERVAL_MS = 250;
-// Effectively unbounded: rounds are limited by maxRounds, not by LangGraph steps.
+// Keep LangGraph invokes long, but roll forward from checkpoints if an invoke reaches this ceiling.
 const RECURSION_LIMIT = 100_000;
 // Only returned when a test passes interruptAfter and the graph stops at that node boundary.
 const INTERRUPTED_FOR_TEST = 'interrupted_for_test';
@@ -165,6 +165,7 @@ class LeadOrchestrator {
     workspace,
     baseUrl,
     maxRounds = DEFAULT_MAX_ROUNDS,
+    stepLimit = RECURSION_LIMIT,
     clientFactory = new ClientFactory(),
     leadRole = createLeadRole(),
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
@@ -191,7 +192,12 @@ class LeadOrchestrator {
     if (!(roles instanceof Map)) throw new TypeError('roles must be a Map');
     if (typeof workspace !== 'string' || !workspace) throw new TypeError('workspace is required');
     if (typeof baseUrl !== 'string' || !baseUrl) throw new TypeError('baseUrl is required');
-    if (!Number.isInteger(maxRounds) || maxRounds < 1) throw new TypeError('maxRounds must be a positive integer');
+    if (maxRounds !== null && (!Number.isSafeInteger(maxRounds) || maxRounds < 1)) {
+      throw new TypeError('maxRounds must be null or a positive safe integer');
+    }
+    if (!Number.isSafeInteger(stepLimit) || stepLimit < 1) {
+      throw new TypeError('stepLimit must be a positive safe integer');
+    }
     if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 0) throw new TypeError('pollIntervalMs must be a non-negative number');
     if (!Number.isFinite(cancelTimeoutMs) || cancelTimeoutMs < 0) throw new TypeError('cancelTimeoutMs must be a non-negative number');
     if (!Number.isFinite(cancelRetryIntervalMs) || cancelRetryIntervalMs < 0) throw new TypeError('cancelRetryIntervalMs must be a non-negative number');
@@ -204,6 +210,7 @@ class LeadOrchestrator {
     this.workspace = path.resolve(workspace);
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.maxRounds = maxRounds;
+    this.stepLimit = stepLimit;
     this.clientFactory = clientFactory;
     this.leadRole = { ...leadRole, sandbox: 'read-only' };
     this.pollIntervalMs = pollIntervalMs;
@@ -250,7 +257,7 @@ class LeadOrchestrator {
   _config(runId, interruptAfter) {
     return {
       configurable: { thread_id: runId },
-      recursionLimit: RECURSION_LIMIT,
+      recursionLimit: this.stepLimit,
       ...(interruptAfter ? { interruptAfter } : {}),
     };
   }
@@ -391,7 +398,36 @@ class LeadOrchestrator {
   async _drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed, contextId }) {
     this.runtimes.set(runId, { signal, onEvent, resumed, pendingNotes: [], ...(isNonEmptyString(contextId) ? { contextId } : {}) });
     try {
-      await this.graph.invoke(graphInput, this._config(runId, interruptAfter));
+      let input = graphInput;
+      for (;;) {
+        const before = await this._snapshot(runId);
+        try {
+          await this.graph.invoke(input, this._config(runId, interruptAfter));
+          break;
+        } catch (error) {
+          if (!(error instanceof GraphRecursionError)) throw error;
+          const snapshot = await this._snapshot(runId);
+          if (signal?.aborted) {
+            if (snapshot.values?.result) return snapshot.values.result;
+            if (LeadOrchestrator._pendingInterrupt(snapshot)) break;
+            throw error;
+          }
+          if (LeadOrchestrator._pendingInterrupt(snapshot) || (snapshot.next || []).length === 0) break;
+          const beforeStep = before.metadata?.step;
+          const afterStep = snapshot.metadata?.step;
+          const beforeId = before.config?.configurable?.checkpoint_id;
+          const afterId = snapshot.config?.configurable?.checkpoint_id;
+          const beforeEmpty = !LeadOrchestrator._exists(before)
+            && !Number.isSafeInteger(beforeStep)
+            && typeof beforeId !== 'string';
+          const advancedStep = Number.isSafeInteger(afterStep)
+            && (beforeEmpty || (Number.isSafeInteger(beforeStep) && afterStep > beforeStep));
+          const advancedCheckpoint = typeof afterId === 'string'
+            && (beforeEmpty || (typeof beforeId === 'string' && afterId !== beforeId));
+          if (!advancedStep || !advancedCheckpoint) throw error;
+          input = null;
+        }
+      }
       return await this._settle(runId, onEvent);
     } catch (error) {
       if (error?.name === 'AbortError' && signal?.aborted) {

@@ -148,8 +148,11 @@ decide --(usage_limit on lead turn)--> budget_pause
   root when present. On a later pass, report changed hashes to the lead as a note.
 - `decide`: one lead Codex turn (thread kept in state), then parse, validate, and apply
   resolutions. A `usage_limit` error routes to `budget_pause` with `source: "lead"`; other
-  errors fail the run as today. `dispatch` with `round >= maxRounds` routes to `finish` with
-  status `max_rounds`.
+  errors retain their existing recovery behavior. LL-8 removes the default
+  dispatch-round limit. An explicit caller cap pauses with `round_limit`;
+  repeated work after a recovery warning pauses with `loop_detected`. Neither
+  pause marks work accepted. Repeated invalid decisions also pause with their
+  validation evidence after the bounded correction attempts.
 - `dispatch`: materialize the round's assignments once (IDs, `round += 1`, attempted roles).
   When every role is read-only, submit all pending assignments. Otherwise submit only the next
   one whose predecessors are finished. Per attempt, check the journal first:

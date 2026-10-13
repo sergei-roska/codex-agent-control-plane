@@ -154,7 +154,11 @@ test('a lane without changes is not integrated, claims no effects, and the attes
   const task = await env.send('orch-writer-a', request(['a.txt']), { contextId: 'ctx-none' });
   assert.equal(task.status.state, 3);
   const writer = writerOf(task);
-  assert.deepEqual({ ...writer, lane: undefined }, { executionId: null, state: null, delta: null, reason: null, effects: 'none', lane: undefined });
+  assert.deepEqual({ ...writer, lane: undefined }, {
+    executionId: null, state: null,
+    delta: { known: true, headChanged: false, changedPaths: [], changedPathCount: 0, source: 'lane_collection' },
+    reason: null, effects: 'none', lane: undefined,
+  });
   assert.deepEqual([writer.lane.state, writer.lane.reason], ['not_integrated', 'no_changes']);
   assert.equal(fs.existsSync(writer.lane.path), true);
   assert.equal(env.admission.findAnyByContextId('ctx-none'), null);

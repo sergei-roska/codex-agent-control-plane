@@ -84,10 +84,14 @@ const WORKER_REPORT_SCHEMA = {
   required: ['outcome', 'summary', 'filesChanged', 'filesInspected', 'checks', 'risks', 'scopeExpansion', 'decisionRequest'],
   properties: {
     outcome: { type: 'string', enum: REPORT_OUTCOMES },
-    summary: { type: 'string' },
+    summary: {
+      type: 'string',
+      description: 'For an acceptance audit, the complete first line is exactly VERDICT: pass, VERDICT: fail, or VERDICT: inconclusive. Pinned-check integrity uses its separate preserve/weaken verdict contract.',
+    },
     filesChanged: stringArray,
     filesInspected: stringArray,
     checks: {
+      description: 'Required checks actually performed for this assignment, or explicit validation steps for cited prior evidence. Never list optional diagnostics or claim reused tests were freshly executed. Failed or unrun assigned checks must retain their result.',
       type: 'array',
       items: {
         type: 'object',
@@ -100,7 +104,10 @@ const WORKER_REPORT_SCHEMA = {
         },
       },
     },
-    risks: stringArray,
+    risks: {
+      description: 'Include supplemental diagnostic commands, forbidden or unrun excluded tests, and reused verifier evidence here with exact command/result or artifact and the limitation. These entries do not satisfy assigned checks.',
+      ...stringArray,
+    },
     scopeExpansion: {
       type: 'array',
       items: {

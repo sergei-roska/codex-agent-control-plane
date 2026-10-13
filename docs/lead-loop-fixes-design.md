@@ -143,3 +143,55 @@ Decisions (they replace the conflicting parts of LL-1 and LL-4):
 
 Wave A in parallel: LL-2 (contracts), LL-3 (digest in orchestrator and server).
 Wave B after A: LL-1 and LL-4 (decision schema, graph, acceptance pinning), then LL-5.
+
+## LL-8 healthy long runs and repeated-work recovery (2026-10-12)
+
+Status: locally qualified on 2026-10-13; live activation remains separate. This
+supersedes the implicit round budgets and automatic extension ceiling in LL-1
+and LL-6.
+
+- Dispatch rounds remain identifiers and metrics. The default has no round
+  ceiling. An explicit positive `maxRounds` supplied by a caller remains an
+  optional cap; it is never inferred from elapsed time or the number of short
+  research assignments. Progress and blocker investigation do not increase an
+  explicit cap automatically; owner `continue` or `change_goal` grants another
+  configured allowance. Existing checkpoint extensions are preserved, and
+  legacy round-limit pauses remain resumable with the unlimited default.
+- A deterministic, checkpointed detector compares bounded recent work and
+  evidence. Repeating an unchanged result three times warns the lead in its
+  next normal turn to change its hypothesis or method. Repeating the warned
+  work again without relevant new evidence produces a resumable
+  `loop_detected` owner decision with the repeated attempts and reasons.
+- Research can advance through new inspected scope, checks and findings.
+  Integrated content, accepted review targets and resolved blockers also
+  provide evidence. IDs, timestamps and rephrased failure claims are not new
+  evidence. Unknown deltas never prove a content change. Unrelated research
+  cannot clear a warning about an unchanged failing target.
+- Equivalent review work shares role, checkpoint and declared scope; changing
+  request prose or incidental evidence IDs does not reset its repetition count.
+  Actual scoped content and performed-check changes remain evidence.
+- Evidence identities use complete relevant path and check sets before report
+  display truncation. Case-sensitive paths retain their identity. Persist only
+  bounded hashes, descriptions and attempt references in detector state.
+- The detector covers direct repetition and short cycles. It is a bounded
+  heuristic, not proof of semantic equivalence or a general progress oracle.
+  Detector state is bounded; the existing full outcome history still grows
+  with run length and remains a separate storage consideration.
+- The lead gets an opportunity to replan before an owner pause. Repeated
+  invalid decisions retain their two correction opportunities and then pause
+  with diagnostics. No additional model calls are used for detection.
+- Owner `continue` or `change_goal` deliberately starts a fresh detector
+  episode. Process restart, technical graph rollover and budget pause retain
+  detector history. `accept_as_is` still runs acceptance and cannot bypass
+  pending reviews or unresolved writer effects.
+- The LangGraph per-invocation step ceiling is a technical segmentation point.
+  Only a confirmed framework recursion-limit exception with an advanced
+  checkpoint can continue from the same run's pending steps. Initial inputs
+  and resume commands are not replayed. Actual interrupts, cancellation and
+  no-advance failures remain bounded.
+- Qualification requires long productive and research runs, unchanged failure
+  and A/B cycles, relevant novelty, durable resume, old checkpoints, and a real
+  small-step LangGraph rollover test without duplicate dispatch effects.
+
+The running staging server remains under the owner's control. Implementation
+and isolated tests do not activate code in that process or resume its paused run.

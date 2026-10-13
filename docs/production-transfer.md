@@ -431,3 +431,57 @@ measured audit savings.
   filesInspected / risks.
 - Production: give non-assignment role modes (questions, inventories) their own
   output schema.
+
+### P-32 Dispatch-round exhaustion interrupted healthy long work
+
+- Symptom: a short single-explorer assignment consumed the same dispatch budget
+  as a substantial implementation round. Runs needed repeated owner extensions,
+  including the live M4 request h6, despite authorization to pursue the goal.
+- Cause: default `maxRounds = 6`, automatic extensions capped at 18, and progress
+  accounting that omitted research. The separate LangGraph invocation limit
+  could also terminate a sufficiently long execution.
+- Decision: LL-8 in `docs/lead-loop-fixes-design.md`. No default dispatch cap;
+  bounded persistent detection of unchanged repeated work, a replan warning,
+  then a diagnostic resumable pause. Explicit caller caps remain available.
+  Technical graph segmentation resumes only from a proven advanced checkpoint.
+- Status: locally qualified on 2026-10-13: independent review and adversarial
+  probes passed; full suite 1,076 passed, 0 failed, 1 optional live probe skipped.
+  The running server and paused M4 task have not been restarted or resumed.
+- Production: distinguish owner-specified resource limits from loop detection;
+  count research evidence, preserve history through recovery, and retain all
+  acceptance and writer-reconciliation gates. A repetition heuristic is not a
+  proof of semantic non-progress. Full outcome/checkpoint storage still grows
+  with run length and needs separate capacity measurement.
+
+### P-33 Paraphrased review requests escaped repetition detection
+
+- Found: owner-reported production loop on 2026-10-13, after verifier r31.
+- Cause: request check text was part of work identity; every paraphrased audit
+  created a new episode despite unchanged checkpoint and failed evidence.
+- Remedy: review role, checkpoint and declared scope identify the work; scoped
+  content and performed checks identify evidence. Interleaved diagnostics do
+  not erase history. Read-only replay of r33-r37 warns at r36 and pauses r37.
+- Status: independently reviewed and probed; full suite passed.
+
+### P-34 Read-only audit reports mixed exclusions with required checks
+
+- Found: production r40 rejected an embellished verdict; r42 rejected a
+  forbidden disk test recorded as not_run despite passing assigned checks.
+- Remedy: schema, profile and runtime instructions require an exact standalone
+  verdict. Required executions and explicit evidence validation go in checks;
+  supplemental diagnostics, exclusions and cited prior evidence go in risks
+  with honest results and limitations. Assigned failures still block approval.
+  Pinned-check preserve/weaken and diagnostic investigation remain distinct.
+- Limit: natural-language assignment/report coverage remains a semantic duty,
+  not a mechanically verified correspondence.
+- Status: independently reviewed and probed; existing report shape preserved.
+
+### P-35 New session stayed disabled after owner Pause or Stop
+
+- Cause: the launcher required a terminal task, but settled Pause/Stop remains
+  INPUT_REQUIRED.
+- Remedy: permit a fresh context after matching confirmed owner pause/stop
+  with no running worker or in-flight control. Clear old decision UI state;
+  retain the old session without resuming or deleting it.
+- Status: seven focused session-control cases and independent probes passed.
+  Reload the UI after integration; backend repairs require project restart.

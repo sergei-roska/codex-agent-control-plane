@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { LeadOrchestrator, renderRunDigest } = require('../src/lead-orchestrator');
 const { TaskState } = require('@a2a-js/sdk');
+const { Command, GraphRecursionError } = require('@langchain/langgraph');
 
 const brief = (role, allowedFiles = ['src/example.js']) => ({
   role,
@@ -32,7 +33,7 @@ const workerReport = (summary, overrides = {}) => JSON.stringify({
   ...overrides,
 });
 
-function makeHarness({ decisions, taskSequence = [], pollIntervalMs = 0, sendMessageImpl, getTaskImpl, cancelTaskImpl, listTasksImpl, authToken = 'test-token', cancelTimeoutMs = 500, cancelRetryIntervalMs = 1 } = {}) {
+function makeHarness({ decisions, taskSequence = [], pollIntervalMs = 0, sendMessageImpl, getTaskImpl, cancelTaskImpl, listTasksImpl, authToken = 'test-token', cancelTimeoutMs = 500, cancelRetryIntervalMs = 1, stepLimit } = {}) {
   const calls = [];
   const clients = new Map();
   let leadIndex = 0;
@@ -97,6 +98,7 @@ function makeHarness({ decisions, taskSequence = [], pollIntervalMs = 0, sendMes
       clientFactory,
       pollIntervalMs,
       authToken,
+      ...(stepLimit === undefined ? {} : { stepLimit }),
       ...(cancelTimeoutMs === 'default' ? {} : { cancelTimeoutMs }),
       cancelRetryIntervalMs,
     }),
@@ -153,12 +155,22 @@ test('dispatches an authenticated A2A assignment and finishes with a fresh read-
 
 const thrice = (value) => [value, value, value];
 
+async function assertLoopDetected(h, goal, details, expectedLeadCalls = 3) {
+  const result = await h.orchestrator.run({ goal });
+  assert.equal(result.status, 'input_required');
+  assert.equal(result.pause.kind, 'human_decision');
+  assert.equal(result.pause.reason, 'loop_detected');
+  assert.match(result.pause.question, details);
+  assert.equal(h.calls.filter((call) => call.type === 'lead').length, expectedLeadCalls);
+  return result;
+}
+
 test('rejects unknown roles and traversal paths before contacting A2A', async (t) => {
   for (const assignment of [brief('orch-missing'), brief('orch-builder', ['../secret.txt']), brief('orch-builder', ['/etc/passwd'])]) {
     await t.test(assignment.role + ':' + assignment.allowedFiles[0], async () => {
       const h = makeHarness({ decisions: thrice(decision('dispatch', [assignment])) });
       const code = assignment.role === 'orch-missing' ? 'role_unknown' : 'path_unsafe';
-      await assert.rejects(h.orchestrator.run({ goal: 'Implement feature' }), new RegExp(`rejected 3 times.*${code}.*(Unknown role|Unsafe allowedFiles path)`));
+      await assertLoopDetected(h, 'Implement feature', new RegExp(`3 times.*${code}.*(Unknown role|Unsafe allowedFiles path)`));
       assert.equal(h.calls.some((call) => call.type === 'send'), false);
     });
   }
@@ -166,11 +178,11 @@ test('rejects unknown roles and traversal paths before contacting A2A', async (t
 
 test('enforces repair escalation order', async () => {
   const h = makeHarness({ decisions: thrice(decision('dispatch', [brief('orch-repair-xhigh')])) });
-  await assert.rejects(h.orchestrator.run({ goal: 'Repair defect' }), /rejected 3 times.*role_ladder_violation.*only be dispatched after an engineer attempt/);
+  await assertLoopDetected(h, 'Repair defect', /3 times.*role_ladder_violation.*only be dispatched after an engineer attempt/);
   assert.equal(h.calls.some((call) => call.type === 'send'), false);
 
   const sameBatch = makeHarness({ decisions: thrice(decision('dispatch', [brief('orch-builder'), brief('orch-repair-xhigh')])) });
-  await assert.rejects(sameBatch.orchestrator.run({ goal: 'Repair defect' }), /rejected 3 times.*role_ladder_violation.*only be dispatched after an engineer attempt/);
+  await assertLoopDetected(sameBatch, 'Repair defect', /3 times.*role_ladder_violation.*only be dispatched after an engineer attempt/);
   assert.equal(sameBatch.calls.some((call) => call.type === 'send'), false);
 
   const sequential = makeHarness({ decisions: [
@@ -186,14 +198,14 @@ test('enforces repair escalation order', async () => {
 
 test('requires prior evidence and one narrow decision for the architect', async (t) => {
   const noEvidence = makeHarness({ decisions: thrice(decision('dispatch', [brief('orch-architect')])) });
-  await assert.rejects(noEvidence.orchestrator.run({ goal: 'Review design' }), /rejected 3 times.*architect_constraint.*requires inspected prior evidence/);
+  await assertLoopDetected(noEvidence, 'Review design', /3 times.*architect_constraint.*requires inspected prior evidence/);
   assert.equal(noEvidence.calls.some((call) => call.type === 'send'), false);
 
   const h = makeHarness({ decisions: [
     decision('dispatch', [brief('orch-explorer')]),
     ...thrice(decision('dispatch', [brief('orch-architect'), brief('orch-explorer')])),
   ] });
-  await assert.rejects(h.orchestrator.run({ goal: 'Review design' }), /rejected 3 times.*architect_constraint.*one narrowly framed decision/);
+  await assertLoopDetected(h, 'Review design', /3 times.*architect_constraint.*one narrowly framed decision/, 4);
   assert.equal(h.calls.filter((call) => call.type === 'send').length, 1);
 });
 
@@ -216,6 +228,7 @@ test('cancels an in-flight A2A task when the caller aborts', async () => {
   let submitted;
   let finishSend;
   const h = makeHarness({
+    stepLimit: 2,
     decisions: [decision('dispatch', [brief('orch-builder')])],
     sendMessageImpl: async ({ role: roleName }) => {
       submitted = { task: { id: 'known-task', contextId: 'context', status: { state: TaskState.TASK_STATE_WORKING }, artifacts: [], history: [] } };
@@ -288,6 +301,113 @@ test('defaults the cancel-confirmation deadline to 30 seconds and keeps it overr
   assert.equal(makeHarness({ decisions: [], cancelTimeoutMs: 1234 }).orchestrator.cancelTimeoutMs, 1234);
 });
 
+test('defaults maxRounds to unlimited and validates explicit round and step limits', () => {
+  const h = makeHarness({ decisions: [] });
+  assert.equal(h.orchestrator.maxRounds, null);
+  assert.equal(h.orchestrator.stepLimit, 100_000);
+
+  for (const maxRounds of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => new (h.orchestrator.constructor)({
+      appServer: h.appServer,
+      roles: h.roles,
+      workspace: '/tmp/a2a-project',
+      baseUrl: 'http://127.0.0.1:4040/',
+      maxRounds,
+    }), { name: 'TypeError', message: 'maxRounds must be null or a positive safe integer' });
+  }
+  for (const maxRounds of [null, 1, Number.MAX_SAFE_INTEGER]) {
+    const configured = new (h.orchestrator.constructor)({
+      appServer: h.appServer,
+      roles: h.roles,
+      workspace: '/tmp/a2a-project',
+      baseUrl: 'http://127.0.0.1:4040/',
+      maxRounds,
+    });
+    assert.equal(configured.maxRounds, maxRounds);
+  }
+  for (const stepLimit of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => new (h.orchestrator.constructor)({
+      appServer: h.appServer,
+      roles: h.roles,
+      workspace: '/tmp/a2a-project',
+      baseUrl: 'http://127.0.0.1:4040/',
+      stepLimit,
+    }), { name: 'TypeError', message: 'stepLimit must be a positive safe integer' });
+  }
+});
+
+test('resumes an advanced LangGraph checkpoint across per-invoke recursion limits', async () => {
+  const h = makeHarness({
+    stepLimit: 2,
+    decisions: [decision('dispatch', [brief('orch-explorer', [])]), decision('finish', [], 'Done after rollover')],
+    sendMessageImpl: ({ role: roleName }) => ({
+      task: { ...completedTask(roleName), id: 'rollover-task', status: { state: TaskState.TASK_STATE_WORKING } },
+    }),
+  });
+  const result = await h.orchestrator.run({ goal: 'Inspect one bounded topic' });
+
+  assert.equal(result.status, 'completed');
+  assert.equal(result.rounds, 1);
+  assert.equal(result.assignments.length, 1);
+  assert.equal(h.calls.filter((call) => call.type === 'lead').length, 2);
+  assert.equal(h.calls.filter((call) => call.type === 'send').length, 1);
+  assert.equal(h.calls.filter((call) => call.type === 'get').length, 1);
+});
+
+test('does not retry recursion errors when the checkpoint did not advance', async () => {
+  const h = makeHarness({ decisions: [] });
+  let invokes = 0;
+  const checkpoint = {
+    values: { round: 0, outcomes: [] },
+    next: ['decide'],
+    tasks: [],
+    metadata: { step: 4 },
+    config: { configurable: { checkpoint_id: 'same-checkpoint' } },
+  };
+  h.orchestrator.graph = {
+    async getState() { return checkpoint; },
+    async invoke() {
+      invokes += 1;
+      throw new GraphRecursionError('Recursion limit reached');
+    },
+  };
+
+  await assert.rejects(h.orchestrator._drive('no-advance', { goal: 'test' }, {
+    signal: undefined,
+    onEvent: undefined,
+    interruptAfter: undefined,
+    resumed: false,
+    contextId: undefined,
+  }), { name: 'GraphRecursionError' });
+  assert.equal(invokes, 1);
+});
+
+test('does not treat missing checkpoint identity or step as advancement', async () => {
+  const h = makeHarness({ decisions: [] });
+  let reads = 0;
+  let invokes = 0;
+  const snapshots = [
+    { values: { round: 0, outcomes: [] }, next: ['decide'], tasks: [], metadata: { step: 4 }, config: { configurable: { checkpoint_id: 'before' } } },
+    { values: { round: 0, outcomes: [] }, next: ['decide'], tasks: [] },
+  ];
+  h.orchestrator.graph = {
+    async getState() { return snapshots[Math.min(reads++, snapshots.length - 1)]; },
+    async invoke() {
+      invokes += 1;
+      throw new GraphRecursionError('Recursion limit reached');
+    },
+  };
+
+  await assert.rejects(h.orchestrator._drive('unknown-advance', { goal: 'test' }, {
+    signal: undefined,
+    onEvent: undefined,
+    interruptAfter: undefined,
+    resumed: false,
+    contextId: undefined,
+  }), { name: 'GraphRecursionError' });
+  assert.equal(invokes, 1);
+});
+
 test('throws an explicit error when abort cancellation cannot be confirmed', async () => {
   const h = makeHarness({
     decisions: [decision('dispatch', [brief('orch-builder')])],
@@ -347,12 +467,19 @@ test('rejects a human choice outside pending options and preserves free-text res
     relatedDecisionIds: [],
   };
   const h = makeHarness({
+    stepLimit: 2,
     decisions: [
       decision('dispatch', [brief('orch-explorer', [])]),
       JSON.stringify({ action: 'request_human_input', assignments: [], final: '', resolutions: [], humanInput: request }),
       decision('finish', [], 'Decision received'),
     ],
   });
+  const invokeInputs = [];
+  const invoke = h.orchestrator.graph.invoke.bind(h.orchestrator.graph);
+  h.orchestrator.graph.invoke = (input, config) => {
+    invokeInputs.push(input);
+    return invoke(input, config);
+  };
   const paused = await h.orchestrator.run({ goal: 'Choose implementation', runId: 'human-choice-run' });
   assert.equal(paused.status, 'input_required');
   // The launcher decision card renders metadata.pause, which is this result's pause unchanged.
@@ -376,9 +503,12 @@ test('rejects a human choice outside pending options and preserves free-text res
 
   const result = await h.orchestrator.resume({ runId: paused.runId, input: { answer: 'Proceed with a text-only answer' } });
   assert.equal(result.status, 'completed');
+  assert.equal(invokeInputs.filter((input) => input instanceof Command).length, 1);
+  assert.ok(invokeInputs.filter((input) => input === null).length > 0);
   const resumedLead = h.calls.filter((call) => call.type === 'lead')[2];
   assert.match(resumedLead.input, /"answer":"Proceed with a text-only answer"/);
   assert.equal(resumedLead.input.includes('"choice"'), false);
+  assert.equal(h.calls.filter((call) => call.type === 'lead').length, 3);
 });
 
 test('getRunDigest summarizes a finished run checkpoint and is null without one', async () => {

@@ -118,6 +118,18 @@ function failureMetadata(error) {
 }
 
 const CONTINUE_INPUT = 'The usage limit has reset. Continue the assignment from where you stopped.';
+const AUDIT_REPORT_GUIDANCE = [
+  'Audit report contract:',
+  'Begin the summary with exactly one complete first line: VERDICT: pass, VERDICT: fail, or VERDICT: inconclusive.',
+  'List only required checks actually performed, or explicit validation steps for cited prior evidence, in checks. State what was actually run or validated; never describe reused tests as freshly executed.',
+  'Record supplemental diagnostics, forbidden or unrun excluded tests, and reused verifier evidence in risks, with the exact command/result or evidence artifact and the limitation.',
+  'Do not move an assigned failed or unrun check into risks to obtain a pass. Do not invent runs.',
+].join('\n');
+const PINNED_CHECK_REPORT_GUIDANCE = [
+  'Pinned-check integrity report contract:',
+  'Begin the summary with exactly one complete first line: VERDICT: preserve or VERDICT: weaken.',
+  'Use this preserve/weaken verdict only for the pinned check under review.',
+].join('\n');
 const CUT_OFF_NOTE = 'A previous attempt at this assignment was cut off by a usage limit; its partial changes are already in the working directory. Inspect them and finish the assignment.';
 const CUT_OFF_LANE_LOST_NOTE = 'A previous attempt at this assignment was cut off by a usage limit; its working copy could not be reused, so its partial changes are not available. Start the assignment again.';
 
@@ -847,7 +859,11 @@ function makeExecutor({
           return appServer.run({
             role: { id: roleId, ...role },
             cwd: lane ? lane.workspacePath : workspace,
-            input: lane ? lanes.laneInput(lane, text) : text,
+            input: lane ? lanes.laneInput(lane, text)
+              : auditRole && reviewContext?.kind === 'pinned_check'
+                ? `${text}\n\n${PINNED_CHECK_REPORT_GUIDANCE}`
+                : auditRole && reviewContext?.kind !== 'investigation'
+                  ? `${text}\n\n${AUDIT_REPORT_GUIDANCE}` : text,
             ...(threadId ? { threadId } : {}),
             selectedSkills,
             outputSchema: WORKER_REPORT_SCHEMA,
@@ -1008,12 +1024,33 @@ function makeExecutor({
           const writerClear = !(holder && ['active', 'unresolved'].includes(holder.state));
           const stable = Boolean(reviewTargetBefore?.known && targetAfter.known
             && reviewTargetBefore.identity === targetAfter.identity && writerClear);
+          const emptyLaneReview = writer?.state === null
+            && writer?.lane?.state === 'not_integrated'
+            && writer.lane.reason === 'no_changes'
+            && writer.delta?.known === true
+            && writer.delta.source === 'lane_collection'
+            && writer.delta.headChanged === false
+            && Array.isArray(writer.delta.changedPaths)
+            && writer.delta.changedPaths.length === 0
+            && writer.delta.changedPathCount === 0;
+          const reportedOutside = emptyLaneReview
+            ? pathsOutsideAllowed(parsedReport.report?.filesChanged || [], structured?.allowedFiles || [], workspace)
+            : [];
           const decision = reviewResult({
             status: completed ? 'TASK_STATE_COMPLETED' : 'TASK_STATE_FAILED',
             report: parsedReport.report,
-            boundary: { results: [] },
+            boundary: { results: reportedOutside.length > 0
+              ? [boundaryRecord('settle.reported_scope', 'FAIL', 'reported_scope_violation', 'settlement',
+                `Reported changed files outside allowedFiles: ${reportedOutside.join(', ')}`)]
+              : [] },
             sandbox: role.sandbox,
             writerExecution: writer,
+            reviewCoverage: {
+              targetKnown: Boolean(reviewTargetBefore?.known && targetAfter.known),
+              targetIdentity: reviewTargetBefore?.known && targetAfter.known ? reviewTargetBefore.identity : null,
+              stable,
+            },
+            scopeViolations: reportedOutside,
           }, 'verifier', reviewContext);
           const reason = !writerClear ? 'review_writer_unsettled'
             : !targetAfter.known ? targetAfter.reason || 'review_target_unknown'

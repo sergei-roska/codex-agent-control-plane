@@ -1151,8 +1151,14 @@ test('auditor refuses plain text and missing or routine review context before mo
 });
 
 test('auditor accepts a stable scoped owner review; investigation and pinned checks preserve their distinct semantics', async () => {
+  let lastInput = '';
   const run = async ({ input, summary }) => {
-    const { agents, context } = makeService({ async run() { return okResult(auditReport(summary)); } }, { roles: auditorRoles });
+    const { agents, context } = makeService({
+      async run(options) {
+        lastInput = options.input;
+        return okResult(auditReport(summary));
+      },
+    }, { roles: auditorRoles });
     return taskResult(await agents.get('auditor').handler.sendMessage(sendParams(message(input)), context));
   };
   const owner = await run({ input: auditRequest(auditReview('owner_request')), summary: 'VERDICT: pass' });
@@ -1169,15 +1175,77 @@ test('auditor accepts a stable scoped owner review; investigation and pinned che
   assert.equal(investigation.status.state, 3);
   assert.equal(investigation.artifacts[0].metadata.review.accepted, false);
   assert.equal(investigation.artifacts[0].metadata.review.reason, 'diagnostic_only');
+  assert.doesNotMatch(lastInput, /VERDICT: pass, VERDICT: fail, or VERDICT: inconclusive/);
 
   const pinned = await run({ input: auditRequest(auditReview('pinned_check')), summary: 'VERDICT: preserve' });
   assert.equal(pinned.status.state, 3);
   assert.equal(pinned.artifacts[0].metadata.review.verdict, 'preserve');
   assert.equal(pinned.artifacts[0].metadata.review.accepted, true);
+  assert.match(lastInput, /Pinned-check integrity report contract/);
+  assert.match(lastInput, /VERDICT: preserve or VERDICT: weaken/);
+  assert.doesNotMatch(lastInput, /VERDICT: pass, VERDICT: fail, or VERDICT: inconclusive/);
   const weakened = await run({ input: auditRequest(auditReview('pinned_check')), summary: 'VERDICT: weaken' });
   assert.equal(weakened.status.state, 3);
   assert.equal(weakened.artifacts[0].metadata.review.verdict, 'weaken');
   assert.equal(weakened.artifacts[0].metadata.review.accepted, false);
+});
+
+test('auditor report contract keeps supplemental and reused evidence separate from required checks', async () => {
+  const diagnostics = [
+    'Excluded diagnostic: `node --test test/filesystem.test.js` was forbidden and not run; it was not required by this assignment.',
+    'Prior verifier evidence: artifact r31 reports 199 disk-backed tests; no test execution is claimed for this audit.',
+  ];
+  let receivedInput = '';
+  const stagingLog = new InMemoryStagingLog();
+  const service = makeService({
+    async run(options) {
+      receivedInput = options.input;
+      return okResult(auditReport('VERDICT: pass', {
+        checks: [{
+          command: 'inspect assigned source and tests', result: 'passed',
+          detail: 'Inspected the assigned scope and validated the cited r31 verifier report as prior evidence; no tests were executed for this check.',
+        }],
+        risks: diagnostics,
+      }));
+    },
+  }, { roles: auditorRoles, stagingLog });
+  const result = taskResult(await service.agents.get('auditor').handler.sendMessage(
+    sendParams(message(auditRequest())), service.context,
+  ));
+  assert.equal(result.status.state, 3);
+  assert.equal(result.artifacts[0].metadata.review.accepted, true);
+  assert.match(receivedInput, /checks\. State what was actually run or validated; never describe reused tests as freshly executed/);
+  assert.match(receivedInput, /Do not move an assigned failed or unrun check into risks/);
+  const audit = stagingLog.list({ type: 'audit_result' }).at(-1);
+  assert.deepEqual(audit.payload.findings, diagnostics);
+
+  for (const checkResult of ['failed', 'not_run']) {
+    const invalid = makeService({
+      async run() {
+        return okResult(auditReport('VERDICT: pass', {
+          checks: [{ command: 'inspect assigned scope', result: checkResult, detail: 'Required review step.' }],
+          risks: diagnostics,
+        }));
+      },
+    }, { roles: auditorRoles });
+    const rejected = taskResult(await invalid.agents.get('auditor').handler.sendMessage(
+      sendParams(message(auditRequest())), invalid.context,
+    ));
+    assert.notEqual(rejected.artifacts[0].metadata.review.accepted, true, checkResult);
+    assert.equal(rejected.artifacts[0].metadata.review.reason, 'review_checks_failed_or_unrun');
+  }
+});
+
+test('auditor runtime rejects an embellished verdict line and inconclusive evidence', async () => {
+  for (const summary of ['VERDICT: pass. Authority/release: PASS', 'VERDICT: inconclusive']) {
+    const service = makeService({ async run() { return okResult(auditReport(summary)); } }, { roles: auditorRoles });
+    const result = taskResult(await service.agents.get('auditor').handler.sendMessage(
+      sendParams(message(auditRequest())), service.context,
+    ));
+    assert.notEqual(result.artifacts[0].metadata.review.accepted, true, summary);
+    assert.equal(result.artifacts[0].metadata.review.reason, summary === 'VERDICT: inconclusive'
+      ? 'audit_verdict_inconclusive' : 'audit_verdict_missing_or_invalid');
+  }
 });
 
 test('auditor rejects escaped targets and a scope changed during the read-only turn', async () => {
@@ -1429,6 +1497,50 @@ test('verifier binds coverage to the post-verification target after an authorize
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('a writable verifier accepts a collected empty lane only with stable scope coverage', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-empty-verifier-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.mkdirSync(path.join(root, 'tests'));
+  fs.writeFileSync(path.join(root, 'src', 'file.js'), 'candidate');
+  const lane = { id: 'lane-empty', path: path.join(root, 'lane'), workspacePath: root, base: 'base' };
+  const writerExecution = {
+    executionId: null, state: null, reason: null, effects: 'none',
+    lane: { id: lane.id, state: 'not_integrated', reason: 'no_changes' },
+    delta: { known: true, headChanged: false, changedPaths: [], changedPathCount: 0, source: 'lane_collection' },
+  };
+  const lanes = {
+    async available() { return true; },
+    async prepare() { return { lane }; },
+    markRunning() {},
+    laneInput(_lane, input) { return input; },
+    sandboxPolicy() { return {}; },
+    recordTurnStart() {},
+    async complete() { return { canceled: false, writerExecution }; },
+  };
+  const review = auditReview('routine', ['src/file.js']);
+  const { agents, context } = makeService({
+    async run() {
+      return okResult(JSON.stringify(validReport({
+        summary: 'Focused verification passed.',
+        filesInspected: ['src/file.js'],
+        checks: [{ command: 'inspect', result: 'passed', detail: 'Scope checked.' }],
+      })));
+    },
+  }, { roles: verifierRoles, workspace: root, lanes });
+  const result = taskResult(await agents.get('verifier').handler.sendMessage(
+    sendParams(message(structured({ objective: 'Verify without edits.', allowedFiles: ['tests'], review }))), context,
+  ));
+  assert.equal(result.status.state, 3);
+  assert.equal(result.artifacts[0].metadata.review.status, 'accepted');
+  assert.equal(result.artifacts[0].metadata.review.accepted, true);
+  assert.equal(result.artifacts[0].metadata.reviewCoverage.stable, true);
+  assert.deepEqual(result.artifacts[0].metadata.writerExecution.delta.changedPaths, []);
 });
 
 test('pinned-check fallback reviewer holds the workspace exclusively while ordinary explorer remains concurrent', async () => {

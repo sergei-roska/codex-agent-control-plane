@@ -179,6 +179,7 @@ in the listed order unless marked independent.
 | LL-1..LL-5 | done `9d72147`..`281db09` | Lead loop fixes after the M3 runs: escalation instead of looping, normalized worker reports, previous-run digest, agent-proposed pinned acceptance checks in the sandbox, scope continuation ([design](lead-loop-fixes-design.md)). |
 | LL-6 | done `9de69a1` | Investigate before asking the owner: closed owner-only list, investigation evidence required, auto-extending rounds on progress, auditor review of changed check scripts. |
 | LL-7 | done `79544f7` | Escalation exit after the M3 loop on Codex 0.162.1 limits: owner-only reason `infeasible_requirement` (a dependency or the environment lacks a capability, proven by investigation); a persisting blocker located outside what the team may change is escalated instead of re-investigated; building a substitute for a missing platform capability is scope expansion. Decision card shows reason, recommended option, evidence, and independent work; choice by option only (`a7be218`). Open: browser check. |
+| LL-8 | locally qualified 2026-10-13; activation pending | Owner request, 2026-10-12: unlimited default dispatch rounds for healthy long runs; bounded persistent repeated-work detection, a replan warning followed by a diagnostic pause, and transparent technical graph rollover ([design](lead-loop-fixes-design.md#ll-8-healthy-long-runs-and-repeated-work-recovery-2026-10-12)). |
 | SES-01 | done `63080b4` | One continuous lead thread per dashboard session with delta prompts and context-based rollover ([design](session-continuity-design.md)). |
 | CTX-01 | done `cdbd152` | Reading discipline after measuring start-up reading (42% of worker input) and outputs over 20 KB (72% of output bytes): `tool_output_token_limit` 3000 per thread, bounded reads, inlined team rules, lead briefs with exact line ranges. Open: verify the cap's effect in a live turn; shared explorer map artifacts; compact skill digests. |
 | ROLE-01 | done `34f01ac`, `8196443`, `46d2098` | Per-project role overrides (owner request, 2026-10-11): clicking a role in the team card opens an in-page modal to set model, reasoning effort, and extra rules for that role in the current project only; stored in `.runtime/projects/<id>/role-overrides.json`, never global. Read once at project-server start; edits are locked (409) while the server runs; a changed lead profile rolls the session lead thread over. Open: browser check of the modal. |
@@ -608,6 +609,16 @@ command (stop at `&&`, `||`, `;`, `|`), and match only real in-place flags
 write attempt per false block.
 
 #### OPS-04 - A writable verifier that changes nothing still gets a receipt [P0]
+
+Status: done in the working tree, 2026-10-12; independent review approved.
+Empty lane collection now attests a known empty delta while preserving the
+`not_integrated` / `no_changes` lifecycle. Only a verifier with this proof,
+known unchanged review coverage, and no scope violations can receive the
+service acceptance and lead receipt. Unsafe/canceled lanes and unknown,
+nonempty, or inconsistent deltas remain rejected. Regression coverage spans
+lane collection, review policy, role service, and critical lead receipts.
+Verification: `env -u NODE_TEST_CONTEXT npm test` passed 1034 of 1035 tests,
+0 failed, 1 skipped (optional live lane probe); no live LLM calls.
 
 Executor: worker-sonnet (review gate is a risk area). Proposed write scope:
 `src/review-policy.js`, `src/lead-graph.js`, their tests. Found live 2026-10-12

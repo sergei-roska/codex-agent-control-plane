@@ -36,6 +36,9 @@ test('schemas satisfy strict structured output rules', () => {
     assert.ok(objects > 2);
   }
   assert.equal(WORKER_REPORT_SCHEMA.properties.decisionRequest.anyOf[1].type, 'null');
+  assert.match(WORKER_REPORT_SCHEMA.properties.summary.description, /complete first line is exactly/);
+  assert.match(WORKER_REPORT_SCHEMA.properties.checks.description, /reused tests were freshly executed/);
+  assert.match(WORKER_REPORT_SCHEMA.properties.risks.description, /supplemental diagnostic commands/);
   assert.equal(DECISION_SCHEMA.properties.humanInput.anyOf[1].type, 'null');
   assert.deepEqual(DECISION_SCHEMA.properties.action.enum, ['dispatch', 'finish', 'request_human_input']);
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom', 'review']);

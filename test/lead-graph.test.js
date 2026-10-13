@@ -615,7 +615,10 @@ test('worker needs_decision must be resolved by the lead', async () => {
 
   const unresolved = makeWorld({ script: [dispatch(brief('orch-explorer', [])), finish('Ignored it'), finish('Ignored it'), finish('Ignored it')], workerFinal });
   await withSession(unresolved, async (session) => {
-    await assert.rejects(session.orchestrator.run({ goal: 'Explore', runId: RUN_ID }), /must be resolved/);
+    const paused = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.escalation, 'loop_detected');
+    assert.match(paused.pause.question, /must be resolved/);
     assert.match(unresolved.prompts[1], new RegExp(attempt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(unresolved.prompts[1], /Keep the API\?/);
   });
@@ -1276,7 +1279,7 @@ test('the round limit pauses for the owner instead of ending with max_rounds, an
     assert.equal(world.admission.acquired.length, 0);
     const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Good enough', choice: 'accept_as_is' } });
     assert.equal(result.status, 'completed');
-    assert.equal(result.text, 'Stopped after reaching the limit of 1 dispatch rounds.');
+    assert.equal(result.text, 'Stopped after reaching the caller-configured limit of 1 dispatch rounds.');
     assert.equal(result.acceptance.disposition, 'accepted');
     assert.equal(world.admission.acquired.length, 1);
     assert.equal(world.leadTurns, 2);
@@ -1407,6 +1410,63 @@ test('matching verifier and auditor receipts are reused without another model ca
     ].includes(event.type));
     assert.ok(neutralReviewEvents.length > 0);
     assert.ok(neutralReviewEvents.every((event) => event.problemId === null));
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('a critical writable verifier receipt accepts a collected empty lane and unblocks the auditor', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const review = { kind: 'risk_change', checkpointId: 'critical-empty-verifier', reason: 'Review the boundary', paths: ['src/file.js'], evidenceIds: ['issue-empty'] };
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+      finish('Reviewed'),
+    ],
+    workerFinal(roleName) {
+      if (roleName === 'orch-builder') return reviewWorkerFinal(roleName);
+      const verifier = roleName === 'orch-verifier';
+      const auditor = roleName === 'orch-auditor';
+      const writerExecution = verifier ? {
+        executionId: null,
+        state: null,
+        reason: null,
+        effects: 'none',
+        lane: { id: 'lane-empty-review', state: 'not_integrated', reason: 'no_changes' },
+        delta: { known: true, headChanged: false, changedPaths: [], changedPathCount: 0, source: 'lane_collection' },
+      } : undefined;
+      const reviewResultMetadata = {
+        policyId: 'auditor-routing/v1', kind: review.kind, checkpointId: review.checkpointId,
+        status: 'accepted', accepted: true, valid: true, verdict: auditor ? 'pass' : null, reason: null,
+      };
+      return {
+        state: TaskState.TASK_STATE_COMPLETED,
+        artifacts: [{
+          name: 'report',
+          parts: textParts(report(auditor ? 'VERDICT: pass\nThe declared scope is safe.' : 'Focused verification passed.', {
+            filesInspected: ['src/file.js'],
+            checks: [{ command: 'inspect', result: 'passed', detail: 'Scope checked.' }],
+          })),
+          metadata: {
+            ...(writerExecution ? { writerExecution } : {}),
+            reviewCoverage: { targetKnown: true, targetIdentity: 'stable-target', stable: true, status: 'accepted', reason: null },
+            review: reviewResultMetadata,
+          },
+        }],
+      };
+    },
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.ok(world.dispatchInputs.some((input) => input.role === 'orch-auditor'));
+    const receipts = stagingLog.list({ runId: RUN_ID, type: 'review_result' });
+    assert.deepEqual(receipts.map((event) => [event.role, event.status]), [
+      ['verifier', 'accepted'], ['auditor', 'accepted'],
+    ]);
   }, { workspace, orchestrator: { stagingLog } });
 });
 
@@ -1845,7 +1905,7 @@ test('the second round of a session resumes the same thread with a delta prompt 
     assert.doesNotMatch(world.prompts[1], /Available roles:|Available skill IDs|User goal:/);
     assert.match(world.prompts[1], /Worker outcomes since your last turn/);
     assert.match(world.prompts[1], /orch-explorer done/);
-    assert.match(world.prompts[1], /Dispatch rounds already used: 1\//);
+    assert.match(world.prompts[1], /Dispatch rounds already used: 1\. Dispatch rounds are unlimited/);
     assert.match(world.prompts[1], /Open worker decisions/);
     assert.match(world.prompts[1], /still apply\. Return only one JSON object/);
     assert.match(world.prompts[1], /exact paths with line ranges.*dispatch an explorer for broad reading/);
@@ -2437,7 +2497,10 @@ test('three consecutive rejected decisions pause the run with the violation code
   const bad = dispatch(brief('orch-builder', ['src/*']));
   const world = makeWorld({ script: [bad, bad, bad, finish('Never reached')] });
   await withSession(world, async (session) => {
-    await assert.rejects(session.orchestrator.run({ goal: 'Build', runId: RUN_ID }), /rejected 3 times.*path_glob_unsupported/);
+    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.escalation, 'loop_detected');
+    assert.match(paused.pause.question, /failed validation 3 times.*path_glob_unsupported/);
     assert.equal(world.leadTurns, 3);
     assert.equal(world.sends.length, 0);
   });
@@ -2447,9 +2510,11 @@ test('a resume after the rejection pause allows two automatic retries again', as
   const bad = dispatch(brief('orch-builder', ['src/*']));
   const world = makeWorld({ script: [bad, bad, bad, bad, bad, finish('Done')] });
   await withSession(world, async (session) => {
-    await assert.rejects(session.orchestrator.run({ goal: 'Build', runId: RUN_ID }), /rejected 3 times/);
+    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(paused.pause.escalation, 'loop_detected');
+    assert.match(paused.pause.question, /failed validation 3 times/);
     assert.equal(world.leadTurns, 3);
-    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Retry the decision', choice: 'continue' } });
     assert.equal(result.status, 'completed');
     assert.equal(world.leadTurns, 6);
   });
@@ -3259,18 +3324,18 @@ const INVESTIGATION_ID = assignmentId(RUN_ID, 1, 0);
 const toGoalPause = (secondFinal) => [notMet('Blocked: the gate needs live runtime qualification.'), dispatch(brief('orch-explorer', [])), notMet(secondFinal)];
 const cited = (text) => `${text} Evidence: ${INVESTIGATION_ID}.`;
 
-test('the first unmet-goal finish grants 3 rounds and an investigation note instead of a pause', async () => {
+test('the first unmet-goal finish requests investigation without an owner pause', async () => {
   const world = makeWorld({ script: [notMet('Blocked: the matrix has hard-coded counts.'), dispatch(brief('orch-explorer', [])), met('Fixed the counts')] });
   await withSession(world, async (session) => {
     const result = await session.orchestrator.run({ goal: 'Close M3', runId: RUN_ID });
     assert.equal(result.status, 'completed');
     assert.equal(result.text, 'Fixed the counts');
     assert.equal(world.leadTurns, 3);
-    assert.match(world.prompts[1], /Dispatch rounds already used: 0\/9\. A dispatch decision consumes one round\. Budget extensions: \+3 at round 0 \(goal_investigation\)\./);
+    assert.match(world.prompts[1], /Dispatch rounds already used: 0\. Dispatch rounds are unlimited; the count is for ordering only\./);
     assert.match(world.prompts[1], /Goal investigation \(requested in round 0\): your finish with goalAchieved false named these blockers:\nBlocked: the matrix has hard-coded counts\./);
     assert.match(world.prompts[1], /cites the assignmentId of a read-only investigation finished after round 0 and states why each remaining blocker is owner-only/);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
-    assert.equal(values.extraRounds, 3);
+    assert.equal(values.extraRounds, 0);
     assert.deepEqual(values.goalInvestigation, { round: 0, final: 'Blocked: the matrix has hard-coded counts.' });
   });
 });
@@ -3303,16 +3368,15 @@ test('continue grants another maxRounds budget and passes the note to the lead',
   await withSession(world, async (session) => {
     const paused = await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
     assert.equal(paused.pause.escalation, 'goal_not_achieved');
-    assert.match(world.prompts[2], /Dispatch rounds already used: 1\/9\./);
+    assert.match(world.prompts[2], /Dispatch rounds already used: 1\. Dispatch rounds are unlimited/);
     await session.restart();
     const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Try the other path', choice: 'continue' } });
     assert.equal(result.status, 'completed');
     assert.equal(result.text, 'Done');
-    assert.match(world.prompts[3], /Dispatch rounds already used: 1\/15\./);
-    assert.match(world.prompts[3], /\+6 at round 1 \(owner\)/);
+    assert.match(world.prompts[3], /Dispatch rounds already used: 1\. Dispatch rounds are unlimited/);
     assert.match(world.prompts[3], /"answer":"Try the other path","choice":"continue"/);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
-    assert.equal(values.extraRounds, 9);
+    assert.equal(values.extraRounds, 0);
   });
 });
 
@@ -3322,7 +3386,7 @@ test('an answer without a choice on an escalation is the recommended continue', 
     await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
     const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Keep going' } });
     assert.equal(result.status, 'completed');
-    assert.match(world.prompts[3], /Dispatch rounds already used: 1\/15\./);
+    assert.match(world.prompts[3], /Dispatch rounds already used: 1\. Dispatch rounds are unlimited/);
   });
 });
 
@@ -3358,7 +3422,7 @@ test('change_goal replaces the goal for the rest of the run with a fresh budget;
     assert.match(world.prompts[3], /Goal \(changed by the owner during this run; authoritative, it replaces the original goal\):\nOnly do Y/);
     assert.match(world.prompts[3], /Original goal \(background only\):\nDo X/);
     assert.doesNotMatch(world.prompts[3], /User goal:/);
-    assert.match(world.prompts[3], /Dispatch rounds already used: 1\/15\./);
+    assert.match(world.prompts[3], /Dispatch rounds already used: 1\. Dispatch rounds are unlimited/);
     assert.match(world.prompts[3], /"answer":"Only do Y","choice":"change_goal"/);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
     assert.equal(values.goal, 'Do X');
@@ -3406,11 +3470,12 @@ test('the decision prompt carries the investigate-first, owner-only, goalAchieve
     assert.match(prompt, /request_human_input is accepted only for an owner-only decision and only after an investigation of that blocker: An investigation is a finished read-only outcome/);
     assert.match(prompt, /A blocker that persists needs its root cause located \(an explorer first; use an auditor only for a concrete risk-boundary question, or scout\/architect when appropriate\)\. Once an investigation locates it outside what the team may change \(a missing capability of a dependency or the environment, or the requirement itself\), stop investigating that blocker and escalate it\./);
     assert.match(prompt, /Worker decision requests are open decisions: resolve each one yourself .*investigating first.*Never leave one unanswered\./);
-    assert.match(prompt, /The first finish with false does not end the run: you get 3 extra rounds/);
-    assert.match(prompt, /the budget grows by 6 rounds automatically, up to 18 rounds; beyond that the owner decides\./);
+    assert.match(prompt, /The first finish with false does not end the run: investigate the root cause of each blocker or fix it while dispatch rounds remain unlimited/);
+    assert.match(prompt, /Dispatch rounds are unlimited by default\. A round number is for ordering only, not a spending authorization\./);
     assert.match(prompt, /acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks/);
     assert.match(prompt, /Acceptance checks: none are pinned yet/);
-    assert.match(prompt, /Dispatch rounds already used: 0\/6\. A dispatch decision consumes one round\.\n/);
+    assert.match(prompt, /Dispatch rounds already used: 0\. Dispatch rounds are unlimited; the count is for ordering only/);
+    assert.doesNotMatch(prompt, /request more rounds|Round budget:/i);
     // The rejected LL-1 escalation triggers are gone.
     assert.doesNotMatch(prompt, /survived two rounds/);
     assert.doesNotMatch(prompt, /change of scope or acceptance criteria/);
@@ -3625,21 +3690,296 @@ test('an unknown continueFrom is rejected with the rule reminder', async () => {
 
 const writerRound = () => dispatch(brief('orch-builder'));
 
-test('the round limit extends itself by maxRounds when the last two rounds made progress', async () => {
+test('default runs complete more than 24 distinct research rounds without a round or elapsed-time cap', async () => {
+  const script = Array.from({ length: 26 }, (_, index) => dispatch({
+    ...brief('orch-explorer', []),
+    objective: `Inspect src/research-${index + 1}.js`,
+  }));
+  script.push(finish('Research complete'));
+  const world = makeWorld({ script });
+  const originalNow = Date.now;
+  Date.now = () => originalNow() + (10 * 60 * 60 * 1000);
+  try {
+    await withSession(world, async (session) => {
+      const result = await session.orchestrator.run({ goal: 'Research the project', runId: RUN_ID });
+      assert.equal(result.status, 'completed');
+      assert.equal(result.rounds, 26);
+      assert.equal(world.sends.length, 26);
+      const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+      assert.equal(values.loopGuard.observations.length, 24);
+      assert.ok(values.loopGuard.episodes.length <= 24);
+    });
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('novel inspected paths after the projected report cap still prevent a false loop pause', async () => {
+  const commonPaths = Array.from({ length: 20 }, (_, index) => `src/a${String(index).padStart(2, '0')}.js`);
+  let reportIndex = 0;
+  const workerFinal = () => {
+    reportIndex += 1;
+    return {
+      state: TaskState.TASK_STATE_COMPLETED,
+      artifacts: [{ name: 'report', parts: textParts(report('Inspected repository modules', {
+        filesInspected: [...commonPaths, `src/z${reportIndex}.js`],
+      })) }],
+    };
+  };
+  const repeated = dispatch(brief('orch-explorer', []));
+  const world = makeWorld({ script: [repeated, repeated, repeated, repeated, finish('Research complete')], workerFinal });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Inspect repository modules', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(values.loopGuard.warning, null);
+    assert.equal(values.loopGuard.episodes.length, 4);
+    assert.equal(result.assignments[0].report.filesInspected.length, 20);
+    assert.doesNotMatch(world.prompts[1], /loopEvidenceIdentity/);
+  });
+});
+
+test('default runs complete more than 24 productive writer rounds', async () => {
+  const script = Array.from({ length: 26 }, (_, index) => dispatch(brief('orch-builder', [`src/output-${index + 1}.js`])));
+  script.push(finish('Changes complete'));
+  const world = makeWorld({
+    script,
+    workerFinal: (_roleName, _contextId, input) => okWriterFinal(input.allowedFiles)("orch-builder"),
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build the outputs', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.rounds, 26);
+    assert.equal(world.sends.length, 26);
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(values.progress.filter((entry) => entry.kind === 'integrated_change').length, 26);
+    assert.equal(values.loopGuard.observations.length, 24);
+  });
+});
+
+const repeatedResearch = (roleName) => ({
+  state: TaskState.TASK_STATE_COMPLETED,
+  artifacts: [{ name: 'report', parts: textParts(report('src/target.js exports parseTarget', { filesInspected: ['src/target.js'] })) }],
+});
+
+test('three repeated research rounds warn the lead, then an unchanged fourth result pauses', async () => {
+  const unrelated = brief('orch-explorer', []);
+  unrelated.objective = 'Inspect docs/other.md';
+  const world = makeWorld({
+    script: Array.from({ length: 4 }, () => dispatch(brief('orch-explorer', []), unrelated)),
+    workerFinal(roleName, contextId, input) {
+      if (input.objective.includes('docs/other.md')) {
+        return { state: TaskState.TASK_STATE_COMPLETED, artifacts: [{ name: 'report', parts: textParts(report('docs/other.md describes setup', { filesInspected: ['docs/other.md'] })) }] };
+      }
+      return repeatedResearch(roleName);
+    },
+  });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Investigate target behavior', runId: RUN_ID });
+    assert.equal(paused.pause.escalation, 'loop_detected');
+    assert.match(paused.pause.question, /Repeated work paused after 4 completed rounds/);
+    assert.equal(world.sends.length, 8);
+    assert.match(world.prompts[3], /Loop warning: the same scoped work repeated 3 times/);
+  });
+});
+
+test('precomputed full-report evidence uses the final rejected review state', async () => {
+  let calls = 0;
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'target.js'), 'module.exports = {}');
+  const checks = [
+    'Inspect authority persistence and stale writes.',
+    'Verify restart behavior for stored authority and stale writes.',
+    'Check persistence after restart, including stale authority.',
+    'Confirm saved authority survives restart without stale writes.',
+  ];
+  const review = {
+    kind: 'risk_change',
+    checkpointId: 'm4-r20-integrated-authority-persistence',
+    reason: 'Review persisted authority',
+    paths: ['src/target.js'],
+    evidenceIds: ['issue-authority-persistence'],
+  };
+  const auditAssignment = (index) => ({
+    ...brief('orch-auditor', []),
+    objective: `Inspect checkpoint attempt ${index + 31}`,
+    checks: [checks[index]],
+    review,
+  });
+  const world = makeWorld({
+    script: [
+      () => dispatch({ ...brief('orch-verifier', ['test']), review }, auditAssignment(0)),
+      ...checks.slice(1).map((_, index) => () => dispatch(auditAssignment(index + 1))),
+    ],
+    workerFinal(roleName) {
+      if (roleName === 'orch-verifier') {
+        return {
+          state: TaskState.TASK_STATE_COMPLETED,
+          artifacts: [{ name: 'report', parts: textParts(report('Focused verification passed.', {
+            filesInspected: ['src/target.js'], checks: [{ command: 'inspect src/target.js', detail: 'Inspected the candidate file.', result: 'passed' }],
+          })), metadata: { writerExecution: releasedWriter() } }],
+        };
+      }
+      const risk = `Review detail changed in attempt ${++calls}`;
+      return {
+        state: TaskState.TASK_STATE_COMPLETED,
+        artifacts: [{
+          name: 'report',
+          parts: textParts(report('VERDICT: fail\nsrc/target.js exports parseTarget', {
+            filesInspected: ['src/target.js'],
+            checks: [{ command: 'inspect src/target.js', detail: 'Inspected the candidate file.', result: 'passed' }],
+            risks: [risk],
+          })),
+          metadata: { review: { status: 'rejected', accepted: false, valid: false, verdict: 'fail', reason: 'Review failed' } },
+        }],
+      };
+    },
+  });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Investigate target behavior', runId: RUN_ID });
+    assert.equal(paused.pause.escalation, 'loop_detected');
+    assert.match(world.prompts[3], /Loop warning: the same scoped work repeated 3 times/);
+    assert.equal(world.sends.length, 5);
+    const auditorContract = world.dispatchInputs.find((input) => input.role === 'orch-auditor').reportContract;
+    assert.match(auditorContract, /summary first line must be exactly VERDICT: pass, VERDICT: fail, or VERDICT: inconclusive/);
+    assert.match(auditorContract, /Never describe reused tests as freshly executed/);
+    assert.match(auditorContract, /Do not invent runs/);
+  }, { workspace });
+});
+
+test('a later target warning is shown to the lead before that target pauses', async () => {
+  const targetA = dispatch({ ...brief('orch-explorer', []), objective: 'Inspect src/a.js' });
+  const targetB = dispatch({ ...brief('orch-explorer', []), objective: 'Inspect src/b.js' });
+  const script = [targetA, targetA, targetA, targetB, targetB, targetB, targetB];
+  const world = makeWorld({
+    script,
+    workerFinal(_roleName, _contextId, input) {
+      const target = input.objective.includes('src/b.js') ? 'src/b.js' : 'src/a.js';
+      return {
+        state: TaskState.TASK_STATE_COMPLETED,
+        artifacts: [{ name: 'report', parts: textParts(report(`${target} exports parseTarget`, { filesInspected: [target] })) }],
+      };
+    },
+  });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Investigate both targets', runId: RUN_ID });
+    assert.equal(paused.pause.escalation, 'loop_detected');
+    assert.match(paused.pause.question, /explorer: inspect src\/b\.js/);
+    assert.match(world.prompts[3], /explorer: inspect src\/a\.js/);
+    assert.match(world.prompts[6], /explorer: inspect src\/a\.js/);
+    assert.match(world.prompts[6], /explorer: inspect src\/b\.js/);
+    assert.equal(world.sends.length, 7);
+  });
+});
+
+test('relevant new research evidence clears the warning and lets a replanned run finish', async () => {
+  let researchCalls = 0;
+  const evolvedResearch = (roleName, contextId, input) => ({
+    state: TaskState.TASK_STATE_COMPLETED,
+    artifacts: [{ name: 'report', parts: textParts(report(
+      ++researchCalls === 4 ? 'src/target.js calls parseHeader before decode' : 'src/target.js exports parseTarget',
+      { filesInspected: ['src/target.js'] },
+    )) }],
+  });
+  const repeated = dispatch(brief('orch-explorer', []));
+  const world = makeWorld({ script: [repeated, repeated, repeated, repeated, finish('Research complete')], workerFinal: evolvedResearch });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Investigate target behavior', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.match(world.prompts[3], /Loop warning:/);
+    assert.doesNotMatch(world.prompts[4], /Loop warning:/);
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(values.loopGuard.warning, null);
+  });
+});
+
+test('owner continuation resets loop history before the same work is retried', async () => {
+  const same = dispatch(brief('orch-explorer', []));
+  const world = makeWorld({ script: [same, same, same, same, same, finish('Done')], workerFinal: repeatedResearch });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Investigate target behavior', runId: RUN_ID });
+    assert.equal(paused.pause.escalation, 'loop_detected');
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Try once more', choice: 'continue' } });
+    assert.equal(result.status, 'completed');
+    assert.doesNotMatch(world.prompts[4], /Loop warning:/);
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(values.loopGuard.observations.length, 1);
+  });
+});
+
+test('loop observations survive a process restart and an old checkpoint without guard state starts clean', async () => {
+  const same = dispatch(brief('orch-explorer', []));
+  const world = makeWorld({ script: [same, same, same, same, finish('Done')], workerFinal: repeatedResearch });
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({ goal: 'Investigate target behavior', runId: RUN_ID, interruptAfter: ['verify'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    const before = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(before.values.loopGuard.lastRound, 1);
+    await session.restart();
+    const paused = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(paused.pause.escalation, 'loop_detected');
+    assert.match(world.prompts[3], /Loop warning: the same scoped work repeated 3 times/);
+  });
+  const legacyWorld = makeWorld({ script: [same, same, finish('Legacy checkpoint resumed')], workerFinal: repeatedResearch });
+  await withSession(legacyWorld, async (session) => {
+    const stopped = await session.orchestrator.run({ goal: 'Investigate target behavior', runId: RUN_ID, interruptAfter: ['verify'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    await session.orchestrator.graph.updateState(config, { loopGuard: null });
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const { values } = await session.orchestrator.graph.getState(config);
+    assert.equal(values.loopGuard.observations.length, 1);
+  });
+});
+
+test('a budget pause preserves detector progress for the resumed research round', async () => {
+  const same = dispatch(brief('orch-explorer', []));
+  const world = makeWorld({ script: [same, same, usageLimitError(), same, finish('Done')], workerFinal: repeatedResearch });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Investigate target behavior', runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    let state = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(state.values.loopGuard.lastRound, 2);
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { note: 'Budget restored' } });
+    assert.equal(result.status, 'completed');
+    state = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(state.values.loopGuard.warning.attempts, 3);
+  });
+});
+
+test('A-B work oscillation warns on the first repeated target and pauses on its recurrence', async () => {
+  const script = Array.from({ length: 7 }, (_, index) => {
+    const target = index % 2 === 0 ? 'src/a.js' : 'src/b.js';
+    return dispatch({ ...brief('orch-builder', [target]), objective: `Repair ${target}` });
+  });
+  const world = makeWorld({ script, workerFinal: (roleName, contextId, input) => okWriterFinal(input.allowedFiles)(roleName) });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Repair both targets', runId: RUN_ID });
+    assert.equal(paused.pause.escalation, 'loop_detected');
+    assert.match(world.prompts[5], /Loop warning: the same scoped work repeated 3 times/);
+    assert.equal(world.sends.length, 7);
+  });
+});
+
+test('an explicit round cap pauses even when recent work made progress', async () => {
   const world = makeWorld({ script: [writerRound(), writerRound(), writerRound(), finish('Done')], workerFinal: okWriterFinal(['src/example.js']) });
   await withSession(world, async (session) => {
-    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
-    assert.equal(result.status, 'completed');
-    assert.equal(result.rounds, 3);
-    assert.match(world.prompts[2], /Dispatch rounds already used: 2\/2\./);
-    assert.match(world.prompts[3], /Dispatch rounds already used: 3\/4\. A dispatch decision consumes one round\. Budget extensions: \+2 at round 2 \(auto: integrated_change\)\./);
+    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(paused.pause.escalation, 'round_limit');
+    assert.match(paused.pause.question, /2 of 2 rounds used/);
+    assert.equal(world.sends.length, 2);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
-    assert.deepEqual(values.roundExtensions, [{ round: 2, by: 'auto', rounds: 2, reason: 'integrated_change' }]);
-    assert.deepEqual(values.progress.map((entry) => [entry.round, entry.kind]), [[1, 'integrated_change'], [2, 'integrated_change'], [3, 'integrated_change']]);
+    assert.deepEqual(values.roundExtensions, []);
+    assert.deepEqual(values.progress.map((entry) => [entry.round, entry.kind]), [[1, 'integrated_change'], [2, 'integrated_change']]);
   }, { orchestrator: { maxRounds: 2 } });
 });
 
-test('a resolved worker decision is progress; read-only rounds without progress pause at the limit', async () => {
+test('an explicit round cap pauses without automatic extensions after a resolved worker decision', async () => {
   const asking = deterministicContextId(attemptId(assignmentId(RUN_ID, 1, 0)));
   const workerFinal = (roleName, contextId) => ({
     state: TaskState.TASK_STATE_COMPLETED,
@@ -3649,26 +3989,27 @@ test('a resolved worker decision is progress; read-only rounds without progress 
   const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), decision({ action: 'dispatch', assignments: [brief('orch-explorer', [])], resolutions: resolve }), dispatch(brief('orch-explorer', [])), dispatch(brief('orch-explorer', []))], workerFinal });
   await withSession(world, async (session) => {
     const paused = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID });
-    // Round 1 -> limit 1 reached with a resolution: +1; round 2 -> limit 2 reached, progress in round 1: +1;
-    // round 3 -> limit 3 reached, no progress in rounds 2-3: pause.
     assert.equal(paused.pause.escalation, 'round_limit');
-    assert.match(paused.pause.question, /3 of 3 rounds used and the lead has not finished and the last two rounds made no progress/);
+    assert.match(paused.pause.question, /1 of 1 rounds used/);
+    assert.equal(world.sends.length, 1);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
-    assert.deepEqual(values.roundExtensions.map((entry) => [entry.round, entry.by, entry.rounds, entry.reason]), [[1, 'auto', 1, 'decision_resolved'], [2, 'auto', 1, 'decision_resolved']]);
+    assert.deepEqual(values.roundExtensions, []);
   }, { orchestrator: { maxRounds: 1 } });
 });
 
-test('automatic extensions stop at 18 rounds and the owner is asked there', async () => {
-  const world = makeWorld({ script: Array.from({ length: 19 }, writerRound), workerFinal: okWriterFinal(['src/example.js']) });
+test('an explicit cap above 18 rounds is honored when each round advances scoped content', async () => {
+  const script = Array.from({ length: 21 }, (_, index) => dispatch(brief('orch-builder', [`src/example-${index + 1}.js`])));
+  script.push(finish('Done'));
+  const world = makeWorld({ script, workerFinal: (roleName, contextId, input) => okWriterFinal(input.allowedFiles)(roleName) });
   await withSession(world, async (session) => {
     const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
     assert.equal(paused.pause.escalation, 'round_limit');
-    assert.match(paused.pause.question, /18 of 18 rounds used and the lead has not finished \(automatic extensions stop at 18 rounds\)/);
-    assert.equal(world.sends.length, 18);
+    assert.match(paused.pause.question, /20 of 20 rounds used/);
+    assert.equal(world.sends.length, 20);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
-    assert.deepEqual(values.roundExtensions, [{ round: 10, by: 'auto', rounds: 8, reason: 'integrated_change' }]);
-    assert.match(world.prompts[18], /Dispatch rounds already used: 18\/18\./);
-  }, { orchestrator: { maxRounds: 10 } });
+    assert.deepEqual(values.roundExtensions, []);
+    assert.match(world.prompts[20], /Dispatch rounds already used: 20\/20\./);
+  }, { orchestrator: { maxRounds: 20 } });
 });
 
 // ------------------------------------------------- LL-6: a changed pinned check is reviewed

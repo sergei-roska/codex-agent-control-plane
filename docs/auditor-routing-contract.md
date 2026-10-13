@@ -86,8 +86,18 @@ Reuse a matching accepted receipt instead of another model call. Relevant
 content, pins, or requirement changes invalidate it. Completed model work alone
 is not an approval: invalid reports, failed checks, unresolved writers, and
 unavailable target identity cannot satisfy a gate. Auditor summaries begin
-with exactly `VERDICT: pass`, `VERDICT: fail`, or `VERDICT: inconclusive`.
-Only pass with valid supporting evidence can satisfy an audit obligation.
+with exactly one complete first line: `VERDICT: pass`, `VERDICT: fail`, or
+`VERDICT: inconclusive`. Only pass with valid supporting evidence can satisfy
+an audit obligation. `checks` contains required checks actually performed or
+explicit evidence-validation steps for cited prior evidence; the detail states
+what was actually run or validated. Reused tests are not fresh executions.
+Supplemental diagnostics, forbidden or unrun excluded tests, and reused
+verifier evidence belong in `risks`, with the exact command/result or artifact
+and the limitation. These entries do not satisfy assigned checks, and an
+assigned failed or unrun check cannot be moved into `risks` to obtain a pass.
+The runtime checks that report checks are present and all passed, but does not
+mechanically map natural-language assignment checks to report entries. The
+auditor instructions require that mapping and honest execution descriptions.
 Diagnostic investigations do not grant acceptance.
 
 The model selects semantic risk areas. Validation checks declarations,

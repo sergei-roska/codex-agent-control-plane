@@ -8,6 +8,7 @@
 node_modules/
 
 # Codex and generated task data
+.agents/teamwork/
 .codex/auth.json
 .codex/sessions/
 .runtime/
