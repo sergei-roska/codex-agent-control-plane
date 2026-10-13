@@ -148,7 +148,7 @@ const DECISION_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: DECISION_ASSIGNMENT_FIELDS.filter((field) => field !== 'repair'),
+        required: DECISION_ASSIGNMENT_FIELDS,
         properties: {
           role: { type: 'string' },
           objective: { type: 'string' },
