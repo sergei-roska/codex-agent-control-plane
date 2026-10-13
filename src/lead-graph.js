@@ -728,6 +728,13 @@ function buildLeadGraph(deps) {
     return Boolean(obligation && sameReviewScope(obligation.review, review));
   }
 
+  function hasActiveReviewerScope(state, roleId, review) {
+    const role = canonicalRoleId(roleId);
+    if (!['verifier', 'auditor'].includes(role)
+      || !(isGatedReview(review) || review?.kind === 'routine')) return false;
+    return obligationMatches(activeObligation(state, review), review);
+  }
+
   function matchingReceipt(obligation, role, target) {
     if (!obligation || !target?.known) return null;
     return (obligation.receipts || []).find((receipt) => receipt.role === role
@@ -752,8 +759,11 @@ function buildLeadGraph(deps) {
       const pending = (obligation.pendingAssignmentIds || []).length > 0;
       const complete = !pending && Boolean(gate.verifier && gate.auditor);
       if (!forFinish && !complete) {
-        const unrelatedWriter = assignments.find((assignment) => getRole(roles, assignment.role)?.sandbox !== 'read-only'
-          && assignment.review?.checkpointId !== obligation.checkpointId);
+        const unrelatedWriter = assignments.find((assignment) => {
+          const isWritable = getRole(roles, assignment.role)?.sandbox !== 'read-only';
+          return isWritable && !hasActiveReviewerScope(state, assignment.role, assignment.review)
+            && assignment.review?.checkpointId !== obligation.checkpointId;
+        });
         if (unrelatedWriter) {
           return `Critical review checkpoint ${obligation.checkpointId} remains pending; writable assignments must stay under that checkpoint until its audit is accepted`;
         }
@@ -2218,6 +2228,7 @@ function buildLeadGraph(deps) {
       const isVerifier = role === 'verifier';
       const isAuditor = role === 'auditor';
       const tracked = review && (isGatedReview(review) || review.kind === 'routine');
+      const scopedReviewer = hasActiveReviewerScope(gateState, role, review);
       const target = review ? targetForReview(gateState, review) : null;
       if (review) {
         const captured = item.reviewTarget || (target ? { known: target.known, identity: target.identity, reason: target.reason } : null);
@@ -2273,7 +2284,7 @@ function buildLeadGraph(deps) {
         for (const obligation of obligations.filter((entry) => isGatedReview(entry.review))) {
           const gate = currentGateState(gateState, obligation);
           const complete = (obligation.pendingAssignmentIds || []).length === 0 && gate.verifier && gate.auditor;
-          if (!complete && review?.checkpointId !== obligation.checkpointId) {
+          if (!complete && review?.checkpointId !== obligation.checkpointId && !scopedReviewer) {
             blocked = {
               code: 'skipped_critical_review_gate',
               reason: `Critical checkpoint ${obligation.checkpointId} still requires current verifier and auditor receipts.`,

@@ -1603,6 +1603,74 @@ test('a same-checkpoint repair cannot let an unrelated writer pass a pending cri
   }, { workspace });
 });
 
+test('scoped reviewers can complete separate critical checkpoints while both gates are pending', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const firstPath = 'src/first.js';
+  const secondPath = 'src/second.js';
+  fs.writeFileSync(path.join(workspace, firstPath), 'first candidate');
+  fs.writeFileSync(path.join(workspace, secondPath), 'second candidate');
+  fs.writeFileSync(path.join(workspace, 'test/review.test.js'), '');
+  const firstReview = {
+    kind: 'risk_change', checkpointId: 'critical-first', reason: 'Review the first boundary',
+    paths: [firstPath], evidenceIds: ['issue-first'],
+  };
+  const secondReview = {
+    kind: 'risk_change', checkpointId: 'critical-second', reason: 'Review the second boundary',
+    paths: [secondPath], evidenceIds: ['issue-second'],
+  };
+  const world = makeWorld({
+    script: [
+      dispatch(
+        { ...brief('orch-builder', [firstPath]), review: firstReview },
+        { ...brief('orch-verifier', ['test']), review: firstReview },
+        { ...brief('orch-auditor', []), review: firstReview },
+      ),
+      dispatch({ ...brief('orch-builder', [secondPath]), review: secondReview }),
+      async () => {
+        fs.writeFileSync(path.join(workspace, firstPath), 'first candidate changed after review');
+        return dispatch(
+          { ...brief('orch-verifier', ['test']), review: firstReview },
+          { ...brief('orch-verifier', ['test']), review: secondReview },
+        );
+      },
+      dispatch(
+        { ...brief('orch-auditor', []), review: firstReview },
+        { ...brief('orch-auditor', []), review: secondReview },
+      ),
+      finish('Both critical checkpoints were reviewed'),
+    ],
+    workerFinal(roleName, _contextId, input) {
+      const writer = roleName === 'orch-builder';
+      const auditor = roleName === 'orch-auditor';
+      const reviewedPath = input.review.paths[0];
+      const summary = writer ? 'Implementation complete.'
+        : auditor ? 'VERDICT: pass\nThe declared scope is safe.' : 'Focused verification passed.';
+      return {
+        state: TaskState.TASK_STATE_COMPLETED,
+        artifacts: [{
+          name: 'report',
+          parts: textParts(report(summary, {
+            filesChanged: writer ? [reviewedPath] : [],
+            filesInspected: writer ? [] : [reviewedPath],
+            checks: writer ? [] : [{ command: 'node --test test/review.test.js', result: 'passed', detail: 'passed' }],
+          })),
+          metadata: { writerExecution: releasedWriter(writer ? [reviewedPath] : []) },
+        }],
+      };
+    },
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Review both trust boundaries', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), [
+      'orch-builder', 'orch-verifier', 'orch-auditor', 'orch-builder',
+      'orch-verifier', 'orch-verifier', 'orch-auditor', 'orch-auditor',
+    ]);
+  }, { workspace });
+});
+
 test('a pending critical checkpoint cannot be downgraded or narrowed during repair', async () => {
   const workspace = gitRepo();
   fs.mkdirSync(path.join(workspace, 'src'));
