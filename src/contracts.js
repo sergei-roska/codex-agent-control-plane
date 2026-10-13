@@ -10,7 +10,7 @@ const MAX_CHARS = 3_000;
 const TRUNCATION_SUFFIX = '... [truncated]';
 const WORKER_REPORT_CONTRACT = 'worker-report/v1';
 const ASSIGNMENT_FIELDS = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
-const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom', 'review'];
+const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom', 'review', 'repair'];
 const DECISION_BASE_KEYS = ['action', 'assignments', 'final', 'resolutions', 'humanInput'];
 const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks', 'records'];
 const ASSIGNMENT_ARRAY_FIELDS = ASSIGNMENT_FIELDS.filter((field) => field !== 'role' && field !== 'objective');
@@ -148,7 +148,7 @@ const DECISION_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: DECISION_ASSIGNMENT_FIELDS,
+        required: DECISION_ASSIGNMENT_FIELDS.filter((field) => field !== 'repair'),
         properties: {
           role: { type: 'string' },
           objective: { type: 'string' },
@@ -173,6 +173,15 @@ const DECISION_SCHEMA = {
                   paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: MAX_ITEMS },
                   evidenceIds: { type: 'array', items: { type: 'string' }, maxItems: MAX_ITEMS },
                 },
+              },
+              { type: 'null' },
+            ],
+          },
+          repair: {
+            anyOf: [
+              {
+                type: 'object', additionalProperties: false, required: ['checkpointIds'],
+                properties: { checkpointIds: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 160 }, minItems: 1, maxItems: MAX_ITEMS } },
               },
               { type: 'null' },
             ],
@@ -510,13 +519,14 @@ function checkAssignment(assignment, decision, ctx) {
   const keys = Object.keys(assignment);
   const shapeOk = ASSIGNMENT_FIELDS.every((field) => keys.includes(field)) && keys.every((field) => DECISION_ASSIGNMENT_FIELDS.includes(field));
   if (!shapeOk) {
-    throw violation('assignment.shape', 'assignment_shape_invalid', 'Assignment must contain exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, and optionally skills, wave, and continueFrom');
+    throw violation('assignment.shape', 'assignment_shape_invalid', 'Assignment must contain the ordinary fields and may include skills, wave, continueFrom, review, and repair');
   }
   // Older checkpoints and callers predate assignment skill routing and waves.
   if (!keys.includes('skills')) assignment.skills = [];
   if (!keys.includes('wave')) assignment.wave = null;
   if (!keys.includes('continueFrom')) assignment.continueFrom = null;
   if (!keys.includes('review')) assignment.review = null;
+  if (!keys.includes('repair')) assignment.repair = null;
   if (assignment.wave !== null && !(Number.isInteger(assignment.wave) && assignment.wave >= 1)) {
     throw violation('assignment.wave', 'wave_invalid', `Assignment wave must be an integer >= 1 or null, got ${JSON.stringify(assignment.wave)}`);
   }
@@ -524,6 +534,28 @@ function checkAssignment(assignment, decision, ctx) {
   if (!role) throw violation('assignment.shape', 'role_unknown', `Unknown role: ${String(assignment.role)}`);
   assignment.role = role.name;
   const canonicalRole = canonicalRoleId(role.name);
+  if (assignment.repair !== null) {
+    const repairRoles = new Set(['engineer', 'recovery-engineer', 'senior-engineer']);
+    const repair = assignment.repair;
+    if (!isPlainObject(repair) || !sameKeys(repair, ['checkpointIds'])
+      || !Array.isArray(repair.checkpointIds) || repair.checkpointIds.length === 0 || repair.checkpointIds.length > MAX_ITEMS
+      || repair.checkpointIds.some((id) => !isNonEmptyString(id) || id.length > 160)
+      || new Set(repair.checkpointIds).size !== repair.checkpointIds.length) {
+      throw violation('assignment.shape', 'field_invalid', 'repair must contain exactly a unique non-empty checkpointIds array of at most 20 IDs');
+    }
+    if (!repairRoles.has(canonicalRole) || role.sandbox === 'read-only' || assignment.review !== null) {
+      throw violation('assignment.shape', 'field_invalid', 'repair is allowed only on one writable engineer, recovery-engineer, or senior-engineer assignment with review null');
+    }
+    if (decision.assignments.length !== 1) {
+      throw violation('assignment.shape', 'field_invalid', 'A repair assignment must be the only assignment in its decision');
+    }
+    const expected = [...(ctx.incompleteCriticalCheckpointIds || [])].sort();
+    const actual = [...repair.checkpointIds].sort();
+    if (actual.length !== expected.length || actual.some((id, index) => id !== expected[index])) {
+      throw violation('assignment.shape', 'field_invalid', 'repair.checkpointIds must name the exact set of currently incomplete critical checkpoints');
+    }
+    assignment.repair = { checkpointIds: [...repair.checkpointIds] };
+  }
   const reviewRequired = canonicalRole === 'auditor' || canonicalRole === 'verifier';
   assignment.review = checkReviewContext(assignment.review, `Assignment for ${role.name}`, {
     required: reviewRequired,
@@ -594,7 +626,7 @@ function checkAssignment(assignment, decision, ctx) {
 const SPECIALIST_REQUIRED_KEYS = ['objective', 'allowedFiles'];
 const SPECIALIST_OPTIONAL_KEYS = [
   'role', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions',
-  'skills', 'wave', 'skillPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance', 'continuation', 'review',
+  'skills', 'wave', 'skillPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance', 'continuation', 'review', 'repair',
 ];
 const SPECIALIST_ARRAY_KEYS = ['inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
 
@@ -640,6 +672,18 @@ function checkSpecialistRequest(request, role, { workspace } = {}) {
   }
   const readOnly = role?.sandbox === 'read-only';
   const canonicalRole = canonicalRoleId(role?.name || role?.id);
+  if (request.repair !== undefined && request.repair !== null) {
+    const repairRoles = new Set(['engineer', 'recovery-engineer', 'senior-engineer']);
+    const repair = request.repair;
+    if (!isPlainObject(repair) || !sameKeys(repair, ['checkpointIds'])
+      || !Array.isArray(repair.checkpointIds) || repair.checkpointIds.length === 0 || repair.checkpointIds.length > MAX_ITEMS
+      || repair.checkpointIds.some((id) => !isNonEmptyString(id) || id.length > 160)
+      || new Set(repair.checkpointIds).size !== repair.checkpointIds.length
+      || !repairRoles.has(canonicalRole) || readOnly || request.review !== null) {
+      throw violation('dispatch.request_input', 'request_invalid', 'repair must be a unique checkpointIds list on a writable engineering request with review null');
+    }
+    out.repair = { checkpointIds: [...repair.checkpointIds] };
+  }
   const reviewRequired = canonicalRole === 'auditor';
   if (request.review !== undefined || reviewRequired) {
     out.review = checkReviewContext(request.review, `Request for ${label}`, {

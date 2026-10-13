@@ -19,6 +19,22 @@ New lead assignments include `review`, null for unrelated read-only work, or:
 }
 ```
 
+Assignments may also omit `repair` or set it to null. A repair assignment uses
+the exact shape `"repair": { "checkpointIds": ["<id>", ...] }` and is limited
+to one writable `engineer`, `recovery-engineer`, or `senior-engineer`
+assignment in the decision, with `review: null`. The IDs must be the complete
+set of currently incomplete critical checkpoints; IDs are unique, non-empty,
+and limited to 20 entries of at most 160 characters. Unknown, noncritical,
+completed, partial, or duplicate IDs are refused. The assignment's existing
+`allowedFiles` remains its write bound. Repair does not change checkpoint
+context and does not bypass gates for any unlisted checkpoint. The runtime
+captures each obligation context and known target internally at selection,
+then rechecks both before submitting the write. Repair admission clears prior
+receipts and tracks the assignment on every named obligation. Each repaired
+checkpoint then needs fresh accepted current-target verifier and auditor
+receipts, in that order, before finish. Unresolved writers still block dispatch;
+auditors retain the existing workspace reservation.
+
 Kinds are `routine`, `risk_change`, `performance`, `component_complete`,
 `investigation`, `owner_request`, and `pinned_check`. Each non-null context
 requires bounded nonempty reason, checkpoint ID, and safe workspace-relative
