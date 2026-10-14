@@ -13,6 +13,7 @@ const express = require('express');
 const { ClientFactory } = require('@a2a-js/sdk/client');
 const { checkSpecialistRequest } = require('../src/contracts');
 const { openStateDatabase, InMemoryDispatchJournal } = require('../src/durable-store');
+const { UsageLedger } = require('../src/usage-ledger');
 const { loadRoles, loadSystemRole } = require('../src/role-catalog');
 const { SYSTEM_REPAIR_CHECKS, SYSTEM_REPAIR_SCOPE, createSystemRepairClient } = require('../src/system-repair-client');
 const { createSystemAgentService, normalizeRpcBody, normalizeSystemRequest, systemSourceManifest } = require('../src/system-agent-service');
@@ -491,8 +492,10 @@ test('launcher exposes the separate system descriptor without initializing its s
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
       name: 'chuck-norris', displayName: 'Chuck Norris', model: 'gpt-6.1-sol', effort: 'high',
+      defaults: { model: 'gpt-6.1-sol', effort: 'high' },
       sandbox: 'workspace-write', scope: 'system', workspace: fs.realpathSync(ROOT),
-      endpoint: fixture.endpoint, status: 'lazy',
+      endpoint: fixture.endpoint, status: 'lazy', configuredModel: 'gpt-6.1-sol', configuredEffort: 'high',
+      pendingRestart: false, usage: null,
     });
     assert.equal(fixture.service.descriptor().status, 'lazy');
   } finally {
@@ -561,4 +564,41 @@ test('server bootstrap captures src/server.js as loaded and reports actual unver
   assert.equal(snapshot.loadedUncapturedSourceFiles.includes('src/server.js'), false);
   assert.equal(snapshot.sourceHashes['src/runtime-identity.js'].length, 64);
   assert.equal(snapshot.loadedUncapturedSourceFiles.includes('src/runtime-identity.js'), false);
+});
+
+test('descriptor usage is null without a state db and sums the system ledger from the state file', async () => {
+  const fixture = await serviceFixture();
+  const tokens = (inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens) => ({
+    inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens,
+  });
+  try {
+    assert.equal(fixture.service.descriptor().usage, null);
+    const state = await openStateDatabase({ filePath: path.join(fixture.temp, 'runtime', 'system', 'chuck-norris', 'state.sqlite') });
+    const ledger = new UsageLedger({ db: state.db });
+    ledger.record({ entryId: 'chuck-norris:run-1', kind: 'lead_turn', role: 'chuck-norris', runId: 'run-1', tokens: tokens(100, 40, 20, 5, 120) });
+    ledger.record({ entryId: 'chuck-norris:run-2', kind: 'lead_turn', role: 'chuck-norris', runId: 'run-2', tokens: tokens(50, 0, 10, 0, 60) });
+    ledger.record({ entryId: 'chuck-norris:run-3', kind: 'lead_turn', role: 'chuck-norris', runId: 'run-3' });
+    await state.close();
+    assert.deepEqual(fixture.service.descriptor().usage, {
+      inputTokens: 150, cachedInputTokens: 40, outputTokens: 30, reasoningOutputTokens: 5, totalTokens: 180, attempts: 3,
+    });
+    await fixture.service.initialize();
+    new UsageLedger({ db: fixture.stateful.state.db }).record({
+      entryId: 'chuck-norris:run-4', kind: 'lead_turn', role: 'chuck-norris', runId: 'run-4', tokens: tokens(1, 0, 1, 0, 2),
+    });
+    const live = fixture.service.descriptor().usage;
+    assert.equal(live.attempts, 1);
+    assert.equal(live.totalTokens, 2);
+  } finally { await fixture.close(); }
+});
+
+test('descriptor usage is null when the system state file is unreadable', async () => {
+  const fixture = await serviceFixture();
+  try {
+    const stateDir = path.join(fixture.temp, 'runtime', 'system', 'chuck-norris');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, 'state.sqlite'), 'not a sqlite database at all');
+    assert.doesNotThrow(() => fixture.service.descriptor());
+    assert.equal(fixture.service.descriptor().usage, null);
+  } finally { await fixture.close(); }
 });

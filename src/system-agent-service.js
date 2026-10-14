@@ -4,6 +4,7 @@ const express = require('express');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const Database = require('better-sqlite3');
 const { AgentCard } = require('@a2a-js/sdk');
 const { CodexAppServer } = require('./codex-app-server');
 const { createAccountProfiles } = require('./account-profiles');
@@ -20,6 +21,7 @@ const {
 const { createActivityStore } = require('./activity-store');
 const { StagingLog } = require('./staging-log');
 const { UsageLedger } = require('./usage-ledger');
+const { summarize } = require('./usage-report');
 const { WriterAdmission } = require('./writer-admission');
 const { LaneManager, selectWriterIsolation, laneRetentionHours } = require('./writer-lanes');
 const { loadSystemRole, EFFORTS, MODEL_PATTERN } = require('./role-catalog');
@@ -31,9 +33,22 @@ const DISPLAY_NAME = 'Chuck Norris';
 const SYSTEM_REQUEST_PROTOCOL = 'system-repair-request/v1';
 const MAX_CONTEXT_BYTES = 16 * 1024;
 const SHUTDOWN_GRACE_MS = 5000;
+const USAGE_FIELDS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens', 'totalTokens'];
 
 function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+// Same shape as usageBlock in launcher-app.js: summed known tokens plus the number of attempts.
+function systemUsageBlock(rows) {
+  const tokens = summarize(rows).tokens || Object.fromEntries(USAGE_FIELDS.map((key) => [key, null]));
+  return { ...tokens, attempts: rows.length };
+}
+
+function readSystemUsage(db) {
+  const hasLedger = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_ledger'").get());
+  const rows = hasLedger ? new UsageLedger({ db, readonly: true }).listAll() : [];
+  return systemUsageBlock(rows);
 }
 
 function hasForbiddenBoundaryKey(value, ancestors = new Set()) {
@@ -311,6 +326,24 @@ function createSystemAgentService({
     if (typeof value.effort !== 'string' || !EFFORTS.has(value.effort)) throw Object.assign(new Error('Unsupported reasoning effort'), { statusCode: 400 });
     return { model: value.model, effort: value.effort };
   }
+  // Token usage over all system-agent runs. An open service reads its live state DB; otherwise the
+  // state file is opened readonly for this read only. Null when the state DB does not exist yet or
+  // cannot be read: usage is informational and must never fail the team endpoints.
+  function readUsage() {
+    try {
+      if (state) return readSystemUsage(state.db);
+      const stateFile = path.join(runtimeDir, 'system', SYSTEM_AGENT_NAME, 'state.sqlite');
+      if (!fs.existsSync(stateFile)) return null;
+      const db = new Database(stateFile, { readonly: true, fileMustExist: true });
+      try {
+        return readSystemUsage(db);
+      } finally {
+        db.close();
+      }
+    } catch (_) {
+      return null;
+    }
+  }
   const descriptor = Object.freeze({
     name: SYSTEM_AGENT_NAME,
     displayName: DISPLAY_NAME,
@@ -557,6 +590,7 @@ function createSystemAgentService({
         configuredEffort: configured.effort,
         pendingRestart: configured.model !== role.model || configured.effort !== role.effort,
         status: initialized ? 'ready' : 'lazy',
+        usage: readUsage(),
       };
     },
     saveSettings(value) {

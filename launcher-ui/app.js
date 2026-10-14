@@ -1678,6 +1678,7 @@
       row.className = 'about-role' + (isLead ? ' is-lead' : '');
       row.dataset.role = canonicalRoleId(agent.name);
       row.dataset.roleKey = agent.name;
+      row.dataset.scope = scope || 'project';
       const displayName = agent.displayName || roleDisplayName(agent.name);
       const tools = agent.tools || {};
       const extra = [];
@@ -1823,9 +1824,12 @@
       document.querySelectorAll('#aboutTeamList .about-role').forEach(function (row) {
         const block = row.querySelector('.role-tokens');
         if (!block) return;
-        const entry = sessionUsage ? roleUsageEntry(row) : null;
-        block.classList.toggle('hidden', !hasSession);
-        const label = sessionUsage ? tokenTotalLabel(entry) : '-';
+        // The system agent keeps its own ledger: its usage comes from the team descriptor, not the session.
+        const system = row.dataset.scope === 'system';
+        const systemUsage = system && teamData && teamData.systemAgent ? teamData.systemAgent.usage : null;
+        const entry = system ? (systemUsage || null) : (sessionUsage ? roleUsageEntry(row) : null);
+        block.classList.toggle('hidden', system ? !systemUsage : !hasSession);
+        const label = system || sessionUsage ? tokenTotalLabel(entry) : '-';
         const totalEl = block.querySelector('.role-tokens-total');
         totalEl.textContent = label;
         totalEl.classList.toggle('is-placeholder', label === '-' || label === 'n/a');
@@ -2544,7 +2548,8 @@
         list.textContent = '';
         addAboutRow(list, data.lead, true, editable);
         data.roles.forEach(function (r) { addAboutRow(list, r, false, editable); });
-        if (data.systemAgent) addAboutRow(list, data.systemAgent, false, true, 'system');
+        // The system agent is global: its row stays editable whenever no project server is running.
+        if (data.systemAgent) addAboutRow(list, data.systemAgent, false, data.running !== true, 'system');
         updateTeamLeds();
         renderTeamTokens();
         document.getElementById('aboutTeamLabel').textContent = 'Team (' + (data.roles.length + 1 + (data.systemAgent ? 1 : 0)) + ' agents)';
@@ -2606,7 +2611,7 @@
 
     function openRoleModal(agent, isLead, opener, scope) {
       const systemScope = scope === 'system';
-      if (systemScope ? !agent : (!currentProjectId || !teamData || teamData.running === true)) return;
+      if (systemScope ? (!agent || (teamData && teamData.running === true)) : (!currentProjectId || !teamData || teamData.running === true)) return;
       roleModalAgent = agent;
       roleModalProjectId = systemScope ? null : currentProjectId;
       roleModalScope = systemScope ? 'system' : 'project';

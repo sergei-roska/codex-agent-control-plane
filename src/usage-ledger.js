@@ -187,6 +187,11 @@ class UsageLedger {
     return out;
   }
 
+  /** Every recorded row, oldest first (the system agent aggregates across all of its runs). */
+  listAll() {
+    return this.db.prepare('SELECT * FROM usage_ledger ORDER BY recorded_at, rowid').all().map(fromRow);
+  }
+
   /** Lead rows of the run plus worker rows linked through the dispatch journal. */
   listByRun(runId) {
     const lead = this.selectLead.all(runId).map(fromRow);
