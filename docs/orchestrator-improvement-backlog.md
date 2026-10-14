@@ -182,10 +182,37 @@ in the listed order unless marked independent.
 | LL-8 | locally qualified 2026-10-13; activation pending | Owner request, 2026-10-12: unlimited default dispatch rounds for healthy long runs; bounded persistent repeated-work detection, a replan warning followed by a diagnostic pause, and transparent technical graph rollover ([design](lead-loop-fixes-design.md#ll-8-healthy-long-runs-and-repeated-work-recovery-2026-10-12)). |
 | SES-01 | done `63080b4` | One continuous lead thread per dashboard session with delta prompts and context-based rollover ([design](session-continuity-design.md)). |
 | CTX-01 | done `cdbd152` | Reading discipline after measuring start-up reading (42% of worker input) and outputs over 20 KB (72% of output bytes): `tool_output_token_limit` 3000 per thread, bounded reads, inlined team rules, lead briefs with exact line ranges. Open: verify the cap's effect in a live turn; shared explorer map artifacts; compact skill digests. |
+| TOK-PROMPT-01 | queued 2026-10-14 | Measure coordinator and auditor prompt composition, then run a reversible one-role compression pilot against matched assignments. Preserve all review gates, model/effort settings, and active runtime; retain changes only with measured token reduction and unchanged acceptance/safety outcomes. See details below. |
 | ROLE-01 | done `34f01ac`, `8196443`, `46d2098` | Per-project role overrides (owner request, 2026-10-11): clicking a role in the team card opens an in-page modal to set model, reasoning effort, and extra rules for that role in the current project only; stored in `.runtime/projects/<id>/role-overrides.json`, never global. Read once at project-server start; edits are locked (409) while the server runs; a changed lead profile rolls the session lead thread over. Open: browser check of the modal. |
 | UI-01 | idea | Under the session status, list the skills given to the run's assignments and the MCP servers and tools enabled per turn ([ideas](dashboard-ideas-backlog.md)). |
 | UI-02 | idea | Integrations sidebar: Confluence, Figma, GTM, Context7 and more, with auth state and per-role enablement ([ideas](dashboard-ideas-backlog.md)). |
 | EP-01 | queued after CA-01 | Execution Paths (owner product decision, 2026-10-10): at intake the lead selects one path from a closed catalog (for example iterative, distributed, review) and records it with the run; decisions are validated against the path's role and cardinality rules; changing the path goes back through planning. Compare paths with [the benchmark plan](orchestration-benchmark-plan.md). |
+
+### TOK-PROMPT-01 - Measure and reduce coordinator/auditor prompt overhead [P1]
+
+State: queued 2026-10-14 for a safe runtime transition after the active
+orchestrator run.
+No profile or runtime changes are authorized by this backlog entry.
+
+- Record a comparable baseline for coordinator and auditor assignments: input,
+  cached input, output and reasoning tokens where available; elapsed time;
+  outcome; retries or rework; permission denials; and review acceptance.
+- Inspect static and dynamic prompt composition for duplicated general
+  instructions. Pilot one role at a time and remove only text proven redundant;
+  retain every policy, scope boundary, and acceptance requirement.
+- Compare matched task classes before and after. Label API-price figures as
+  counterfactuals; subscription cost remains unknown unless directly measured.
+- Keep a profile change only if token use decreases and acceptance, safety,
+  rework, and elapsed-time results remain within declared tolerances. Otherwise
+  restore the baseline profile.
+- Do not lower reasoning effort, remove reviewers, change rollover behavior,
+  or modify/reload a runtime while it is serving the active run.
+
+Starting evidence: `.agents/teamwork/root/token-optimization-review.md` records
+the 2026-10-13 usage snapshot. Coordinator and auditor contributed about 91% of
+the known-row short-context API-price counterfactual; 94% of worker input was
+cached. These are prioritization signals, not proof that the prompts waste
+tokens or that a change will save money.
 
 ## Phase A: baseline, compact evidence, executable contracts
 

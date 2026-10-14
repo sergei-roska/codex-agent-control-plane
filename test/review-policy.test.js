@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { computeReviewTarget, reviewResult } = require('../src/review-policy');
+const { computeReviewTarget, reviewResult, sameReviewScope } = require('../src/review-policy');
 
 const review = { kind: 'risk_change', checkpointId: 'cp-1', reason: 'boundary change', paths: ['src/file.js'], evidenceIds: [] };
 
@@ -35,6 +35,25 @@ test('review targets allow an in-workspace parent symlink and change when scoped
   const second = computeReviewTarget({ workspace: root, review });
   assert.equal(second.known, true);
   assert.notEqual(first.identity, second.identity);
+});
+
+test('prerequisite links are part of immutable scope and target identity', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'review-policy-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.writeFileSync(path.join(root, 'src', 'file.js'), 'candidate');
+  const unlinked = { ...review, prerequisiteFor: [] };
+  const linked = { ...review, prerequisiteFor: ['critical-1'] };
+  assert.equal(sameReviewScope(unlinked, linked), false);
+  assert.equal(sameReviewScope(review, unlinked), true);
+  assert.equal(
+    computeReviewTarget({ workspace: root, review }).identity,
+    computeReviewTarget({ workspace: root, review: unlinked }).identity,
+  );
+  assert.notEqual(
+    computeReviewTarget({ workspace: root, review: unlinked }).identity,
+    computeReviewTarget({ workspace: root, review: linked }).identity,
+  );
 });
 
 test('review results must inspect the declared scope and pass all reported checks', () => {

@@ -1,5 +1,7 @@
 'use strict';
 
+const { createRuntimeIdentity } = require('./runtime-identity');
+const runtimeIdentity = globalThis[Symbol.for('codex.server.runtimeIdentity')] || createRuntimeIdentity();
 const express = require('express');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -25,9 +27,11 @@ const { createActivityStore } = require('./activity-store');
 const { createEvidenceStore } = require('./evidence-store');
 const { StagingLog } = require('./staging-log');
 const { validateAcceptanceContract, formatAcceptance, invalidAcceptanceContract } = require('./acceptance');
-const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
+const { loadOrCreateAuthToken, readAuthToken, createAuthMiddleware } = require('./local-auth');
+const { createSystemRepairClient } = require('./system-repair-client');
 const { loadSkillCatalog } = require('./skill-catalog');
 const { canonicalRoleId, roleDisplayName } = require('./role-names');
+runtimeIdentity.seal();
 
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 3000;
@@ -631,13 +635,16 @@ function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, ta
  * Responses: { runs: [{ taskId, pauseRequested }] } for the runs the call applied to (all active runs, or
  * the one named by body.taskId).
  */
-function registerControl(app, { authMiddleware, orchestrator }) {
+function registerControl(app, { authMiddleware, orchestrator, runtimeIdentity }) {
   const view = (runs) => ({ runs: runs.map((run) => ({ taskId: run.runId, pauseRequested: run.pauseRequested })) });
   const target = (req) => {
     const active = orchestrator.activeRuns?.() || [];
     const taskId = req.body?.taskId;
     return typeof taskId === 'string' && taskId ? active.filter((run) => run.runId === taskId) : active;
   };
+  app.get('/control/runtime', authMiddleware, (_req, res) => {
+    res.json(runtimeIdentity.snapshot);
+  });
   app.get('/control/pause', authMiddleware, (req, res) => {
     res.json(view(orchestrator.activeRuns?.() || []));
   });
@@ -685,8 +692,17 @@ async function startServer({
   workspaceLockDir,
   autoResume = autoResumeEnabled(),
   budgetWatcherOptions = {},
+  systemRepairClientFactory = createSystemRepairClient,
 } = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new RangeError('port must be an integer from 0 to 65535');
+  const systemAgentUrl = process.env.CODEX_A2A_SYSTEM_AGENT_URL || null;
+  const systemAgentTokenPath = process.env.CODEX_A2A_SYSTEM_AGENT_TOKEN_FILE || null;
+  let systemAgentToken = null;
+  if (systemAgentUrl) {
+    if (!systemAgentTokenPath) throw new Error('CODEX_A2A_SYSTEM_AGENT_TOKEN_FILE is required when the system agent is configured');
+    systemAgentToken = readAuthToken({ filePath: path.resolve(systemAgentTokenPath) });
+  }
+  if (systemAgentTokenPath) delete process.env.CODEX_A2A_SYSTEM_AGENT_TOKEN_FILE;
   if (typeof workspace !== 'string' || !workspace || !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`workspace must be an existing directory: ${workspace}`);
   }
@@ -714,7 +730,10 @@ async function startServer({
 
     const authToken = loadOrCreateAuthToken(tokenFile ? { filePath: tokenFile } : undefined);
     const authMiddleware = createAuthMiddleware(authToken);
-    const baseRoles = loadRoles(profilesDir ? { profilesDir } : undefined);
+    const baseRoles = loadRoles({
+      ...(profilesDir ? { profilesDir } : {}),
+      onSourceFile: (file, source) => runtimeIdentity.captureProfileSource(file, source),
+    });
     const skillCatalog = loadSkillCatalog();
     const app = express();
     // Until startup reconciliation and route registration finish, JSON-RPC calls get a retryable 503 (not 404).
@@ -758,12 +777,23 @@ async function startServer({
     }
     const usageLedger = new UsageLedger({ db: state.db });
     const stagingLog = new StagingLog({ db: state.db });
+    const journal = new DispatchJournal(state);
+    const repairSystemClient = systemAgentUrl ? systemRepairClientFactory({
+      endpoint: systemAgentUrl,
+      authToken: systemAgentToken,
+      journal,
+    }) : null;
+    const repairSystem = repairSystemClient ? (request, context = {}) => repairSystemClient(request, {
+      ...context,
+      requesterRuntimeIdentity: runtimeIdentity.snapshot,
+    }) : null;
     const evidenceStore = createEvidenceStore(state.db);
     const activityStore = createActivityStore(state.db);
     const sessionThreads = new SessionThreads({ db: state.db });
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog,
-      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, stagingLog, activityStore, evidenceStore, sessionThreads,
+      checkpointer: state.checkpointer, journal, admission, usageLedger, stagingLog, activityStore, evidenceStore, sessionThreads,
+      ...(repairSystem ? { repairSystem, systemAgentAvailable: true } : { systemAgentAvailable: false }),
       parallelWriters: worktreeMode,
       ...(acceptanceScratch ? { acceptanceScratch } : {}),
     });
@@ -802,7 +832,7 @@ async function startServer({
     const leadAgent = registerLead(app, {
       leadRole, orchestrator, baseUrl, authMiddleware, taskStore: leadTaskStore, budgetWatcher,
     });
-    registerControl(app, { authMiddleware, orchestrator });
+    registerControl(app, { authMiddleware, orchestrator, runtimeIdentity });
     ready = true;
     budgetWatcher?.start();
     return {

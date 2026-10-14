@@ -187,6 +187,8 @@ class LeadOrchestrator {
     skillCatalog = loadSkillCatalog(),
     sessionThreads = null,
     rolloverTokens = rolloverTokensFromEnv(),
+    repairSystem = null,
+    systemAgentAvailable = false,
   } = {}) {
     if (!appServer || typeof appServer.run !== 'function') throw new TypeError('appServer.run is required');
     if (!(roles instanceof Map)) throw new TypeError('roles must be a Map');
@@ -219,6 +221,8 @@ class LeadOrchestrator {
     this.cancelRetryIntervalMs = cancelRetryIntervalMs;
     this.clients = new Map();
     this.journal = journal;
+    this.repairSystem = typeof repairSystem === 'function' ? repairSystem : null;
+    this.systemAgentAvailable = systemAgentAvailable === true && Boolean(this.repairSystem);
     this.checkpointer = checkpointer;
     // Per-run runtime objects (signal, onEvent). Never checkpointed and never passed to LangGraph.
     this.runtimes = new Map();
@@ -244,6 +248,8 @@ class LeadOrchestrator {
       skillCatalog,
       sessionThreads,
       rolloverTokens,
+      repairSystem: this.repairSystem,
+      systemAgentAvailable: this.systemAgentAvailable,
       sessionDigest: (input) => this._sessionDigest(input),
       runtimeFor: (runId) => this.runtimes.get(runId),
       clientFor: (roleName) => this._clientFor(roleName),
@@ -277,7 +283,7 @@ class LeadOrchestrator {
     return Object.keys(snapshot.values || {}).length > 0 || (snapshot.next || []).length > 0;
   }
 
-  /** Pending interrupt value ({ kind: 'human_decision' | 'waiting_for_budget' | 'writer_unresolved' | 'owner_pause', ... }) or null. */
+  /** Pending interrupt value ({ kind: 'human_decision' | 'waiting_for_budget' | 'writer_unresolved' | 'owner_pause' | 'system_repair', ... }) or null. */
   async getPause(runId) {
     if (!isNonEmptyString(runId)) return null;
     return LeadOrchestrator._pendingInterrupt(await this._snapshot(runId));

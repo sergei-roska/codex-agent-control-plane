@@ -6,6 +6,7 @@
 *.pid
 *.sock
 node_modules/
+launcher-ui/metrics/
 
 # Codex and generated task data
 .agents/teamwork/

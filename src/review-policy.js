@@ -32,7 +32,8 @@ function sameReviewScope(left, right) {
     && left.checkpointId === right.checkpointId
     && left.reason === right.reason
     && JSON.stringify(paths(left)) === JSON.stringify(paths(right))
-    && JSON.stringify([...left.evidenceIds].sort()) === JSON.stringify([...right.evidenceIds].sort());
+    && JSON.stringify([...left.evidenceIds].sort()) === JSON.stringify([...right.evidenceIds].sort())
+    && JSON.stringify([...(left.prerequisiteFor || [])].sort()) === JSON.stringify([...(right.prerequisiteFor || [])].sort());
 }
 
 function unknown(reason) {
@@ -136,6 +137,9 @@ function computeReviewTarget({ workspace, review, runId = null, goal = '', check
     reason: review.reason,
     paths: [...review.paths].sort(),
     evidenceIds: [...review.evidenceIds].sort(),
+    ...((review.prerequisiteFor || []).length > 0
+      ? { prerequisiteFor: [...review.prerequisiteFor].sort() }
+      : {}),
     goalSha256: sha256(String(goal || '')),
     requirementContext: requirementContext === null ? null : sha256(JSON.stringify(requirementContext)),
     checks: checkContext,

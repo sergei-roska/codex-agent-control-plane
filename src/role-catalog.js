@@ -144,7 +144,7 @@ function runtimeInstructions(instructions, teamPath, teamRules, skillPath) {
   return resolved;
 }
 
-function loadRoles({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
+function loadRoles({ profilesDir = DEFAULT_PROFILES_DIR, onSourceFile = null } = {}) {
   const root = path.resolve(profilesDir);
   const agentsDir = path.join(root, 'agents');
   const teamPath = path.join(root, 'TEAM.md');
@@ -156,11 +156,14 @@ function loadRoles({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
   }
 
   const teamRules = fs.readFileSync(teamPath, 'utf8');
+  onSourceFile?.(teamPath, teamRules);
   const skillPath = path.join(root, 'skills') + path.sep;
   const roles = new Map();
   for (const fileName of fs.readdirSync(agentsDir).filter((name) => name.endsWith('.toml')).sort()) {
     const filePath = path.join(agentsDir, fileName);
-    const role = parseProfile(fs.readFileSync(filePath, 'utf8'), filePath);
+    const source = fs.readFileSync(filePath, 'utf8');
+    onSourceFile?.(filePath, source);
+    const role = parseProfile(source, filePath);
     if (fileName !== `${role.sourceName}.toml`) {
       throw new Error(`${filePath}: filename must match role name ${role.sourceName}`);
     }
@@ -199,4 +202,21 @@ function createLeadRole({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
   };
 }
 
-module.exports = { createLeadRole, loadRoles, EFFORTS, MODEL_PATTERN, LEAD_ROLE_NAME };
+function loadSystemRole({ profilePath, teamPath = path.join(DEFAULT_PROFILES_DIR, 'TEAM.md'), onSourceFile = null } = {}) {
+  if (typeof profilePath !== 'string' || !profilePath) throw new TypeError('profilePath is required');
+  const filePath = path.resolve(profilePath);
+  const profileSource = fs.readFileSync(filePath, 'utf8');
+  onSourceFile?.(filePath, profileSource);
+  const role = parseProfile(profileSource, filePath);
+  if (path.basename(filePath) !== role.sourceName + '.toml') {
+    throw new Error(filePath + ': filename must match role name ' + role.sourceName);
+  }
+  delete role.sourceName;
+  const teamRules = fs.readFileSync(teamPath, 'utf8');
+  onSourceFile?.(teamPath, teamRules);
+  const skillPath = path.join(path.dirname(filePath), 'skills') + path.sep;
+  role.instructions = runtimeInstructions(role.instructions, teamPath, teamRules, skillPath);
+  return role;
+}
+
+module.exports = { createLeadRole, loadRoles, loadSystemRole, EFFORTS, MODEL_PATTERN, LEAD_ROLE_NAME };

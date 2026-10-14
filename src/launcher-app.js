@@ -32,7 +32,8 @@ const {
 } = require('./launcher-sessions');
 const { UsageLedger } = require('./usage-ledger');
 const { summarize } = require('./usage-report');
-const { buildSituation, ownerPausedLead, gitStatus } = require('./session-situation');
+const { sessionPerformance } = require('./session-performance');
+const { buildSituation, buildReviewContexts, ownerPausedLead, gitStatus } = require('./session-situation');
 const { createAskService, AskError } = require('./launcher-ask');
 
 const UI_DIR = path.join(__dirname, '..', 'launcher-ui');
@@ -105,6 +106,7 @@ function sessionUsage(db, contextId) {
 function createLauncherApp({
   projects,
   readAuthToken,
+  systemAgent = null,
   createClient = (baseUrl) => new ClientFactory().createFromUrl(baseUrl, '/orchestrator/agent-card.json'),
   createRoleClient = (roleUrl) => new ClientFactory().createFromUrl(`${roleUrl}/agent-card.json`, ''),
   openTasksDb = (file, options) => new Database(file, options),
@@ -119,6 +121,7 @@ function createLauncherApp({
   const logins = new Map();
 
   app.use(express.json());
+  if (systemAgent?.router) app.use(systemAgent.router);
 
   app.get('/favicon.ico', (req, res) => res.status(204).end());
 
@@ -137,6 +140,28 @@ function createLauncherApp({
       return res.status(404).json({ success: false, error: 'Unknown project: ' + id });
     }
     next();
+  });
+
+  app.get('/api/system-agent', (_req, res) => res.json(systemAgent?.descriptor?.() || null));
+
+  app.put('/api/system-agent/settings', (req, res) => {
+    if (!systemAgent?.saveSettings) return res.status(404).json({ success: false, error: 'System agent settings are unavailable' });
+    try {
+      const settings = systemAgent.saveSettings(req.body);
+      res.json({ success: true, ...settings, systemAgent: systemAgent.descriptor() });
+    } catch (error) {
+      res.status(error.statusCode || 500).json({ success: false, error: error.message || 'Invalid system agent settings' });
+    }
+  });
+
+  app.delete('/api/system-agent/settings', (_req, res) => {
+    if (!systemAgent?.resetSettings) return res.status(404).json({ success: false, error: 'System agent settings are unavailable' });
+    try {
+      const settings = systemAgent.resetSettings();
+      res.json({ success: true, ...settings, systemAgent: systemAgent.descriptor() });
+    } catch (error) {
+      res.status(error.statusCode || 500).json({ success: false, error: error.message || 'Could not reset system agent settings' });
+    }
   });
 
   // API: project registry
@@ -302,7 +327,20 @@ function createLauncherApp({
       const contextId = req.params.contextId;
       const usage = withTasksDb(req.params.id, { readonly: true }, db => sessionUsage(db, contextId));
       if (usage === null) return res.status(404).json({ error: 'Session not found' });
-      res.json(usage || { contextId, byRole: {}, total: usageBlock([]), unknownCount: 0 });
+      const response = usage || { contextId, byRole: {}, total: usageBlock([]), unknownCount: 0 };
+      if (req.query.details === 'performance') {
+        const performance = withTasksDb(req.params.id, { readonly: true }, db => sessionPerformance(db, contextId));
+        if (performance === null) return res.status(404).json({ error: 'Session not found' });
+        response.performance = performance || {
+          schema: 'session-performance/v1',
+          generatedAt: new Date().toISOString(),
+          totals: summarize([]),
+          byRole: {},
+          retryAttempts: 0,
+          attempts: [],
+        };
+      }
+      res.json(response);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -339,6 +377,17 @@ function createLauncherApp({
       const situation = await withTasksDbAsync(req.params.id, { readonly: true }, db => buildSituation(db, req.params.contextId, { pauseRequestedRuns: requested }));
       if (!situation) return res.status(404).json({ error: 'Session not found' });
       res.json(situation);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Stored review contexts from the latest session checkpoint.
+  app.get('/api/projects/:id/sessions/:contextId/review-contexts', async (req, res) => {
+    try {
+      const reviewContexts = await withTasksDbAsync(req.params.id, { readonly: true }, db => buildReviewContexts(db, req.params.contextId));
+      if (!reviewContexts) return res.status(404).json({ error: 'Session not found' });
+      res.json(reviewContexts);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -536,9 +585,14 @@ function createLauncherApp({
 
   app.get('/api/team', (req, res) => {
     try {
+      const lead = createLeadRole();
+      const roles = Array.from(loadRoles().values());
+      const projectRoles = [lead, ...roles];
       res.json({
-        lead: pickRole(createLeadRole()),
-        roles: Array.from(loadRoles().values()).map(pickRole),
+        lead: pickRole(lead),
+        roles: roles.map(pickRole),
+        systemAgent: systemAgent?.descriptor?.() || null,
+        models: [...new Set(projectRoles.map((role) => role.model))].sort(),
       });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -565,6 +619,7 @@ function createLauncherApp({
     return {
       lead: describe(baseLead),
       roles: [...baseRoles.values()].map(describe),
+      systemAgent: systemAgent?.descriptor?.() || null,
       models: [...new Set(all.map((role) => role.model))].sort(),
       warning,
       running: serverActive(id),
@@ -831,6 +886,8 @@ function createLauncherApp({
   });
 
   // Closes every pending login server; called by the launcher on shutdown.
+  app.closeSystemAgent = async () => systemAgent?.close?.();
+
   app.closeAccountLogins = async () => {
     await Promise.all([...logins.values()].filter((l) => l.status === 'pending').map((l) => endLogin(l, 'failed', 'Launcher stopped')));
   };

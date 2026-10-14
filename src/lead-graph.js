@@ -26,6 +26,7 @@ const {
 } = require('./loop-guard');
 
 const DEFAULT_RECONCILE_WAIT_MS = 30_000;
+const MAX_SYSTEM_RESULTS = 10;
 const MAX_OUTCOME_TEXT_CHARS = 12_000;
 const MAX_STATUS_TEXT_CHARS = 2_000;
 const MAX_REPORT_CHARS = 100_000;
@@ -552,6 +553,9 @@ function resetsAtHint(limits) {
 }
 
 function pauseMessage(value) {
+  if (value?.kind === 'system_repair') {
+    return `System repair is paused for a technical condition (${value.status || 'unknown'}): ${value.message || 'the separate service has not established a safe result.'} Send any message to recheck the same durable request; unresolved task effects remain unknown.`;
+  }
   if (value?.kind === 'human_decision') {
     const options = (value.options || []).map((option) => `  - ${option.id}: ${option.description}`).join('\n');
     return [
@@ -602,14 +606,15 @@ const RULE_REMINDERS = {
   'assignment.paths': PATH_RULE,
   'assignment.writer_scope': `${ASSIGNMENT_SCOPE_RULE} ${PATH_RULE}`,
   'decision.parse': 'Return only one JSON object matching the supplied schema.',
-  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, and records, with unused fields empty or null. A dispatch needs 1 to 4 assignments. If there is nothing to dispatch, use finish or request_human_input instead of an empty dispatch.',
+  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, records, and systemInput, with unused fields empty or null. A dispatch needs 1 to 4 assignments. If there is nothing to dispatch, use finish, request_human_input, or request_system_repair instead of an empty dispatch.',
   'decision.goal': 'finish requires goalAchieved true or false: true only when the goal is met, false with the blockers named in final. Use null for dispatch and request_human_input.',
   'decision.investigate_first': `Investigate first: dispatch a read-only explorer first; use auditor only for a concrete risk-boundary question. ${INVESTIGATION_RULE} ${OWNER_ONLY_RULE}`,
   'decision.acceptance_checks': `${CHECK_RULE} Use null to propose nothing.`,
-  'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds when it is owner-only; a dispatch of only read-only roles may leave them open while you investigate them.',
+  'decision.resolutions': 'Resolve every open worker decision in resolutions, except IDs cited in humanInput.relatedDecisionIds for owner-only choices or systemInput.relatedDecisionIds for diagnostic control-plane repair; read-only dispatches may keep decisions open while investigating.',
+  'decision.system_repair': 'Use request_system_repair only for a defect in the separately hosted control plane. Keep cited worker decisions open; provide concrete evidence and do not route target-project or product defects to the system service.',
   'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, continueFrom, and review; role must be an available role id.',
-  'assignment.review': 'Use review:null for unrelated read-only or non-material administrative/document work. Material implementation declares {kind, checkpointId, reason, paths, evidenceIds}. Verifier and auditor must cite the same checkpoint, scope, reason, and evidence IDs. Routine material work needs verifier evidence; critical work needs verifier then auditor evidence.',
-  'decision.review_gate': 'A required review receipt is missing, failed, stale, or has unknown target identity. Dispatch the verifier first; for critical work dispatch the auditor after a passing verifier. Repair may continue under the same checkpoint; unrelated writers wait for critical audit completion.',
+  'assignment.review': 'Use review:null for unrelated read-only or non-material administrative/document work. Material implementation declares {kind, checkpointId, reason, paths, evidenceIds, prerequisiteFor}, using prerequisiteFor:[] by default. Verifier and auditor must cite the same checkpoint, scope, reason, evidence IDs, and prerequisiteFor. A new gated verifier may link the exact complete set of pending critical checkpoint IDs; its matching auditor repeats the list. Routine material work needs verifier evidence; critical work needs verifier then auditor evidence.',
+  'decision.review_gate': 'A required review receipt is missing, failed, stale, or has unknown target identity. Dispatch the verifier first; for critical work dispatch the auditor after a passing verifier. A single new gated verifier may cross pending critical gates only when it links their exact complete ID set and has no co-dispatched writer; its auditor repeats that link. All original and new critical checkpoints still need current-target verifier and auditor receipts before finish. Repair may continue under the same checkpoint; unrelated writers wait for critical audit completion.',
   'assignment.continue_from': 'continueFrom is null or the assignmentId of a finished outcome of this run with the same role; each such id may be used by one assignment of a decision.',
   'assignment.wave': 'wave is an integer >= 1 or null; consecutive assignments with the same wave run concurrently, and writers in one wave need pairwise disjoint allowedFiles. Reviewers cannot share a wave with writers; run verifier before auditor in successive execution groups of the same decision when possible.',
   'assignment.skills': 'Select at most 5 unique skill IDs from the trusted listed skill IDs; use [] when none apply.',
@@ -633,6 +638,11 @@ const LeadState = Annotation.Root({
   openDecisions: last(() => []),
   closedDecisions: last(() => []),
   humanRequest: last(() => null),
+  systemRequest: last(() => null),
+  systemCount: last(() => 0),
+  systemResults: last(() => []),
+  systemCompletedIncidents: last(() => []),
+  systemStopPending: last(() => false),
   humanAnswers: last(() => []),
   humanCount: last(() => 0),
   // LL-1: rounds granted by the owner on top of maxRounds, and a goal that replaces state.goal.
@@ -684,6 +694,8 @@ const LeadState = Annotation.Root({
  *   admission?: WriterAdmission, reconcileWaitMs?: number,
  *   sessionThreads?: SessionThreads, sessionDigest?({ contextId, runId, runIds, state }) -> string, rolloverTokens?: number,
  *   parallelWriters?: boolean, usageLedger?: UsageLedger, activityStore?: ActivityStore, evidenceStore?: EvidenceStore, runCheckImpl?, snapshot?,
+ *   repairSystem?(request, { runId, contextId, workspace, signal, onEvent, requestId }) -> bounded result,
+ *   systemAgentAvailable?: boolean,
  *   acceptanceScratch?: { env: string[], baseDir: string } (owner setting),
  *   stagingLog?: StagingLog,
  * }
@@ -695,6 +707,7 @@ function buildLeadGraph(deps) {
   } = deps;
   const skillCatalog = deps.skillCatalog || loadSkillCatalog();
   const { admission } = deps;
+  const systemAgentAvailable = deps.systemAgentAvailable === true;
   const stagingLog = deps.stagingLog || new InMemoryStagingLog();
   const reconcileWaitMs = Number.isFinite(deps.reconcileWaitMs) ? deps.reconcileWaitMs : DEFAULT_RECONCILE_WAIT_MS;
 
@@ -760,6 +773,26 @@ function buildLeadGraph(deps) {
     }).map((obligation) => obligation.checkpointId).sort();
   }
 
+  function isPrerequisiteVerifier(state, assignment, assignments) {
+    const review = assignment?.review;
+    const linked = review?.prerequisiteFor || [];
+    if (canonicalRoleId(assignment?.role) !== 'verifier' || !isGatedReview(review)
+      || linked.length === 0 || assignment.repair) return false;
+    if (assignments.some((entry) => entry !== assignment
+      && getRole(roles, entry.role)?.sandbox !== 'read-only')) return false;
+    const newLinkedScopes = assignments.filter((entry) => (entry.review?.prerequisiteFor || []).length > 0
+      && !activeObligation(state, entry.review));
+    if (newLinkedScopes.length < 1 || newLinkedScopes.length > 2
+      || (state.reviewObligations || []).some((entry) => entry.checkpointId === review.checkpointId)) return false;
+    const linkedAuditors = newLinkedScopes.filter((entry) => entry !== assignment);
+    if (linkedAuditors.length > 1 || linkedAuditors.some((entry) => canonicalRoleId(entry.role) !== 'auditor'
+      || !sameReviewScope(entry.review, review))) return false;
+    const expected = incompleteCriticalCheckpointIds(state);
+    const actual = [...linked].sort();
+    if (actual.length !== expected.length || actual.some((id, index) => id !== expected[index])) return false;
+    return targetForReview(state, review).known;
+  }
+
   function gateFailure(state, { forFinish = false, assignments = [] } = {}) {
     const obligations = (state.reviewObligations || []).filter((entry) => isGatedReview(entry.review));
     for (const obligation of obligations) {
@@ -771,6 +804,7 @@ function buildLeadGraph(deps) {
           const isWritable = getRole(roles, assignment.role)?.sandbox !== 'read-only';
           const repairScope = assignment.repair?.checkpointIds || [];
           return isWritable && !hasActiveReviewerScope(state, assignment.role, assignment.review)
+            && !isPrerequisiteVerifier(state, assignment, assignments)
             && assignment.review?.checkpointId !== obligation.checkpointId
             && !repairScope.includes(obligation.checkpointId);
         });
@@ -837,6 +871,7 @@ function buildLeadGraph(deps) {
             reason: review.reason,
             paths: review.paths,
             evidenceIds: review.evidenceIds,
+            prerequisiteFor: review.prerequisiteFor || [],
             targetKnown: target.known,
             targetReason: target.reason,
           } : null,
@@ -1554,6 +1589,15 @@ function buildLeadGraph(deps) {
   const outcomesForPrompt = (outcomes) => boundedOutcomes(outcomes.map(({ objective: _objective, continuation: _continuation, loopEvidenceIdentity: _identity, ...outcome }) => outcome));
 
   // SES-01: the lead thread already holds the rules and roles; send only what is new since its last turn.
+  function systemRepairPolicy() {
+    return `Separate system repair service available: ${systemAgentAvailable ? 'yes' : 'no'}. Use request_system_repair only for a demonstrated defect in this hosting control plane or its separately hosted system service. Target-project/product/orchestrator implementation defects belong to project roles, including when the target happens to be an orchestrator. Do not route by repository or project name. Chuck Norris is never an ordinary project assignment and cannot make owner decisions, grant authority/budget/rounds, clear project worker decisions, or satisfy target acceptance/review receipts. Include concrete incident evidence and keep related worker decisions open.`;
+  }
+
+  function systemResultsSection(state) {
+    if (!state.systemResults?.length) return 'System repair evidence: none.';
+    return 'Prior system repair results (diagnostic evidence only; never acceptance credit):\n' + JSON.stringify(state.systemResults.slice(-MAX_SYSTEM_RESULTS));
+  }
+
   function deltaPrompt(state, extras) {
     const sections = [DELTA_REMINDER];
     if (extras.goalChanged) {
@@ -1565,6 +1609,8 @@ function buildLeadGraph(deps) {
     sections.push(reviewObligationsSection(state));
     if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
     if (extras.goalChanged) sections.push(`Available skill candidates (choose 0-5 relevant IDs for each assignment; no skill is required for unrelated work):\n${JSON.stringify(extras.skillCandidates)}`);
+    sections.push(systemRepairPolicy());
+    sections.push(systemResultsSection(state));
     sections.push(openDecisionsSection(state));
     sections.push(...stateNotes(state));
     const fresh = state.outcomes.slice(extras.seenOutcomes);
@@ -1595,19 +1641,21 @@ function buildLeadGraph(deps) {
     ];
     if (extras.sessionDigest) sections.splice(1 + goal.length + 1, 0, `Session so far (this lead thread is new; the earlier conversation of this session is summarized here, background only):\n${extras.sessionDigest}`);
     if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
+    sections.push(systemRepairPolicy());
+    sections.push(systemResultsSection(state));
     sections.push(openDecisionsSection(state));
     sections.push(...stateNotes(state));
     // The objective is kept for the run digest only; the bounded prompt stays as before.
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(outcomesForPrompt(state.outcomes)));
     sections.push([
-      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, continueFrom, review, and repair. Set repair:null for ordinary work. Use review:null for unrelated read-only work and non-material administrative or document-only changes. For material implementation set review to {kind,checkpointId,reason,paths,evidenceIds}; use routine for ordinary material changes, risk_change for trust-boundary/security/authority/recovery/concurrency/migration/public-contract changes, performance for performance requirements, component_complete for an integrated independently usable component, investigation for diagnostic audit only, and owner_request for an explicit owner audit. Do not classify risk by filenames. Routine material changes need a verifier after integration; they do not trigger an auditor. Critical changes need a passing verifier first and then a bounded auditor before dependent writes or finish. Verifier and auditor must use the same kind, checkpointId, reason, paths, and evidenceIds. A checkpoint review context is immutable: do not downgrade its kind or narrow its paths during repair or review; create a new checkpoint for a new scope. If critical checkpoint gates block an authorized repair, one writable engineer, recovery-engineer, or senior-engineer may be dispatched alone with review:null and repair:{checkpointIds:[...]} naming the exact complete set of currently incomplete critical checkpoint IDs (up to 20 unique IDs, each at most 160 characters). Keep allowedFiles bounded. This repair scope only permits work on those checkpoint obligations; it does not permit unrelated writers, and it preserves each stored review context. Repair admission invalidates prior receipts and requires a fresh current-target verifier followed by a fresh current-target auditor for every listed checkpoint before finish. Unknown or changed targets block the write. The verifier and auditor may run in successive execution groups of one decision after verifier evidence is evaluated. An investigation never satisfies acceptance.',
+      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, continueFrom, review, and repair. Set repair:null for ordinary work. Use review:null for unrelated read-only work and non-material administrative or document-only changes. For material implementation set review to {kind,checkpointId,reason,paths,evidenceIds,prerequisiteFor}; use prerequisiteFor:[] by default. Use routine for ordinary material changes, risk_change for trust-boundary/security/authority/recovery/concurrency/migration/public-contract changes, performance for performance requirements, component_complete for an integrated independently usable component, investigation for diagnostic audit only, and owner_request for an explicit owner audit. Do not classify risk by filenames. Routine material changes need a verifier after integration; they do not trigger an auditor. Critical changes need a passing verifier first and then a bounded auditor before dependent writes or finish. Verifier and auditor must use the same kind, checkpointId, reason, paths, evidenceIds, and prerequisiteFor. A checkpoint review context is immutable: do not downgrade its kind or narrow its paths during repair or review; create a new checkpoint for a new scope. If other critical checkpoints are pending, one new gated verifier may include prerequisiteFor:[...] naming the exact complete set of currently incomplete critical checkpoint IDs (up to 20 unique IDs, each at most 160 characters); its matching auditor repeats the same list. This admits only that verifier scope: do not combine it with unrelated writers, do not dispatch multiple linked scopes, and wait to finish until every original and new checkpoint has its own current-target verifier and auditor receipt. If critical checkpoint gates block an authorized repair, one writable engineer, recovery-engineer, or senior-engineer may be dispatched alone with review:null and repair:{checkpointIds:[...]} naming the exact complete set of currently incomplete critical checkpoint IDs (up to 20 unique IDs, each at most 160 characters). Keep allowedFiles bounded. This repair scope only permits work on those checkpoint obligations; it does not permit unrelated writers, and it preserves each stored review context. Repair admission invalidates prior receipts and requires a fresh current-target verifier followed by a fresh current-target auditor for every listed checkpoint before finish. Unknown or changed targets block the write. The verifier and auditor may run in successive execution groups of one decision after verifier evidence is evaluated. An investigation never satisfies acceptance.',
       `${ASSIGNMENT_SCOPE_RULE} ${PATH_RULE}`,
       'Record durable semantic lessons in records (max 20): {id,kind,status,summary,evidenceIds,relatedIds,adrPath}. Use stable IDs for problems/decisions, relate remedies and verification records to problem IDs, and keep proposed, accepted, implemented, and tested states distinct. Architecture records require a safe workspace-relative Markdown ADR path; all other records use adrPath:null. Use records:[] when there is nothing material to record. Do not claim a fix or verification that the evidence does not establish.',
       'Briefing rules: in each assignment inputs and evidence, give exact file paths with line ranges and the facts already established, so workers do not re-explore; reuse explorer findings by quoting the relevant paths and ranges. Do not read large files yourself: read at most a few narrow ranges and dispatch an explorer for broad reading.',
       deps.parallelWriters
         ? 'Waves: assignment.wave is an integer >= 1 or null. Consecutive assignments sharing the same wave run concurrently. Writers in one wave each work in an isolated copy of the workspace made from the same starting state and do not see each other\'s changes; their changes are integrated into the shared workspace as each finishes. A later wave (or a null-wave assignment after them), for example a verifier, sees the integrated result. Writers in one wave must own disjoint allowedFiles. Use null for strictly sequential steps.'
         : 'Waves: assignment.wave may be used to group read-only work that runs concurrently. Writers always run one at a time in array order regardless of wave. Use null otherwise.',
-      'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, and records. Use empty arrays, an empty string, or null for unused fields.',
+      'The JSON must contain action (dispatch, finish, request_human_input, or request_system_repair), assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, records, and systemInput. Use empty arrays, an empty string, or null for unused fields.',
       'Repair and debugging assignments should use directory prefixes that cover the module and its tests, not single files. When a worker reports scopeExpansion or asks for a scope decision, prefer re-dispatching with continueFrom set to that outcome\'s assignmentId (same role) and the expanded allowedFiles over a fresh assignment: the worker continues its own thread instead of re-discovering its context.',
       'Worker decision requests are open decisions: resolve each one yourself (resolutions: decisionId, choice, rationale), investigating first when the evidence does not settle it; list one in humanInput.relatedDecisionIds only when it is an owner-only decision. Never leave one unanswered. Worker reports are self-reported; check scopeViolations and reportError.',
       `Investigate first: never ask the owner what investigation can answer; the owner has no one to ask either. ${OWNER_ONLY_RULE}`,
@@ -1823,6 +1871,8 @@ function buildLeadGraph(deps) {
         }
       }
       validateDecision(decision, {
+        systemCount: state.systemCount || 0,
+        systemIncidents: new Set(state.systemCompletedIncidents || []),
         roles,
         attemptedRoles: new Set(state.attemptedRoles),
         outcomeCount: state.outcomes.length,
@@ -1842,6 +1892,14 @@ function buildLeadGraph(deps) {
         const blocked = gateFailure(state, { forFinish: true });
         if (blocked) throw new BoundaryViolation('decision.review_gate', 'review_receipt_missing', blocked);
       } else if (decision.action === 'dispatch') {
+        const prerequisiteAssignments = decision.assignments.filter((assignment) => (assignment.review?.prerequisiteFor || []).length > 0
+          && !activeObligation(state, assignment.review));
+        const prerequisiteVerifiers = prerequisiteAssignments.filter((assignment) => canonicalRoleId(assignment.role) === 'verifier');
+        if (prerequisiteAssignments.length > 0 && (prerequisiteVerifiers.length !== 1
+          || !isPrerequisiteVerifier(state, prerequisiteVerifiers[0], decision.assignments))) {
+          throw new BoundaryViolation('decision.review_gate', 'review_checkpoint_pending',
+            'A prerequisite verifier must name the exact incomplete critical checkpoints, use a new gated checkpoint, and have a known target');
+        }
         const blocked = gateFailure(state, { assignments: decision.assignments });
         if (blocked) throw new BoundaryViolation('decision.review_gate', 'review_checkpoint_pending', blocked);
         for (const assignment of decision.assignments) {
@@ -1947,6 +2005,26 @@ function buildLeadGraph(deps) {
         },
       });
       return { ...update, humanCount: state.humanCount + 1, humanRequest: { decisionId, ...decision.humanInput } };
+    }
+    if (decision.action === 'request_system_repair') {
+      const requestId = state.runId + ':system:' + ((state.systemCount || 0) + 1);
+      const related = new Set(decision.systemInput.relatedDecisionIds);
+      const request = {
+        ...decision.systemInput,
+        projectContext: {
+          goal: String(state.goalOverride || state.goal || '').slice(0, 2000),
+          projectChecks: (state.contract?.requiredChecks || []).slice(0, 10),
+          evidence: state.outcomes.slice(-10).map((entry) => String(entry.report?.summary || entry.text || '').slice(0, 500)).filter(Boolean),
+          openDecisions: state.openDecisions.filter((entry) => related.has(entry.id)).map((entry) => ({
+            id: entry.id, role: entry.role, question: String(entry.request?.question || '').slice(0, 500),
+          })),
+        },
+      };
+      return {
+        ...update,
+        systemCount: (state.systemCount || 0) + 1,
+        systemRequest: { requestId, incidentId: request.incidentId, request, status: 'pending', attempts: 0, lastResult: null },
+      };
     }
     const limit = roundLimit(state);
     if (limit !== null && state.round >= limit) {
@@ -2736,6 +2814,73 @@ function buildLeadGraph(deps) {
     return { continuable: [], batch: { round: state.round, parallel, continuation: true, items } };
   }
 
+  async function systemRepair(state, config) {
+    const runtime = runtimeOf(config);
+    if (runtime.signal?.aborted) return canceledUpdate(runtime.signal);
+    if (ownerPauseRequested(config)) interrupt({ kind: 'owner_pause', message: OWNER_PAUSE_MESSAGE });
+    const pending = state.systemRequest;
+    if (!pending) return {};
+    let result;
+    try {
+      result = typeof deps.repairSystem === 'function'
+        ? await deps.repairSystem(pending.request, {
+          runId: state.runId, contextId: runtime.contextId ?? state.contextId ?? null,
+          workspace, signal: runtime.signal, onEvent: runtime.onEvent, requestId: pending.requestId,
+        })
+        : { status: 'unavailable', reason: 'system_repair_service_unavailable' };
+    } catch (error) {
+      result = { status: runtime.signal?.aborted ? 'unknown' : 'unavailable', reason: String(error?.message || error).slice(0, 500) };
+    }
+    const wasStopped = runtime.signal?.aborted;
+    const status = ['completed', 'blocked', 'unavailable', 'unknown', 'budget', 'restart_required'].includes(result?.status)
+      ? result.status : 'unknown';
+    const bounded = {
+      status,
+      ...(result?.taskId ? { taskId: String(result.taskId).slice(0, 200) } : {}),
+      ...(result?.reason ? { reason: String(result.reason).slice(0, 500) } : {}),
+      ...(result?.report ? { report: result.report } : {}),
+      ...(result?.writerExecution ? { writerExecution: result.writerExecution } : {}),
+      ...(result?.delta ? { delta: result.delta } : {}),
+      ...(result?.scopeViolations ? { scopeViolations: result.scopeViolations.slice(0, 20) } : {}),
+    };
+    const entry = {
+      requestId: pending.requestId, incidentId: pending.incidentId,
+      evidence: pending.request.evidence, status, taskId: bounded.taskId || null, result: bounded,
+    };
+    const results = [...(state.systemResults || [])];
+    const existing = results.findIndex((item) => item.requestId === pending.requestId);
+    if (existing >= 0) results[existing] = entry;
+    else results.push(entry);
+    const systemResults = results.slice(-MAX_SYSTEM_RESULTS);
+    const systemCompletedIncidents = [...(state.systemCompletedIncidents || [])];
+    if (['completed', 'restart_required'].includes(status) && !wasStopped) {
+      const incidentHash = crypto.createHash('sha256').update(pending.incidentId).update('\0').update(JSON.stringify(pending.request.evidence || [])).digest('hex');
+      if (!systemCompletedIncidents.includes(incidentHash)) systemCompletedIncidents.push(incidentHash);
+    }
+    if (status === 'completed' && !wasStopped) return { systemRequest: null, systemResults, systemCompletedIncidents };
+    const retainedStatus = wasStopped ? 'unknown' : status;
+    const retainedResult = wasStopped ? { ...bounded, status: 'unknown', reason: 'owner_stop_during_system_repair; effects may be unknown' } : bounded;
+    return {
+      systemRequest: { ...pending, status: retainedStatus, attempts: (pending.attempts || 0) + 1, lastResult: retainedResult },
+      systemResults, systemCompletedIncidents,
+      ...(wasStopped ? { systemStopPending: true } : {}),
+    };
+  }
+
+  async function systemPause(state, config) {
+    if (ownerPauseRequested(config)) interrupt({ kind: 'owner_pause', message: OWNER_PAUSE_MESSAGE });
+    const request = state.systemRequest;
+    const value = {
+      kind: 'system_repair', requestId: request?.requestId || null,
+      incidentId: request?.incidentId || null, status: request?.status || 'unknown',
+      message: state.systemStopPending
+        ? 'Owner stop interrupted system repair; cancellation and task effects are unconfirmed. The request remains durable.'
+        : request?.lastResult?.reason || 'System repair is waiting for a technical condition. Resume to recheck the same durable request.',
+    };
+    interrupt(value);
+    return state.systemStopPending ? { systemStopPending: false } : {};
+  }
+
   async function humanInput(state, config) {
     const request = state.humanRequest;
     const { final: _final, review: _review, ...shown } = request;
@@ -3035,6 +3180,7 @@ function buildLeadGraph(deps) {
     if (state.status) return 'finish';
     if (state.budget) return 'budget_pause';
     if (state.humanRequest) return 'human_input';
+    if (state.systemRequest) return ownerPauseRequested(config) ? 'pause_before_dispatch' : 'system_repair';
     if (state.retryDecide || state.redecide) return 'decide';
     // A pause requested during the lead turn parks before anything is submitted; the plan is kept.
     return ownerPauseRequested(config) ? 'pause_before_dispatch' : 'dispatch';
@@ -3045,6 +3191,11 @@ function buildLeadGraph(deps) {
   };
   const afterReviewCheck = (state) => (state.humanRequest ? 'human_input' : 'accept');
   const afterHumanInput = (state) => (state.status === 'completed' ? 'accept' : 'decide');
+  const afterSystemRepair = (state, config) => state.status === 'canceled' ? 'finish'
+    : ownerPauseRequested(config) ? 'owner_pause' : state.systemRequest || state.systemStopPending ? 'system_pause' : 'decide';
+  const afterSystemPause = (state) => state.status === 'canceled' ? 'finish' : state.systemRequest ? 'system_repair' : 'decide';
+  const afterOwnerPause = (state) => state.status === 'canceled' ? 'finish'
+    : state.systemRequest ? 'system_repair' : state.batch ? collectRoute(state) : state.pendingAssignments ? 'dispatch' : 'decide';
   const collectRoute = (state) => {
     if (state.status === 'canceled') return 'verify';
     if (state.batch.items.some((item) => item.state === 'pending')) return 'dispatch';
@@ -3083,6 +3234,8 @@ function buildLeadGraph(deps) {
     .addNode('verify', verify)
     .addNode('reconcile', reconcile)
     .addNode('human_input', humanInput)
+    .addNode('system_repair', systemRepair)
+    .addNode('system_pause', systemPause)
     .addNode('budget_pause', budgetPause)
     .addNode('owner_pause', ownerPause)
     .addNode('pause_before_dispatch', ownerPause)
@@ -3092,16 +3245,18 @@ function buildLeadGraph(deps) {
     .addNode('finish', finish)
     .addEdge(START, 'intake')
     .addEdge('intake', 'decide')
-    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'budget_pause', 'human_input', 'dispatch', 'decide', 'pause_before_dispatch'])
-    .addEdge('pause_before_dispatch', 'dispatch')
+    .addConditionalEdges('decide', afterDecide, ['finish', 'accept', 'budget_pause', 'human_input', 'system_repair', 'dispatch', 'decide', 'pause_before_dispatch'])
+    .addConditionalEdges('pause_before_dispatch', afterOwnerPause, ['finish', 'system_repair', 'dispatch', 'verify', 'decide'])
     .addConditionalEdges('accept', afterAccept, ['finish', 'decide', 'dispatch'])
     .addConditionalEdges('review_check', afterReviewCheck, ['accept', 'human_input'])
     .addEdge('dispatch', 'collect')
     .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify', 'owner_pause'])
-    .addConditionalEdges('owner_pause', collectRoute, ['dispatch', 'verify'])
+    .addConditionalEdges('owner_pause', afterOwnerPause, ['finish', 'system_repair', 'dispatch', 'verify', 'decide'])
     .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'human_input', 'review_check', 'decide'])
     .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'decide'])
     .addConditionalEdges('human_input', afterHumanInput, ['accept', 'decide'])
+    .addConditionalEdges('system_repair', afterSystemRepair, ['finish', 'owner_pause', 'system_pause', 'decide'])
+    .addConditionalEdges('system_pause', afterSystemPause, ['finish', 'system_repair', 'decide'])
     .addEdge('budget_pause', 'continue_limited')
     .addConditionalEdges('continue_limited', afterContinueLimited, ['finish', 'dispatch', 'review_check', 'decide'])
     .addConditionalEdges('finish', afterFinish, [END, 'reconcile', 'decide']);

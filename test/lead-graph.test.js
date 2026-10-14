@@ -17,6 +17,7 @@ const { createActivityStore } = require('../src/activity-store');
 const { SessionThreads } = require('../src/session-threads');
 const { InMemoryStagingLog } = require('../src/staging-log');
 const { boundedOutcomes } = require('../src/lead-graph');
+const { computeReviewTarget } = require('../src/review-policy');
 const {
   DispatchJournal, openStateDatabase, assignmentId, attemptId, deterministicContextId,
 } = require('../src/durable-store');
@@ -667,7 +668,7 @@ test('an empty dispatch is rejected with a reminder to finish or ask', async () 
   await withSession(world, async (session) => {
     const result = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
     assert.equal(result.status, 'completed');
-    assert.match(world.prompts[1], /use finish or request_human_input instead of an empty dispatch/);
+    assert.match(world.prompts[1], /use finish, request_human_input, or request_system_repair instead of an empty dispatch/);
   });
 });
 
@@ -1669,6 +1670,120 @@ test('scoped reviewers can complete separate critical checkpoints while both gat
       'orch-verifier', 'orch-verifier', 'orch-auditor', 'orch-auditor',
     ]);
   }, { workspace });
+});
+
+test('one linked prerequisite verifier is admitted and registered while critical gates are pending', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src/file.js'), 'candidate');
+  const pending = { kind: 'risk_change', checkpointId: 'critical-pending', reason: 'Review the pending boundary', paths: ['src/file.js'], evidenceIds: ['issue-pending'] };
+  const prerequisite = {
+    kind: 'risk_change', checkpointId: 'critical-prerequisite', reason: 'Verify the prerequisite boundary',
+    paths: ['src/file.js'], evidenceIds: ['issue-prerequisite'], prerequisiteFor: ['critical-pending'],
+  };
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review: pending }),
+      dispatch(
+        { ...brief('orch-verifier', ['test']), review: prerequisite, wave: 1 },
+        { ...brief('orch-auditor', []), review: prerequisite, wave: 2 },
+      ),
+      dispatch({ ...brief('orch-verifier', ['test']), review: pending }),
+      dispatch({ ...brief('orch-auditor', []), review: pending }),
+      finish('Both critical checkpoints were reviewed'),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Review a prerequisite boundary', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), [
+      'orch-builder', 'orch-verifier', 'orch-auditor', 'orch-verifier', 'orch-auditor',
+    ]);
+    assert.equal(world.dispatchInputs[1].review.prerequisiteFor[0], 'critical-pending');
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    const prerequisiteObligation = values.reviewObligations.find((entry) => entry.checkpointId === prerequisite.checkpointId);
+    assert.deepEqual(prerequisiteObligation.receipts.map(({ role, status }) => [role, status]), [
+      ['verifier', 'accepted'], ['auditor', 'accepted'],
+    ]);
+    const target = computeReviewTarget({
+      workspace,
+      review: prerequisite,
+      runId: RUN_ID,
+      goal: 'Review a prerequisite boundary',
+      checks: [],
+    });
+    assert.equal(target.known, true);
+    assert.ok(prerequisiteObligation.receipts.every((receipt) => receipt.targetIdentity === target.identity));
+  }, { workspace });
+});
+
+test('prerequisite admission rejects an incomplete or over-broad link and a co-dispatched writer', async () => {
+  const cases = [
+    { name: 'missing', links: [] },
+    { name: 'stale', links: ['critical-old'] },
+    { name: 'partial', links: ['critical-a'] },
+    { name: 'extra', links: ['critical-a', 'critical-extra'] },
+    { name: 'unknown', links: ['critical-unknown'] },
+    { name: 'multiple', links: ['critical-a'], duplicate: true },
+    { name: 'writer', links: ['critical-a'], writer: true },
+    { name: 'same-checkpoint-writer', links: ['critical-a'], sameCheckpointWriter: true },
+    { name: 'existing', links: ['critical-a'], existing: true },
+    { name: 'auditor', links: ['critical-a'], role: 'orch-auditor' },
+  ];
+  for (const entry of cases) {
+    const workspace = gitRepo();
+    fs.mkdirSync(path.join(workspace, 'src'));
+    fs.mkdirSync(path.join(workspace, 'test'));
+    fs.writeFileSync(path.join(workspace, 'src/file.js'), 'candidate');
+    const first = { kind: 'risk_change', checkpointId: 'critical-a', reason: 'Review A', paths: ['src/file.js'], evidenceIds: ['issue-a'] };
+    const linked = { ...first, checkpointId: entry.existing ? 'critical-a' : 'critical-new', reason: 'Verify a linked prerequisite', prerequisiteFor: entry.links };
+    const invalid = [{ ...brief(entry.role || 'orch-verifier', entry.role === 'orch-auditor' ? [] : ['test']), review: linked }];
+    if (entry.sameCheckpointWriter) {
+      invalid.splice(0, 1,
+        { ...brief('orch-builder', ['src/file.js']), review: first, wave: 1 },
+        { ...invalid[0], wave: 2 });
+    }
+    if (entry.duplicate) invalid.push({ ...brief('orch-verifier', ['test']), review: { ...linked, checkpointId: 'critical-new-2' } });
+    if (entry.writer) invalid.push({ ...brief('orch-builder', ['src/other.js']), objective: 'Unrelated writer' });
+    const world = makeWorld({
+      script: [
+        dispatch({ ...brief('orch-builder', ['src/file.js']), review: first }),
+        dispatch(...invalid),
+        dispatch(
+          { ...brief('orch-verifier', ['test']), review: first },
+          ...(entry.name === 'partial' ? [{ ...brief('orch-verifier', ['test']), review: { ...first, checkpointId: 'critical-b', reason: 'Review B', evidenceIds: ['issue-b'] } }] : []),
+          { ...brief('orch-auditor', []), review: first },
+          ...(entry.name === 'partial' ? [{ ...brief('orch-auditor', []), review: { ...first, checkpointId: 'critical-b', reason: 'Review B', evidenceIds: ['issue-b'] } }] : []),
+        ),
+        finish('The original checkpoint was reviewed'),
+      ],
+      workerFinal: reviewWorkerFinal,
+    });
+    await withSession(world, async (session) => {
+      let result;
+      if (entry.name === 'partial') {
+        const stopped = await session.orchestrator.run({ goal: `Reject prerequisite case ${entry.name}`, runId: RUN_ID, interruptAfter: ['dispatch'] });
+        assert.equal(stopped.status, 'interrupted_for_test');
+        const config = { configurable: { thread_id: RUN_ID } };
+        const values = (await session.orchestrator.graph.getState(config)).values;
+        const second = { ...first, checkpointId: 'critical-b', reason: 'Review B', evidenceIds: ['issue-b'] };
+        await session.orchestrator.graph.updateState(config, {
+          reviewObligations: [...values.reviewObligations, { checkpointId: second.checkpointId, review: second, pendingAssignmentIds: [], receipts: [] }],
+        });
+        await session.restart();
+        result = await session.orchestrator.resume({ runId: RUN_ID });
+      } else {
+        result = await session.orchestrator.run({ goal: `Reject prerequisite case ${entry.name}`, runId: RUN_ID });
+      }
+      assert.equal(result.status, 'completed', entry.name);
+      assert.deepEqual(world.dispatchInputs.map((input) => input.role), entry.name === 'partial'
+        ? ['orch-builder', 'orch-verifier', 'orch-verifier', 'orch-auditor', 'orch-auditor']
+        : ['orch-builder', 'orch-verifier', 'orch-auditor'], entry.name);
+      assert.match(world.prompts[2], /Critical review checkpoint|prerequisite verifier|already has a pending/, entry.name);
+    }, { workspace });
+  }
 });
 
 test('a pending critical checkpoint cannot be downgraded or narrowed during repair', async () => {
@@ -3040,7 +3155,7 @@ test('the decision prompt describes waves according to parallelWriters', async (
       await session.orchestrator.run({ goal: 'Plan', runId: RUN_ID });
       assert.match(world.prompts[0], pattern);
       assert.match(world.prompts[0], /Waves: assignment\.wave/);
-      assert.match(world.prompts[0], /skills, wave, continueFrom, and review/);
+      assert.match(world.prompts[0], /skills, wave, continueFrom, review, and repair/);
       assert.match(world.prompts[0], /directory prefixes that cover the module and its tests/);
       assert.match(world.prompts[0], /scopeExpansion[^\n]*continueFrom[^\n]*expanded allowedFiles/);
     }, options);

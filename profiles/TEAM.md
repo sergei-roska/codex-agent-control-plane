@@ -24,6 +24,25 @@ The lead checks the user's stated goal, project instructions, relevant code, tes
 
 Ask the user only when authority is missing, an external or irreversible action requires their decision, or materially different product outcomes remain after reasonable investigation. Present the options, recommendation, evidence already checked, and work that can continue independently. Do not ask for a preference merely because multiple valid implementation orders exist. Do not grant a denied tool permission or assume authority from a model's recommendation.
 
+
+## Hosting system defects
+
+The runtime may advertise Chuck Norris, a separate system repair agent. Use
+request_system_repair for a concrete defect in the hosting control plane, with
+systemInput containing incidentId, question, bounded evidence and related open
+worker decision IDs. Chuck owns control-plane source repairs in a separate
+workspace. Do not dispatch him as a project specialist or ask a project writer
+to repair hosting code by expanding project scope. A target project that builds
+an orchestrator still uses the ordinary project roles for its own defects.
+
+Route technical system questions to Chuck instead of asking the owner to debug
+the controller. Resolve routine technical choices from evidence. Product scope,
+credentials/access grants, paid resources, external writes and irreversible
+actions retain the owner-only decision contract. Chuck's response is system
+evidence; it does not accept project work, replace current-target review,
+clear unresolved writers, resume an owner pause or grant budget. An unavailable
+service or required reload remains a technical wait with its incident identity.
+
 ## Dispatch
 
 | Role | Model and effort | Use |

@@ -184,7 +184,7 @@ describe('start', () => {
     assert.deepEqual(events, ['token', 'spawn']);
     const s = spawned[0];
     assert.equal(s.cmd, process.execPath);
-    assert.deepEqual(s.args, ['src/server.js']);
+    assert.deepEqual(s.args, ['server-bootstrap.js']);
     assert.equal(s.opts.cwd, path.join(tmp, 'repo'));
     assert.equal(s.opts.env.PORT, String(p.port));
     assert.equal(s.opts.env.CODEX_WORKSPACE, p.path);

@@ -3,6 +3,45 @@
 Status: ideas recorded at the owner's request on 2026-10-10. Not designed, not
 scheduled. Each item needs a short design before implementation.
 
+## UI-PERF-01: performance and token charts
+
+Status: implemented in the working tree on 2026-10-14; independent review
+approved. Full project checks: 1092 passed, 1 optional live probe skipped,
+0 failed. Live desktop/mobile layout and static-snapshot data were verified.
+
+Final owner scope: keep the visible page compact. Link it from the console with
+the selected project/session; show task tokens and recorded working time in two
+compact charts with a short summary. Keep the paginated detail table collapsed
+by default. Use readable body/control/table text of at least 16 px and labels
+of at least 14 px; keep the existing page style.
+
+Keep richer optimization statistics in a separate local SQLite metrics table for
+agent analysis: session/run/task attribution, model and effort, numerical token
+and timing data, retries, permission denials, execution outcomes, reported review
+verdicts, checks, and receipt status. Collect from the orchestrator state database
+through a read-only connection; never migrate or write that source database.
+Collection is deterministic and requires no additional LLM calls. Publish only
+a compact numerical snapshot for the visible page.
+
+The page reads persisted evidence and preserves ReAct, writer/review admission,
+budget gates, model choices, and reasoning effort. It must work on the already
+loaded launcher through the existing static/usage/session routes. New detailed API telemetry
+is optional until a safe launcher transition; restarting the active launcher
+would stop the running project servers and is excluded.
+
+Missing measurements remain unknown. Label legacy dispatch lifecycle spans
+separately from measured execution durations; overlapping durations are not
+end-to-end wall time. Distinguish completed execution, a passing review receipt,
+and accepted project checkpoints. Reasoning output is already included in output
+tokens. Token counts are not a monetary bill. Compare matching tasks and include
+failed work before claiming an efficiency improvement.
+
+Further diagnostic candidates: repeated reads/tool calls, rework per accepted
+result, scheduling/admission refusals, cache-prefix stability, and per-request
+latency. These require adequate telemetry before adding graphs or changing
+behavior. Token prompt compression itself remains queued as TOK-PROMPT-01 in
+`orchestrator-improvement-backlog.md`.
+
 ## UI-01: skills and MCP tools of the current run
 
 Under the session status line ("Status: task in progress..."), show what the

@@ -4,12 +4,13 @@
   "description": "Codex Universal roles exposed over the A2A protocol",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node server-bootstrap.js",
     "ask": "node src/cli.js",
     "usage": "node src/usage-report.js",
     "staging:report": "node src/staging-report.js",
     "evidence": "node src/evidence-store.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "launcher": "node launcher-bootstrap.js"
   },
   "keywords": [],
   "type": "commonjs",

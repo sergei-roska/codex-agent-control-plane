@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <title>Performance - Codex Control Plane</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+  <link rel="stylesheet" href="/ui/performance.css">
+</head>
+<body class="performance-page">
+  <header class="navbar">
+      <a class="brand" href="/" id="homeNavLink">
+      <span class="brand-icon" aria-hidden="true">&#9889;</span>
+      <span class="brand-text"><span class="brand-name">Codex Control Plane</span><span class="brand-subtitle">Universal A2A</span></span>
+    </a>
+    <nav class="page-nav" aria-label="Main navigation">
+      <a class="page-nav-link" href="/" id="controlNavLink">Control plane</a>
+      <a class="page-nav-link is-current" href="/ui/performance.html" aria-current="page">Performance</a>
+    </nav>
+  </header>
+
+  <main class="performance-shell">
+    <section class="performance-heading">
+      <div>
+        <p class="eyebrow">SESSION SUMMARY</p>
+        <h1>Performance</h1>
+        <p class="performance-intro">Review task token use and recorded working time.</p>
+      </div>
+      <button class="btn btn-secondary" id="refreshButton" type="button">Refresh</button>
+    </section>
+
+    <section class="performance-filters" aria-label="Performance selection">
+      <label>Project<select id="projectSelect" autocomplete="off"><option value="">Loading projects...</option></select></label>
+      <label>Session<select id="sessionSelect" autocomplete="off"><option value="">Select a project</option></select></label>
+      <div id="refreshStatus" class="refresh-status" role="status" aria-live="polite">Loading project list...</div>
+    </section>
+
+    <div id="pageMessage" class="page-message" role="status" aria-live="polite">Loading performance data...</div>
+    <div id="dashboard" class="dashboard hidden">
+      <section class="summary-grid" aria-label="Session summary">
+        <article class="summary-card"><div class="summary-label">Session tokens</div><div class="summary-value" id="tokenTotal">Unknown</div><div class="summary-detail" id="tokenDetail"></div></article>
+        <article class="summary-card"><div class="summary-label">Recorded working time</div><div class="summary-value" id="timeTotal">Unknown</div><div class="summary-detail" id="timeDetail"></div></article>
+      </section>
+      <div class="task-charts">
+        <section class="panel" aria-labelledby="taskTokenTitle">
+          <div class="panel-heading"><div><p class="eyebrow">TASK TOKENS</p><h2 id="taskTokenTitle">Tokens per task</h2></div></div>
+          <div id="taskTokenChart" class="task-chart"></div>
+          <p id="taskTokenCoverage" class="panel-note"></p>
+        </section>
+        <section class="panel" aria-labelledby="taskTimeTitle">
+          <div class="panel-heading"><div><p class="eyebrow">RECORDED TIME</p><h2 id="taskTimeTitle">Working time per task</h2></div></div>
+          <div id="taskTimeChart" class="task-chart"></div>
+          <p id="taskTimeCoverage" class="panel-note"></p>
+        </section>
+      </div>
+      <details class="panel task-details" id="taskDetails">
+        <summary>Task and assignment details <span id="rowCount" class="details-count"></span></summary>
+        <div class="table-scroll"><table><thead><tr><th scope="col">Task / role</th><th scope="col">Tokens</th><th scope="col">Working time</th><th scope="col">State</th></tr></thead><tbody id="taskRows"></tbody></table></div>
+        <div class="table-more"><span></span><button class="btn btn-secondary btn-sm hidden" id="loadMoreButton" type="button">Load more</button></div>
+        <p id="tableNote" class="panel-note"></p>
+      </details>
+    </div>
+  </main>
+  <script src="/ui/performance.js"></script>
+</body>
+</html>

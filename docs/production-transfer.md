@@ -19,6 +19,7 @@ Implementation, isolated verification, and live qualification are separate.
 
 | Date | Decision | ADR |
 |---|---|---|
+| 2026-10-14 | Separate Chuck Norris system repair from project work and owner-only decisions; independently accepted in disposable tests | docs/adr/chuck-norris-system-repair.md |
 | 2026-10-12 | Retain staging problems, attempted resolutions, and architectural decisions with evidence and statuses; durable runtime implementation qualified in isolation | docs/adr/staging-lessons-and-decision-log.md |
 | 2026-10-11 | Session token usage is attributed through lead run ids and the dispatch journal, not context ids | docs/adr/launcher-session-usage-attribution.md |
 | 2026-10-11 | The launcher projects live run state read-only from the lead's LangGraph checkpoint | docs/adr/launcher-situation-from-checkpoint.md |
@@ -485,3 +486,31 @@ measured audit savings.
   retain the old session without resuming or deleting it.
 - Status: seven focused session-control cases and independent probes passed.
   Reload the UI after integration; backend repairs require project restart.
+
+### SYS-REPAIR-01 Project roles cannot repair the hosting control plane
+
+- Symptom: a systemic controller defect needs outside repair, while project
+  specialists only have the target workspace and the owner receives debugging
+  questions.
+- Decision: Chuck Norris is a separate launcher-hosted A2A system repair agent;
+  lead decisions have a dedicated system escalation and separate evidence.
+- Design corrections: direct repository execution would expose mutable runtime
+  state before scope validation, and the ordinary project bearer would grant
+  system repair authority. Require verified isolated lanes, allowlisted
+  integration and a separate system credential. Source reload proof must name
+  the actual requester or launcher process that loaded the affected code.
+- Implementation: separate profile/service, journaled A2A client, graph route,
+  technical wait/recheck, loaded-source proof and UI projection are in the
+  working tree. Final full suite: 1129 pass, 0 fail, 1 optional live skip;
+  independent APPROVE and five adversarial probes HOLDS. No live run is claimed.
+- Production: carry separate system capability, persistence and lifecycle;
+  never accept a model report as authority to clear project writers, review
+  gates, owner pauses or budgets. Retain uncertain submissions for identity
+  reconciliation instead of blind writable retries.
+- ADR: [Chuck Norris system repair](adr/chuck-norris-system-repair.md).
+
+- SYS-REPAIR-01 follow-up: a challenger reproduced source integration on a
+  completed model turn with a failed repair report/checks. The system executor
+  now validates the candidate before integration; failed candidates remain
+  isolated. Actual loaded entry/helper capture and SDK interface sanitization
+  also passed independent review. Automatic maintenance restarts remain deferred.

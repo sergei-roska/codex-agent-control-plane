@@ -63,6 +63,8 @@ function createProjectManager(options = {}) {
   const {
     repoDir = path.resolve(__dirname, '..'),
     runtimeDir = path.join(repoDir, '.runtime'),
+    systemAgentUrl = null,
+    systemAgentTokenFile = null,
     portRange = [3000, 3099],
     spawn = childProcess.spawn,
     fetch = globalThis.fetch,
@@ -345,7 +347,7 @@ function createProjectManager(options = {}) {
       fs.mkdirSync(path.dirname(record.stateDb), { recursive: true, mode: 0o700 });
       const roleOverrides = path.resolve(roleOverridesPath(id));
       fs.mkdirSync(path.dirname(roleOverrides), { recursive: true, mode: 0o700 });
-      const child = spawn(process.execPath, ['src/server.js'], {
+      const child = spawn(process.execPath, ['server-bootstrap.js'], {
         cwd: repoDir,
         env: {
           ...process.env,
@@ -353,7 +355,9 @@ function createProjectManager(options = {}) {
           CODEX_WORKSPACE: record.path,
           CODEX_A2A_STATE_DB: record.stateDb,
           CODEX_A2A_ROLE_OVERRIDES: roleOverrides,
-          CODEX_A2A_PROJECT_SETTINGS: path.resolve(projectSettingsPath(id))
+          CODEX_A2A_PROJECT_SETTINGS: path.resolve(projectSettingsPath(id)),
+          ...(systemAgentUrl ? { CODEX_A2A_SYSTEM_AGENT_URL: systemAgentUrl } : {}),
+          ...(systemAgentTokenFile ? { CODEX_A2A_SYSTEM_AGENT_TOKEN_FILE: path.resolve(systemAgentTokenFile) } : {})
         }
       });
       rt.child = child;

@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
-const { startServer, describePause, makeLeadExecutor, registerLead, rejectOverlappingLeadTask, protectRoleRpcMounts } = require('../src/server');
+const { startServer, describePause, makeLeadExecutor, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts } = require('../src/server');
 const { makeLeadCard } = require('../src/server');
 const fs = require('node:fs');
 const { ResumeInputError } = require('../src/lead-orchestrator');
@@ -13,6 +13,8 @@ const { ServerCallContext } = require('@a2a-js/sdk/server');
 const { openStateDatabase, createTaskStore } = require('../src/durable-store');
 const { WriterAdmission } = require('../src/writer-admission');
 const { validateAcceptanceContract } = require('../src/acceptance');
+const { createRuntimeIdentity } = require('../src/runtime-identity');
+const { createAuthMiddleware } = require('../src/local-auth');
 
 // Test files run in parallel processes; keep workspace locks private to this process.
 process.env.CODEX_A2A_WORKSPACE_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-ws-lock-'));
@@ -1903,6 +1905,66 @@ test('the control routes need the loopback token and drive the orchestrator paus
     httpServer.close();
     await runtime.close();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runtime control route requires bearer auth and returns the loaded identity snapshot', () => {
+  const token = 'A'.repeat(43);
+  const snapshot = Object.freeze({ schemaVersion: 1, pid: process.pid, sourceHashes: Object.freeze({ 'src/server.js': 'a'.repeat(64) }) });
+  const routes = new Map();
+  registerControl({
+    get(route, ...handlers) { routes.set(route, handlers); },
+    post() {},
+  }, {
+    authMiddleware: createAuthMiddleware(token),
+    orchestrator: {},
+    runtimeIdentity: { snapshot },
+  });
+
+  const invoke = (authorization) => {
+    const [auth, handler] = routes.get('/control/runtime');
+    const response = {
+      statusCode: 200,
+      headers: {},
+      body: null,
+      set(name, value) { this.headers[name] = value; return this; },
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    const request = { path: '/control/runtime', headers: { authorization }, get(name) { return this.headers[name.toLowerCase()]; } };
+    auth(request, response, () => handler(request, response));
+    return response;
+  };
+
+  const rejected = invoke(undefined);
+  assert.equal(rejected.statusCode, 401);
+  assert.deepEqual(rejected.body, { error: 'Unauthorized' });
+  const accepted = invoke(`Bearer ${token}`);
+  assert.equal(accepted.statusCode, 200);
+  assert.strictEqual(accepted.body, snapshot);
+});
+
+test('runtime identity hashes loaded source and remains stable after the source file changes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-identity-test-'));
+  const sourcePath = path.join(root, 'src', 'loaded.js');
+  const source = 'module.exports = "loaded value";\n';
+  fs.mkdirSync(path.dirname(sourcePath));
+  fs.writeFileSync(sourcePath, source);
+  const identity = createRuntimeIdentity({ root, sourceFiles: ['src/loaded.js'] });
+  try {
+    const loaded = require(sourcePath);
+    const snapshot = identity.seal();
+    const expectedHash = require('node:crypto').createHash('sha256').update(source).digest('hex');
+    assert.equal(loaded, 'loaded value');
+    assert.equal(snapshot.sourceHashes['src/loaded.js'], expectedHash);
+    assert.equal(Object.isFrozen(snapshot), true);
+    assert.equal(Object.isFrozen(snapshot.sourceHashes), true);
+
+    fs.writeFileSync(sourcePath, 'module.exports = "changed on disk";\n');
+    assert.strictEqual(identity.snapshot, snapshot);
+    assert.equal(identity.snapshot.sourceHashes['src/loaded.js'], expectedHash);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

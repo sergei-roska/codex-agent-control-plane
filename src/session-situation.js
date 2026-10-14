@@ -30,6 +30,8 @@ const NODE_PHASE = {
   accept: 'verifying',
   human_input: 'waiting_owner',
   budget_pause: 'budget_pause',
+  system_repair: 'system_repair',
+  system_pause: 'system_wait',
 };
 const PROGRESS_LABEL = { integrated_change: 'Integrated change', decision_resolved: 'Decision resolved', check_passed: 'Check passed' };
 const PROGRESS_SHOWN = 10;
@@ -46,10 +48,12 @@ function hasTable(db, name) {
 
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 3)}...` : text);
 
-// Phase of the session. A checkpointed node wins over the A2A state for a budget pause and for a
-// human request, because both arrive as INPUT_REQUIRED. Unknown combinations are null, never guessed.
+// Phase of the session. Checkpointed system nodes and budget/human request nodes take precedence over
+// INPUT_REQUIRED; unknown combinations are null, never guessed.
 function phaseOf(state, node) {
   if (TERMINAL_PHASE[state]) return TERMINAL_PHASE[state];
+  if (node === 'system_repair') return 'system_repair';
+  if (node === 'system_pause') return 'system_wait';
   if (node === 'budget_pause') return 'budget_pause';
   if (node === 'human_input' || state === 'TASK_STATE_INPUT_REQUIRED') return 'waiting_owner';
   return NODE_PHASE[node] ?? null;
@@ -195,6 +199,39 @@ function parkedPause(row) {
 
 // Pauses the owner caused and can lift with a plain continue: a soft pause and a Stop (STOP-01).
 const OWNER_PAUSE_KINDS = new Set(['owner_pause', 'stopped']);
+const SYSTEM_RESULT_STATUSES = new Set(['pending', 'completed', 'restart_required', 'blocked', 'unavailable', 'unknown', 'waiting_for_budget', 'budget', 'recheck_limit']);
+const SYSTEM_REASONS = new Set([
+  'aborted_before_dispatch', 'aborted_before_send', 'ambiguous_writable_submission_not_resent',
+  'authentication_required', 'boundary_evidence_not_passed', 'canceled_with_unknown_effects',
+  'cancellation_unconfirmed', 'identity_or_request_missing', 'invalid_worker_report',
+  'journaled_task_unavailable', 'loaded_runtime_code_requires_restart', 'owner_stop_during_system_repair',
+  'repair_check_not_passed', 'repair_report_not_completed', 'scope_violation',
+  'specialist_input_required', 'specialist_task_rejected', 'specialist_usage_limit',
+  'send_result_unknown', 'submission_lookup_failed', 'system_recheck_limit', 'system_repair_service_unavailable',
+  'task_id_missing_after_send', 'task_not_completed', 'task_poll_failed', 'writer_execution_not_authoritatively_released',
+]);
+const SYSTEM_ID = /^(?!sk[._:-]|rk[._:-]|pk[._:-]|ghp[._:-]|github_pat[._:-]|token[._:-]|secret[._:-]|bearer[._:-])[a-z0-9][a-z0-9._:-]{0,159}$/i;
+
+function boundedSystemRepair(values) {
+  const request = values?.systemRequest && typeof values.systemRequest === 'object' ? values.systemRequest : null;
+  const results = Array.isArray(values?.systemResults) ? values.systemResults.slice(-10) : [];
+  const latest = request ? null : results.at(-1);
+  if (!request && !latest) return null;
+  const rawResult = request?.lastResult || latest?.result || {};
+  const status = request?.status || latest?.status || rawResult.status || 'unknown';
+  const rawReason = typeof rawResult.reason === 'string' ? rawResult.reason : '';
+  const reason = SYSTEM_REASONS.has(rawReason) ? rawReason : null;
+  const boundedStatus = SYSTEM_RESULT_STATUSES.has(status) ? status : 'unknown';
+  return {
+    requestId: SYSTEM_ID.test(String(request?.requestId || latest?.requestId || ''))
+      ? clip(String(request?.requestId || latest?.requestId || ''), 200) : null,
+    incidentId: SYSTEM_ID.test(String(request?.incidentId || latest?.incidentId || ''))
+      ? clip(String(request?.incidentId || latest?.incidentId || ''), 160) : null,
+    status: boundedStatus,
+    attempts: Number.isInteger(request?.attempts) ? Math.max(0, Math.min(request.attempts, 100)) : null,
+    reason,
+  };
+}
 
 // The lead task of a session (the latest turn) when it is parked on an owner pause or stop; else null.
 function ownerPausedLead(db, contextId) {
@@ -222,7 +259,7 @@ async function buildSituation(db, contextId, { pauseRequestedRuns = [] } = {}) {
   const parkedKind = parkedPause(lead)?.kind;
   const pauseKind = OWNER_PAUSE_KINDS.has(parkedKind) ? parkedKind : null;
   if (pauseKind) phase = 'paused';
-  else if (pauseRequested && (phase === 'planning' || phase === 'working' || phase === 'verifying')) phase = 'pausing';
+  else if (pauseRequested && (phase === 'planning' || phase === 'working' || phase === 'verifying' || phase === 'system_repair')) phase = 'pausing';
   const activity = liveRow(db, `lead:${leadTaskId}`);
   let startedAt = activity?.started_at ?? null;
   if (!startedAt && checkpoint) startedAt = await firstCheckpointTs(db, leadTaskId);
@@ -235,6 +272,7 @@ async function buildSituation(db, contextId, { pauseRequestedRuns = [] } = {}) {
     phase,
     // 'owner_pause' (soft pause) or 'stopped' (Stop) while parked; null otherwise.
     pauseKind,
+    systemRepair: boundedSystemRepair(values),
     round: Number.isInteger(values.round) ? values.round : null,
     budget: values.budget && typeof values.budget === 'object' ? { ...values.budget } : null,
     startedAt,
@@ -259,6 +297,23 @@ async function buildSituation(db, contextId, { pauseRequestedRuns = [] } = {}) {
       })),
     } : null,
     nextSteps: phase === 'done' ? nextStepsOf(values.result?.text ?? values.text) : null,
+  };
+}
+
+// Review contexts stored in the latest lead checkpoint; unavailable when the channel is absent.
+async function buildReviewContexts(db, contextId) {
+  const leadIds = sessionLeadTaskIds(db, contextId);
+  if (leadIds.length === 0) return null;
+  const checkpoint = await latestCheckpoint(db, leadIds[leadIds.length - 1]);
+  const values = checkpoint?.values || {};
+  if (!Object.prototype.hasOwnProperty.call(values, 'reviewObligations') || !Array.isArray(values.reviewObligations)) {
+    return { available: false, reviewContexts: null };
+  }
+  return {
+    available: true,
+    reviewContexts: values.reviewObligations
+      .map((obligation) => obligation?.review)
+      .filter((review) => review && typeof review === 'object' && !Array.isArray(review)),
   };
 }
 
@@ -324,4 +379,4 @@ async function gitStatus(cwd) {
   return { available: true, branch, head, files, diffstat };
 }
 
-module.exports = { buildSituation, ownerPausedLead, gitStatus, phaseOf, nodeOf, nextStepsOf, parsePorcelain, parseShortstat };
+module.exports = { buildSituation, buildReviewContexts, ownerPausedLead, gitStatus, phaseOf, nodeOf, nextStepsOf, parsePorcelain, parseShortstat };

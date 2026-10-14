@@ -40,11 +40,11 @@ test('schemas satisfy strict structured output rules', () => {
   assert.match(WORKER_REPORT_SCHEMA.properties.checks.description, /reused tests were freshly executed/);
   assert.match(WORKER_REPORT_SCHEMA.properties.risks.description, /supplemental diagnostic commands/);
   assert.equal(DECISION_SCHEMA.properties.humanInput.anyOf[1].type, 'null');
-  assert.deepEqual(DECISION_SCHEMA.properties.action.enum, ['dispatch', 'finish', 'request_human_input']);
-  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom', 'review']);
+  assert.deepEqual(DECISION_SCHEMA.properties.action.enum, ['dispatch', 'finish', 'request_human_input', 'request_system_repair']);
+  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom', 'review', 'repair']);
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.continueFrom, { type: ['string', 'null'] });
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.wave, { type: ['integer', 'null'], minimum: 1 });
-  assert.deepEqual(DECISION_SCHEMA.required, ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks', 'records']);
+  assert.deepEqual(DECISION_SCHEMA.required, ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks', 'records', 'systemInput']);
   assert.deepEqual(DECISION_SCHEMA.properties.goalAchieved, { type: ['boolean', 'null'] });
   const [checks, none] = DECISION_SCHEMA.properties.acceptanceChecks.anyOf;
   assert.equal(none.type, 'null');
@@ -210,6 +210,17 @@ function human(overrides = {}) {
 function ask(overrides = {}) {
   return { action: 'request_human_input', assignments: [], final: '', resolutions: [], humanInput: human(), ...overrides };
 }
+function systemRepair(overrides = {}) {
+  return {
+    action: 'request_system_repair', assignments: [], final: '', resolutions: [], humanInput: null,
+    systemInput: {
+      incidentId: 'control-plane-incident', question: 'Why is the controller losing durable writer identity?',
+      evidence: ['src/durable-store.js: DispatchJournal keys are incomplete', 'test/lead-graph.test.js reproduces replay collision'],
+      relatedDecisionIds: [],
+    },
+    ...overrides,
+  };
+}
 const throws = (decision, context, pattern) => assert.throws(() => validateDecision(decision, context), pattern);
 
 test('validateDecision accepts valid finish, dispatch, and request_human_input', () => {
@@ -218,6 +229,37 @@ test('validateDecision accepts valid finish, dispatch, and request_human_input',
   validateDecision(dispatch([assignment({ role: 'orch-builder', allowedFiles: ['src/a.js'] })]), ctx());
   validateDecision(ask(), ctx());
   validateDecision(dispatch(Array.from({ length: MAX_ASSIGNMENTS }, () => assignment())), ctx());
+});
+
+test('system repair decisions are exact, bounded, and keep cited worker decisions open', () => {
+  const open = ctx({ openDecisionIds: new Set(['worker-d1']) });
+  const request = systemRepair({ systemInput: {
+    incidentId: 'incident-1', question: 'Repair the host controller replay boundary',
+    evidence: ['src/lead-graph.js: system repair ID changes on retry'],
+    relatedDecisionIds: ['worker-d1'],
+  } });
+  validateDecision(request, open);
+  assert.equal(request.goalAchieved, null);
+  assert.equal(request.acceptanceChecks, null);
+  assert.equal(request.systemInput.relatedDecisionIds[0], 'worker-d1');
+
+  throws(systemRepair({ systemInput: { ...request.systemInput, extra: true } }), open, /exactly incidentId/);
+  throws(systemRepair({ systemInput: { ...request.systemInput, evidence: [] } }), open, /must not be empty/);
+  throws(systemRepair({ systemInput: { ...request.systemInput, relatedDecisionIds: ['closed'] } }), open, /not open/);
+  throws(systemRepair({ systemInput: { ...request.systemInput, incidentId: 'x'.repeat(161) } }), open, /at most 160/);
+  throws(systemRepair({ assignments: [assignment()] }), open, /no assignments/);
+  throws(systemRepair({ final: 'done' }), open, /no assignments/);
+  throws(systemRepair({ humanInput: human() }), open, /no assignments/);
+  throws(systemRepair({ goalAchieved: true }), open, /no assignments/);
+  throws(systemRepair({ acceptanceChecks: [] }), open, /no assignments/);
+  throws(systemRepair({ resolutions: [{ decisionId: 'worker-d1', choice: 'resolved', rationale: 'x' }] }), open, /no assignments/);
+  throws(finish({ systemInput: request.systemInput }), open, /systemInput is allowed only/);
+  const legacy = finish();
+  delete legacy.systemInput;
+  validateDecision(legacy, ctx());
+  assert.equal(legacy.systemInput, null);
+  validateDecision(systemRepair(), ctx({ systemCount: 1000 }));
+  throws(systemRepair(), ctx({ systemIncidents: new Set([require('node:crypto').createHash('sha256').update('control-plane-incident').update('\0').update(JSON.stringify(systemRepair().systemInput.evidence)).digest('hex')]) }), /completed repair request/);
 });
 
 test('validateDecision enforces shape and action rules', () => {
@@ -244,7 +286,7 @@ test('validateDecision enforces shape and action rules', () => {
 test('validateDecision enforces assignment rules', () => {
   const bad = (overrides, pattern, context = ctx()) => throws(dispatch([assignment(overrides)]), context, pattern);
   throws(dispatch(['x']), ctx(), /must be an object/);
-  throws(dispatch([{ role: 'orch-planner' }]), ctx(), /exactly role/);
+  throws(dispatch([{ role: 'orch-planner' }]), ctx(), /must contain the ordinary fields and may include skills/);
   bad({ role: 'nope' }, /Unknown role/);
   bad({ objective: ' ' }, /needs an objective/);
   for (const field of ['allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions']) {
@@ -317,7 +359,7 @@ test('assignment skills are bounded, unique, catalog-selectable, and legacy deci
   throws(dispatch([assignment({ skills: Array.from({ length: 6 }, (_, i) => `skill-${i}`) })]), ctx(), /at most 5/);
   throws(dispatch([assignment({ skills: ['unknown'] })]), candidateCtx, /not advertised/);
   throws(dispatch([assignment({ skills: ['not-catalogued'] })]), ctx({ skillCatalog: new Map() }), /Unknown skill/);
-  throws(dispatch([{ ...assignment(), skills: [], skillPins: [] }]), ctx(), /optionally skills/);
+  throws(dispatch([{ ...assignment(), skills: [], skillPins: [] }]), ctx(), /must contain the ordinary fields and may include skills/);
 });
 
 test('structured records require safe architecture paths and correlate remedies to problems', () => {
@@ -342,7 +384,26 @@ test('reviewers need matching contexts and ordered non-concurrent execution grou
   throws(dispatch([{ ...writer, wave: 1 }, { ...verifier, wave: 1 }, auditor]), ctx(), /cannot share a wave with writer/);
   throws(dispatch([writer, auditor, verifier]), ctx(), /Run the verifier before the auditor/);
   throws(dispatch([writer, { ...verifier, review: { ...review, paths: ['src'] } }, auditor]), ctx(), /same review kind, reason, scope, and evidence IDs/);
+  throws(dispatch([
+    { ...verifier, review: { ...review, prerequisiteFor: ['critical-0'] } },
+    { ...auditor, review },
+  ]), ctx(), /same review kind, reason, scope, and evidence IDs/);
   throws(dispatch([assignment({ role: 'orch-auditor', allowedFiles: [] })]), ctx(), /requires review metadata/);
+});
+
+test('prerequisite review links normalize legacy contexts and are restricted to gated verifiers', () => {
+  const review = { kind: 'risk_change', checkpointId: 'cp-new', reason: 'Verify the prerequisite', paths: ['src/file.js'], evidenceIds: ['e-1'] };
+  const verifier = assignment({ role: 'orch-verifier', allowedFiles: ['test'], review: structuredClone(review) });
+  validateDecision(dispatch([verifier]), ctx());
+  assert.deepEqual(verifier.review.prerequisiteFor, []);
+  const linkedVerifier = assignment({
+    role: 'orch-verifier', allowedFiles: ['test'],
+    review: { ...review, prerequisiteFor: ['critical-1'] },
+  });
+  validateDecision(dispatch([linkedVerifier]), ctx());
+  assert.deepEqual(linkedVerifier.review.prerequisiteFor, ['critical-1']);
+  throws(dispatch([assignment({ role: 'orch-builder', allowedFiles: ['src/file.js'], review: { ...review, prerequisiteFor: ['critical-1'] } })]), ctx(), /only on a gated verifier scope/);
+  throws(dispatch([assignment({ role: 'orch-verifier', allowedFiles: ['test'], review: { ...review, prerequisiteFor: ['critical-1', 'critical-1'] } })]), ctx(), /must be unique/);
 });
 
 test('validateDecision enforces humanInput rules', () => {
@@ -507,6 +568,8 @@ test('validateDecision throws BoundaryViolation with predicate ids and codes', (
 
 const WRITER = { id: 'engineer', name: 'orch-builder', sandbox: 'workspace-write' };
 const READER = { id: 'explorer', name: 'orch-explorer', sandbox: 'read-only' };
+const VERIFIER = { id: 'verifier', name: 'orch-verifier', sandbox: 'workspace-write' };
+const AUDITOR = { id: 'auditor', name: 'orch-auditor', sandbox: 'read-only' };
 
 function specialist(overrides = {}) {
   return {
@@ -535,6 +598,18 @@ test('checkSpecialistRequest accepts the shape the lead sends and returns a copy
   const minimal = checkSpecialistRequest({ objective: 'x', allowedFiles: [] }, READER, { workspace: '/ws' });
   assert.deepEqual(minimal.inputs, []);
   assert.equal(checkSpecialistRequest(specialist({ role: 'engineer' }), WRITER, { workspace: '/ws' }).role, 'engineer');
+});
+
+test('checkSpecialistRequest accepts linked gated verifier and auditor contexts only', () => {
+  const review = {
+    kind: 'risk_change', checkpointId: 'critical-prerequisite', reason: 'Verify the linked scope',
+    paths: ['src/file.js'], evidenceIds: ['issue-1'], prerequisiteFor: ['critical-pending'],
+  };
+  const verifier = checkSpecialistRequest(specialist({ role: 'orch-verifier', review }), VERIFIER, { workspace: '/ws' });
+  const auditor = checkSpecialistRequest(specialist({ role: 'orch-auditor', allowedFiles: [], review }), AUDITOR, { workspace: '/ws' });
+  assert.deepEqual(verifier.review, review);
+  assert.deepEqual(auditor.review, review);
+  specialistCode(specialist({ review }), WRITER, 'dispatch.request_input', 'request_invalid');
 });
 
 test('checkSpecialistRequest rejects shape problems', () => {
