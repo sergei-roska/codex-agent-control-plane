@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "autonomy-evaluation/v1",
+  "evaluatorVersion": "1.0.0",
+  "baselineId": "aut-05-baseline-offline-v3",
+  "corpusId": "aut-05-regression-corpus-v3",
+  "corpusDigest": "bf180584c4ee3620b2c676f42e0c09be8d977dec2d82cbd39e3fd90cf60485fc",
+  "valid": true,
+  "caseCount": 7,
+  "observationCount": 7,
+  "findings": [
+    {
+      "code": "metric_not_covered",
+      "severity": "info",
+      "message": "metric \"first_pass_accepted_checkpoints\" is not covered by any observation"
+    },
+    {
+      "code": "metric_not_covered",
+      "severity": "info",
+      "message": "metric \"accepted_results\" is not covered by any observation"
+    },
+    {
+      "code": "metric_not_covered",
+      "severity": "info",
+      "message": "metric \"repair_cycles\" is not covered by any observation"
+    },
+    {
+      "code": "metric_not_covered",
+      "severity": "info",
+      "message": "metric \"review_cycles\" is not covered by any observation"
+    },
+    {
+      "code": "metric_not_covered",
+      "severity": "info",
+      "message": "metric \"owner_escalations\" is not covered by any observation"
+    }
+  ],
+  "summary": {
+    "acceptedResults": null,
+    "passedCount": 4,
+    "failedCount": 2,
+    "notRunCount": 0,
+    "inconclusiveCount": 1,
+    "notSupportedCount": 0,
+    "requirementPreservation": {
+      "numerator": 5,
+      "denominator": 5,
+      "value": 1
+    },
+    "firstPassAcceptedCheckpoints": null,
+    "measuredCostPerAcceptedResult": null
+  },
+  "eligibility": {
+    "scope": "offline_contract_and_artifact",
+    "assessed": true,
+    "ready": false,
+    "limitations": [
+      "offline_contract_and_artifact scope: no live model execution, measured spend, or token capture; measured_cost_per_accepted_result is always null",
+      "eligibility.ready is always false; only the lead records baseline_ready after independent verification and audit"
+    ]
+  }
+}

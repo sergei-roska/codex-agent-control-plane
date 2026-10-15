@@ -1,0 +1,77 @@
+{
+  "decisionVersion": "aut-05-lead-acceptance/v1",
+  "baselineId": "aut-05-baseline-offline-v3",
+  "lifecycleStatus": "baseline_ready",
+  "acceptedScope": "offline_contract_and_artifact",
+  "comparisonScope": "Frozen manual planning artifact structure, requirement traceability, and offline checker capability only.",
+  "baselineSha256": "4fe46b3cc7d7a67e5bc1df2c5347f5bcd007fccb808a8294671d0a0ee0183786",
+  "artifacts": [
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/baseline.json",
+      "sha256": "4fe46b3cc7d7a67e5bc1df2c5347f5bcd007fccb808a8294671d0a0ee0183786"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/corpus.json",
+      "sha256": "bf180584c4ee3620b2c676f42e0c09be8d977dec2d82cbd39e3fd90cf60485fc"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/observations.json",
+      "sha256": "99b50d7b5c2983ca3d380507120d08ac3caf4965ab3daede3832d263fe24defa"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/failed-incomplete-usage-evidence.json",
+      "sha256": "24a1f47bc94051775ebb988a3d56a56581c8de56a176348f818a084f1d834c88"
+    },
+    {
+      "path": "docs/aut-05-metric-definitions.md",
+      "sha256": "55ab34120292726741263bfba9e8498f8db09304a5510caec446d0311ef4c8ed"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/capture-provenance.json",
+      "sha256": "81bdd8a20a32f2b228efa87a3acd395df85938c42f1c7a967e866ef45532880b"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/current-lead-planning-output.md",
+      "sha256": "e95219d7a2bf375cd2e04a3f392f92220839f13704d6ec72b5a89d463e90d5a6"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/requirements.md",
+      "sha256": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/reviewer-assessment.json",
+      "sha256": "f4951651dc47ab836b8452b593e2c0d8cd3bc5e3992187dd69d5d54105a4caa2"
+    },
+    {
+      "path": "docs/evidence/aut-05/v3-verification.md",
+      "sha256": "157d82c618e3fea6f9c23db38724546c77ecad4b99be06112537f1babaca144b"
+    },
+    {
+      "path": "docs/evidence/aut-05/v3-integrity-audit.md",
+      "sha256": "625ce90ba23ee3ed41eabe7a859090c118cd4f16d1650742e86f9798b8ca486d"
+    },
+    {
+      "path": "docs/evidence/aut-05/evaluation-report.json",
+      "sha256": "92921b868c5239ded87e2544e7098ce3a4b33d3d2b28f623ea374538e58c8461"
+    },
+    {
+      "path": "docs/evidence/aut-05/verification-results.json",
+      "sha256": "85d1e7220db7637befedbbe5d82d5e0433fe2f5fda0b10b032be698431faf2ef"
+    }
+  ],
+  "generatedEvidenceDirectory": "artifacts/autonomy/aut-05-baseline-offline-v3/",
+  "durableEvaluationReport": "docs/evidence/aut-05/evaluation-report.json",
+  "rejectedCohorts": [
+    "aut-05-baseline-offline-v1",
+    "aut-05-baseline-offline-v2"
+  ],
+  "limits": [
+    "Historical technical findings do not establish fresh target runtime behavior or authorization effects.",
+    "Planning capture is a manual current-lead artifact, not a historical harness run or a model benchmark.",
+    "Semantic requirement preservation was already 5/5; missing literal IDs indicate structural traceability gaps.",
+    "Accepted implementation results, first-pass acceptance, workflow timing, tokens and measured spend remain unavailable.",
+    "The joined failed attempt has 5573 ms elapsed time but does not establish complete workflow duration.",
+    "Evaluator eligibility.ready stays false; this separate lead decision grants bounded baseline readiness only."
+  ],
+  "nextCheckpoint": "AUT-01 A0 after owner-requested prior-work commit"
+}

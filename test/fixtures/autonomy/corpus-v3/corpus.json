@@ -1,0 +1,340 @@
+{
+  "schemaVersion": "autonomy-corpus/v1",
+  "corpusId": "aut-05-regression-corpus-v3",
+  "revision": 4,
+  "title": "Corrected AUT-05 offline and historical evidence cohort v3",
+  "createdAt": "2026-10-15T14:56:05Z",
+  "cases": [
+    {
+      "caseId": "canonical-identity-contradiction",
+      "revision": 1,
+      "title": "Canonical identity incomplete or contradictory",
+      "failureFamily": "canonical_identity",
+      "evaluationMode": "historical_observation",
+      "targetSystem": "target_orchestrator",
+      "sourceSnapshot": "pre-repair source revision unknown; post-repair r211 verifier target commit be71a620c153d6c46e0696a8e53d2fdc56ea4af5",
+      "goal": "Reject/refrain from authorizing when the actual target contract requires identity fields that are incomplete or contradictory.",
+      "canonicalInputs": [],
+      "constraints": [
+        "no live A2A resume",
+        "identity contradiction must be rejected, not coerced"
+      ],
+      "inputArtifacts": [],
+      "expectedOutcomeArtifacts": [],
+      "oracle": {
+        "requiredOutcome": "reject: a persisted context manifest or capability grant that contradicts the canonical assignment identity is refused",
+        "forbiddenEffects": [
+          "authorizing a task whose persisted identity contradicts the canonical assignment",
+          "checking only policy_version while ignoring write_scope/capability contradictions"
+        ],
+        "acceptedEvidenceType": "identity-contradiction rejection receipt",
+        "sourceContract": "src/runtime-identity.js and src/contracts.js identity predicates"
+      },
+      "applicability": {
+        "affectedByAutInterventions": [],
+        "isRegressionControl": true
+      },
+      "assessment": {
+        "adapter": "historical-evidence-adapter",
+        "supportedObservations": [
+          "historical_observation"
+        ],
+        "knownLimitations": [
+          "historical evidence is recorded in gitignored handoffs (.agents/teamwork/monitor-owner/handoff.md r209/r210)",
+          "no frozen digest for transient handoff evidence",
+          "historical handoff summary only; no runtime receipt or proven target source revision"
+        ]
+      }
+    },
+    {
+      "caseId": "nested-manifest-contradiction",
+      "revision": 1,
+      "title": "Nested manifests contradict each other",
+      "failureFamily": "nested_manifest_contradiction",
+      "evaluationMode": "historical_observation",
+      "targetSystem": "target_orchestrator",
+      "sourceSnapshot": "pre-repair source revision unknown; post-repair r229 verifier target commit 4ecb726155784d99ab17f2d222fc58a96d14e2c8",
+      "goal": "Retain disagreement between nested manifests and the contract's failure outcome; equality of one projection is insufficient.",
+      "canonicalInputs": [],
+      "constraints": [
+        "no live A2A resume",
+        "both manifest projections must be validated, not one"
+      ],
+      "inputArtifacts": [],
+      "expectedOutcomeArtifacts": [],
+      "oracle": {
+        "requiredOutcome": "reject: contradictory nested manifests produce the contract's failure outcome; validating only one projection is insufficient",
+        "forbiddenEffects": [
+          "accepting a manifest when a nested manifest contradicts it",
+          "validating only policy_version while ignoring nested coverage"
+        ],
+        "acceptedEvidenceType": "nested-manifest rejection receipt",
+        "sourceContract": "src/contracts.js and src/lead-graph.js manifest derivation"
+      },
+      "applicability": {
+        "affectedByAutInterventions": [],
+        "isRegressionControl": true
+      },
+      "assessment": {
+        "adapter": "historical-evidence-adapter",
+        "supportedObservations": [
+          "historical_observation"
+        ],
+        "knownLimitations": [
+          "historical evidence in .agents/teamwork/PROJECT.md (QA-227-1) and root/handoff.md (r227-r229)",
+          "historical handoff summary only; no runtime receipt or proven target source revision"
+        ]
+      }
+    },
+    {
+      "caseId": "producer-mismatch",
+      "revision": 1,
+      "title": "Fixture/dispatcher producer mismatch",
+      "failureFamily": "producer_mismatch",
+      "evaluationMode": "historical_observation",
+      "targetSystem": "target_orchestrator",
+      "sourceSnapshot": "pre-repair source revision unknown; r214 candidate c3c1399b314d823e3d4b2ea85191120f3a268b5c; fresh r216/r217 target commit bc8e1301cf6d5e76e8c8a4605631d70f22101a06",
+      "goal": "Preserve required producer provenance; test both the expected producer and a lookalike/wrong producer.",
+      "canonicalInputs": [],
+      "constraints": [
+        "no live A2A resume",
+        "producer must equal 'dispatcher' on both records"
+      ],
+      "inputArtifacts": [],
+      "expectedOutcomeArtifacts": [],
+      "oracle": {
+        "requiredOutcome": "reject: proof derivation requires producer='dispatcher' on both records; a lookalike/wrong producer is refused",
+        "forbiddenEffects": [
+          "accepting a proof whose producer is not the dispatcher",
+          "deriving authority from a record with missing/wrong producer"
+        ],
+        "acceptedEvidenceType": "producer-rejection receipt",
+        "sourceContract": "src/contracts.js proof-derivation producer provenance"
+      },
+      "applicability": {
+        "affectedByAutInterventions": [],
+        "isRegressionControl": true
+      },
+      "assessment": {
+        "adapter": "historical-evidence-adapter",
+        "supportedObservations": [
+          "historical_observation"
+        ],
+        "knownLimitations": [
+          "historical evidence in .agents/teamwork/root/handoff.md (QP-212-01, r213/r214)",
+          "historical handoff summary only; no runtime receipt or proven target source revision"
+        ]
+      }
+    },
+    {
+      "caseId": "stale-review-continuation",
+      "revision": 1,
+      "title": "Stale review continuation must be rejected before model execution",
+      "failureFamily": "stale_review_continuation",
+      "evaluationMode": "historical_observation",
+      "targetSystem": "target_orchestrator",
+      "sourceSnapshot": "request rejected before model execution; source revision unknown; later r216/r217 target commit bc8e1301cf6d5e76e8c8a4605631d70f22101a06",
+      "goal": "Observe rejection before model execution and distinguish a later fresh review from replay of the stale origin.",
+      "canonicalInputs": [],
+      "constraints": [
+        "no live A2A resume",
+        "rejection must precede model execution"
+      ],
+      "inputArtifacts": [],
+      "expectedOutcomeArtifacts": [],
+      "oracle": {
+        "requiredOutcome": "reject: a stale review continuation is refused before model execution (review_origin_unknown/review_origin_stale)",
+        "forbiddenEffects": [
+          "model execution before rejection",
+          "replay of the stale origin as a fresh review"
+        ],
+        "acceptedEvidenceType": "review.continuation rejection receipt",
+        "sourceContract": "src/contracts.js review.continuation predicates and src/a2a-role-service.js admission boundary"
+      },
+      "applicability": {
+        "affectedByAutInterventions": [
+          "AUT-02"
+        ],
+        "isRegressionControl": true
+      },
+      "assessment": {
+        "adapter": "historical-evidence-adapter",
+        "supportedObservations": [
+          "historical_observation"
+        ],
+        "knownLimitations": [
+          "historical evidence in .agents/teamwork/root/handoff.md and blocker-decision-log.md (r215 review_origin_stale)",
+          "historical handoff summary only; no runtime receipt or proven target source revision"
+        ]
+      }
+    },
+    {
+      "caseId": "valid-ordinary-result-control",
+      "revision": 1,
+      "title": "Valid ordinary result with complete accepted evidence sequence",
+      "failureFamily": "positive_control",
+      "evaluationMode": "historical_observation",
+      "targetSystem": "target_orchestrator",
+      "sourceSnapshot": "bounded checkpoint reviews r216/r217 passed at target commit bc8e1301cf6d5e76e8c8a4605631d70f22101a06; overall acceptance null",
+      "goal": "Preserve a positive control with a complete accepted evidence sequence, proving the adapter is not always-failing.",
+      "canonicalInputs": [],
+      "constraints": [
+        "no live A2A resume",
+        "requires a current-target verifier then auditor receipt chain"
+      ],
+      "inputArtifacts": [],
+      "expectedOutcomeArtifacts": [],
+      "oracle": {
+        "requiredOutcome": "pass: a complete accepted evidence sequence (current-target verifier then auditor) is recorded",
+        "forbiddenEffects": [
+          "a usage row, task status, or passing sentence standing in for an accepted receipt",
+          "a stale or wrong-target receipt counted as accepted"
+        ],
+        "acceptedEvidenceType": "current-target review receipt chain",
+        "sourceContract": "src/review-policy.js current-target identity and src/lead-graph.js gate completion"
+      },
+      "applicability": {
+        "affectedByAutInterventions": [
+          "AUT-01"
+        ],
+        "isRegressionControl": true
+      },
+      "assessment": {
+        "adapter": "historical-evidence-adapter",
+        "supportedObservations": [
+          "historical_observation"
+        ],
+        "knownLimitations": [
+          "historical evidence in .agents/teamwork/monitor-owner/handoff.md (r214/r216 verifier -> r217 auditor passed m4-t312e1c2b3a-quota-proof)",
+          "historical handoff summary only; no runtime receipt or proven target source revision"
+        ]
+      }
+    },
+    {
+      "caseId": "failed-incomplete-usage",
+      "revision": 2,
+      "title": "Failed auditor attempt with unavailable token usage",
+      "failureFamily": "failed_incomplete_usage",
+      "evaluationMode": "historical_observation",
+      "targetSystem": "target_orchestrator",
+      "sourceSnapshot": "readonly state/performance SQLite export for 2026-10-13; state sha256 958065171649cf4826069eda8e171b77e4222590b6ccd85e6ebb21c7c19a2f42; performance sha256 5d6cc9040ab8549a5ae697429273402e9700c86c919c6f1d31083e94b1064154",
+      "goal": "Retain the concrete failed auditor execution and missing token usage without inferring acceptance or zero spend.",
+      "canonicalInputs": [],
+      "constraints": [
+        "no live A2A resume",
+        "missing usage must remain unknown, never zero"
+      ],
+      "inputArtifacts": [],
+      "expectedOutcomeArtifacts": [],
+      "oracle": {
+        "requiredOutcome": "inconclusive: the failed auditor execution and unavailable usage are retained; no accepted verdict or zero spend is inferred",
+        "forbiddenEffects": [
+          "recording a fabricated acceptance for a failed result",
+          "recording zero measured cost when cost is unknown"
+        ],
+        "acceptedEvidenceType": "joined failed task, dispatch attempt, and usage record",
+        "sourceContract": "docs/aut-05-baseline-runbook.md section 2 (usage is not an acceptance receipt) and src/usage-report.js measured.cost null"
+      },
+      "applicability": {
+        "affectedByAutInterventions": [
+          "AUT-04"
+        ],
+        "isRegressionControl": true
+      },
+      "assessment": {
+        "adapter": "historical-evidence-adapter",
+        "supportedObservations": [
+          "historical_observation"
+        ],
+        "knownLimitations": [
+          "sanitized source export is pinned at test/fixtures/autonomy/corpus-v3/failed-incomplete-usage-evidence.json",
+          "the source record does not establish the target implementation revision, a review verdict, or a complete workflow interval"
+        ]
+      }
+    },
+    {
+      "caseId": "aut-01-planning-baseline",
+      "revision": 1,
+      "title": "Manual current-lead planning artifact before AUT-01",
+      "failureFamily": "planning_baseline",
+      "evaluationMode": "artifact_assessment",
+      "targetSystem": "harness",
+      "sourceSnapshot": "harness git HEAD 63eb95918c3986f3ad5ac237c22a6bafc5ef5530 plus AUT05 untracked working tree; AUT01 not implemented",
+      "goal": "Freeze one representative feature's canonical inputs and current-workflow planning output before AUT-01, with an independent reviewer-scored artifact baseline.",
+      "canonicalInputs": [
+        {
+          "path": "bench/fixtures/f2-repair/GOAL.txt",
+          "sha256": "666a1d5f055274475714f1e6fe8510079dc3bd787bdf079251525a5d39968bf7"
+        },
+        {
+          "path": "bench/fixtures/f2-repair/CHECKS.json",
+          "sha256": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860"
+        },
+        {
+          "path": "bench/fixtures/f2-repair/FIXTURE.md",
+          "sha256": "83aaa2fa7bf0b8c899c487c4589195295c8884b091faeb882ca7e83ce64d44f4"
+        },
+        {
+          "path": "bench/fixtures/f2-repair/src/price.js",
+          "sha256": "775708a5693f857c2493b6e662e1e3ebbb6da9050d05123222f9c817fff5acc0"
+        },
+        {
+          "path": "bench/fixtures/f2-repair/test/price.test.js",
+          "sha256": "f0532faca004df9074aed1f3094ee087851e689f3050e0389e26d8d03e0ef0b6"
+        }
+      ],
+      "constraints": [
+        "do not pre-correct omissions",
+        "independent reviewer scoring only"
+      ],
+      "inputArtifacts": [
+        {
+          "path": "test/fixtures/autonomy/planning-baseline/current-lead-planning-output.md",
+          "sha256": "e95219d7a2bf375cd2e04a3f392f92220839f13704d6ec72b5a89d463e90d5a6"
+        },
+        {
+          "path": "test/fixtures/autonomy/planning-baseline/capture-provenance.json",
+          "sha256": "81bdd8a20a32f2b228efa87a3acd395df85938c42f1c7a967e866ef45532880b"
+        },
+        {
+          "path": "test/fixtures/autonomy/planning-baseline/reviewer-assessment.json",
+          "sha256": "f4951651dc47ab836b8452b593e2c0d8cd3bc5e3992187dd69d5d54105a4caa2"
+        },
+        {
+          "path": "test/fixtures/autonomy/planning-baseline/requirements.md",
+          "sha256": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0"
+        }
+      ],
+      "expectedOutcomeArtifacts": [],
+      "oracle": {
+        "requiredOutcome": "Freeze the manual planning artifact and assess only semantic preservation and traceability structure against its captured source inputs; make no model or workflow performance claim.",
+        "forbiddenEffects": [
+          "pre-correcting the current output's omissions before scoring",
+          "fabricating token/cost/timing metrics for the offline scope"
+        ],
+        "acceptedEvidenceType": "manual planning artifact plus capture provenance and independent reviewer assessment",
+        "sourceContract": "AUT-05 runbook section 4.1 artifact_assessment; root-authorized capture provenance"
+      },
+      "applicability": {
+        "affectedByAutInterventions": [
+          "AUT-01"
+        ],
+        "isRegressionControl": false
+      },
+      "assessment": {
+        "adapter": "offline artifact assessment; no execution",
+        "supportedObservations": [
+          "artifact bytes and source digests",
+          "reviewed semantic requirement mapping",
+          "traceability structure",
+          "mandatory semantic inventory bytes"
+        ],
+        "knownLimitations": [
+          "not a harness run or model output",
+          "no workflow quality or performance claim",
+          "independent semantic review of the manual artifact is captured; traceability remains a separate structural gap"
+        ]
+      }
+    }
+  ]
+}

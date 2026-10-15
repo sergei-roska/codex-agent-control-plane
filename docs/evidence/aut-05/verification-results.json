@@ -1,0 +1,28 @@
+{
+  "nodeVersion": "v24.21.0",
+  "focused": {
+    "command": "node --test --test-isolation=none --test-reporter=tap test/autonomy-evaluation.test.js test/autonomy-evaluation-cli.test.js test/autonomy-schemas.test.js",
+    "tests": 49,
+    "pass": 49,
+    "fail": 0
+  },
+  "integration": {
+    "command": "env -u NODE_TEST_CONTEXT node --test --test-isolation=none --test-reporter=tap test/*.test.js",
+    "tests": 1145,
+    "pass": 1144,
+    "fail": 0,
+    "skipped": 1,
+    "durationMs": 100572.793223,
+    "temporaryLog": "/tmp/aut05-review-repair/full-suite-v3.log",
+    "logSha256": "7fa51ea02cce109d5e9066a117d5df11d33ad01f972887d00422ad585069a2ab",
+    "finalDelta": "Final baseline limitations-only restoration was reviewed independently and replayed after this suite. Implementation, schemas, corpus, observations, evidence and tests were unchanged."
+  },
+  "sourceHashes": {
+    "src/autonomy-evaluation.js": "829ad5dc365404712a9382964ffd5dc91387a1eb2d1d35785919c62438982f25",
+    "tools/autonomy/evaluate.js": "ea73d34140f9932ebef0cf692c53efa7e3ee8d69caf02916c23d4d49bcb7e05e",
+    "test/autonomy-evaluation-cli.test.js": "3b9ea1c7b53c75944f50ef86936a1c5b3c69de6cf2ed260a7c04a55025358c4f",
+    "test/autonomy-evaluation.test.js": "94e13c7a1074ec81ef917957d0889bd89ba67c06ac70f9fed360f98d2e836c8d",
+    "test/autonomy-schemas.test.js": "6445099301633bb272e3af52f0d005259f73abc7be7f650e15339147e8ab8a70",
+    "test/lead-graph.test.js": "99ede84343d70097aacbc361c0d3dadf7c7d38910eeacdcc5b01efb455495bc7"
+  }
+}

@@ -1850,7 +1850,7 @@ test('a rejected role-service audit result cannot become a graph receipt', async
     const auditorResults = stagingLog.list({ runId: RUN_ID, type: 'review_result' }).filter((event) => event.role === 'auditor');
     assert.deepEqual(auditorResults.map((event) => event.status), ['failed', 'accepted']);
     assert.equal(auditorResults[0].payload.serviceReviewAccepted, false);
-    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-verifier', 'orch-auditor', 'orch-auditor']);
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-verifier', 'orch-auditor', 'orch-verifier', 'orch-auditor']);
   }, { workspace, orchestrator: { stagingLog } });
 });
 
@@ -4052,7 +4052,10 @@ test('precomputed full-report evidence uses the final rejected review state', as
   const world = makeWorld({
     script: [
       () => dispatch({ ...brief('orch-verifier', ['test']), review }, auditAssignment(0)),
-      ...checks.slice(1).map((_, index) => () => dispatch(auditAssignment(index + 1))),
+      ...checks.slice(1).map((_, index) => () => dispatch(
+        { ...brief('orch-verifier', ['test']), review },
+        auditAssignment(index + 1),
+      )),
     ],
     workerFinal(roleName) {
       if (roleName === 'orch-verifier') {
@@ -4082,7 +4085,7 @@ test('precomputed full-report evidence uses the final rejected review state', as
     const paused = await session.orchestrator.run({ goal: 'Investigate target behavior', runId: RUN_ID });
     assert.equal(paused.pause.escalation, 'loop_detected');
     assert.match(world.prompts[3], /Loop warning: the same scoped work repeated 3 times/);
-    assert.equal(world.sends.length, 5);
+    assert.equal(world.sends.length, 8);
     const auditorContract = world.dispatchInputs.find((input) => input.role === 'orch-auditor').reportContract;
     assert.match(auditorContract, /summary first line must be exactly VERDICT: pass, VERDICT: fail, or VERDICT: inconclusive/);
     assert.match(auditorContract, /Never describe reused tests as freshly executed/);

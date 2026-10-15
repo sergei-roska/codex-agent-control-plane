@@ -1,0 +1,603 @@
+{
+  "schemaVersion": "autonomy-observation/v1",
+  "observations": [
+    {
+      "observationId": "obs-canonical-identity-contradiction",
+      "caseId": "canonical-identity-contradiction",
+      "corpusRevision": 3,
+      "corpusDigest": "ee4becac07508507ed601cf016e21416135dcec413ae0c568ddafaf502e8b98b",
+      "mode": "historical_observation",
+      "dataOrigin": "real",
+      "runId": null,
+      "taskId": null,
+      "assignmentId": null,
+      "attemptId": null,
+      "checkpointId": null,
+      "candidateId": null,
+      "identityNullReasons": {
+        "runId": "historical_observation imports the incident from reviewed handoffs, not a single run identity",
+        "taskId": "historical_observation imports the incident from reviewed handoffs, not a single task identity",
+        "assignmentId": "historical_observation imports the incident from reviewed handoffs, not a single assignment identity",
+        "attemptId": "historical_observation imports the incident from reviewed handoffs, not a single attempt identity",
+        "checkpointId": "historical_observation imports the incident from reviewed handoffs, not a single checkpoint identity",
+        "candidateId": "historical_observation imports the incident from reviewed handoffs, not a single candidate identity"
+      },
+      "targetSourceSnapshot": "pre-repair source revision unknown; post-repair r211 verifier target commit be71a620c153d6c46e0696a8e53d2fdc56ea4af5",
+      "configDigests": {
+        "promptConfig": null,
+        "skillConfig": null,
+        "roleConfig": null,
+        "acceptanceRules": null
+      },
+      "runtime": null,
+      "actualResult": "fail",
+      "checks": [
+        {
+          "checkId": "historical-review-observation",
+          "result": "failed",
+          "detail": "r209 historical review finding: persisted identity projections contradicted the canonical assignment and derivation checked only policy_version"
+        }
+      ],
+      "acceptanceDisposition": "historical review summary only; not a runtime receipt, accepted task result, authorization, or write effect",
+      "forbiddenEffectObservations": [],
+      "evidenceArtifacts": [
+        {
+          "path": "test/fixtures/autonomy/corpus-v2/historical-source-evidence.md",
+          "sha256": "a8c4b9a416a678a6972a771216c4995da702ca9dbaeb33b9337d6a7ee62be250"
+        }
+      ],
+      "metrics": [
+        {
+          "metricId": "tokens",
+          "value": null,
+          "unit": "tokens",
+          "availability": "unavailable",
+          "sourceRef": "obs-canonical-identity-contradiction",
+          "missingReason": "historical handoff evidence has no token measurements",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        },
+        {
+          "metricId": "measured_cost_per_accepted_result",
+          "value": null,
+          "unit": "currency_per_accepted_result",
+          "availability": "unavailable",
+          "sourceRef": "obs-canonical-identity-contradiction",
+          "missingReason": "no measured subscription spend source",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        }
+      ],
+      "evaluatedAt": "2026-10-15T14:22:58Z",
+      "measurementInterval": {
+        "start": null,
+        "end": null,
+        "pauseHandling": "unknown"
+      }
+    },
+    {
+      "observationId": "obs-nested-manifest-contradiction",
+      "caseId": "nested-manifest-contradiction",
+      "corpusRevision": 3,
+      "corpusDigest": "ee4becac07508507ed601cf016e21416135dcec413ae0c568ddafaf502e8b98b",
+      "mode": "historical_observation",
+      "dataOrigin": "real",
+      "runId": null,
+      "taskId": null,
+      "assignmentId": null,
+      "attemptId": null,
+      "checkpointId": null,
+      "candidateId": null,
+      "identityNullReasons": {
+        "runId": "historical_observation imports the incident from reviewed handoffs, not a single run identity",
+        "taskId": "historical_observation imports the incident from reviewed handoffs, not a single task identity",
+        "assignmentId": "historical_observation imports the incident from reviewed handoffs, not a single assignment identity",
+        "attemptId": "historical_observation imports the incident from reviewed handoffs, not a single attempt identity",
+        "checkpointId": "historical_observation imports the incident from reviewed handoffs, not a single checkpoint identity",
+        "candidateId": "historical_observation imports the incident from reviewed handoffs, not a single candidate identity"
+      },
+      "targetSourceSnapshot": "pre-repair source revision unknown; post-repair r229 verifier target commit 4ecb726155784d99ab17f2d222fc58a96d14e2c8",
+      "configDigests": {
+        "promptConfig": null,
+        "skillConfig": null,
+        "roleConfig": null,
+        "acceptanceRules": null
+      },
+      "runtime": null,
+      "actualResult": "fail",
+      "checks": [
+        {
+          "checkId": "historical-review-observation",
+          "result": "failed",
+          "detail": "r227 historical audit finding: one persisted policy projection was not strictly validated; no write or authorization effect is asserted"
+        }
+      ],
+      "acceptanceDisposition": "historical review summary only; not a runtime receipt, accepted task result, authorization, or write effect",
+      "forbiddenEffectObservations": [],
+      "evidenceArtifacts": [
+        {
+          "path": "test/fixtures/autonomy/corpus-v2/historical-source-evidence.md",
+          "sha256": "a8c4b9a416a678a6972a771216c4995da702ca9dbaeb33b9337d6a7ee62be250"
+        }
+      ],
+      "metrics": [
+        {
+          "metricId": "tokens",
+          "value": null,
+          "unit": "tokens",
+          "availability": "unavailable",
+          "sourceRef": "obs-nested-manifest-contradiction",
+          "missingReason": "historical handoff evidence has no token measurements",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        },
+        {
+          "metricId": "measured_cost_per_accepted_result",
+          "value": null,
+          "unit": "currency_per_accepted_result",
+          "availability": "unavailable",
+          "sourceRef": "obs-nested-manifest-contradiction",
+          "missingReason": "no measured subscription spend source",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        }
+      ],
+      "evaluatedAt": "2026-10-15T14:22:58Z",
+      "measurementInterval": {
+        "start": null,
+        "end": null,
+        "pauseHandling": "unknown"
+      }
+    },
+    {
+      "observationId": "obs-producer-mismatch",
+      "caseId": "producer-mismatch",
+      "corpusRevision": 3,
+      "corpusDigest": "ee4becac07508507ed601cf016e21416135dcec413ae0c568ddafaf502e8b98b",
+      "mode": "historical_observation",
+      "dataOrigin": "real",
+      "runId": null,
+      "taskId": null,
+      "assignmentId": null,
+      "attemptId": null,
+      "checkpointId": null,
+      "candidateId": null,
+      "identityNullReasons": {
+        "runId": "historical_observation imports the incident from reviewed handoffs, not a single run identity",
+        "taskId": "historical_observation imports the incident from reviewed handoffs, not a single task identity",
+        "assignmentId": "historical_observation imports the incident from reviewed handoffs, not a single assignment identity",
+        "attemptId": "historical_observation imports the incident from reviewed handoffs, not a single attempt identity",
+        "checkpointId": "historical_observation imports the incident from reviewed handoffs, not a single checkpoint identity",
+        "candidateId": "historical_observation imports the incident from reviewed handoffs, not a single candidate identity"
+      },
+      "targetSourceSnapshot": "pre-repair source revision unknown; r214 candidate c3c1399b314d823e3d4b2ea85191120f3a268b5c; fresh r216/r217 target commit bc8e1301cf6d5e76e8c8a4605631d70f22101a06",
+      "configDigests": {
+        "promptConfig": null,
+        "skillConfig": null,
+        "roleConfig": null,
+        "acceptanceRules": null
+      },
+      "runtime": null,
+      "actualResult": "pass",
+      "checks": [
+        {
+          "checkId": "historical-review-observation",
+          "result": "passed",
+          "detail": "r214 verifier plus fresh r216/r217 reviews passed producer binding and rejection controls; no write or authorization effect is asserted"
+        }
+      ],
+      "acceptanceDisposition": "historical review summary only; not a runtime receipt, accepted task result, authorization, or write effect",
+      "forbiddenEffectObservations": [],
+      "evidenceArtifacts": [
+        {
+          "path": "test/fixtures/autonomy/corpus-v2/historical-source-evidence.md",
+          "sha256": "a8c4b9a416a678a6972a771216c4995da702ca9dbaeb33b9337d6a7ee62be250"
+        }
+      ],
+      "metrics": [
+        {
+          "metricId": "tokens",
+          "value": null,
+          "unit": "tokens",
+          "availability": "unavailable",
+          "sourceRef": "obs-producer-mismatch",
+          "missingReason": "historical handoff evidence has no token measurements",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        },
+        {
+          "metricId": "measured_cost_per_accepted_result",
+          "value": null,
+          "unit": "currency_per_accepted_result",
+          "availability": "unavailable",
+          "sourceRef": "obs-producer-mismatch",
+          "missingReason": "no measured subscription spend source",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        }
+      ],
+      "evaluatedAt": "2026-10-15T14:22:58Z",
+      "measurementInterval": {
+        "start": null,
+        "end": null,
+        "pauseHandling": "unknown"
+      }
+    },
+    {
+      "observationId": "obs-stale-review-continuation",
+      "caseId": "stale-review-continuation",
+      "corpusRevision": 3,
+      "corpusDigest": "ee4becac07508507ed601cf016e21416135dcec413ae0c568ddafaf502e8b98b",
+      "mode": "historical_observation",
+      "dataOrigin": "real",
+      "runId": null,
+      "taskId": null,
+      "assignmentId": null,
+      "attemptId": null,
+      "checkpointId": null,
+      "candidateId": null,
+      "identityNullReasons": {
+        "runId": "historical_observation imports the incident from reviewed handoffs, not a single run identity",
+        "taskId": "historical_observation imports the incident from reviewed handoffs, not a single task identity",
+        "assignmentId": "historical_observation imports the incident from reviewed handoffs, not a single assignment identity",
+        "attemptId": "historical_observation imports the incident from reviewed handoffs, not a single attempt identity",
+        "checkpointId": "historical_observation imports the incident from reviewed handoffs, not a single checkpoint identity",
+        "candidateId": "historical_observation imports the incident from reviewed handoffs, not a single candidate identity"
+      },
+      "targetSourceSnapshot": "request rejected before model execution; source revision unknown; later r216/r217 target commit bc8e1301cf6d5e76e8c8a4605631d70f22101a06",
+      "configDigests": {
+        "promptConfig": null,
+        "skillConfig": null,
+        "roleConfig": null,
+        "acceptanceRules": null
+      },
+      "runtime": null,
+      "actualResult": "pass",
+      "checks": [
+        {
+          "checkId": "historical-review-observation",
+          "result": "passed",
+          "detail": "r215 preflight rejected the stale continuation before model execution; this was not an auditor verdict"
+        }
+      ],
+      "acceptanceDisposition": "historical review summary only; not a runtime receipt, accepted task result, authorization, or write effect",
+      "forbiddenEffectObservations": [],
+      "evidenceArtifacts": [
+        {
+          "path": "test/fixtures/autonomy/corpus-v2/historical-source-evidence.md",
+          "sha256": "a8c4b9a416a678a6972a771216c4995da702ca9dbaeb33b9337d6a7ee62be250"
+        }
+      ],
+      "metrics": [
+        {
+          "metricId": "tokens",
+          "value": null,
+          "unit": "tokens",
+          "availability": "unavailable",
+          "sourceRef": "obs-stale-review-continuation",
+          "missingReason": "rejected before model execution; no tokens consumed",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        },
+        {
+          "metricId": "measured_cost_per_accepted_result",
+          "value": null,
+          "unit": "currency_per_accepted_result",
+          "availability": "unavailable",
+          "sourceRef": "obs-stale-review-continuation",
+          "missingReason": "no measured subscription spend source",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        }
+      ],
+      "evaluatedAt": "2026-10-15T14:22:58Z",
+      "measurementInterval": {
+        "start": null,
+        "end": null,
+        "pauseHandling": "unknown"
+      }
+    },
+    {
+      "observationId": "obs-valid-ordinary-result-control",
+      "caseId": "valid-ordinary-result-control",
+      "corpusRevision": 3,
+      "corpusDigest": "ee4becac07508507ed601cf016e21416135dcec413ae0c568ddafaf502e8b98b",
+      "mode": "historical_observation",
+      "dataOrigin": "real",
+      "runId": null,
+      "taskId": null,
+      "assignmentId": null,
+      "attemptId": null,
+      "checkpointId": "m4-t312e1c2b3a-quota-proof",
+      "candidateId": null,
+      "identityNullReasons": {
+        "runId": "historical_observation imports the incident from reviewed handoffs, not a single run identity",
+        "taskId": "historical_observation imports the incident from reviewed handoffs, not a single task identity",
+        "assignmentId": "historical_observation imports the incident from reviewed handoffs, not a single assignment identity",
+        "attemptId": "historical_observation imports the incident from reviewed handoffs, not a single attempt identity",
+        "checkpointId": null,
+        "candidateId": "historical_observation imports the incident from reviewed handoffs, not a single candidate identity"
+      },
+      "targetSourceSnapshot": "bounded checkpoint reviews r216/r217 passed at target commit bc8e1301cf6d5e76e8c8a4605631d70f22101a06; overall acceptance null",
+      "configDigests": {
+        "promptConfig": null,
+        "skillConfig": null,
+        "roleConfig": null,
+        "acceptanceRules": null
+      },
+      "runtime": null,
+      "actualResult": "pass",
+      "checks": [
+        {
+          "checkId": "historical-review-observation",
+          "result": "passed",
+          "detail": "r216 verifier and r217 auditor passed a bounded checkpoint; overall task and M4 acceptance remained null"
+        }
+      ],
+      "acceptanceDisposition": "historical review summary only; not a runtime receipt, accepted task result, authorization, or write effect",
+      "forbiddenEffectObservations": [],
+      "evidenceArtifacts": [
+        {
+          "path": "test/fixtures/autonomy/corpus-v2/historical-source-evidence.md",
+          "sha256": "a8c4b9a416a678a6972a771216c4995da702ca9dbaeb33b9337d6a7ee62be250"
+        }
+      ],
+      "metrics": [
+        {
+          "metricId": "tokens",
+          "value": null,
+          "unit": "tokens",
+          "availability": "unavailable",
+          "sourceRef": "obs-valid-ordinary-result-control",
+          "missingReason": "historical handoff evidence has no token measurements",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        },
+        {
+          "metricId": "measured_cost_per_accepted_result",
+          "value": null,
+          "unit": "currency_per_accepted_result",
+          "availability": "unavailable",
+          "sourceRef": "obs-valid-ordinary-result-control",
+          "missingReason": "no measured subscription spend source",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        }
+      ],
+      "evaluatedAt": "2026-10-15T14:22:58Z",
+      "measurementInterval": {
+        "start": null,
+        "end": null,
+        "pauseHandling": "unknown"
+      }
+    },
+    {
+      "observationId": "obs-failed-incomplete-usage",
+      "caseId": "failed-incomplete-usage",
+      "corpusRevision": 3,
+      "corpusDigest": "ee4becac07508507ed601cf016e21416135dcec413ae0c568ddafaf502e8b98b",
+      "mode": "historical_observation",
+      "dataOrigin": "real",
+      "runId": null,
+      "taskId": null,
+      "assignmentId": null,
+      "attemptId": null,
+      "checkpointId": null,
+      "candidateId": null,
+      "identityNullReasons": {
+        "runId": "historical_observation imports the incident from reviewed handoffs, not a single run identity",
+        "taskId": "historical_observation imports the incident from reviewed handoffs, not a single task identity",
+        "assignmentId": "historical_observation imports the incident from reviewed handoffs, not a single assignment identity",
+        "attemptId": "historical_observation imports the incident from reviewed handoffs, not a single attempt identity",
+        "checkpointId": "historical_observation imports the incident from reviewed handoffs, not a single checkpoint identity",
+        "candidateId": "historical_observation imports the incident from reviewed handoffs, not a single candidate identity"
+      },
+      "targetSourceSnapshot": "historical incomplete usage summary; exact incident source revision unknown",
+      "configDigests": {
+        "promptConfig": null,
+        "skillConfig": null,
+        "roleConfig": null,
+        "acceptanceRules": null
+      },
+      "runtime": null,
+      "actualResult": "inconclusive",
+      "checks": [
+        {
+          "checkId": "historical-evidence-only",
+          "result": "not_run",
+          "detail": "no complete source report or corpus case execution is included in this summary"
+        }
+      ],
+      "acceptanceDisposition": "historical summary only; required complete evidence is unavailable",
+      "forbiddenEffectObservations": [],
+      "evidenceArtifacts": [
+        {
+          "path": "test/fixtures/autonomy/corpus-v2/historical-source-evidence.md",
+          "sha256": "a8c4b9a416a678a6972a771216c4995da702ca9dbaeb33b9337d6a7ee62be250"
+        }
+      ],
+      "metrics": [
+        {
+          "metricId": "elapsed_time",
+          "value": null,
+          "unit": "milliseconds",
+          "availability": "unavailable",
+          "sourceRef": "obs-failed-incomplete-usage",
+          "missingReason": "no wall-clock interval recorded in the historical evidence",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        },
+        {
+          "metricId": "tokens",
+          "value": null,
+          "unit": "tokens",
+          "availability": "unavailable",
+          "sourceRef": "obs-failed-incomplete-usage",
+          "missingReason": "usage data missing for the failed/incomplete result",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        },
+        {
+          "metricId": "measured_cost_per_accepted_result",
+          "value": null,
+          "unit": "currency_per_accepted_result",
+          "availability": "unavailable",
+          "sourceRef": "obs-failed-incomplete-usage",
+          "missingReason": "measured subscription cost remains null (TOK-OPT-01); never fabricated as zero",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "historical_observation",
+          "tokenBreakdown": null
+        }
+      ],
+      "evaluatedAt": "2026-10-15T14:22:58Z",
+      "measurementInterval": {
+        "start": null,
+        "end": null,
+        "pauseHandling": "unknown"
+      }
+    },
+    {
+      "observationId": "obs-aut-01-planning-baseline",
+      "caseId": "aut-01-planning-baseline",
+      "corpusRevision": 3,
+      "corpusDigest": "ee4becac07508507ed601cf016e21416135dcec413ae0c568ddafaf502e8b98b",
+      "mode": "artifact_assessment",
+      "dataOrigin": "real",
+      "runId": null,
+      "taskId": null,
+      "assignmentId": null,
+      "attemptId": null,
+      "checkpointId": null,
+      "candidateId": null,
+      "identityNullReasons": {
+        "runId": "artifact_assessment is a reviewer-scored planning artifact, not a run",
+        "taskId": "artifact_assessment is a reviewer-scored planning artifact, not a task",
+        "assignmentId": "artifact_assessment is a reviewer-scored planning artifact, not an assignment",
+        "attemptId": "artifact_assessment is a reviewer-scored planning artifact, not an attempt",
+        "checkpointId": "artifact_assessment is a reviewer-scored planning artifact, not a checkpoint",
+        "candidateId": "artifact_assessment is a reviewer-scored planning artifact, not a candidate"
+      },
+      "targetSourceSnapshot": "harness git HEAD 63eb95918c3986f3ad5ac237c22a6bafc5ef5530 plus AUT05 untracked working tree; AUT01 not implemented",
+      "configDigests": {
+        "promptConfig": null,
+        "skillConfig": null,
+        "roleConfig": null,
+        "acceptanceRules": null
+      },
+      "runtime": null,
+      "actualResult": "pass",
+      "checks": [
+        {
+          "checkId": "independent-semantic-assessment",
+          "result": "passed",
+          "detail": "Independent review confirmed REQ-1 through REQ-4 and AC1; traceability capability is reported separately."
+        }
+      ],
+      "acceptanceDisposition": "manual artifact semantic assessment passed; no model run, product repair, test execution, or current-target accepted result is claimed",
+      "forbiddenEffectObservations": [],
+      "evidenceArtifacts": [
+        {
+          "path": "test/fixtures/autonomy/planning-baseline/current-lead-planning-output.md",
+          "sha256": "e95219d7a2bf375cd2e04a3f392f92220839f13704d6ec72b5a89d463e90d5a6"
+        },
+        {
+          "path": "test/fixtures/autonomy/planning-baseline/capture-provenance.json",
+          "sha256": "81bdd8a20a32f2b228efa87a3acd395df85938c42f1c7a967e866ef45532880b"
+        },
+        {
+          "path": "test/fixtures/autonomy/planning-baseline/reviewer-assessment.json",
+          "sha256": "f4951651dc47ab836b8452b593e2c0d8cd3bc5e3992187dd69d5d54105a4caa2"
+        },
+        {
+          "path": "test/fixtures/autonomy/planning-baseline/requirements.md",
+          "sha256": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0"
+        }
+      ],
+      "metrics": [
+        {
+          "metricId": "requirement_preservation",
+          "value": 1,
+          "unit": "ratio",
+          "availability": "measured",
+          "sourceRef": "test/fixtures/autonomy/planning-baseline/reviewer-assessment.json",
+          "missingReason": null,
+          "numerator": 5,
+          "denominator": 5,
+          "excludedIncompleteCount": 0,
+          "observationMode": "artifact_assessment",
+          "tokenBreakdown": null
+        },
+        {
+          "metricId": "tokens",
+          "value": null,
+          "unit": "tokens",
+          "availability": "unavailable",
+          "sourceRef": "obs-aut-01-planning-baseline",
+          "missingReason": "offline artifact assessment consumes no tokens",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "artifact_assessment",
+          "tokenBreakdown": null
+        },
+        {
+          "metricId": "measured_cost_per_accepted_result",
+          "value": null,
+          "unit": "currency_per_accepted_result",
+          "availability": "unavailable",
+          "sourceRef": "obs-aut-01-planning-baseline",
+          "missingReason": "no measured subscription spend source for this offline scope",
+          "numerator": null,
+          "denominator": null,
+          "excludedIncompleteCount": null,
+          "observationMode": "artifact_assessment",
+          "tokenBreakdown": null
+        }
+      ],
+      "evaluatedAt": "2026-10-15T14:22:58Z",
+      "measurementInterval": {
+        "start": null,
+        "end": null,
+        "pauseHandling": "unknown"
+      }
+    }
+  ]
+}

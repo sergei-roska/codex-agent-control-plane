@@ -1,7 +1,13 @@
 # AUT-05 runbook: regression corpus and baseline before AUT-01
 
-Status: proposed execution instructions for an implementation agent.
+Status: execution instructions; the implementation decision is recorded in the
+AUT-05 review linked below.
 Updated: 2026-10-15.
+
+Implementation status and the accepted baseline reference are recorded in
+[the AUT-05 review](aut-05-review.md). The submitted implementation handoff is
+not authoritative acceptance evidence. Next-step instructions are in
+[the AUT-01 runbook](aut-01-traceability-runbook.md).
 
 ## 1. Mission and completion boundary
 
@@ -179,8 +185,12 @@ Record:
   `superseded`. A failed validation is a finding, not a promoted status.
 
 Only the lead records the accepted `baseline_ready` reference after existing
-review requirements are satisfied. The evaluator emits findings and eligibility;
-it does not grant project acceptance or clear a runtime gate.
+review requirements are satisfied. This can be a separate immutable acceptance
+decision referencing the exact captured baseline digest and final review
+artifacts. The captured manifest need not be rewritten after its review just to
+change a lifecycle label; avoid circular hashes between evidence and acceptance.
+The evaluator emits findings and eligibility; it does not grant project
+acceptance or clear a runtime gate.
 
 Baseline artifacts are immutable after capture. Changed corpus, metric
 semantics, source/configuration, or oracle creates a new baseline revision and
@@ -292,20 +302,22 @@ join the actual journal/review records only when the identity chain is complete.
 Do not silently fall back to the default state path. The new evaluator takes
 explicit input paths and validates all joins before summarizing metrics.
 
-### 7.3 Proposed offline evaluator interface
+### 7.3 Offline evaluator interface
 
 Implement an interface equivalent to:
 
 ```text
 node tools/autonomy/evaluate.js \
+  --root <absolute-trusted-repository-root> \
   --corpus <corpus-manifest.json> \
   --observations <observation-manifest.json> \
   --baseline <baseline-manifest.json> \
   --json
 ```
 
-This new command does not exist yet. It reads frozen inputs, validates contracts,
-computes supported metrics, and emits findings plus a summary to stdout.
+The implementation is reviewed in `docs/aut-05-review.md`. It reads frozen
+inputs, validates contracts, computes supported metrics, and emits findings plus
+a summary to stdout.
 It never invokes a model, runs arbitrary corpus shell commands, edits source
 state, or writes its own acceptance status into a database.
 
@@ -338,8 +350,8 @@ accepted baseline status. Do not infer execution authority from the model name.
 
 ## 9. Required verification for the implementation agent
 
-These are implementation acceptance obligations; no tests have been run merely
-by authoring this runbook.
+These are implementation acceptance obligations. Actual verification results and
+their reviewed source versions are recorded separately in `docs/aut-05-review.md`.
 
 - Complete known metrics aggregate correctly; missing values remain null with
   coverage. Partial cost cannot become a complete cost-per-result metric.

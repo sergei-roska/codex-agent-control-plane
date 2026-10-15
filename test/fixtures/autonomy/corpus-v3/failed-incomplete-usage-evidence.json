@@ -1,0 +1,89 @@
+{
+  "schemaVersion": "aut-05-historical-evidence/v1",
+  "evidenceId": "failed-incomplete-usage-r33-a0",
+  "captureMethod": "read-only SQLite transaction across attached state and performance databases; query_only enabled; task, dispatch, usage ledger, and performance projection selected by joined run/assignment/task identifiers",
+  "sourceFiles": {
+    "state": {
+      "path": ".runtime/projects/c8740b5b4f/state.sqlite",
+      "sha256": "958065171649cf4826069eda8e171b77e4222590b6ccd85e6ebb21c7c19a2f42",
+      "sizeBytes": 1867628544,
+      "journalMode": "wal",
+      "wal": {
+        "path": ".runtime/projects/c8740b5b4f/state.sqlite-wal",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      }
+    },
+    "performance": {
+      "path": ".runtime/projects/c8740b5b4f/performance.sqlite",
+      "sha256": "5d6cc9040ab8549a5ae697429273402e9700c86c919c6f1d31083e94b1064154",
+      "sizeBytes": 344064,
+      "journalMode": "delete",
+      "wal": null
+    },
+    "metricsSnapshot": {
+      "path": "launcher-ui/metrics/c8740b5b4f/8d7f6bd4-2d43-48cd-933a-53736fba2e88.json",
+      "sha256": "99a2e97e9f04d75147cd30a7af0e133af763ef255d481a7adb8079d688a49409",
+      "sizeBytes": 83393,
+      "journalMode": null,
+      "wal": null
+    }
+  },
+  "identity": {
+    "contextId": "d6e5b65f-eaea-5c0c-8a0c-a8a8fbb7dd82",
+    "runId": "a125b4c6-f640-45ae-a106-22f97837f8e9",
+    "assignmentId": "a125b4c6-f640-45ae-a106-22f97837f8e9:r33:a0",
+    "taskId": "e88656f4-3880-43ce-aa6a-c39b88fa7eeb",
+    "attemptId": "a125b4c6-f640-45ae-a106-22f97837f8e9:r33:a0:t1",
+    "role": "auditor"
+  },
+  "result": {
+    "taskState": "TASK_STATE_FAILED",
+    "failureKind": "other",
+    "errorCode": "serverOverloaded",
+    "reviewStatus": "inconclusive",
+    "reviewReason": "audit_execution_failed",
+    "dispatchState": "finished",
+    "dispatchCreatedAt": "2026-10-13T06:53:45.003Z",
+    "dispatchUpdatedAt": "2026-10-13T06:53:50.771Z"
+  },
+  "usage": {
+    "entryId": "auditor:e88656f4-3880-43ce-aa6a-c39b88fa7eeb:01a13409-e215-78c3-a3e2-a91d5cc621da",
+    "kind": "worker_turn",
+    "rowRunId": null,
+    "rowAttemptId": null,
+    "outcome": "failed",
+    "tokenSource": "unavailable",
+    "tokens": null,
+    "elapsedMs": 5573,
+    "turns": 1,
+    "modelRequests": null,
+    "recordedAt": "2026-10-13T06:53:50.694Z"
+  },
+  "performanceProjection": {
+    "entryId": "auditor:e88656f4-3880-43ce-aa6a-c39b88fa7eeb:01a13409-e215-78c3-a3e2-a91d5cc621da",
+    "startedAt": "2026-10-13T06:53:45.118Z",
+    "elapsedMs": 5573.0,
+    "outcome": "failed",
+    "taskState": "TASK_STATE_FAILED",
+    "inputTokens": null,
+    "cachedInputTokens": null,
+    "outputTokens": null,
+    "reasoningOutputTokens": null,
+    "totalTokens": null
+  },
+  "joinBasis": [
+    "dispatch_journal.task_id = tasks.id",
+    "usage_ledger.task_id = tasks.id",
+    "performance_attempts.task_id = dispatch_journal.task_id",
+    "performance_attempts.assignment_id = dispatch_journal.assignment_id",
+    "performance_attempts.run_id = dispatch_journal.run_id"
+  ],
+  "limitations": [
+    "usage_ledger row is a pre/turn usage projection and has null runId and attemptId; identity joins through taskId/contextId to the unique dispatch row, which supplies runId/assignmentId/attemptId",
+    "failed auditor review execution is not an accepted review verdict",
+    "elapsedMs is one failed attempt duration, not a complete case or workflow interval",
+    "token fields are unavailable; subscription cost is not measured",
+    "target implementation source revision and effects beyond recorded dispatch metadata are not established"
+  ]
+}

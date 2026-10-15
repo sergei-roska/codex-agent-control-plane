@@ -1,0 +1,184 @@
+{
+  "schemaVersion": "autonomy-baseline/v1",
+  "baselineId": "aut-05-baseline-offline-v3",
+  "corpusDigest": "bf180584c4ee3620b2c676f42e0c09be8d977dec2d82cbd39e3fd90cf60485fc",
+  "corpusId": "aut-05-regression-corpus-v3",
+  "targetSourceSnapshot": "harness git HEAD 63eb95918c3986f3ad5ac237c22a6bafc5ef5530 plus AUT05 untracked working tree; AUT01 not implemented",
+  "evaluatorVersion": "1.0.0",
+  "metricDefinitionsVersion": "aut-05-metrics/v1",
+  "hardAcceptanceRules": [
+    "corpusDigest must match the frozen corpus.json sha256",
+    "an observation must never fabricate acceptance without current-target evidence",
+    "a null metric value requires availability unavailable (or partial) and a non-empty missingReason",
+    "a ratio metric must carry explicit numerator, denominator, and excludedIncompleteCount",
+    "a nonzero denominator is required for measured_cost_per_accepted_result"
+  ],
+  "caseObservations": [
+    {
+      "caseId": "canonical-identity-contradiction",
+      "observationIds": [
+        "obs-canonical-identity-contradiction"
+      ]
+    },
+    {
+      "caseId": "nested-manifest-contradiction",
+      "observationIds": [
+        "obs-nested-manifest-contradiction"
+      ]
+    },
+    {
+      "caseId": "producer-mismatch",
+      "observationIds": [
+        "obs-producer-mismatch"
+      ]
+    },
+    {
+      "caseId": "stale-review-continuation",
+      "observationIds": [
+        "obs-stale-review-continuation"
+      ]
+    },
+    {
+      "caseId": "valid-ordinary-result-control",
+      "observationIds": [
+        "obs-valid-ordinary-result-control"
+      ]
+    },
+    {
+      "caseId": "failed-incomplete-usage",
+      "observationIds": [
+        "obs-failed-incomplete-usage"
+      ]
+    },
+    {
+      "caseId": "aut-01-planning-baseline",
+      "observationIds": [
+        "obs-aut-01-planning-baseline"
+      ]
+    }
+  ],
+  "sourceOutputDigests": [
+    {
+      "path": "docs/aut-05-metric-definitions.md",
+      "sha256": "55ab34120292726741263bfba9e8498f8db09304a5510caec446d0311ef4c8ed"
+    },
+    {
+      "path": "schemas/autonomy-baseline-v1.schema.json",
+      "sha256": "8e15702790402c9f7da958f877f0237d71920c97ea30944daf37274a5f3ec585"
+    },
+    {
+      "path": "schemas/autonomy-corpus-v1.schema.json",
+      "sha256": "4c72298b526c7761f61d1e06954c56617f30da82df0754df4212ffb955f0d066"
+    },
+    {
+      "path": "schemas/autonomy-observation-v1.schema.json",
+      "sha256": "f182466df9b682441c71a2167b536d7936327e8f0ff0ea8c2a236b685d8a455b"
+    },
+    {
+      "path": "src/autonomy-evaluation.js",
+      "sha256": "829ad5dc365404712a9382964ffd5dc91387a1eb2d1d35785919c62438982f25"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/corpus.json",
+      "sha256": "bf180584c4ee3620b2c676f42e0c09be8d977dec2d82cbd39e3fd90cf60485fc"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/failed-incomplete-usage-evidence.json",
+      "sha256": "24a1f47bc94051775ebb988a3d56a56581c8de56a176348f818a084f1d834c88"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/historical-source-evidence.md",
+      "sha256": "01b51661485c7a4bbe1bc650f7df58bef7471eaf283134a052d90ae5ea17c260"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/observations.json",
+      "sha256": "99b50d7b5c2983ca3d380507120d08ac3caf4965ab3daede3832d263fe24defa"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/capture-provenance.json",
+      "sha256": "81bdd8a20a32f2b228efa87a3acd395df85938c42f1c7a967e866ef45532880b"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/current-lead-planning-output.md",
+      "sha256": "e95219d7a2bf375cd2e04a3f392f92220839f13704d6ec72b5a89d463e90d5a6"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/requirements.md",
+      "sha256": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/reviewer-assessment.json",
+      "sha256": "f4951651dc47ab836b8452b593e2c0d8cd3bc5e3992187dd69d5d54105a4caa2"
+    },
+    {
+      "path": "tools/autonomy/evaluate.js",
+      "sha256": "ea73d34140f9932ebef0cf692c53efa7e3ee8d69caf02916c23d4d49bcb7e05e"
+    }
+  ],
+  "limitations": [
+    "offline only; no live model execution, measured spend, or token capture",
+    "five target-orchestrator cases are historical handoff summaries; their pre-repair source revisions and runtime receipts are unavailable",
+    "the pre-AUT-01 artifact is manual current-lead work, not a harness or model output",
+    "the 5/5 planning score measures semantic preservation; traceability is separately absent and no product correctness or execution is inferred",
+    "accepted_results and all live-workflow metrics are unavailable in this evaluator",
+    "one failed auditor execution has a joined task/dispatch/usage export; its token usage is unavailable and its 5573 ms attempt duration is not a complete case/workflow interval"
+  ],
+  "supportedScope": "offline_contract_and_artifact",
+  "snapshotCompleteness": "partial: historical target source revisions and runtime receipts remain unavailable; one failed auditor attempt has joined token-unavailable source evidence; planning artifact and independent semantic review are captured",
+  "metricAvailabilityCoverage": [
+    {
+      "metricId": "requirement_preservation",
+      "availability": "measured",
+      "reason": "independent semantic assessment of the manual planning artifact; not a workflow performance score"
+    },
+    {
+      "metricId": "first_pass_accepted_checkpoints",
+      "availability": "unavailable",
+      "reason": "not measured in this offline historical/manual artifact scope"
+    },
+    {
+      "metricId": "accepted_results",
+      "availability": "unavailable",
+      "reason": "not measured in this offline historical/manual artifact scope"
+    },
+    {
+      "metricId": "repair_cycles",
+      "availability": "unavailable",
+      "reason": "not measured in this offline historical/manual artifact scope"
+    },
+    {
+      "metricId": "review_cycles",
+      "availability": "unavailable",
+      "reason": "not measured in this offline historical/manual artifact scope"
+    },
+    {
+      "metricId": "owner_escalations",
+      "availability": "unavailable",
+      "reason": "not measured in this offline historical/manual artifact scope"
+    },
+    {
+      "metricId": "elapsed_time",
+      "availability": "unavailable",
+      "reason": "not measured in this offline historical/manual artifact scope"
+    },
+    {
+      "metricId": "tokens",
+      "availability": "unavailable",
+      "reason": "not measured in this offline historical/manual artifact scope"
+    },
+    {
+      "metricId": "measured_cost_per_accepted_result",
+      "availability": "unavailable",
+      "reason": "not measured in this offline historical/manual artifact scope"
+    }
+  ],
+  "verificationEvidence": [],
+  "auditEvidence": [],
+  "lifecycleStatus": "captured",
+  "configDigests": {
+    "promptConfig": null,
+    "skillConfig": null,
+    "roleConfig": null,
+    "acceptanceRules": null
+  }
+}

@@ -1,0 +1,243 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "autonomy-baseline-v1.schema.json",
+  "title": "Autonomy baseline manifest (autonomy-baseline/v1)",
+  "description": "Documentation schema for the persisted autonomy baseline manifest. Records the frozen, immutable capture of a corpus evaluation for a declared scope. Not executed by ajv; strict field lists must match docs/aut-05-baseline-runbook.md section 4.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "baselineId",
+    "corpusDigest",
+    "corpusId",
+    "targetSourceSnapshot",
+    "evaluatorVersion",
+    "metricDefinitionsVersion",
+    "configDigests",
+    "hardAcceptanceRules",
+    "caseObservations",
+    "sourceOutputDigests",
+    "limitations",
+    "supportedScope",
+    "snapshotCompleteness",
+    "metricAvailabilityCoverage",
+    "verificationEvidence",
+    "auditEvidence",
+    "lifecycleStatus"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "enum": [
+        "autonomy-baseline/v1"
+      ]
+    },
+    "baselineId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "corpusDigest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "corpusId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "targetSourceSnapshot": {
+      "type": "string"
+    },
+    "evaluatorVersion": {
+      "type": "string"
+    },
+    "metricDefinitionsVersion": {
+      "type": "string"
+    },
+    "hardAcceptanceRules": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "caseObservations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "caseId",
+          "observationIds"
+        ],
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "observationIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "sourceOutputDigests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "supportedScope": {
+      "type": "string",
+      "enum": [
+        "offline_contract_and_artifact"
+      ]
+    },
+    "snapshotCompleteness": {
+      "type": "string"
+    },
+    "metricAvailabilityCoverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "metricId",
+          "availability",
+          "reason"
+        ],
+        "properties": {
+          "metricId": {
+            "type": "string",
+            "enum": [
+              "requirement_preservation",
+              "first_pass_accepted_checkpoints",
+              "accepted_results",
+              "repair_cycles",
+              "review_cycles",
+              "owner_escalations",
+              "elapsed_time",
+              "tokens",
+              "measured_cost_per_accepted_result"
+            ]
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "measured",
+              "derived",
+              "partial",
+              "unavailable"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "verificationEvidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/artifactReference"
+      }
+    },
+    "auditEvidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/artifactReference"
+      }
+    },
+    "lifecycleStatus": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "captured",
+        "verified",
+        "baseline_ready",
+        "superseded"
+      ]
+    },
+    "configDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "promptConfig",
+        "skillConfig",
+        "roleConfig",
+        "acceptanceRules"
+      ],
+      "properties": {
+        "promptConfig": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "skillConfig": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "roleConfig": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "acceptanceRules": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "artifactReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

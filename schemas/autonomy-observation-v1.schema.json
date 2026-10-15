@@ -1,0 +1,631 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "autonomy-observation-v1.schema.json",
+  "title": "Autonomy observation manifest (autonomy-observation/v1)",
+  "description": "Documentation schema for the persisted autonomy observation manifest. Records what actually happened for each corpus case, separate from the oracle's required outcome. Not executed by ajv; strict field lists must match docs/aut-05-baseline-runbook.md section 4.2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "observations"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "enum": [
+        "autonomy-observation/v1"
+      ]
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "observationId",
+          "caseId",
+          "corpusRevision",
+          "corpusDigest",
+          "mode",
+          "dataOrigin",
+          "runId",
+          "taskId",
+          "assignmentId",
+          "attemptId",
+          "checkpointId",
+          "candidateId",
+          "identityNullReasons",
+          "targetSourceSnapshot",
+          "configDigests",
+          "runtime",
+          "actualResult",
+          "checks",
+          "acceptanceDisposition",
+          "forbiddenEffectObservations",
+          "evidenceArtifacts",
+          "metrics",
+          "evaluatedAt",
+          "measurementInterval"
+        ],
+        "properties": {
+          "observationId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "caseId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "corpusRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "corpusDigest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "offline_contract",
+              "artifact_assessment",
+              "historical_observation",
+              "live_workflow"
+            ]
+          },
+          "dataOrigin": {
+            "type": "string",
+            "enum": [
+              "illustrative",
+              "real"
+            ],
+            "description": "illustrative = schema-exercising example data, not a real capture; real = frozen from actual reviewed evidence. An illustrative observation must never be promoted to a real acceptance result."
+          },
+          "runId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null requires an explicit reason in identityNullReasons; populated when the evaluation mode supplies this identity."
+          },
+          "taskId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null requires an explicit reason in identityNullReasons; populated when the evaluation mode supplies this identity."
+          },
+          "assignmentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null requires an explicit reason in identityNullReasons; populated when the evaluation mode supplies this identity."
+          },
+          "attemptId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null requires an explicit reason in identityNullReasons; populated when the evaluation mode supplies this identity."
+          },
+          "checkpointId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null requires an explicit reason in identityNullReasons; populated when the evaluation mode supplies this identity."
+          },
+          "candidateId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null requires an explicit reason in identityNullReasons; populated when the evaluation mode supplies this identity."
+          },
+          "identityNullReasons": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "runId",
+              "taskId",
+              "assignmentId",
+              "attemptId",
+              "checkpointId",
+              "candidateId"
+            ],
+            "description": "Structured per-field reason for null identity. Each entry is a non-empty string iff the corresponding identity field is null, and null iff that field is populated. Enforced mechanically by the evaluator; a null identity field without a reason, or a populated field with a reason, is rejected.",
+            "properties": {
+              "runId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              },
+              "taskId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              },
+              "assignmentId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              },
+              "attemptId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              },
+              "checkpointId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              },
+              "candidateId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              }
+            }
+          },
+          "targetSourceSnapshot": {
+            "type": "string"
+          },
+          "configDigests": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "promptConfig",
+              "skillConfig",
+              "roleConfig",
+              "acceptanceRules"
+            ],
+            "properties": {
+              "promptConfig": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "skillConfig": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "roleConfig": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "acceptanceRules": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          },
+          "runtime": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "modelId",
+              "provider",
+              "reasoningSettings",
+              "promptHashes",
+              "skillHashes",
+              "budgets",
+              "toolConfig"
+            ],
+            "properties": {
+              "modelId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reasoningSettings": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "promptHashes": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "skillHashes": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "budgets": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "maxTokens",
+                  "timeoutMs"
+                ],
+                "properties": {
+                  "maxTokens": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "timeoutMs": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                }
+              },
+              "toolConfig": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "toolPolicyDigest"
+                ],
+                "properties": {
+                  "toolPolicyDigest": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            },
+            "anyOf": []
+          },
+          "actualResult": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "inconclusive",
+              "not_supported",
+              "not_run"
+            ]
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "checkId",
+                "result",
+                "detail"
+              ],
+              "properties": {
+                "checkId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]+$"
+                },
+                "result": {
+                  "type": "string",
+                  "enum": [
+                    "passed",
+                    "failed",
+                    "not_run"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "acceptanceDisposition": {
+            "type": "string"
+          },
+          "forbiddenEffectObservations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidenceArtifacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "metricId",
+                "value",
+                "unit",
+                "availability",
+                "sourceRef",
+                "missingReason",
+                "numerator",
+                "denominator",
+                "excludedIncompleteCount",
+                "observationMode",
+                "tokenBreakdown"
+              ],
+              "properties": {
+                "metricId": {
+                  "type": "string",
+                  "enum": [
+                    "requirement_preservation",
+                    "first_pass_accepted_checkpoints",
+                    "accepted_results",
+                    "repair_cycles",
+                    "review_cycles",
+                    "owner_escalations",
+                    "elapsed_time",
+                    "tokens",
+                    "measured_cost_per_accepted_result"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "description": "Numeric measured value, or null when unavailable. A string is never a valid metric value.",
+                  "minimum": 0
+                },
+                "unit": {
+                  "type": "string",
+                  "enum": [
+                    "ratio",
+                    "count",
+                    "milliseconds",
+                    "tokens",
+                    "currency_per_accepted_result"
+                  ]
+                },
+                "availability": {
+                  "type": "string",
+                  "enum": [
+                    "measured",
+                    "derived",
+                    "partial",
+                    "unavailable"
+                  ]
+                },
+                "sourceRef": {
+                  "type": "string"
+                },
+                "missingReason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "numerator": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "denominator": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "excludedIncompleteCount": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "observationMode": {
+                  "type": "string",
+                  "enum": [
+                    "offline_contract",
+                    "artifact_assessment",
+                    "historical_observation",
+                    "live_workflow"
+                  ],
+                  "description": "Must equal the enclosing observation's mode."
+                },
+                "tokenBreakdown": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": false,
+                  "required": [
+                    "input",
+                    "cachedInput",
+                    "output",
+                    "reasoningOutput",
+                    "total",
+                    "derived",
+                    "formula"
+                  ],
+                  "description": "Per-field token breakdown for the tokens metric; null for every other metricId.",
+                  "properties": {
+                    "input": {
+                      "$ref": "#/definitions/tokenField"
+                    },
+                    "cachedInput": {
+                      "$ref": "#/definitions/tokenField"
+                    },
+                    "output": {
+                      "$ref": "#/definitions/tokenField"
+                    },
+                    "reasoningOutput": {
+                      "$ref": "#/definitions/tokenField"
+                    },
+                    "total": {
+                      "$ref": "#/definitions/tokenField"
+                    },
+                    "derived": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "formula": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              },
+              "if": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "value"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "missingReason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          "evaluatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "measurementInterval": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "start",
+              "end",
+              "pauseHandling"
+            ],
+            "properties": {
+              "start": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "end": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "pauseHandling": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "tokenField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "coverage"
+      ],
+      "properties": {
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "coverage": {
+          "type": "string",
+          "enum": [
+            "measured",
+            "derived",
+            "unavailable"
+          ]
+        }
+      }
+    }
+  }
+}

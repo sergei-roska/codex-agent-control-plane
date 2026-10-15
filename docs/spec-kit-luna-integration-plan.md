@@ -1,7 +1,12 @@
 # Spec Kit integration plan for the harness
 
-Status: proposed implementation plan. Phase 0 is the next bounded milestone.
+Status: implementation roadmap. The AUT-05 review records Phase 0 acceptance;
+AUT-01 Phase 1 is the next bounded milestone after its A0 entry check.
 Updated: 2026-10-15.
+
+Execution guides: [AUT-05 baseline](aut-05-baseline-runbook.md),
+[AUT-05 implementation review](aut-05-review.md), and
+[the next AUT-01 runbook](aut-01-traceability-runbook.md).
 
 ## 1. Decision and intended result
 
@@ -47,6 +52,11 @@ tree equals those commits:
 
 Recheck relevant source bytes when implementation starts. Record changed-file
 hashes alongside the commit identifiers in pilot evidence.
+
+The AUT-05 implementation review started from harness commit
+`63eb95918c3986f3ad5ac237c22a6bafc5ef5530` plus the submitted untracked work.
+Its final reviewed artifact hashes and acceptance scope are recorded in
+`docs/aut-05-review.md`; the earlier plan-authoring commit above is historical.
 
 | Source | Contract reused |
 |---|---|
@@ -103,7 +113,9 @@ their implementation starts only after the preceding evidence is assessed.
 ## 3. Phase 1 architecture and authority
 
 Entry condition: an independently reviewed `baseline_ready` handoff from the
-AUT-05 runbook. Reuse its representative feature, canonical inputs, baseline
+AUT-05 runbook, corroborated by the final implementation review and exact frozen
+artifacts. The submitted handoff alone does not establish acceptance. Reuse its
+representative feature, canonical inputs, baseline
 planning artifact, metric definitions, and declared comparison limitations.
 Unknown live-model measurements do not prevent an explicitly offline pilot;
 they prevent unsupported claims about live-model improvement or savings.
@@ -147,10 +159,17 @@ cannot discover every requirement omitted from arbitrary prose.
 The checker subsequently proves coverage of that accepted inventory. It must
 never claim that a self-authored inventory proves its own completeness.
 
-Use one representative feature with at least two mandatory requirements,
-acceptance criteria, a dependency chain, two potentially parallel tasks, an
-explicitly forbidden path, and one risk-sensitive requirement. Include an
-ordinary task as a control against classifying everything as critical.
+Use the accepted F2 price-repair planning artifact as the representative feature.
+It has multiple mandatory requirements and an explicitly forbidden test path,
+but only one implementation task and no intrinsic authentication boundary.
+Use separately labeled synthetic fixtures for dependency chains, parallel tasks,
+and gated-risk cases. Qualify all those properties across the fixture corpus;
+do not invent additional product requirements to force them into the F2 goal.
+
+The accepted planning artifact is explicitly a manually authored current-agent
+artifact, not a historical harness/model execution. Assess substantive constraint
+preservation separately from explicit machine traceability. Lack of literal IDs
+does not by itself demonstrate loss of the corresponding requirement.
 
 ### 3.3 Proposed files
 
@@ -166,7 +185,7 @@ test/spec-context.test.js
 test/spec-analyzer.test.js
 test/spec-assignment-adapter.test.js
 test/spec-analyzer-cli.test.js
-test/fixtures/spec-kit/pilot-auth/
+test/fixtures/spec-kit/pilot-price/
 ```
 
 The JSON Schema files document the persisted format. Implement strict runtime
@@ -219,6 +238,12 @@ bounded directories. Validate these paths against the same independent
 reads files still supplies bounded verifier paths because the effective verifier
 role is workspace-write. These permissions do not require the verifier to edit.
 Never infer them by parsing a command or by copying all implementation paths.
+
+For the F2 fixture, existing product tests are immutable and product changes are
+restricted to `src/price.js`. Place any verifier operational permission in an
+explicit separate verification area under the checker fixture root. Authorize
+that area in the accepted context; do not grant writes to protected product
+tests merely to satisfy the verifier's nonempty scope contract.
 
 ### 4.2 Scope is an independent input
 
@@ -1122,12 +1147,19 @@ before that feature can receive a passing readiness report.
 
 ## 15. First implementation brief
 
-Start with AUT-05 runbook B0-B1, then progress through B2-B6 to an independently
-reviewed `baseline_ready` handoff. Preserve all unrelated working-tree edits.
+Resolve the accepted baseline in `docs/aut-05-review.md` and complete AUT-01
+entry checkpoint A0. The initial AUT-05 capture is retained; do not repeat it
+or replace its frozen bytes to begin AUT-01. Requalify through AUT-05 B0-B6 only
+if the required evidence boundary has changed. Preserve unrelated work.
 
 Next, execute P1.0-P1.1: bind the frozen representative feature, establish its
 complete canonical inventory and independent scope/risk context, then implement
 the two strict AUT-01 contracts and their fixtures.
+
+Use [the AUT-01 runbook](aut-01-traceability-runbook.md) for executable A0-A5
+entry checks, fixture layout, qualification, and comparison instructions. It
+incorporates the actual AUT-05 review limits and supersedes any old pilot-auth
+example or unverified submitted baseline reference.
 
 Before dispatching the next implementation task, inspect its actual output and
 confirm the context/map boundary and source bindings. Continue through P1.2-P1.7

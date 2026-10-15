@@ -1,0 +1,79 @@
+{
+  "assessmentVersion": "aut-01-planning-review/v1",
+  "artifactPath": "test/fixtures/autonomy/planning-baseline/current-lead-planning-output.md",
+  "assessmentStatus": "independently_reviewed_semantic_assessment",
+  "comparisonScope": "frozen artifact structure and offline analyzer capability",
+  "semanticRequirements": [
+    {
+      "requirementId": "REQ-1",
+      "requirement": "Apply a whole-number percentage discount: 200 at 10 percent becomes 180.",
+      "result": "pass",
+      "artifactSection": "lines 9-12, 18-20, 30-32",
+      "sourceEvidence": "GOAL.txt digest 666a1d5f055274475714f1e6fe8510079dc3bd787bdf079251525a5d39968bf7; src/price.js and test/price.test.js digests in capture-provenance.json"
+    },
+    {
+      "requirementId": "REQ-2",
+      "requirement": "Keep test/price.test.js unchanged.",
+      "result": "pass",
+      "artifactSection": "lines 20, 22-25, 30-35",
+      "sourceEvidence": "GOAL.txt digest 666a1d5f055274475714f1e6fe8510079dc3bd787bdf079251525a5d39968bf7; test/price.test.js digest f0532faca004df9074aed1f3094ee087851e689f3050e0389e26d8d03e0ef0b6"
+    },
+    {
+      "requirementId": "REQ-3",
+      "requirement": "Limit product writes to src/price.js in an isolated fixture copy.",
+      "result": "pass",
+      "artifactSection": "lines 22-23, 32",
+      "sourceEvidence": "FIXTURE.md lines 6-8 and digest 83aaa2fa7bf0b8c899c487c4589195295c8884b091faeb882ca7e83ce64d44f4; artifact spans match current-lead-planning-output.md digest"
+    },
+    {
+      "requirementId": "REQ-4",
+      "requirement": "Preserve zero-percent discount, subtotal, and withTax behavior.",
+      "result": "pass",
+      "artifactSection": "lines 11-12, 18-20, 30-32",
+      "sourceEvidence": "test/price.test.js digest f0532faca004df9074aed1f3094ee087851e689f3050e0389e26d8d03e0ef0b6"
+    },
+    {
+      "requirementId": "AC-1",
+      "requirement": "The unchanged fixture test suite passes, including percentage and zero-percent cases.",
+      "result": "pass",
+      "artifactSection": "lines 30-36",
+      "sourceEvidence": "CHECKS.json digest df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860; planned acceptance check only, not an executed result"
+    }
+  ],
+  "traceabilityCapability": {
+    "status": "not_present",
+    "details": "The artifact has no stable requirement IDs, typed task schema, validated assignment envelope, or automated traceability report."
+  },
+  "scoring": {
+    "metricId": "requirement_preservation",
+    "numerator": 5,
+    "denominator": 5,
+    "excludedIncompleteCount": 0,
+    "availability": "measured",
+    "value": 1,
+    "reason": "Independent semantic review confirmed all four requirements and AC1 are preserved."
+  },
+  "provenanceLimitations": [
+    "This is a manual current-lead planning artifact, not a harness run or model output.",
+    "No implementation, test execution, verifier run, or performance measurement occurred during capture.",
+    "Missing literal requirement IDs are a traceability gap, not evidence of semantic requirement loss."
+  ],
+  "independentReview": {
+    "verdict": "approve",
+    "reviewMode": "independent semantic review of a manual current-lead artifact; not a harness run, model output, or executed repair",
+    "reviewedArtifactSha256": "e95219d7a2bf375cd2e04a3f392f92220839f13704d6ec72b5a89d463e90d5a6",
+    "provenanceSha256": "81bdd8a20a32f2b228efa87a3acd395df85938c42f1c7a967e866ef45532880b",
+    "sourceEvidenceDigestsMatchCapture": true,
+    "semanticRequirementCount": 5,
+    "semanticRequirementsSatisfied": 5,
+    "semanticAssessment": "All four stated requirements and acceptance criterion AC1 are explicitly preserved in the manual artifact. Missing literal IDs are structural traceability loss only, not semantic requirement loss.",
+    "traceabilityCapability": "not_present; structural gap reported separately and not included as a lost semantic requirement",
+    "limitations": [
+      "AC1 is a planned acceptance criterion; no test execution or product repair is inferred.",
+      "This score compares frozen artifact semantics and offline analyzer capability only; it is not a model or workflow performance result."
+    ],
+    "inventoryPath": "test/fixtures/autonomy/planning-baseline/requirements.md",
+    "inventorySha256": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0",
+    "provenancePath": "test/fixtures/autonomy/planning-baseline/capture-provenance.json"
+  }
+}

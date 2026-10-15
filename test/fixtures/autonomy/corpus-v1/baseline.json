@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "autonomy-baseline/v1",
+  "baselineId": "aut-05-baseline-offline-v1",
+  "corpusDigest": "87b3f2bc9292e92d71607096a932f9090069dc45a27453943728d8d1ac0f8e7b",
+  "corpusId": "aut-05-regression-corpus",
+  "targetSourceSnapshot": "git HEAD 63eb95918c3986f3ad5ac237c22a6bafc5ef5530",
+  "evaluatorVersion": "1.0.0",
+  "metricDefinitionsVersion": "16a89e135253012d1f22e53ea99298863fca072f1992e12b73ba4e019d351792",
+  "hardAcceptanceRules": [
+    "corpusDigest must match the frozen corpus.json sha256",
+    "an observation must never fabricate acceptance without current-target evidence",
+    "a null metric value requires availability unavailable (or partial) and a non-empty missingReason",
+    "a ratio metric must carry explicit numerator, denominator, and excludedIncompleteCount",
+    "a nonzero denominator is required for measured_cost_per_accepted_result",
+    "an accepted result requires dataOrigin 'real' and actualResult 'pass' with all checks passed"
+  ],
+  "caseObservations": [
+    { "caseId": "canonical-identity-contradiction", "observationIds": ["obs-canonical-identity-contradiction"] },
+    { "caseId": "nested-manifest-contradiction", "observationIds": ["obs-nested-manifest-contradiction"] },
+    { "caseId": "producer-mismatch", "observationIds": ["obs-producer-mismatch"] },
+    { "caseId": "stale-review-continuation", "observationIds": ["obs-stale-review-continuation"] },
+    { "caseId": "valid-ordinary-result-control", "observationIds": ["obs-valid-ordinary-result-control"] },
+    { "caseId": "failed-incomplete-usage", "observationIds": ["obs-failed-incomplete-usage"] },
+    { "caseId": "aut-01-planning-baseline", "observationIds": ["obs-aut-01-planning-baseline"] }
+  ],
+  "sourceOutputDigests": [
+    { "path": "test/fixtures/autonomy/corpus-v1/corpus.json", "sha256": "87b3f2bc9292e92d71607096a932f9090069dc45a27453943728d8d1ac0f8e7b" },
+    { "path": "test/fixtures/autonomy/corpus-v1/observations.json", "sha256": "a1ed7344cad8f4fece77436ac3022fd25194999ab1d4255ca9e93f7881431417" },
+    { "path": "test/fixtures/autonomy/planning-baseline/canonical-input.md", "sha256": "594578f4353bf7c49fcb362c88597cf5ea8cc86a262a8c671abd445186a6fe46" },
+    { "path": "test/fixtures/autonomy/planning-baseline/requirements.md", "sha256": "e52c265402041d9076dd4cb3e435c7eac8758373277504c28e2d0ce05bb07bf1" },
+    { "path": "test/fixtures/autonomy/planning-baseline/current-workflow-output.md", "sha256": "834990df2afaddc89450900bb73688a019e5311662ba2290d53e8dec788ec932" },
+    { "path": "docs/aut-05-metric-definitions.md", "sha256": "16a89e135253012d1f22e53ea99298863fca072f1992e12b73ba4e019d351792" },
+    { "path": "schemas/autonomy-corpus-v1.schema.json", "sha256": "fe83db210a7f60f3f5599cd79ef158d10e078ea2a7e448d6dd8bb785c0a8ca8d" },
+    { "path": "schemas/autonomy-observation-v1.schema.json", "sha256": "186cb4056bd1e1ab317684d4f9005aa0d811abba448178c722e35296748c6885" },
+    { "path": "schemas/autonomy-baseline-v1.schema.json", "sha256": "390e47e18e8597f69a85b547acf74ccad8d2427279a6be01be1628ab1f4c81f7" },
+    { "path": "src/autonomy-evaluation.js", "sha256": "68e7666d5bd5a32ca992a416d3a709b4407d2aa8f743b03222999374eb8be325" },
+    { "path": "tools/autonomy/evaluate.js", "sha256": "d765fae236b7b2b7fc937d93a863b70bbbc503b8165f75c4eb06b8040bfcb37e" }
+  ],
+  "limitations": [
+    "offline scope: no live model execution, measured spend, or token capture; measured_cost_per_accepted_result is always null",
+    "target-orchestrator cases are historical observations whose primary evidence is in gitignored handoffs (.agents/teamwork/); provenance is textual, no frozen digest for that evidence",
+    "historical observations carry no token/timing identity; those metrics are null with reasons",
+    "first_pass_accepted_checkpoints, repair_cycles, review_cycles, and owner_escalations are unavailable in this offline scope",
+    "summary.acceptedResults counts real pass observations (case-oracle satisfied); the strict 'accepted results with matching current-target review receipts' metric requires live comparison-phase data and is not computable in this offline historical scope"
+  ],
+  "supportedScope": "offline_contract_and_artifact",
+  "snapshotCompleteness": "complete: all seven case families represented with a validated observed result or clearly declared historical observation",
+  "metricAvailabilityCoverage": [
+    { "metricId": "requirement_preservation", "availability": "measured", "reason": "planning baseline independently scored 0/5" },
+    { "metricId": "first_pass_accepted_checkpoints", "availability": "unavailable", "reason": "no first-attempt review outcome in historical observations" },
+    { "metricId": "accepted_results", "availability": "measured", "reason": "evaluator counts actualResult pass with dataOrigin real" },
+    { "metricId": "repair_cycles", "availability": "unavailable", "reason": "historical evidence records rounds, not assignment/candidate IDs" },
+    { "metricId": "review_cycles", "availability": "unavailable", "reason": "historical evidence records rounds, not distinct review sequences" },
+    { "metricId": "owner_escalations", "availability": "unavailable", "reason": "no owner decisions in the frozen evidence" },
+    { "metricId": "elapsed_time", "availability": "unavailable", "reason": "no wall-clock intervals in historical evidence" },
+    { "metricId": "tokens", "availability": "unavailable", "reason": "no token measurements in the offline scope" },
+    { "metricId": "measured_cost_per_accepted_result", "availability": "unavailable", "reason": "no measured subscription spend source" }
+  ],
+  "verificationEvidence": [
+    "test/autonomy-schemas.test.js, test/autonomy-evaluation.test.js, test/autonomy-evaluation-cli.test.js (32 pass, 0 fail)",
+    "independent reviewer score: requirement_preservation 0/5 (planning-baseline)",
+    "critic (verifier) review of the integrated 7-case candidate: single blocker (stale corpusDigest) fixed by the lead and re-verified (evaluator exit 0, valid:true, assessed:true, 32/32 tests pass)"
+  ],
+  "auditEvidence": [
+    "auditor integrity + semantics audit of the integrated candidate: PASS (captured baseline)"
+  ],
+  "lifecycleStatus": "baseline_ready"
+}
