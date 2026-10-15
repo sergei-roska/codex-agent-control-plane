@@ -1,7 +1,8 @@
 # AUT-01 implementation runbook after the AUT-05 review
 
-Status: implementation instructions; the AUT-05 entry evidence must be checked
-at A0 before starting the checker implementation.
+Status: implementation instructions. The completed offline Phase 1 qualification
+and exact acceptance are recorded in [the AUT-01 review](aut-01-review.md).
+A0 remains mandatory for a new or changed pilot baseline.
 
 ## 1. Mission
 
@@ -218,7 +219,7 @@ AUT-05:
 8. Emit JSON to stdout and bounded diagnostics to stderr. No files, cache, DB,
    shell commands, Git operations, models, or planned checks are executed.
 
-Proposed command, available only after implementation:
+Implemented Phase 1 command:
 
 ```text
 node tools/spec-kit/analyze.js \

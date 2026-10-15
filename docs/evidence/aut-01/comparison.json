@@ -1,0 +1,58 @@
+{
+  "comparisonVersion": "aut-01-offline-comparison/v1",
+  "baseline": {
+    "baselineId": "aut-05-baseline-offline-v3",
+    "path": "test/fixtures/autonomy/corpus-v3/baseline.json",
+    "sha256": "4fe46b3cc7d7a67e5bc1df2c5347f5bcd007fccb808a8294671d0a0ee0183786",
+    "manualPlanningArtifact": {
+      "path": "test/fixtures/autonomy/planning-baseline/current-lead-planning-output.md",
+      "sha256": "e95219d7a2bf375cd2e04a3f392f92220839f13704d6ec72b5a89d463e90d5a6"
+    },
+    "semanticRequirementPreservation": {
+      "numerator": 5,
+      "denominator": 5,
+      "scope": "Independently reviewed frozen manual artifact; not model quality."
+    },
+    "explicitMachineTraceability": "not_present",
+    "validatedHarnessProposals": "not_present"
+  },
+  "intervention": {
+    "featureId": "pilot-price",
+    "analysisFingerprint": "2f6accab6c0342b50bb61701555621bc51105cffdbf17be500028b284e015e25",
+    "reportPath": "docs/evidence/aut-01/analysis-report.json",
+    "reportSha256": "de79f676b77fbadc4881872949bbc23144f0a003f7e715e5f79ccc471c3fbc42",
+    "mandatoryRequirementCoverage": {
+      "covered": 4,
+      "total": 4
+    },
+    "mandatoryAcceptanceCoverage": {
+      "covered": 1,
+      "total": 1
+    },
+    "validProposals": 2,
+    "proposalKinds": [
+      "engineer",
+      "verifier"
+    ],
+    "semanticRequirementPreservation": "No new numeric semantic score asserted. Context/map semantics independently reviewed; baseline already preserves all five criteria.",
+    "qualification": "Q01-Q28 controls mapped to 38 focused tests and 22 supplemental independent negative probes; final verifier and auditor approve."
+  },
+  "regressionControls": {
+    "baselineReferences": "All accepted AUT-05 artifact references remain unchanged.",
+    "historicalTargetCases": "Retained historical evidence only; target behavior was not reexecuted."
+  },
+  "checkerMeasurement": {
+    "exitCode": 0,
+    "elapsedMs": 63.715747,
+    "scope": "Actual local checker process only; not workflow/model latency."
+  },
+  "workflowMeasurements": {
+    "tokens": null,
+    "measuredCost": null,
+    "workflowElapsedTime": null,
+    "firstPassAcceptedCheckpoints": null,
+    "acceptedImplementationResults": null,
+    "reason": "No live model, workflow, product repair or implementation acceptance was executed."
+  },
+  "decision": "Retain the offline structural checker and assignment adapter for the bounded Phase 1 capability. Runtime enrollment/gates and skills remain separate unqualified interventions."
+}

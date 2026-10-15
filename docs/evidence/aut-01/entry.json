@@ -1,0 +1,61 @@
+{
+  "checkpoint": "AUT-01-A0",
+  "status": "passed",
+  "implementationBaseCommit": "a3b28a5cbab78c191907127f8964836fe0872f9d",
+  "acceptedBaseline": {
+    "path": "test/fixtures/autonomy/corpus-v3/baseline.json",
+    "sha256": "4fe46b3cc7d7a67e5bc1df2c5347f5bcd007fccb808a8294671d0a0ee0183786"
+  },
+  "leadDecision": {
+    "path": "docs/evidence/aut-05/acceptance.json",
+    "sha256": "8ddd383d689e261839bd311b0c44b58c9929ba9afa7e41364b7bc59e0d679d5d"
+  },
+  "comparisonScope": "Frozen manual planning artifact structure, requirement traceability, and offline checker capability only.",
+  "allAcceptanceReferencesVerified": true,
+  "checkerFilesAbsentBeforeImplementation": [
+    "src/spec-context.js",
+    "src/spec-analyzer.js",
+    "src/spec-assignment-adapter.js",
+    "tools/spec-kit/analyze.js",
+    "schemas/spec-context-v1.schema.json",
+    "schemas/spec-traceability-v1.schema.json"
+  ],
+  "inputHashes": {
+    "src/contracts.js": "be1966aea45abdaaf498fd53feef0a738b6bb2a642504d70539e45fc9f6d1698",
+    "src/role-names.js": "f0ff3e378f9c8027da4b44babbf1861e01b97068014da982b85ce0d9abc7db5e",
+    "src/staging-log.js": "554595dde7bb1a80ea5ac51f7a9ba8c383a7616a213fa9a7a2b5abd0122a7f56",
+    "src/review-policy.js": "0d4ea958db3a0b3566426d4bbe3203d11eedb08dec34f432838f226ad9ba87a6",
+    "src/role-catalog.js": "90d5bc5c49c66db62d6ff1ee79017a165367000276c54452fa517bb28e1dc765",
+    "profiles/TEAM.md": "218211a83778abb515a11c8be798c472fa6a7388f1878c07b1a4f4bd81042fd4",
+    "docs/spec-kit-luna-integration-plan.md": "50ac6a6bc10b0cd411321e2569972c8c6badb369bb5363c6db947425e4fc5503",
+    "docs/aut-01-traceability-runbook.md": "09ebe31a69f054f9910c0d0a7e866956cfc1f82688dcd9b8d5fcb59c417d37d6",
+    "profiles/agents/architect.toml": "53e68b690e99858c59fa2145cadaba7268331b3c2ece2f31bc4c4c6910fabeee",
+    "profiles/agents/auditor.toml": "bd813a94613a34aac3c4c94442f7176f463419bf2022a9b4b92a0d46e8489a03",
+    "profiles/agents/engineer.toml": "bb29590bc2ac3a2dd1505f292c518dc714cd2defe81652e767b0232cc9a8642d",
+    "profiles/agents/explorer.toml": "182686715f17459158f33ff892482a4cdb621a89a21f3036c49b90033982185b",
+    "profiles/agents/recovery-engineer.toml": "d69120f1b75ff0b6ebb53bdb19c6a9a82e180b00fd2a5d66a1824a988f99dab0",
+    "profiles/agents/scout.toml": "ff98f3291e52589e6d26cec8a4e320315732694db8dcb1ec5cf70acd2cffba06",
+    "profiles/agents/senior-engineer.toml": "75dc963eb537b9e5350d7391c0ffebd5e75d379b724b316d1d1f76ba89164cbf",
+    "profiles/agents/verifier.toml": "0a019f9d2d522831ed92c3b02d7424956b83aad28b5f76d3db61ce745da0ee19"
+  },
+  "captureKind": "manual_current_lead_artifact",
+  "semanticBaseline": {
+    "numerator": 5,
+    "denominator": 5
+  },
+  "limits": [
+    "Historical technical findings do not establish fresh target runtime behavior or authorization effects.",
+    "Planning capture is a manual current-lead artifact, not a historical harness run or a model benchmark.",
+    "Semantic requirement preservation was already 5/5; missing literal IDs indicate structural traceability gaps.",
+    "Accepted implementation results, first-pass acceptance, workflow timing, tokens and measured spend remain unavailable.",
+    "The joined failed attempt has 5573 ms elapsed time but does not establish complete workflow duration.",
+    "Evaluator eligibility.ready stays false; this separate lead decision grants bounded baseline readiness only."
+  ],
+  "evaluatorReplay": {
+    "command": "node tools/autonomy/evaluate.js --root . --corpus test/fixtures/autonomy/corpus-v3/corpus.json --observations test/fixtures/autonomy/corpus-v3/observations.json --baseline test/fixtures/autonomy/corpus-v3/baseline.json",
+    "exitCode": 0,
+    "valid": true,
+    "assessed": true,
+    "ready": false
+  }
+}

@@ -1,0 +1,202 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "spec-context-v1.schema.json",
+  "title": "Spec Kit feature context v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "featureId",
+    "featureDir",
+    "sources",
+    "requirements",
+    "acceptanceCriteria",
+    "writeScope",
+    "riskRules",
+    "checks",
+    "priorEvidence",
+    "decisions"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "spec-context/v1" },
+    "featureId": { "$ref": "#/definitions/featureId" },
+    "featureDir": { "$ref": "#/definitions/relativePath" },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "#/definitions/source" }
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/definitions/requirement" }
+    },
+    "acceptanceCriteria": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": { "$ref": "#/definitions/acceptanceCriterion" }
+    },
+    "writeScope": { "$ref": "#/definitions/writeScope" },
+    "riskRules": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": { "$ref": "#/definitions/riskRule" }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/definitions/check" }
+    },
+    "priorEvidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": { "$ref": "#/definitions/priorEvidence" }
+    },
+    "decisions": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "$ref": "#/definitions/decision" }
+    }
+  },
+  "definitions": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+    "featureId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "relativePath": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*[\\\\*?\\[\\]])[^\\u0001-\\u001f\\u007f]+$" },
+    "boundedText": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "stringList": {
+      "type": "array",
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+    },
+    "riskTags": {
+      "type": "array",
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "type": "string", "enum": ["risk_change", "performance", "component_complete"] }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "sha256"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "path": { "$ref": "#/definitions/relativePath" },
+        "sha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "sourceLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId", "startLine", "endLine"],
+      "properties": {
+        "sourceId": { "$ref": "#/definitions/id" },
+        "startLine": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "endLine": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+      }
+    },
+    "scopeEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["file", "directory"] },
+        "path": { "$ref": "#/definitions/relativePath" }
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sourceLocation", "mandatory", "acceptanceIds", "riskTags", "exclusionReason"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "sourceLocation": { "$ref": "#/definitions/sourceLocation" },
+        "mandatory": { "type": "boolean" },
+        "acceptanceIds": { "$ref": "#/definitions/stringList" },
+        "riskTags": { "$ref": "#/definitions/riskTags" },
+        "exclusionReason": { "type": ["string", "null"], "maxLength": 1000 }
+      }
+    },
+    "acceptanceCriterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sourceLocation", "requirementIds", "mandatory", "checkIds", "exclusionReason"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "sourceLocation": { "$ref": "#/definitions/sourceLocation" },
+        "requirementIds": { "$ref": "#/definitions/stringList" },
+        "mandatory": { "type": "boolean" },
+        "checkIds": { "$ref": "#/definitions/stringList" },
+        "exclusionReason": { "type": ["string", "null"], "maxLength": 1000 }
+      }
+    },
+    "writeScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow", "deny"],
+      "properties": {
+        "allow": { "type": "array", "minItems": 1, "maxItems": 200, "items": { "$ref": "#/definitions/scopeEntry" } },
+        "deny": { "type": "array", "maxItems": 200, "items": { "$ref": "#/definitions/scopeEntry" } }
+      }
+    },
+    "riskRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "riskTags", "sourceLocation", "rationale"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "path": { "$ref": "#/definitions/scopeEntry" },
+        "riskTags": { "$ref": "#/definitions/riskTags" },
+        "sourceLocation": { "$ref": "#/definitions/sourceLocation" },
+        "rationale": { "$ref": "#/definitions/boundedText" }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "argv", "timeoutMs", "verifierWritePaths", "sourceLocation", "rationale"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "argv": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 3000 } },
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+        "verifierWritePaths": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/definitions/scopeEntry" } },
+        "sourceLocation": { "$ref": "#/definitions/sourceLocation" },
+        "rationale": { "$ref": "#/definitions/boundedText" }
+      }
+    },
+    "priorEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sourceLocation", "description"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "sourceLocation": { "$ref": "#/definitions/sourceLocation" },
+        "description": { "$ref": "#/definitions/boundedText" }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "affectedRequirementIds", "sourceLocation", "rationale", "resolution"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "status": { "type": "string", "enum": ["resolved", "unresolved"] },
+        "affectedRequirementIds": { "$ref": "#/definitions/stringList" },
+        "sourceLocation": { "$ref": "#/definitions/sourceLocation" },
+        "rationale": { "$ref": "#/definitions/boundedText" },
+        "resolution": { "type": ["string", "null"], "maxLength": 4000 }
+      },
+      "allOf": [
+        { "if": { "properties": { "status": { "const": "resolved" } }, "required": ["status"] }, "then": { "properties": { "resolution": { "type": "string", "minLength": 1 } } } },
+        { "if": { "properties": { "status": { "const": "unresolved" } }, "required": ["status"] }, "then": { "properties": { "resolution": { "type": "null" } } } }
+      ]
+    }
+  }
+}

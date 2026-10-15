@@ -1,0 +1,65 @@
+{
+  "schemaVersion": "spec-traceability/v1",
+  "featureId": "pilot-price",
+  "contextSha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf",
+  "artifactBindings": [
+    {
+      "role": "spec",
+      "path": "specs/pilot-price/spec.md",
+      "sha256": "857ba273c9e5a5dea3ad8133a48c24d4507ff3d3fd24a4f593fe9c568d6e098c"
+    },
+    {
+      "role": "plan",
+      "path": "specs/pilot-price/plan.md",
+      "sha256": "dad1df7d19a6ef67b27432bedb9bd6500e3c575e2a0889417a7e2a5e4588a5a7"
+    },
+    {
+      "role": "tasks",
+      "path": "specs/pilot-price/tasks.md",
+      "sha256": "e1cc5e831cae34abace5aa719f35db11645f4f92138642bd9e15868b27ea12f7"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T001",
+      "role": "engineer",
+      "objective": "Correct the whole-number percentage calculation while preserving zero-percent, subtotal, and withTax behavior.",
+      "requirementIds": [
+        "REQ-1",
+        "REQ-2",
+        "REQ-3",
+        "REQ-4"
+      ],
+      "acceptanceIds": [
+        "AC-1"
+      ],
+      "dependsOn": [],
+      "parallel": false,
+      "writePaths": [
+        {
+          "kind": "file",
+          "path": "product/src/price.js"
+        }
+      ],
+      "checkIds": [
+        "CHECK-1"
+      ],
+      "priorEvidenceIds": [
+        "EVID-GOAL",
+        "EVID-DEFECT",
+        "EVID-FIXTURE-ACCEPTANCE",
+        "EVID-ACCEPTANCE-TESTS",
+        "EVID-MANDATORY-INVENTORY"
+      ],
+      "stopConditions": [
+        "Stop if a product write outside product/src/price.js appears necessary.",
+        "Stop if a protected product test or check definition would need modification.",
+        "Stop if the arithmetic change cannot preserve the listed existing behaviors."
+      ],
+      "additionalRiskTags": [],
+      "declaredReviewKind": "routine",
+      "checkpointId": "pilot-price-T001",
+      "reviewReason": "Review the bounded arithmetic repair and verify that only the permitted product source changed."
+    }
+  ]
+}

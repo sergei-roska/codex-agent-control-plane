@@ -1,0 +1,42 @@
+{
+  "nodeVersion": "v24.21.0",
+  "focused": {
+    "command": "node --test --test-isolation=none --test-reporter=tap test/spec-context.test.js test/spec-analyzer.test.js test/spec-assignment-adapter.test.js test/spec-analyzer-cli.test.js",
+    "tests": 38,
+    "pass": 38,
+    "fail": 0,
+    "source": "final-verifier.md"
+  },
+  "integration": {
+    "command": "env -u NODE_TEST_CONTEXT node --test --test-isolation=none --test-reporter=tap test/*.test.js",
+    "tests": 1183,
+    "pass": 1182,
+    "fail": 0,
+    "skipped": 1,
+    "durationMs": 101223.912087,
+    "temporaryLog": "/tmp/aut01-full-suite.log",
+    "logSha256": "a004aa62902f88baa48a8813ea03391211f6c007656b49e7731f3440307177ae"
+  },
+  "supplementalQualification": {
+    "command": "node docs/evidence/aut-01/qualification-probes.cjs",
+    "scriptSha256": "4407fe3ef783d667b6c89f31825653ac58a39879dd38b9f23a1f8c26b2d0a7a7",
+    "resultPath": "docs/evidence/aut-01/qualification-probe-results.jsonl",
+    "resultSha256": "ee76389b8af152b2d68c8536104f85a383005ddef9432ead741b90afcdbfa85a",
+    "cases": 22,
+    "blocked": 22,
+    "cliExit1Cases": 21,
+    "directAnalysisBlockedCases": 1
+  },
+  "sourceHashes": {
+    "src/spec-analyzer.js": "1cd0a87793ac61d891145d9c7b905438ecb6ac89de2210b70bb940f94802912c",
+    "src/spec-assignment-adapter.js": "723600b0a5b76e03d44a8dbbd26d5f38325d17e36a3f6050808cd8475225c585",
+    "src/spec-context.js": "054c6a90cf298d8f7b6ffff8cee72ffbd415a98c95abe87adc95fc6398e56228",
+    "test/spec-analyzer-cli.test.js": "b1e4acf255f3482e7c07d7165809cb98778b993b426bcdbc567f1362afd4da89",
+    "test/spec-analyzer.test.js": "3931a9959aa992e50533dbdc2cf15a3dee5469c25943f25549c0b4da848c682f",
+    "test/spec-assignment-adapter.test.js": "aa09ec132c9bdc24ecb363fd0307f4c35e6bcfeb178a3074dc16af50215b80e5",
+    "test/spec-context.test.js": "8529da89cb0860d88fce6af17e618405d53970cd3580fa9942ce9ecadb4de48d",
+    "tools/spec-kit/analyze.js": "cdbe9c58f70ebc0d776e9a17f8a663392e83b8f5ef58979f6451ace86763e399",
+    "schemas/spec-context-v1.schema.json": "2a6874520d3f0013c9aff95660bec3aa3bde41321e50a5cea7dffb2972678e0f",
+    "schemas/spec-traceability-v1.schema.json": "b1b1de5edc96662529e3726a1e5d663be27ca10184cb5b905e4409ecec778976"
+  }
+}

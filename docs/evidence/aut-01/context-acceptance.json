@@ -1,0 +1,35 @@
+{
+  "decisionVersion": "spec-context-acceptance/v1",
+  "featureId": "pilot-price",
+  "contextPath": "context/pilot-context.json",
+  "contextSha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf",
+  "status": "accepted_for_offline_planning",
+  "authority": "Lead decision after independent semantic context review.",
+  "reviewArtifact": {
+    "path": "docs/evidence/aut-01/context-semantic-review.md",
+    "sha256": "e7b025a7255b0a6e8d6d790209b8a87b47efc6c7b8bc8d5d48314b821c96b790"
+  },
+  "mandatoryRequirementIds": [
+    "REQ-1",
+    "REQ-2",
+    "REQ-3",
+    "REQ-4"
+  ],
+  "mandatoryAcceptanceIds": [
+    "AC-1"
+  ],
+  "productWriteScope": [
+    "product/src/price.js"
+  ],
+  "verifierOperationalScope": [
+    "verification/checks"
+  ],
+  "baselineId": "aut-05-baseline-offline-v3",
+  "baselineSha256": "4fe46b3cc7d7a67e5bc1df2c5347f5bcd007fccb808a8294671d0a0ee0183786",
+  "limits": [
+    "Independent semantic review establishes inventory completeness; checker validates coverage of that inventory.",
+    "Original F2 product remains intentionally unrepaired and its planned checks are not executed.",
+    "Typed scopes describe offline planning policy; live prefix-based scopes need later effect enforcement.",
+    "No dispatch authority, implementation acceptance, or model/workflow savings claim."
+  ]
+}

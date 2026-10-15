@@ -1,0 +1,133 @@
+{
+  "decisionVersion": "aut-01-phase-1-acceptance/v1",
+  "status": "accepted",
+  "milestone": "AUT-01 Phase 1 offline artifact pilot",
+  "implementationBaseCommit": "a3b28a5cbab78c191907127f8964836fe0872f9d",
+  "analysisFingerprint": "2f6accab6c0342b50bb61701555621bc51105cffdbf17be500028b284e015e25",
+  "acceptedContextSha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf",
+  "mapSha256": "212f256587a672c4c6de818a67a52e8a0463663258f39756d9409a6e53be3ec8",
+  "implementationAcceptance": "not_evaluated",
+  "scope": "Offline requirement-to-task traceability, graph/scope/risk validation, assignment proposals and deterministic read-only checker.",
+  "verification": {
+    "focusedPass": 38,
+    "supplementalBlocked": 22,
+    "integrationPass": 1182,
+    "integrationFail": 0,
+    "integrationSkip": 1
+  },
+  "artifacts": [
+    {
+      "path": "docs/evidence/aut-01/entry.json",
+      "sha256": "c35f213064a111597d6d8b90f05c9929f005db084ea5faaf6902bf9765fc8549"
+    },
+    {
+      "path": "docs/evidence/aut-01/context-acceptance.json",
+      "sha256": "026bc8e85e8c5edc4ef232e008eede4995ef16c36cb914cb8d4dab914b72a581"
+    },
+    {
+      "path": "docs/evidence/aut-01/context-semantic-review.md",
+      "sha256": "e7b025a7255b0a6e8d6d790209b8a87b47efc6c7b8bc8d5d48314b821c96b790"
+    },
+    {
+      "path": "docs/evidence/aut-01/context-implementation-review.md",
+      "sha256": "80e687b66c3dd70da1dc6d48623d4a9d14882005a088c5d645267599a155ff41"
+    },
+    {
+      "path": "docs/evidence/aut-01/analyzer-review.md",
+      "sha256": "4fe1488202c9c53990655cd9697d58681f6b1acbf67c71120057a58427f32d80"
+    },
+    {
+      "path": "docs/evidence/aut-01/adapter-review.md",
+      "sha256": "7f890000398952396e6d0b1b2101b711e147f385e86764b5eea08ad488038eb5"
+    },
+    {
+      "path": "docs/evidence/aut-01/final-verifier.md",
+      "sha256": "9bc24d4192fb8fa419a0073efed29d78e8bd1c93846c8199840dd11e52284fea"
+    },
+    {
+      "path": "docs/evidence/aut-01/final-audit.md",
+      "sha256": "4f75432a13c2ed9b92bd10737e9a8854e82cbdb1d69d200327baa13210e90b54"
+    },
+    {
+      "path": "docs/evidence/aut-01/analysis-report.json",
+      "sha256": "de79f676b77fbadc4881872949bbc23144f0a003f7e715e5f79ccc471c3fbc42"
+    },
+    {
+      "path": "docs/evidence/aut-01/verification-results.json",
+      "sha256": "16b34c69716610655faabbb3d2c8599a6458076498f72bb9be171285763f1cc4"
+    },
+    {
+      "path": "docs/evidence/aut-01/qualification-probes.cjs",
+      "sha256": "4407fe3ef783d667b6c89f31825653ac58a39879dd38b9f23a1f8c26b2d0a7a7"
+    },
+    {
+      "path": "docs/evidence/aut-01/qualification-probe-results.jsonl",
+      "sha256": "ee76389b8af152b2d68c8536104f85a383005ddef9432ead741b90afcdbfa85a"
+    },
+    {
+      "path": "docs/evidence/aut-01/comparison.json",
+      "sha256": "10ebc3844e18fb41132dc277d881f95cddfc87cf8e88b9ed4ac206add7a1a608"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/context/accepted-context.json",
+      "sha256": "026bc8e85e8c5edc4ef232e008eede4995ef16c36cb914cb8d4dab914b72a581"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/context/pilot-context.json",
+      "sha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/specs/pilot-price/traceability.json",
+      "sha256": "212f256587a672c4c6de818a67a52e8a0463663258f39756d9409a6e53be3ec8"
+    },
+    {
+      "path": "schemas/spec-context-v1.schema.json",
+      "sha256": "2a6874520d3f0013c9aff95660bec3aa3bde41321e50a5cea7dffb2972678e0f"
+    },
+    {
+      "path": "schemas/spec-traceability-v1.schema.json",
+      "sha256": "b1b1de5edc96662529e3726a1e5d663be27ca10184cb5b905e4409ecec778976"
+    },
+    {
+      "path": "src/spec-analyzer.js",
+      "sha256": "1cd0a87793ac61d891145d9c7b905438ecb6ac89de2210b70bb940f94802912c"
+    },
+    {
+      "path": "src/spec-assignment-adapter.js",
+      "sha256": "723600b0a5b76e03d44a8dbbd26d5f38325d17e36a3f6050808cd8475225c585"
+    },
+    {
+      "path": "src/spec-context.js",
+      "sha256": "054c6a90cf298d8f7b6ffff8cee72ffbd415a98c95abe87adc95fc6398e56228"
+    },
+    {
+      "path": "test/spec-analyzer-cli.test.js",
+      "sha256": "b1e4acf255f3482e7c07d7165809cb98778b993b426bcdbc567f1362afd4da89"
+    },
+    {
+      "path": "test/spec-analyzer.test.js",
+      "sha256": "3931a9959aa992e50533dbdc2cf15a3dee5469c25943f25549c0b4da848c682f"
+    },
+    {
+      "path": "test/spec-assignment-adapter.test.js",
+      "sha256": "aa09ec132c9bdc24ecb363fd0307f4c35e6bcfeb178a3074dc16af50215b80e5"
+    },
+    {
+      "path": "test/spec-context.test.js",
+      "sha256": "8529da89cb0860d88fce6af17e618405d53970cd3580fa9942ce9ecadb4de48d"
+    },
+    {
+      "path": "tools/spec-kit/analyze.js",
+      "sha256": "cdbe9c58f70ebc0d776e9a17f8a663392e83b8f5ef58979f6451ace86763e399"
+    }
+  ],
+  "generatedEvidenceDirectory": "artifacts/autonomy/aut-01-pilot-price/",
+  "limits": [
+    "Independent semantic review establishes source inventory completeness. Structural ID equality does not prove prose agreement.",
+    "Typed write policy is not equivalent to live harness descendant-prefix enforcement.",
+    "Snapshot rereads detect observed drift; no atomic filesystem guarantee under concurrent writers.",
+    "Original F2 fixture remains intentionally unrepaired; no planned product check, model, runtime admission or live workflow was executed.",
+    "No claim of semantic improvement from 0/5, model superiority, token savings, workflow latency or measured monetary savings."
+  ],
+  "nextDecision": "Assess a separate runtime enrollment/gate or later intervention plan after quota reset. No later implementation is started or implied."
+}

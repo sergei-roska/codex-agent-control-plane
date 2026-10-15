@@ -1,0 +1,259 @@
+{
+  "schemaVersion": "spec-context/v1",
+  "featureId": "pilot-price",
+  "featureDir": "specs/pilot-price",
+  "sources": [
+    {
+      "id": "canonical-goal",
+      "path": "canonical/GOAL.txt",
+      "sha256": "666a1d5f055274475714f1e6fe8510079dc3bd787bdf079251525a5d39968bf7"
+    },
+    {
+      "id": "canonical-checks",
+      "path": "canonical/CHECKS.json",
+      "sha256": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860"
+    },
+    {
+      "id": "canonical-fixture",
+      "path": "canonical/FIXTURE.md",
+      "sha256": "83aaa2fa7bf0b8c899c487c4589195295c8884b091faeb882ca7e83ce64d44f4"
+    },
+    {
+      "id": "canonical-input",
+      "path": "canonical/canonical-input.md",
+      "sha256": "7e20c26ccaa8ce95c1725707b7b6325c7098730ef9c6d823f7583b05c0c98e4c"
+    },
+    {
+      "id": "mandatory-inventory",
+      "path": "canonical/requirements.md",
+      "sha256": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0"
+    },
+    {
+      "id": "product-source",
+      "path": "product/src/price.js",
+      "sha256": "775708a5693f857c2493b6e662e1e3ebbb6da9050d05123222f9c817fff5acc0"
+    },
+    {
+      "id": "product-tests",
+      "path": "product/test/price.test.js",
+      "sha256": "f0532faca004df9074aed1f3094ee087851e689f3050e0389e26d8d03e0ef0b6"
+    },
+    {
+      "id": "product-package",
+      "path": "product/package.json",
+      "sha256": "54f5009c7b5705040063e83e6d6b20a5110b3e56c668cc6c85369de31195aadf"
+    },
+    {
+      "id": "product-checks",
+      "path": "product/CHECKS.json",
+      "sha256": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860"
+    }
+  ],
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "sourceLocation": {
+        "sourceId": "mandatory-inventory",
+        "startLine": 9,
+        "endLine": 10
+      },
+      "mandatory": true,
+      "acceptanceIds": [
+        "AC-1"
+      ],
+      "riskTags": [],
+      "exclusionReason": null
+    },
+    {
+      "id": "REQ-2",
+      "sourceLocation": {
+        "sourceId": "mandatory-inventory",
+        "startLine": 11,
+        "endLine": 12
+      },
+      "mandatory": true,
+      "acceptanceIds": [
+        "AC-1"
+      ],
+      "riskTags": [],
+      "exclusionReason": null
+    },
+    {
+      "id": "REQ-3",
+      "sourceLocation": {
+        "sourceId": "mandatory-inventory",
+        "startLine": 13,
+        "endLine": 13
+      },
+      "mandatory": true,
+      "acceptanceIds": [
+        "AC-1"
+      ],
+      "riskTags": [],
+      "exclusionReason": null
+    },
+    {
+      "id": "REQ-4",
+      "sourceLocation": {
+        "sourceId": "mandatory-inventory",
+        "startLine": 14,
+        "endLine": 15
+      },
+      "mandatory": true,
+      "acceptanceIds": [
+        "AC-1"
+      ],
+      "riskTags": [],
+      "exclusionReason": null
+    }
+  ],
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "sourceLocation": {
+        "sourceId": "mandatory-inventory",
+        "startLine": 19,
+        "endLine": 21
+      },
+      "requirementIds": [
+        "REQ-1",
+        "REQ-2",
+        "REQ-3",
+        "REQ-4"
+      ],
+      "mandatory": true,
+      "checkIds": [
+        "CHECK-1"
+      ],
+      "exclusionReason": null
+    }
+  ],
+  "writeScope": {
+    "allow": [
+      {
+        "kind": "file",
+        "path": "product/src/price.js"
+      },
+      {
+        "kind": "directory",
+        "path": "verification/checks"
+      }
+    ],
+    "deny": [
+      {
+        "kind": "file",
+        "path": "product/test/price.test.js"
+      },
+      {
+        "kind": "file",
+        "path": "product/CHECKS.json"
+      },
+      {
+        "kind": "file",
+        "path": "product/package.json"
+      }
+    ]
+  },
+  "riskRules": [
+    {
+      "id": "RISK-product-source",
+      "path": {
+        "kind": "file",
+        "path": "product/src/price.js"
+      },
+      "riskTags": [],
+      "sourceLocation": {
+        "sourceId": "canonical-fixture",
+        "startLine": 5,
+        "endLine": 8
+      },
+      "rationale": "The accepted fixture limits product changes to the price implementation; the context owner classifies this arithmetic repair as routine."
+    },
+    {
+      "id": "RISK-verifier-checks",
+      "path": {
+        "kind": "directory",
+        "path": "verification/checks"
+      },
+      "riskTags": [],
+      "sourceLocation": {
+        "sourceId": "canonical-checks",
+        "startLine": 1,
+        "endLine": 1
+      },
+      "rationale": "This separate directory is the explicit operational scope for verifier artifacts and is outside the product tree."
+    }
+  ],
+  "checks": [
+    {
+      "id": "CHECK-1",
+      "argv": [
+        "npm",
+        "--prefix",
+        "product",
+        "test"
+      ],
+      "timeoutMs": 60000,
+      "verifierWritePaths": [
+        {
+          "kind": "directory",
+          "path": "verification/checks"
+        }
+      ],
+      "sourceLocation": {
+        "sourceId": "canonical-checks",
+        "startLine": 1,
+        "endLine": 1
+      },
+      "rationale": "Plan the existing F2 test suite; the checker does not execute it."
+    }
+  ],
+  "priorEvidence": [
+    {
+      "id": "EVID-GOAL",
+      "sourceLocation": {
+        "sourceId": "canonical-goal",
+        "startLine": 1,
+        "endLine": 1
+      },
+      "description": "Frozen goal says to fix the failing price test without changing tests."
+    },
+    {
+      "id": "EVID-DEFECT",
+      "sourceLocation": {
+        "sourceId": "product-source",
+        "startLine": 7,
+        "endLine": 10
+      },
+      "description": "Inspected source shows applyDiscount multiplies by pct as a fraction, while pct is documented as a whole-number percentage."
+    },
+    {
+      "id": "EVID-FIXTURE-ACCEPTANCE",
+      "sourceLocation": {
+        "sourceId": "canonical-fixture",
+        "startLine": 5,
+        "endLine": 8
+      },
+      "description": "Frozen fixture description identifies the defect and exact product write path."
+    },
+    {
+      "id": "EVID-ACCEPTANCE-TESTS",
+      "sourceLocation": {
+        "sourceId": "product-tests",
+        "startLine": 7,
+        "endLine": 21
+      },
+      "description": "Pinned tests cover whole-number discount, zero-percent behavior, subtotal, and withTax."
+    },
+    {
+      "id": "EVID-MANDATORY-INVENTORY",
+      "sourceLocation": {
+        "sourceId": "mandatory-inventory",
+        "startLine": 7,
+        "endLine": 21
+      },
+      "description": "Accepted AUT-05 inventory defines REQ-1 through REQ-4 and AC-1; semantic score was independently assessed 5/5."
+    }
+  ],
+  "decisions": []
+}

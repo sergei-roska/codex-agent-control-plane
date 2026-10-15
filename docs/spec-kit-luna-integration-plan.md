@@ -1,7 +1,8 @@
 # Spec Kit integration plan for the harness
 
-Status: implementation roadmap. The AUT-05 review records Phase 0 acceptance;
-AUT-01 Phase 1 is the next bounded milestone after its A0 entry check.
+Status: implementation roadmap. AUT-05 Phase 0 and AUT-01 offline Phase 1 are
+accepted. [Phase 1 qualification](aut-01-review.md) records exact evidence and
+limits; later runtime and skill interventions remain unqualified.
 Updated: 2026-10-15.
 
 Execution guides: [AUT-05 baseline](aut-05-baseline-runbook.md),
@@ -668,7 +669,7 @@ node tools/spec-kit/analyze.js \
   --json
 ```
 
-These flags describe code to be implemented; the command is not available yet.
+The Phase 1 command is implemented; its qualification is in `docs/aut-01-review.md`.
 Use explicit arguments for the pilot. Do not select the latest numbered feature,
 consult the current Git branch, or modify `.specify/feature.json` in this checker.
 

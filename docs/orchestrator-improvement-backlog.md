@@ -678,7 +678,10 @@ artifacts automatically, so the harness must own consistency checks and the
 authority to accept changes:
 <https://github.com/github/spec-kit/blob/main/docs/guides/evolving-specs.md>.
 
-### AUT-01 - Requirement-to-task traceability [P1, idea]
+### AUT-01 - Requirement-to-task traceability [P1, offline pilot accepted]
+
+Accepted offline Phase 1: [qualification and limits](aut-01-review.md). Runtime
+enrollment and admission remain separate unqualified work.
 
 Pilot a lead-produced map from stable requirement and acceptance IDs to bounded
 tasks, dependencies, writable paths, checks, evidence, review gates, and stop
@@ -731,7 +734,11 @@ authorized run; return typed data and evidence references. MCP must not decide
 review freshness or grant mutation authority; deterministic runtime contracts
 remain responsible for those guarantees.
 
-### AUT-05 - Autonomy regression corpus and measures [cross-cutting, idea]
+### AUT-05 - Autonomy regression corpus and measures [cross-cutting, baseline accepted]
+
+Accepted offline v3 preparation baseline: [review and exact decision](aut-05-review.md).
+The AUT-01 [comparison](evidence/aut-01/comparison.json) qualifies structural
+capability only. Live workflow and economy measurements remain unavailable.
 
 Before retaining prompt, skill, model, or orchestration changes, record a
 baseline and compare representative tasks with the same acceptance rules. Seed

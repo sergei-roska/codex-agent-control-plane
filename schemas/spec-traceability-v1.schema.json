@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "spec-traceability-v1.schema.json",
+  "title": "Spec Kit traceability map v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "featureId", "contextSha256", "artifactBindings", "tasks"],
+  "properties": {
+    "schemaVersion": { "const": "spec-traceability/v1" },
+    "featureId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "contextSha256": { "$ref": "#/definitions/sha256" },
+    "artifactBindings": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "$ref": "#/definitions/artifactBinding" }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/definitions/task" }
+    }
+  },
+  "definitions": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "relativePath": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*[\\\\*?\\[\\]])[^\\u0001-\\u001f\\u007f]+$" },
+    "stringList": {
+      "type": "array",
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+    },
+    "scopeEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["file", "directory"] },
+        "path": { "$ref": "#/definitions/relativePath" }
+      }
+    },
+    "artifactBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "sha256"],
+      "properties": {
+        "role": { "type": "string", "enum": ["spec", "plan", "tasks"] },
+        "path": { "$ref": "#/definitions/relativePath" },
+        "sha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "objective", "requirementIds", "acceptanceIds", "dependsOn", "parallel", "writePaths", "checkIds", "priorEvidenceIds", "stopConditions", "additionalRiskTags", "declaredReviewKind", "checkpointId", "reviewReason"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^T[0-9]{3,6}$" },
+        "role": { "const": "engineer" },
+        "objective": { "type": "string", "minLength": 1, "maxLength": 3000 },
+        "requirementIds": { "$ref": "#/definitions/stringList" },
+        "acceptanceIds": { "$ref": "#/definitions/stringList" },
+        "dependsOn": { "$ref": "#/definitions/stringList" },
+        "parallel": { "type": "boolean" },
+        "writePaths": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/definitions/scopeEntry" } },
+        "checkIds": { "$ref": "#/definitions/stringList" },
+        "priorEvidenceIds": { "$ref": "#/definitions/stringList" },
+        "stopConditions": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 3000 } },
+        "additionalRiskTags": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["risk_change", "performance", "component_complete"] }
+        },
+        "declaredReviewKind": { "type": "string", "enum": ["routine", "risk_change", "performance", "component_complete"] },
+        "checkpointId": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+        "reviewReason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+      }
+    }
+  }
+}

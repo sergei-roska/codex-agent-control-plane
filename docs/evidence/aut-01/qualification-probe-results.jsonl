@@ -1,0 +1,22 @@
+{"name":"Q21 missing objective","exit":1,"verdict":"blocked","codes":["assignment_compile_failed","assignment_contract_invalid","required_field","string_bounds"],"fingerprint":"e63901051ab39919d48a7d05c3696b241dbc90f0b2af105aa34de999308637fa"}
+{"name":"Q21 incomplete review reason","exit":1,"verdict":"blocked","codes":["assignment_contract_invalid","assignment_contract_invalid","required_field","string_bounds"],"fingerprint":"3463844cb0c16d54956359faab2f0bbba9d8c78cc9cc55a5861bf80b2b2c4ce9"}
+{"name":"Q21 empty stops","exit":1,"verdict":"blocked","codes":["array_bounds"],"fingerprint":"591ad2fc7bcc6d8157818ce4bfef9e5c3220098b9c4940dae3131ad01468486f"}
+{"name":"Q21 absent verifier paths","exit":1,"verdict":"blocked","codes":["verifier_scope_empty"],"fingerprint":null}
+{"name":"Q21 outside verifier paths","exit":1,"verdict":"blocked","codes":["verifier_scope_denied"],"fingerprint":null}
+{"name":"Q23 too many items","exit":1,"verdict":"blocked","codes":["assignment_compile_failed","assignment_compile_failed","assignment_contract_invalid","assignment_contract_invalid"],"fingerprint":"1abd6ca4ab064c77f97690d6f10bc68205dc8f527b85152429b0b313ed917e34"}
+{"name":"Q25 boolean number","exit":1,"verdict":"blocked","codes":["timeout_invalid"],"fingerprint":null}
+{"name":"Q24 disappeared input","opens":3,"verdict":"blocked","codes":["input_drift_detected"],"fingerprint":"2f6accab6c0342b50bb61701555621bc51105cffdbf17be500028b284e015e25"}
+{"name":"Q05 duplicate requirements","exit":1,"verdict":"blocked","codes":["duplicate_id"],"fingerprint":null}
+{"name":"Q05 duplicate acceptanceCriteria","exit":1,"verdict":"blocked","codes":["duplicate_id"],"fingerprint":null}
+{"name":"Q05 duplicate checks","exit":1,"verdict":"blocked","codes":["duplicate_id"],"fingerprint":null}
+{"name":"Q05 duplicate priorEvidence","exit":1,"verdict":"blocked","codes":["duplicate_id"],"fingerprint":null}
+{"name":"Q07 unsafe a/../b","exit":1,"verdict":"blocked","codes":["assignment_contract_invalid","assignment_contract_invalid","path_unsafe","risk_rule_missing","write_scope_denied"],"fingerprint":"1702438b468cab4fb9a18ea4492be628955e4aed98a913e0d4ea9644d69a3c94"}
+{"name":"Q07 unsafe /absolute","exit":1,"verdict":"blocked","codes":["assignment_contract_invalid","assignment_contract_invalid","path_unsafe","risk_rule_missing","write_scope_denied"],"fingerprint":"b2d6bd05358a5e2621b143ab7cc6cfd93a65ad2f780d2c253021a02e7503b29e"}
+{"name":"Q07 unsafe product/src/*.js","exit":1,"verdict":"blocked","codes":["assignment_contract_invalid","assignment_contract_invalid","path_unsafe","risk_rule_missing","write_scope_denied"],"fingerprint":"57c770e1798c7194cd5c2ab28be1d63b31c145757ee6da7e7c88ad2fd3d6bc8c"}
+{"name":"Q07 unsafe product//src/price.js","exit":1,"verdict":"blocked","codes":["assignment_contract_invalid","assignment_contract_invalid","path_unsafe","risk_rule_missing","write_scope_denied"],"fingerprint":"306d4fa6e7ce5fec4e37ee4f370261a9e3549cf8c49a695992f68cd047a9c4fd"}
+{"name":"Q20 injected workspaceRoot","exit":1,"verdict":"blocked","codes":["unknown_field"],"fingerprint":"30392d88b077412079767f8a5fa0251444997367092282a7a24aefb8a3e7426c"}
+{"name":"Q20 injected writeScope","exit":1,"verdict":"blocked","codes":["unknown_field"],"fingerprint":"1075aacd114ada00217f42067cb77843d84d4545fcec0cf8ac203f5a7735e12c"}
+{"name":"Q20 injected contextPath","exit":1,"verdict":"blocked","codes":["unknown_field"],"fingerprint":"7d3ea8421a28f095ea93577ff1b6ccc966e9add86643b99639e26e9824d9cba7"}
+{"name":"Q18 changed spec","exit":1,"verdict":"blocked","codes":["artifact_digest_mismatch"],"fingerprint":null}
+{"name":"Q18 changed plan","exit":1,"verdict":"blocked","codes":["artifact_digest_mismatch"],"fingerprint":null}
+{"name":"Q18 changed tasks","exit":1,"verdict":"blocked","codes":["artifact_digest_mismatch"],"fingerprint":null}
