@@ -29,3 +29,13 @@ read bounded file sections. Pass agents file paths and concise deltas instead
 of duplicating full history. Use the smallest team with clear file ownership.
 Reuse verification only while its inputs remain valid; rerun affected checks
 after changes. Keep a compact current state instead of append-only transcripts.
+
+## Project terminology
+
+- "Harness" means this repository and the agent system developed here. It is
+  both the web interface used to run work on other projects and a testbed for
+  recording problems and solutions before applying those lessons to production
+  projects.
+- "Lead" means the lead role within the harness.
+- "Orchestrator" means the new orchestrator that the harness is developing.
+- Keep these terms distinct in discussion, plans, handoffs, and documentation.

@@ -7,6 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { TaskState } = require('@a2a-js/sdk');
+const { uuid6 } = require('@langchain/langgraph-checkpoint');
+const { INTERRUPT } = require('@langchain/langgraph');
 const { LeadOrchestrator, RunNotFoundError } = require('../src/lead-orchestrator');
 const { execFileSync } = require('node:child_process');
 const { UsageLedger } = require('../src/usage-ledger');
@@ -668,7 +670,7 @@ test('an empty dispatch is rejected with a reminder to finish or ask', async () 
   await withSession(world, async (session) => {
     const result = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
     assert.equal(result.status, 'completed');
-    assert.match(world.prompts[1], /use finish, request_human_input, or request_system_repair instead of an empty dispatch/);
+    assert.match(world.prompts[1], /use finish or request_human_input instead of an empty dispatch/);
   });
 });
 
@@ -2075,6 +2077,62 @@ const tokenUsage = (contextTokens, contextWindow = null, summed = 5 * contextTok
   model: 'gpt-lead', tokens: { inputTokens: summed, totalTokens: summed }, tokenSource: 'total_delta', contextTokens, contextWindow,
 });
 const sessionWorld = (script) => Object.assign(makeWorld({ script }), { freshThreads: true });
+
+test('full and resumed delta prompts carry the complete stored review context', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate\n');
+  vcs(workspace, 'add', '.');
+  vcs(workspace, 'commit', '-q', '-m', 'candidate');
+  const review = {
+    kind: 'risk_change',
+    checkpointId: 'critical-context-transfer',
+    reason: 'Review the trust boundary',
+    paths: ['src/file.js'],
+    evidenceIds: ['incident-17', 'decision-23'],
+    prerequisiteFor: [],
+  };
+  const world = sessionWorld([
+    dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+    dispatch({ ...brief('orch-verifier', ['test']), review }, { ...brief('orch-auditor', []), review }),
+    finish('Reviewed'),
+  ]);
+  world.leadExtras = (turn) => ({ usage: tokenUsage(turn === 1 ? 200000 : 1000) });
+  world.workerFinal = reviewWorkerFinal;
+
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID, contextId: SESSION, interruptAfter: ['verify'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+
+    const config = { configurable: { thread_id: RUN_ID } };
+    const values = (await session.orchestrator.graph.getState(config)).values;
+    assert.equal(values.reviewObligations.length, 1);
+    const legacyObligation = {
+      ...values.reviewObligations[0],
+      review: { ...values.reviewObligations[0].review },
+    };
+    delete legacyObligation.review.prerequisiteFor;
+    await session.orchestrator.graph.updateState(config, {
+      reviewObligations: [legacyObligation],
+    });
+
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.threadArgs, [undefined, undefined, 'thread-2']);
+
+    const extract = (prompt) => {
+      const match = /Checkpoint review obligations[^\n]*\n(\[[^\n]*\])/.exec(prompt);
+      assert.ok(match, 'prompt contains serialized checkpoint review obligations');
+      return JSON.parse(match[1])[0].review;
+    };
+    const expected = { ...review, prerequisiteFor: [] };
+    assert.deepEqual(extract(world.prompts[1]), expected);
+    assert.deepEqual(extract(world.prompts[2]), expected);
+    assert.match(world.prompts[1], /reuse each review object exactly as stored/i);
+    assert.match(world.prompts[2], /reuse each review object exactly as stored/i);
+    assert.doesNotMatch(world.prompts[2], /Available roles:|User goal:/);
+  }, { withSessions: true, workspace });
+});
 
 test('the second round of a session resumes the same thread with a delta prompt that carries the new outcomes', async () => {
   const world = sessionWorld([dispatch(brief('orch-explorer', [])), finish('Done')]);
@@ -4675,5 +4733,67 @@ test('Stop cancels a running writer; resume reconciles it before the lead plans 
     assert.equal(world.leadTurns, 2);
     assert.equal(world.sends.length, 1);
     assert.match(world.prompts[1], /"kind":"reconciliation"/);
+  });
+});
+
+// Legacy resume only: the system repair route was removed, but a session parked at the old
+// system_pause node (with its legacy channels and pending interrupt) must still load and resume.
+test('a session parked at the legacy system_pause node resumes as an ordinary lead turn', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), humanRequest(), finish('Continued after removal')] });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Choose', runId: RUN_ID });
+    assert.equal(paused.status, 'input_required');
+    const config = { configurable: { thread_id: RUN_ID } };
+    const saver = session.state.checkpointer;
+    const tuple = await saver.getTuple(config);
+    const base = tuple.checkpoint;
+    const version = Math.max(...Object.values(base.channel_versions).map(Number)) + 1;
+    const channelVersions = Object.fromEntries(Object.entries(base.channel_versions).filter(([key]) => !key.startsWith('branch:to:')));
+    channelVersions['branch:to:system_repair'] = version;
+    channelVersions['branch:to:system_pause'] = version + 1;
+    const systemRequest = {
+      requestId: `${RUN_ID}:system:1`, incidentId: 'control-plane-incident', status: 'unavailable', attempts: 1,
+      lastResult: { status: 'unavailable', reason: 'system_repair_service_unavailable' },
+      request: { incidentId: 'control-plane-incident', question: 'Why?', evidence: ['e1'], relatedDecisionIds: [] },
+    };
+    const legacy = {
+      ...base,
+      id: uuid6(-2),
+      ts: new Date(Date.parse(base.ts) + 1000).toISOString(),
+      channel_values: {
+        ...Object.fromEntries(Object.entries(base.channel_values).filter(([key]) => !key.startsWith('branch:to:'))),
+        'branch:to:system_repair': 'decide',
+        'branch:to:system_pause': 'system_repair',
+        humanRequest: null,
+        systemRequest,
+        systemCount: 1,
+        systemResults: [{ requestId: systemRequest.requestId, incidentId: systemRequest.incidentId, status: 'unavailable' }],
+        systemCompletedIncidents: [],
+        systemStopPending: false,
+      },
+      channel_versions: channelVersions,
+      versions_seen: Object.fromEntries(Object.entries(base.versions_seen).filter(([node]) => node !== 'human_input')),
+    };
+    await saver.put({ configurable: { ...config.configurable, checkpoint_ns: '', checkpoint_id: base.id } }, legacy, { source: 'loop', step: (tuple.metadata?.step ?? 0) + 1, parents: {} }, channelVersions);
+    const parked = await session.orchestrator._snapshot(RUN_ID);
+    assert.deepEqual(parked.next, ['system_pause']);
+    // The old node parked through interrupt(); store that pending interrupt for its task.
+    await saver.putWrites(parked.config, [[INTERRUPT, {
+      value: { kind: 'system_repair', requestId: systemRequest.requestId, incidentId: systemRequest.incidentId, status: 'unavailable', message: 'waiting' },
+      id: 'legacy-system-pause',
+    }]], parked.tasks[0].id);
+    const snapshot = await session.orchestrator._snapshot(RUN_ID);
+    assert.deepEqual(snapshot.next, ['system_pause']);
+    assert.equal(snapshot.values.systemRequest.incidentId, 'control-plane-incident');
+    assert.equal((await session.orchestrator.getPause(RUN_ID)).kind, 'system_repair');
+
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Continued after removal');
+    assert.equal(world.leadTurns, 3);
+    const after = await session.orchestrator._snapshot(RUN_ID);
+    assert.equal(after.values.systemRequest, null);
+    assert.ok(after.values.progress.some((entry) => entry.kind === 'route_removed' && /removed/.test(entry.detail)));
+    assert.equal(await session.orchestrator.getPause(RUN_ID), null);
   });
 });

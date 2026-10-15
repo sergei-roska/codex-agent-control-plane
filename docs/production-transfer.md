@@ -19,7 +19,7 @@ Implementation, isolated verification, and live qualification are separate.
 
 | Date | Decision | ADR |
 |---|---|---|
-| 2026-10-14 | Separate Chuck Norris system repair from project work and owner-only decisions; independently accepted in disposable tests | docs/adr/chuck-norris-system-repair.md |
+| 2026-10-14 | Chuck Norris system repair agent added, then removed the same day after its first live use (superseded) | docs/adr/chuck-norris-system-repair.md |
 | 2026-10-12 | Retain staging problems, attempted resolutions, and architectural decisions with evidence and statuses; durable runtime implementation qualified in isolation | docs/adr/staging-lessons-and-decision-log.md |
 | 2026-10-11 | Session token usage is attributed through lead run ids and the dispatch journal, not context ids | docs/adr/launcher-session-usage-attribution.md |
 | 2026-10-11 | The launcher projects live run state read-only from the lead's LangGraph checkpoint | docs/adr/launcher-situation-from-checkpoint.md |
@@ -489,6 +489,9 @@ measured audit savings.
 
 ### SYS-REPAIR-01 Project roles cannot repair the hosting control plane
 
+- Status: removed on 2026-10-14 after its first live use; see P-36. The text
+  below is kept as dated history.
+
 - Symptom: a systemic controller defect needs outside repair, while project
   specialists only have the target workspace and the owner receives debugging
   questions.
@@ -514,3 +517,55 @@ measured audit savings.
   now validates the candidate before integration; failed candidates remain
   isolated. Actual loaded entry/helper capture and SDK interface sanitization
   also passed independent review. Automatic maintenance restarts remain deferred.
+
+### P-36 A new service passed mocked tests but failed on first live use
+
+- Found: 2026-10-14, first live use of the Chuck Norris system repair agent.
+- Symptom: four defects that mocked tests had not shown: oversized request
+  inputs, a lane isolation probe that failed because the lanes and the app-server
+  working directory sat inside the repaired repository, a retry path that could
+  not resubmit after an isolation refusal, and a stale phase display.
+- Cause: the service was accepted on mocked integration tests only. The agent
+  edits the tree its own control plane runs from, which makes isolation hard to
+  establish and impossible to prove with stubs.
+- Decision: the agent and the lead route to it were removed (see the superseded
+  ADR). Control-plane incidents are fixed by the owner or a dev session.
+- Production: a new service must have a live smoke run in the real environment
+  before its first real use. Mocked acceptance does not establish isolation,
+  sizing or recovery behavior.
+
+### P-37 A live dispatch decision populated the final field
+
+- Found: 2026-10-15 during a monitored run after the current-candidate verifier
+  passed an integrated repair.
+- Symptom: the lead's dispatch decisions were rejected three times with
+  `records_invalid` and `decision_envelope_invalid`; validation reported that
+  dispatch decisions must leave `final` empty. The lead paused with
+  `loop_detected` before dispatching new work.
+- Recovery: the controller selected the recommended `continue`, preserving the
+  existing goal and configured round allowance, and reminded the lead to leave
+  `final` empty. The lead resumed at the decision step.
+- Status: after the follow-up audit failed without a summary, the lead integrated
+  a workspace-consistency repair at round 191 and dispatched a verifier at round
+  192. The run continued without another owner pause, and the invalid dispatch
+  decision has not recurred. A durable prompt-level correction is not verified.
+- Production: keep `final` empty on dispatch actions and treat repeated schema
+  rejection as an orchestration defect, not a reason to accept incomplete work.
+
+### P-38 Historical evidence pins cannot qualify a changed candidate
+
+- Found: 2026-10-15 when the r194 lifecycle verifier compared current source and
+  test files against the immutable T3.1.2d.2 evidence record.
+- Symptom: verification was inconclusive because the recorded source/test pins
+  describe an earlier candidate; the lead had to decide which checkpoint
+  revision should bind before lifecycle acceptance could proceed.
+- Cause: later repairs changed the same paths while the d.2 evidence correctly
+  retained its original hashes and qualification history.
+- Remedy selected: preserve d.2 and its original pins as historical evidence;
+  create a separate current-candidate qualification from the executed r194
+  evidence and independently measured hashes. Keep the checkpoint unaccepted
+  until fresh current-target verification and audit receipts exist.
+- Status: evidence-only assignment started in round 195; the new record and
+  subsequent review gates are pending.
+- Production: never rewrite old evidence pins to match changed files. Bind a new
+  candidate revision and renew every affected gate before acceptance.

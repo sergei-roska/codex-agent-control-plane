@@ -66,9 +66,7 @@ async function fixture(t) {
     { ...leadTask('park-decide', INPUT, '2026-03-08T10:00:00.000Z', 'ctx-park-decide'), metadata: { pause: { kind: 'owner_pause', message: 'Paused by the owner' } } },
     { ...leadTask('park-stopped', INPUT, '2026-03-10T10:00:00.000Z', 'ctx-park-stopped'), metadata: { pause: { kind: 'stopped', message: 'Stopped by the owner' } } },
     { ...leadTask('park-restart', INPUT, '2026-03-09T10:00:00.000Z', 'ctx-park-restart'), metadata: { pause: { kind: 'restart' } } },
-    { ...leadTask('system-run', WORKING, '2026-03-11T10:00:00.000Z', 'ctx-system-run') },
-    { ...leadTask('system-wait', INPUT, '2026-03-12T10:00:00.000Z', 'ctx-system-wait'), metadata: { pause: { kind: 'system_repair' } } },
-    { ...leadTask('system-owner', INPUT, '2026-03-13T10:00:00.000Z', 'ctx-system-owner'), metadata: { pause: { kind: 'owner_pause', message: 'Paused by the owner' } } },
+    { ...leadTask('legacy-system', INPUT, '2026-03-11T10:00:00.000Z', 'ctx-legacy-system'), metadata: { pause: { kind: 'system_repair' } } },
   ];
   for (const task of tasks) await store.save(task, new ServerCallContext());
   state.db.exec(`CREATE TABLE IF NOT EXISTS live_activity (
@@ -141,17 +139,10 @@ async function fixture(t) {
   await put('park-decide', checkpoint(1, { round: 2 }, { 'branch:to:decide': 7 }, '2026-03-08T10:10:00.000Z'), 1);
   await put('park-stopped', checkpoint(1, { round: 2, status: 'canceled' }, { 'branch:to:finish': 8 }, '2026-03-10T10:10:00.000Z'), 1);
   await put('park-restart', checkpoint(1, { round: 2 }, { 'branch:to:decide': 7 }, '2026-03-09T10:10:00.000Z'), 1);
-  const systemRequest = {
-    requestId: 'run-system:system:1', incidentId: 'control-plane-incident', status: 'pending', attempts: 0,
-    lastResult: null,
-  };
-  await put('system-run', checkpoint(1, { round: 2, systemRequest }, { 'branch:to:system_repair': 8 }, '2026-03-11T10:10:00.000Z'), 1);
-  await put('system-wait', checkpoint(1, {
+  await put('legacy-system', checkpoint(1, {
     round: 2,
-    systemRequest: { ...systemRequest, status: 'unavailable', attempts: 1, lastResult: { status: 'unavailable', reason: 'system_repair_service_unavailable' } },
-    systemResults: [{ requestId: systemRequest.requestId, incidentId: systemRequest.incidentId, status: 'unavailable' }],
-  }, { 'branch:to:system_pause': 9 }, '2026-03-12T10:10:00.000Z'), 1);
-  await put('system-owner', checkpoint(1, { round: 2, systemRequest }, { 'branch:to:owner_pause': 10 }, '2026-03-13T10:10:00.000Z'), 1);
+    systemRequest: { requestId: 'run-system:system:1', incidentId: 'control-plane-incident', status: 'unavailable', attempts: 1 },
+  }, { 'branch:to:system_pause': 9 }, '2026-03-11T10:10:00.000Z'), 1);
   await put('owner-1', checkpoint(1, { round: 1 }, { 'branch:to:human_input': 5 }, '2026-03-05T10:10:00.000Z'), 1);
   return state.db;
 }
@@ -162,8 +153,6 @@ test('phaseOf maps terminal states, input pauses, and graph nodes; unknown combi
   assert.equal(phaseOf('TASK_STATE_REJECTED', null), 'failed');
   assert.equal(phaseOf('TASK_STATE_CANCELED', null), 'canceled');
   assert.equal(phaseOf('TASK_STATE_INPUT_REQUIRED', 'budget_pause'), 'budget_pause');
-  assert.equal(phaseOf('TASK_STATE_WORKING', 'system_repair'), 'system_repair');
-  assert.equal(phaseOf('TASK_STATE_INPUT_REQUIRED', 'system_pause'), 'system_wait');
   assert.equal(phaseOf('TASK_STATE_INPUT_REQUIRED', 'human_input'), 'waiting_owner');
   assert.equal(phaseOf('TASK_STATE_INPUT_REQUIRED', null), 'waiting_owner');
   assert.equal(phaseOf('TASK_STATE_WORKING', 'intake'), 'planning');
@@ -189,7 +178,7 @@ test('nodeOf picks the highest branch version; nextStepsOf reads the next-work p
 test('a running session projects the batch, decisions, progress and timestamps from its checkpoint', async (t) => {
   const db = await fixture(t);
   const s = await buildSituation(db, 'ctx-run');
-  assert.deepEqual(Object.keys(s), ['contextId', 'leadTaskId', 'state', 'node', 'phase', 'pauseKind', 'systemRepair', 'round', 'budget', 'startedAt', 'updatedAt',
+  assert.deepEqual(Object.keys(s), ['contextId', 'leadTaskId', 'state', 'node', 'phase', 'pauseKind', 'round', 'budget', 'startedAt', 'updatedAt',
     'batch', 'openDecisions', 'progress', 'acceptance', 'nextSteps']);
   assert.equal(s.contextId, 'ctx-run');
   assert.equal(s.leadTaskId, 'run-1');
@@ -262,45 +251,15 @@ test('a budget pause and a human request are waiting phases', async (t) => {
   assert.equal(owner.phase, 'waiting_owner');
 });
 
-test('system repair execution and technical waits are distinct from owner decisions', async (t) => {
+// Legacy resume only: a session parked at the removed system repair route shows no system phase.
+test('a session parked at the legacy system_pause node projects as an ordinary waiting lead', async (t) => {
   const db = await fixture(t);
-  const active = await buildSituation(db, 'ctx-system-run');
-  assert.equal(active.node, 'system_repair');
-  assert.equal(active.phase, 'system_repair');
-  assert.deepEqual(active.systemRepair, {
-    requestId: 'run-system:system:1', incidentId: 'control-plane-incident', status: 'pending', attempts: 0, reason: null,
-  });
-
-  const waiting = await buildSituation(db, 'ctx-system-wait');
-  assert.equal(waiting.node, 'system_pause');
-  assert.equal(waiting.phase, 'system_wait');
-  assert.equal(waiting.pauseKind, null);
-  assert.equal(waiting.systemRepair.status, 'unavailable');
-  assert.equal(waiting.systemRepair.reason, 'system_repair_service_unavailable');
-  assert.equal(ownerPausedLead(db, 'ctx-system-wait'), null);
-});
-
-test('an owner pause during system repair remains an owner pause and keeps its repair summary', async (t) => {
-  const db = await fixture(t);
-  const situation = await buildSituation(db, 'ctx-system-owner');
-  assert.equal(situation.node, 'owner_pause');
-  assert.equal(situation.phase, 'paused');
-  assert.equal(situation.pauseKind, 'owner_pause');
-  assert.equal(situation.systemRepair.incidentId, 'control-plane-incident');
-  assert.deepEqual(ownerPausedLead(db, 'ctx-system-owner'), { taskId: 'system-owner', contextId: 'ctx-system-owner' });
-});
-
-test('system repair summary omits unsafe reason and identifier text', async (t) => {
-  const db = await fixture(t);
-  const saver = new SqliteSaver(db);
-  await saver.put({ configurable: { thread_id: 'system-run', checkpoint_ns: '' } }, checkpoint(2, {
-    systemRequest: { requestId: 'Bearer secret', incidentId: 'incident with spaces', status: 'pending', attempts: 0,
-      lastResult: { status: 'blocked', reason: 'token=secret value' } },
-  }, { 'branch:to:system_repair': 11 }, '2026-03-11T10:11:00.000Z'), { source: 'loop', step: 2, parents: {} });
-  const situation = await buildSituation(db, 'ctx-system-run');
-  assert.equal(situation.systemRepair.requestId, null);
-  assert.equal(situation.systemRepair.incidentId, null);
-  assert.equal(situation.systemRepair.reason, null);
+  const situation = await buildSituation(db, 'ctx-legacy-system');
+  assert.equal(situation.node, 'system_pause');
+  assert.equal(situation.phase, 'waiting_owner');
+  assert.equal(situation.pauseKind, null);
+  assert.equal(Object.hasOwn(situation, 'systemRepair'), false);
+  assert.equal(ownerPausedLead(db, 'ctx-legacy-system'), null);
 });
 
 test('phase is pausing while a pause is requested and the lead has not parked yet', async (t) => {

@@ -27,8 +27,7 @@ const { createActivityStore } = require('./activity-store');
 const { createEvidenceStore } = require('./evidence-store');
 const { StagingLog } = require('./staging-log');
 const { validateAcceptanceContract, formatAcceptance, invalidAcceptanceContract } = require('./acceptance');
-const { loadOrCreateAuthToken, readAuthToken, createAuthMiddleware } = require('./local-auth');
-const { createSystemRepairClient } = require('./system-repair-client');
+const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
 const { loadSkillCatalog } = require('./skill-catalog');
 const { canonicalRoleId, roleDisplayName } = require('./role-names');
 runtimeIdentity.seal();
@@ -692,17 +691,8 @@ async function startServer({
   workspaceLockDir,
   autoResume = autoResumeEnabled(),
   budgetWatcherOptions = {},
-  systemRepairClientFactory = createSystemRepairClient,
 } = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new RangeError('port must be an integer from 0 to 65535');
-  const systemAgentUrl = process.env.CODEX_A2A_SYSTEM_AGENT_URL || null;
-  const systemAgentTokenPath = process.env.CODEX_A2A_SYSTEM_AGENT_TOKEN_FILE || null;
-  let systemAgentToken = null;
-  if (systemAgentUrl) {
-    if (!systemAgentTokenPath) throw new Error('CODEX_A2A_SYSTEM_AGENT_TOKEN_FILE is required when the system agent is configured');
-    systemAgentToken = readAuthToken({ filePath: path.resolve(systemAgentTokenPath) });
-  }
-  if (systemAgentTokenPath) delete process.env.CODEX_A2A_SYSTEM_AGENT_TOKEN_FILE;
   if (typeof workspace !== 'string' || !workspace || !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`workspace must be an existing directory: ${workspace}`);
   }
@@ -777,23 +767,12 @@ async function startServer({
     }
     const usageLedger = new UsageLedger({ db: state.db });
     const stagingLog = new StagingLog({ db: state.db });
-    const journal = new DispatchJournal(state);
-    const repairSystemClient = systemAgentUrl ? systemRepairClientFactory({
-      endpoint: systemAgentUrl,
-      authToken: systemAgentToken,
-      journal,
-    }) : null;
-    const repairSystem = repairSystemClient ? (request, context = {}) => repairSystemClient(request, {
-      ...context,
-      requesterRuntimeIdentity: runtimeIdentity.snapshot,
-    }) : null;
     const evidenceStore = createEvidenceStore(state.db);
     const activityStore = createActivityStore(state.db);
     const sessionThreads = new SessionThreads({ db: state.db });
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog,
-      checkpointer: state.checkpointer, journal, admission, usageLedger, stagingLog, activityStore, evidenceStore, sessionThreads,
-      ...(repairSystem ? { repairSystem, systemAgentAvailable: true } : { systemAgentAvailable: false }),
+      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, stagingLog, activityStore, evidenceStore, sessionThreads,
       parallelWriters: worktreeMode,
       ...(acceptanceScratch ? { acceptanceScratch } : {}),
     });

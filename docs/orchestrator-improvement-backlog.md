@@ -661,6 +661,86 @@ scope violations, and other unintegrated reasons. Tests: writable verifier
 with no edits gets an accepted receipt; `lane_unsafe`, `canceled`, unknown
 delta, and target change stay rejected.
 
+## Future autonomy ideas: spec-driven planning and recovery (2026-10-15)
+
+Status: ideas only. These items are not part of M0-M3 acceptance and do not
+authorize runtime changes. Preserve the current PRD, plans, and task contracts
+as the sources of truth; avoid creating a competing specification set.
+
+Spec Kit is a candidate workflow reference, not a required dependency. Its
+specify -> plan -> tasks -> implement -> converge flow and spec-of-specs
+roadmap pattern may help the lead turn an epic into bounded, dependency-ordered
+slices. Pilot the artifact model on one future feature before considering CLI or
+skill installation: <https://github.com/github/spec-kit> and
+<https://github.com/github/spec-kit/blob/main/docs/concepts/spec-of-specs.md>.
+Spec Kit's analyze step is read-only and its core does not reconcile all
+artifacts automatically, so the harness must own consistency checks and the
+authority to accept changes:
+<https://github.com/github/spec-kit/blob/main/docs/guides/evolving-specs.md>.
+
+### AUT-01 - Requirement-to-task traceability [P1, idea]
+
+Pilot a lead-produced map from stable requirement and acceptance IDs to bounded
+tasks, dependencies, writable paths, checks, evidence, review gates, and stop
+conditions. Each task must trace back to at least one requirement; every
+mandatory requirement must be covered. Run a deterministic, read-only analyzer
+before dispatch to report uncovered requirements, orphan tasks, dependency
+cycles, missing acceptance evidence, and conflicts with source plans. The lead
+resolves findings explicitly; the analyzer never silently rewrites source
+documents. Use the existing PRD and plans as canonical inputs.
+
+Exit evidence: representative plans yield a complete traceability map, every
+derived task passes the dispatch contract, and analysis detects seeded coverage,
+dependency, and scope-boundary defects without changing files.
+
+### AUT-02 - Fresh-target review recovery [P1, idea]
+
+When an implementation changes a reviewed candidate, invalidate its old
+receipts and require a verifier, followed by an auditor where the checkpoint
+requires one, against the new target. A stale continuation must be rejected
+before model execution and return the lead to a bounded fresh-review path; do
+not reuse historical review origins or weaken the stored checkpoint context.
+Use the 2026-10-15 r215 `review_origin_stale` event as a regression fixture.
+
+Exit evidence: the stale continuation remains non-authorizing, the lead
+automatically dispatches a correctly bound fresh review, and the current-target
+verifier/auditor receipts pass without a repeated preflight rejection or gate
+bypass.
+
+### AUT-03 - Lead spec-decomposition skill [P2, idea]
+
+Trial one versioned, hash-pinned skill for converting a short user goal and
+canonical project documents into a roadmap, requirement map, dependency-ordered
+tasks, and a dispatch-readiness report. Keep user authority, scope boundaries,
+and the existing assignment contract explicit. Prefer the skill over expanding
+the global system prompt; enable it only for the lead during the pilot.
+
+Exit evidence: on the autonomy regression set, the lead preserves all explicit
+constraints, identifies missing decisions rather than inventing them, and
+produces dispatchable tasks with no coverage or dependency defects. Retain the
+skill only if it improves these outcomes without unacceptable prompt or token
+growth.
+
+### AUT-04 - Read-only structured evidence tools [P2, idea]
+
+Consider MCP only if evaluation shows that roles cannot reliably retrieve
+canonical run-scoped data through existing interfaces. Candidate read-only
+operations include current candidate identity, requirement dependencies,
+checkpoint receipts, and required-check results. Scope every lookup to the
+authorized run; return typed data and evidence references. MCP must not decide
+review freshness or grant mutation authority; deterministic runtime contracts
+remain responsible for those guarantees.
+
+### AUT-05 - Autonomy regression corpus and measures [cross-cutting, idea]
+
+Before retaining prompt, skill, model, or orchestration changes, record a
+baseline and compare representative tasks with the same acceptance rules. Seed
+cases from known failures: incomplete canonical identity checks, contradictory
+nested manifests, fixture/dispatcher producer mismatch, and stale review
+continuation. Track first-pass accepted checkpoints, repair/review cycles,
+owner escalations, elapsed time, and measured cost per accepted result. Never
+trade acceptance or safety for fewer rounds; unknown measurements stay unknown.
+
 ## Verification and rollout policy
 
 1. Run focused tests in implementation tasks, then the existing project checks at

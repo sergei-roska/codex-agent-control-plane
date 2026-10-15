@@ -1,7 +1,6 @@
 'use strict';
 
 const path = require('node:path');
-const crypto = require('node:crypto');
 const { canonicalRoleId, getRole } = require('./role-names');
 const { isSafeIdentity } = require('./staging-log');
 
@@ -13,7 +12,7 @@ const WORKER_REPORT_CONTRACT = 'worker-report/v1';
 const ASSIGNMENT_FIELDS = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
 const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom', 'review', 'repair'];
 const DECISION_BASE_KEYS = ['action', 'assignments', 'final', 'resolutions', 'humanInput'];
-const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks', 'records', 'systemInput'];
+const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks', 'records'];
 const ASSIGNMENT_ARRAY_FIELDS = ASSIGNMENT_FIELDS.filter((field) => field !== 'role' && field !== 'objective');
 const REPORT_OUTCOMES = ['completed', 'blocked', 'needs_decision', 'failed'];
 const CHECK_RESULTS = ['passed', 'failed', 'not_run'];
@@ -141,9 +140,9 @@ const WORKER_REPORT_SCHEMA = {
 const DECISION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks', 'records', 'systemInput'],
+  required: ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks', 'records'],
   properties: {
-    action: { type: 'string', enum: ['dispatch', 'finish', 'request_human_input', 'request_system_repair'] },
+    action: { type: 'string', enum: ['dispatch', 'finish', 'request_human_input'] },
     assignments: {
       type: 'array',
       items: {
@@ -200,22 +199,6 @@ const DECISION_SCHEMA = {
         required: ['decisionId', 'choice', 'rationale'],
         properties: { decisionId: { type: 'string' }, choice: { type: 'string' }, rationale: { type: 'string' } },
       },
-    },
-    systemInput: {
-      anyOf: [
-        {
-          type: 'object',
-          additionalProperties: false,
-          required: ['incidentId', 'question', 'evidence', 'relatedDecisionIds'],
-          properties: {
-            incidentId: { type: 'string', minLength: 1, maxLength: 160 },
-            question: { type: 'string', minLength: 1, maxLength: MAX_CHARS },
-            evidence: { type: 'array', items: { type: 'string', minLength: 1, maxLength: MAX_CHARS }, minItems: 1, maxItems: MAX_ITEMS },
-            relatedDecisionIds: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 160 }, maxItems: MAX_ITEMS },
-          },
-        },
-        { type: 'null' },
-      ],
     },
     humanInput: {
       anyOf: [
@@ -920,32 +903,6 @@ function checkWaveScopes(assignments, ctx) {
  * ctx = { roles: Map, attemptedRoles: Set, outcomeCount: number, openDecisionIds: Set, unresolvedWriterCount?: number,
  *   investigations?: [{ assignmentId, round }], openDecisionRounds?: Map, goalInvestigationRound?: number | null }
  */
-function checkSystemInput(value, openIds, ctx) {
-  const fields = ['incidentId', 'question', 'evidence', 'relatedDecisionIds'];
-  if (!isPlainObject(value) || !sameKeys(value, fields)) {
-    throw violation('decision.envelope', 'decision_envelope_invalid', `systemInput must contain exactly ${fields.join(', ')}`);
-  }
-  const problem = boundedString(value.incidentId, 'systemInput.incidentId')
-    || value.incidentId.length > 160 && 'systemInput.incidentId must be at most 160 characters'
-    || boundedString(value.question, 'systemInput.question')
-    || checkStringArray(value.evidence, 'systemInput.evidence', { allowEmpty: false })
-    || checkStringArray(value.relatedDecisionIds, 'systemInput.relatedDecisionIds');
-  if (problem) throw violation('decision.envelope', 'decision_envelope_invalid', problem);
-  if (value.evidence.length > MAX_ITEMS || value.relatedDecisionIds.length > MAX_ITEMS
-    || value.relatedDecisionIds.some((id) => id.length > 160)
-    || new Set(value.evidence).size !== value.evidence.length || new Set(value.relatedDecisionIds).size !== value.relatedDecisionIds.length) {
-    throw violation('decision.envelope', 'decision_envelope_invalid', 'systemInput evidence and relatedDecisionIds must be bounded and unique');
-  }
-  for (const id of value.relatedDecisionIds) {
-    if (!openIds.has(id)) throw violation('decision.resolutions', 'decision_unresolved', `systemInput.relatedDecisionIds references a decision that is not open: ${id}`);
-  }
-  const completed = ctx.systemIncidents || new Set();
-  const incidentKey = crypto.createHash('sha256').update(value.incidentId).update('\0').update(JSON.stringify(value.evidence)).digest('hex');
-  if (completed.has(incidentKey)) {
-    throw violation('decision.envelope', 'decision_envelope_invalid', `System incident ${value.incidentId} already has a completed repair request`);
-  }
-}
-
 function validateDecision(decision, ctx) {
   if (!isPlainObject(decision)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead decision must be a JSON object');
   const openIds = ctx.openDecisionIds || new Set();
@@ -958,10 +915,9 @@ function validateDecision(decision, ctx) {
   const legacyGoal = !keys.includes('goalAchieved');
   if (legacyGoal) decision.goalAchieved = null;
   if (!keys.includes('acceptanceChecks')) decision.acceptanceChecks = null;
-  if (!keys.includes('systemInput')) decision.systemInput = null;
   if (decision.goalAchieved !== null && typeof decision.goalAchieved !== 'boolean') throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead goalAchieved must be true, false, or null');
   if (decision.acceptanceChecks !== null && !Array.isArray(decision.acceptanceChecks)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead acceptanceChecks must be an array or null');
-  if (!['dispatch', 'finish', 'request_human_input', 'request_system_repair'].includes(decision.action)) throw violation('decision.envelope', 'decision_envelope_invalid', `Unsupported lead action: ${String(decision.action)}`);
+  if (!['dispatch', 'finish', 'request_human_input'].includes(decision.action)) throw violation('decision.envelope', 'decision_envelope_invalid', `Unsupported lead action: ${String(decision.action)}`);
   if (!Array.isArray(decision.assignments)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead assignments must be an array');
   if (typeof decision.final !== 'string') throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead final must be a string');
   if (!Array.isArray(decision.resolutions)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead resolutions must be an array');
@@ -981,12 +937,6 @@ function validateDecision(decision, ctx) {
     resolved.add(resolution.decisionId);
   }
 
-  if (decision.action === 'request_system_repair') {
-    checkSystemInput(decision.systemInput, openIds, ctx);
-  } else if (decision.systemInput !== null) {
-    throw violation('decision.envelope', 'decision_envelope_invalid', 'systemInput is allowed only for request_system_repair');
-  }
-
   if (decision.action === 'finish') {
     if (decision.assignments.length !== 0 || !decision.final.trim()) throw violation('decision.envelope', 'decision_envelope_invalid', 'Finish decisions require no assignments and non-empty final text');
     if (decision.humanInput !== null) throw violation('decision.envelope', 'decision_envelope_invalid', 'Finish decisions must leave humanInput null');
@@ -1001,11 +951,6 @@ function validateDecision(decision, ctx) {
     if (decision.assignments.length !== 0) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input decisions require no assignments');
     if (decision.final.trim()) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input decisions must leave final empty');
     checkHumanInput(decision.humanInput, openIds, ctx);
-  } else if (decision.action === 'request_system_repair') {
-    if (decision.assignments.length !== 0 || decision.final.trim() || decision.humanInput !== null
-      || decision.goalAchieved !== null || decision.acceptanceChecks !== null || decision.resolutions.length !== 0) {
-      throw violation('decision.envelope', 'decision_envelope_invalid', 'request_system_repair requires no assignments, final, humanInput, goalAchieved, acceptanceChecks, or resolutions');
-    }
   } else {
     if (decision.assignments.length < 1 || decision.assignments.length > MAX_ASSIGNMENTS) {
       throw violation('decision.envelope', 'assignment_count_invalid', `Dispatch must contain between 1 and ${MAX_ASSIGNMENTS} assignments`);
@@ -1020,8 +965,7 @@ function validateDecision(decision, ctx) {
     }
   }
 
-  const related = new Set(decision.action === 'request_human_input' ? decision.humanInput.relatedDecisionIds
-    : decision.action === 'request_system_repair' ? decision.systemInput.relatedDecisionIds : []);
+  const related = new Set(decision.action === 'request_human_input' ? decision.humanInput.relatedDecisionIds : []);
   // LL-6: a dispatch of only read-only roles may leave open decisions open while they are investigated;
   // without it no investigation could follow the round a worker decision was raised in.
   const investigating = decision.action === 'dispatch'

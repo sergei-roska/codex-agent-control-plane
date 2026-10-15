@@ -621,24 +621,3 @@ describe('session situation and project git status', () => {
     assert.equal((await api('GET', '/api/projects/nothex/git-status')).status, 404);
   });
 });
-
-describe('system agent usage', () => {
-  it('passes systemAgent.usage through the global and the project team', async () => {
-    const usage = { inputTokens: 150, cachedInputTokens: 40, outputTokens: 30, reasoningOutputTokens: 5, totalTokens: 180, attempts: 3 };
-    const app = createLauncherApp({
-      projects: fakeProjects(),
-      readAuthToken: () => 'tok',
-      systemAgent: { descriptor: () => ({ name: 'chuck-norris', usage }) },
-    });
-    const srv = await new Promise((resolve) => { const listening = app.listen(0, '127.0.0.1', () => resolve(listening)); });
-    const root = 'http://127.0.0.1:' + srv.address().port;
-    try {
-      const global = await (await fetch(root + '/api/team')).json();
-      assert.deepEqual(global.systemAgent.usage, usage);
-      const project = await (await fetch(root + `/api/projects/${ID_A}/team`)).json();
-      assert.deepEqual(project.systemAgent.usage, usage);
-    } finally {
-      await new Promise((resolve) => srv.close(resolve));
-    }
-  });
-});

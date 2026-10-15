@@ -315,11 +315,10 @@ function messageCorrelations(requestContext) {
 
 function makeExecutor({
   roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, activityStore = null, skillCatalog,
-  lanes = null, stagingLog, requireIsolatedWrites = false, artifactMetadata = null,
+  lanes = null, stagingLog,
 }) {
   const writable = role.sandbox !== 'read-only';
   const reservations = new Map();
-  const settledWaiters = new Set();
 
   // Release the workspace when the outcome is known; otherwise mark the writer unresolved and
   // retry reconciliation while its process is being terminated. Returns writerExecution metadata.
@@ -354,10 +353,6 @@ function makeExecutor({
 
   const releaseReservation = (taskId, reservation) => {
     if (reservations.get(taskId) === reservation) reservations.delete(taskId);
-    if (reservations.size === 0) {
-      for (const resolve of settledWaiters) resolve();
-      settledWaiters.clear();
-    }
   };
   const executor = {
     async execute(requestContext, eventBus) {
@@ -720,34 +715,8 @@ function makeExecutor({
         }
 
         // A lane only for a structured workspace-write request while the lane probe holds (R11).
-        const laneRequest = writable && Boolean(lanes) && role.sandbox === 'workspace-write'
-          && Array.isArray(structured?.allowedFiles) && structured.allowedFiles.length > 0;
-        let laneAvailable = false;
-        if (laneRequest) {
-          try { laneAvailable = await lanes.available(); } catch (_) { laneAvailable = false; }
-        }
-        if (requireIsolatedWrites && writable && !laneAvailable) {
-          recordPreTurn('refused');
-          writeStaging('role_failure', 'failed', { stage: 'writer_isolation', failureKind: 'guarantee_unavailable' }, { required: false });
-          publishTerminalStatus(TaskState.TASK_STATE_FAILED, {
-            messageId: taskId + '-isolation-error',
-            contextId,
-            taskId,
-            role: 2,
-            parts: [{ content: { $case: 'text', value: 'An isolated writer lane is unavailable; no model turn was started.' } }],
-            metadata: {
-              failureKind: 'guarantee_unavailable',
-              codexErrorInfo: null,
-              effects: 'none',
-              boundary: { contract: BOUNDARY_CONTRACT, results: [boundaryRecord(
-                'dispatch.writer_isolation', 'FAIL', 'guarantee_unavailable', 'dispatch',
-                'An isolated writer lane is unavailable; shared-workspace execution is disabled.',
-              )] },
-            },
-          });
-          return;
-        }
-        const useLane = requireIsolatedWrites ? laneAvailable : laneRequest && laneAvailable;
+        const useLane = writable && Boolean(lanes) && role.sandbox === 'workspace-write'
+          && Array.isArray(structured?.allowedFiles) && structured.allowedFiles.length > 0 && await lanes.available();
         if (useLane) {
           let prepared;
           try {
@@ -956,31 +925,15 @@ function makeExecutor({
           writer = await settleWriter(execution.executionId, known, runError?.outcomeUnknown === true ? 'outcome_unknown' : 'turn_not_terminal');
           settled = true;
         }
-        const resultText = typeof result?.text === "string" ? result.text : "";
-        const completed = result?.status === "completed";
-        const parsedReport = completed ? parseWorkerReport(resultText) : { report: null, error: null };
-        const reportedScopeViolations = requireIsolatedWrites && parsedReport.report
-          ? pathsOutsideAllowed(parsedReport.report.filesChanged || [], structured?.allowedFiles || [], workspace)
-          : [];
-        const systemReportIntegrable = Boolean(parsedReport.report && !parsedReport.error
-          && parsedReport.report.outcome === "completed"
-          && parsedReport.report.decisionRequest === null
-          && Array.isArray(parsedReport.report.scopeExpansion) && parsedReport.report.scopeExpansion.length === 0
-          && Array.isArray(parsedReport.report.checks)
-          && parsedReport.report.checks.every((check) => check.result === "passed")
-          && (structured?.checks || []).every((command) => parsedReport.report.checks.some((check) => check.command === command && check.result === "passed"))
-          && reportedScopeViolations.length === 0);
         let laneCanceled = false;
         if (lane) {
-          // R6: integrate only completed turns; the system role also needs a clean, in-scope report.
-          const integrate = !runError && !controller.signal.aborted && completed
-            && (!requireIsolatedWrites || systemReportIntegrable);
+          // R6: integrate only a turn that completed and was not aborted; any other turn keeps its lane.
+          const integrate = !runError && !controller.signal.aborted && result?.status === 'completed';
           const laneOutcome = await lanes.complete({
             lane,
             integrate,
             reason: integrate ? null
-              : controller.signal.aborted ? "canceled" : runError?.outcomeUnknown === true ? "outcome_unknown"
-                : requireIsolatedWrites && completed ? "system_report_not_integrable" : "turn_failed",
+              : controller.signal.aborted ? 'canceled' : runError?.outcomeUnknown === true ? 'outcome_unknown' : 'turn_failed',
             allowedFiles: structured.allowedFiles,
             role: roleId,
             taskId,
@@ -993,8 +946,11 @@ function makeExecutor({
           laneCanceled = laneOutcome.canceled;
         }
         if (runError) throw runError;
+        const resultText = typeof result?.text === 'string' ? result.text : '';
         // A lane that went through integration reports that outcome even if a cancel arrived meanwhile.
         const canceled = lane ? laneCanceled : controller.signal.aborted;
+        const completed = result?.status === 'completed';
+        const parsedReport = completed ? parseWorkerReport(resultText) : { report: null, error: null };
         let effectiveCompleted = completed;
         if ((auditRole || pinnedCheckReviewer) && !canceled) {
           const targetAfter = targetForDirectReview(reviewContext, structured);
@@ -1167,20 +1123,10 @@ function makeExecutor({
                 if (outside.length) {
                   results.push(boundaryRecord('settle.attested_scope', 'FAIL', 'attested_scope_violation', 'settlement',
                     `Changed paths outside allowedFiles: ${outside.join(', ')}`));
-                } else if (requireIsolatedWrites && writer.lane?.state === 'integrated') {
-                  results.push(boundaryRecord('settle.attested_scope', 'PASS', null, 'settlement',
-                    `Integrated lane delta contains ${delta.changedPaths.length} path(s), all within allowedFiles.`));
                 }
               }
             }
             boundary = { contract: BOUNDARY_CONTRACT, results };
-          }
-          let extraArtifactMetadata = {};
-          if (typeof artifactMetadata === 'function') {
-            try {
-              extraArtifactMetadata = await artifactMetadata({ writerExecution: writer, report: parsedReport.report, workspace });
-              if (!extraArtifactMetadata || typeof extraArtifactMetadata !== 'object' || Array.isArray(extraArtifactMetadata)) extraArtifactMetadata = {};
-            } catch (_) { extraArtifactMetadata = {}; }
           }
           eventBus.publish(AgentEvent.artifactUpdate({
             taskId,
@@ -1201,7 +1147,6 @@ function makeExecutor({
                 ...(writer ? { writerExecution: writer } : {}),
                 ...(telemetry ? telemetry : {}),
                 ...(reviewOutcomeMetadata ? { reviewCoverage: reviewOutcomeMetadata.reviewCoverage, review: reviewOutcomeMetadata } : {}),
-                ...extraArtifactMetadata,
               },
               extensions: [],
             },
@@ -1304,19 +1249,6 @@ function makeExecutor({
       activeTask.controller?.abort();
     },
 
-    cancelAll() {
-      for (const activeTask of reservations.values()) {
-        if (!activeTask.entered) continue;
-        activeTask.cancelRequested = true;
-        activeTask.controller?.abort();
-      }
-    },
-
-    settled() {
-      if (reservations.size === 0) return Promise.resolve();
-      return new Promise((resolve) => settledWaiters.add(resolve));
-    },
-
     reserveTask(taskId) {
       if (reservations.has(taskId)) return undefined;
       const reservation = { taskId, entered: false, terminal: false, cancelRequested: false };
@@ -1365,7 +1297,7 @@ function rejectOverlappingTask(executor) {
 /** Mount one independently stored A2A JSON-RPC agent per role. */
 function registerRoleAgents(app, {
   roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger, activityStore,
-  skillCatalog = loadSkillCatalog(), lanes = null, stagingLog = new InMemoryStagingLog(), requireIsolatedWrites = false, artifactMetadata = null,
+  skillCatalog = loadSkillCatalog(), lanes = null, stagingLog = new InMemoryStagingLog(),
 }) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
     throw new TypeError('app must be an Express application');
@@ -1389,7 +1321,7 @@ function registerRoleAgents(app, {
     const endpoint = new URL(route, `${origin.origin}/`).toString();
     const card = makeRoleCard({ roleId, role, endpoint });
     const executor = makeExecutor({
-      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, lanes, stagingLog, requireIsolatedWrites, artifactMetadata,
+      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, lanes, stagingLog,
     });
     const handler = new DefaultRequestHandler(
       card,
@@ -1409,7 +1341,7 @@ function registerRoleAgents(app, {
       app.use(`${routePath}/agent-card.json`, cardHandler);
       app.use(routePath, ...rpcHandlers);
     }
-    registered.set(rawRoleId, { card, handler, executor });
+    registered.set(rawRoleId, { card, handler });
   }
   return registered;
 }

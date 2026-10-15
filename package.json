@@ -10,7 +10,7 @@
     "staging:report": "node src/staging-report.js",
     "evidence": "node src/evidence-store.js",
     "test": "node --test test/*.test.js",
-    "launcher": "node launcher-bootstrap.js"
+    "launcher": "node launcher.js"
   },
   "keywords": [],
   "type": "commonjs",

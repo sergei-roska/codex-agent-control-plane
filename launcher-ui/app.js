@@ -126,13 +126,13 @@
     ];
     const SITUATION_NODE_PHASE = {
       intake: 'planning', decide: 'planning',
-      dispatch: 'working', collect: 'working', system_repair: 'working', system_pause: 'working',
+      dispatch: 'working', collect: 'working',
       verify: 'verifying', review_check: 'verifying', reconcile: 'verifying', accept: 'verifying'
     };
     const SITUATION_PHASE_LABELS = {
       planning: 'Planning', working: 'Working', verifying: 'Verifying', waiting_owner: 'Waiting for you',
       budget_pause: 'Budget pause', done: 'Done', failed: 'Failed', canceled: 'Canceled',
-      pausing: 'Pausing', paused: 'Paused', system_repair: 'System repair', system_wait: 'Technical wait'
+      pausing: 'Pausing', paused: 'Paused'
     };
     const SITUATION_COLLAPSED_KEY = 'launcher.situationCollapsed';
     let situationCollapsed = readSituationCollapsed();
@@ -286,7 +286,6 @@
         else url.searchParams.delete('project');
         history.replaceState(null, '', url);
       } catch (_) {}
-      syncPerformanceNavLink();
       if (changed) {
         resetSessionView();
         if (initialSessionParam) setSession(initialSessionParam);
@@ -515,13 +514,7 @@
         else if (active) hintText = 'Lead is working: your questions go to the scout.';
       }
       else if (sending || pendingTurn) { hintText = 'Lead is working on your message...'; locked = true; }
-      else if (!ownerPaused && last && isPausedState(last.state)) {
-        const pause = last.metadata?.pause || {};
-        hintText = pause.kind === 'system_repair'
-          ? 'System repair is waiting for a technical condition. No owner answer is needed.'
-          : 'Lead is paused: answer through the decision card above.';
-        locked = true;
-      }
+      else if (!ownerPaused && last && isPausedState(last.state)) { hintText = 'Lead is paused: answer through the decision card above.'; locked = true; }
       else if (last && !lastTerminal) { hintText = 'Lead is working: wait for the answer before sending another message.'; locked = true; }
 
       goalEl.disabled = locked;
@@ -806,9 +799,7 @@
       } else if (kind === 'paused') {
         head.appendChild(statePill('paused', 'paused'));
         bubble.classList.add('bubble-paused');
-        body = t.metadata?.pause?.kind === 'system_repair'
-          ? 'Technical system repair wait. See the Situation panel for status and available next steps.'
-          : 'Paused: waiting for a human decision.\n\n' + extractParts(t.status?.message?.parts);
+        body = 'Paused: waiting for a human decision.\n\n' + extractParts(t.status?.message?.parts);
       } else if (kind === 'completed') {
         const artifact = t.artifacts?.at(-1);
         head.appendChild(statePill('completed', acceptanceLabel(artifact?.metadata?.acceptance?.disposition)));
@@ -861,11 +852,7 @@
       }
       const state = last.state;
       if (state === 'TASK_STATE_WORKING' || state === 2) label.textContent = 'Status: task in progress...';
-      else if (isPausedState(state)) {
-        label.textContent = last.metadata?.pause?.kind === 'system_repair'
-          ? 'Status: system repair is waiting (paused)'
-          : 'Status: human decision required (paused)';
-      }
+      else if (isPausedState(state)) label.textContent = 'Status: human decision required (paused)';
       else if (state === 'TASK_STATE_COMPLETED' || state === 3) {
         label.textContent = 'Status: COMPLETED SUCCESSFULLY';
         const disposition = last.artifacts?.at(-1)?.metadata?.acceptance?.disposition;
@@ -971,11 +958,6 @@
         return;
       }
       const pause = last.metadata?.pause || {};
-      if (pause.kind === 'system_repair') {
-        card.classList.add('hidden');
-        decisionCardKey = '';
-        return;
-      }
       card.classList.remove('hidden');
       const key = JSON.stringify([last.id, pause.kind || '', pause.decisionId || '', pause.question || '', pause.message || '']);
       if (key !== decisionCardKey) {
@@ -1255,7 +1237,7 @@
     }
 
     function pauseLeadPhase(phase) {
-      return phase === 'planning' || phase === 'working' || phase === 'verifying' || phase === 'system_repair';
+      return phase === 'planning' || phase === 'working' || phase === 'verifying';
     }
 
     async function postPauseControl(path, body, label) {
@@ -1673,12 +1655,11 @@
     setInterval(refreshProjects, 3000);
     refreshProjects();
 
-    function addAboutRow(list, agent, isLead, editable, scope) {
+    function addAboutRow(list, agent, isLead, editable) {
       const row = document.createElement('div');
       row.className = 'about-role' + (isLead ? ' is-lead' : '');
       row.dataset.role = canonicalRoleId(agent.name);
       row.dataset.roleKey = agent.name;
-      row.dataset.scope = scope || 'project';
       const displayName = agent.displayName || roleDisplayName(agent.name);
       const tools = agent.tools || {};
       const extra = [];
@@ -1690,11 +1671,11 @@
         row.tabIndex = 0;
         row.setAttribute('role', 'button');
         row.setAttribute('aria-label', 'Edit ' + displayName + ' settings');
-        row.addEventListener('click', function () { openRoleModal(agent, isLead, row, scope || 'project'); });
+        row.addEventListener('click', function () { openRoleModal(agent, isLead, row); });
         row.addEventListener('keydown', function (ev) {
           if (ev.key === 'Enter' || ev.key === ' ') {
             ev.preventDefault();
-            openRoleModal(agent, isLead, row, scope || 'project');
+            openRoleModal(agent, isLead, row);
           }
         });
       }
@@ -1711,7 +1692,6 @@
       setTooltip(roleId, canonicalRoleId(agent.name), true);
       head.appendChild(roleId);
       if (isLead) head.appendChild(textEl('span', 'about-badge', 'lead'));
-      if (agent.pendingRestart) head.appendChild(textEl('span', 'about-badge', 'restart required'));
       const write = agent.sandbox === 'workspace-write';
       head.appendChild(textEl('span', 'about-badge' + (write ? ' write' : ''), write ? 'write' : 'read'));
       row.appendChild(head);
@@ -1723,16 +1703,10 @@
       const override = agent.override || {};
       const chips = document.createElement('div');
       chips.className = 'about-chips';
-      const displayedModel = agent.configuredModel || agent.model;
-      const displayedEffort = agent.configuredEffort || agent.effort;
-      const model = textEl('span', 'about-chip' + (override.model != null || (agent.pendingRestart && agent.configuredModel) ? ' is-override' : ''), displayedModel || '-');
-      const effort = textEl('span', 'about-chip' + (override.effort != null || (agent.pendingRestart && agent.configuredEffort) ? ' is-override' : ''), displayedEffort || '-');
+      const model = textEl('span', 'about-chip' + (override.model != null ? ' is-override' : ''), agent.model || '-');
+      const effort = textEl('span', 'about-chip' + (override.effort != null ? ' is-override' : ''), agent.effort || '-');
       if (override.model != null) setTooltip(model, 'Overridden for this project', false);
       if (override.effort != null) setTooltip(effort, 'Overridden for this project', false);
-      if (agent.pendingRestart) {
-        setTooltip(model, 'Saved system settings; restart the launcher to apply', false);
-        setTooltip(effort, 'Saved system settings; restart the launcher to apply', false);
-      }
       chips.appendChild(model);
       chips.appendChild(effort);
       row.appendChild(chips);
@@ -1824,12 +1798,9 @@
       document.querySelectorAll('#aboutTeamList .about-role').forEach(function (row) {
         const block = row.querySelector('.role-tokens');
         if (!block) return;
-        // The system agent keeps its own ledger: its usage comes from the team descriptor, not the session.
-        const system = row.dataset.scope === 'system';
-        const systemUsage = system && teamData && teamData.systemAgent ? teamData.systemAgent.usage : null;
-        const entry = system ? (systemUsage || null) : (sessionUsage ? roleUsageEntry(row) : null);
-        block.classList.toggle('hidden', system ? !systemUsage : !hasSession);
-        const label = system || sessionUsage ? tokenTotalLabel(entry) : '-';
+        const entry = sessionUsage ? roleUsageEntry(row) : null;
+        block.classList.toggle('hidden', !hasSession);
+        const label = sessionUsage ? tokenTotalLabel(entry) : '-';
         const totalEl = block.querySelector('.role-tokens-total');
         totalEl.textContent = label;
         totalEl.classList.toggle('is-placeholder', label === '-' || label === 'n/a');
@@ -1972,7 +1943,7 @@
     function situationStepIndex(sit) {
       const direct = SITUATION_STEPS.findIndex(function (s) { return s.phase === sit.phase; });
       if (direct >= 0) return direct;
-      if (sit.phase === 'waiting_owner' || sit.phase === 'budget_pause' || sit.phase === 'system_repair' || sit.phase === 'system_wait') {
+      if (sit.phase === 'waiting_owner' || sit.phase === 'budget_pause') {
         const mapped = SITUATION_NODE_PHASE[sit.node];
         return SITUATION_STEPS.findIndex(function (s) { return s.phase === mapped; });
       }
@@ -2035,8 +2006,6 @@
         side.prepend(iconEl('i-pause'));
         wrap.appendChild(side);
       }
-      if (sit.phase === 'system_repair') wrap.appendChild(textEl('span', 'situation-side is-pausing', 'Chuck Norris is repairing the control plane'));
-      if (sit.phase === 'system_wait') wrap.appendChild(textEl('span', 'situation-side is-budget', 'Technical wait - no owner answer needed'));
       if (sit.phase === 'pausing') wrap.appendChild(textEl('span', 'situation-side is-pausing', 'Pausing'));
       if (sit.phase === 'paused') {
         wrap.appendChild(pauseKindOf(sit) === 'stopped'
@@ -2174,59 +2143,6 @@
       return block;
     }
 
-    function situationSystemRepair(sit) {
-      const repair = sit.systemRepair;
-      if (!repair || typeof repair !== 'object') return null;
-      const labels = {
-        pending: 'Repair is running', completed: 'Repair report received', restart_required: 'Repair needs a control-plane restart',
-        blocked: 'Repair is blocked', unavailable: 'Repair service unavailable', unknown: 'Repair status unknown',
-        waiting_for_budget: 'Repair is waiting for budget', budget: 'Repair is waiting for budget', recheck_limit: 'Repair recheck limit reached'
-      };
-      const block = situationBlock('Chuck Norris system repair');
-      block.appendChild(textEl('div', 'situation-meta', labels[repair.status] || 'Repair status unknown'));
-      if (repair.incidentId) block.appendChild(textEl('div', 'situation-meta', 'Incident: ' + String(repair.incidentId)));
-      const reason = typeof repair.reason === 'string' ? repair.reason.replace(/_/g, ' ') : '';
-      if (reason) block.appendChild(textEl('div', 'situation-meta', 'Reason: ' + reason));
-      if (repair.status === 'restart_required') {
-        block.appendChild(textEl('div', 'situation-meta', 'The control plane must restart and prove the loaded repair before another check can run.'));
-      } else if (repair.status === 'budget') {
-        block.appendChild(textEl('div', 'situation-meta', 'Wait for the system agent budget to recover before retrying.'));
-      } else if (repair.status === 'recheck_limit') {
-        block.appendChild(textEl('div', 'situation-meta', 'The system repair recheck limit has been reached.'));
-      }
-      if (canRetrySystemRepair(sit)) {
-        const action = repair.status === 'restart_required' ? 'Check repair after restart' : 'Retry system repair';
-        const retry = textEl('button', 'btn btn-secondary btn-sm', action);
-        retry.type = 'button';
-        retry.addEventListener('click', retrySystemRepair);
-        block.appendChild(retry);
-      }
-      return block;
-    }
-
-    function canRetrySystemRepair(sit) {
-      const last = lastTurn();
-      const repair = sit && sit.systemRepair;
-      if (!repair || sit.phase !== 'system_wait' || sit.pauseKind || !last || last.id !== sit.leadTaskId
-        || !isPausedState(last.state) || last.metadata?.pause?.kind !== 'system_repair' || sending || pendingTurn) return false;
-      if (repair.status === 'restart_required') return true;
-      if (repair.status === 'unavailable') return repair.reason !== 'authentication_required';
-      if (repair.status !== 'unknown') return false;
-      if (!repair.reason) return true;
-      return new Set([
-        'aborted_before_dispatch', 'aborted_before_send', 'ambiguous_writable_submission_not_resent',
-        'cancellation_unconfirmed', 'journaled_task_unavailable', 'send_result_unknown',
-        'submission_lookup_failed', 'task_id_missing_after_send', 'task_poll_failed',
-      ]).has(repair.reason);
-    }
-
-    function retrySystemRepair() {
-      const sit = situationKey === situationScope() ? situation : null;
-      const last = lastTurn();
-      if (!canRetrySystemRepair(sit) || !currentProjectId || !currentSessionId || !last) return false;
-      return executeA2A({ goal: 'Retry system repair', taskId: last.id });
-    }
-
     function situationStop(sit) {
       const finished = sit.phase === 'done' || sit.phase === 'failed' || sit.phase === 'canceled';
       const text = typeof sit.nextSteps === 'string' ? sit.nextSteps.trim() : '';
@@ -2254,7 +2170,7 @@
       if (signature !== situationSignature) {
         situationSignature = signature;
         const blocks = [];
-        if (sit) blocks.push(situationTrack(sit), situationMeta(sit), situationNow(sit), situationDone(sit), situationSystemRepair(sit), situationAcceptance(sit));
+        if (sit) blocks.push(situationTrack(sit), situationMeta(sit), situationNow(sit), situationDone(sit), situationAcceptance(sit));
         blocks.push(situationFiles(git));
         if (sit) blocks.push(situationStop(sit));
         const content = document.getElementById('situationContent');
@@ -2536,7 +2452,7 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
         if (token !== teamLoadToken) return;
-        teamData = data;
+        teamData = projectId ? data : null;
         errEl.classList.add('hidden');
         // Roles are read when the project server starts, so they are editable only while it is stopped.
         const editable = Boolean(projectId) && data.running !== true;
@@ -2548,11 +2464,9 @@
         list.textContent = '';
         addAboutRow(list, data.lead, true, editable);
         data.roles.forEach(function (r) { addAboutRow(list, r, false, editable); });
-        // The system agent is global: its row stays editable whenever no project server is running.
-        if (data.systemAgent) addAboutRow(list, data.systemAgent, false, data.running !== true, 'system');
         updateTeamLeds();
         renderTeamTokens();
-        document.getElementById('aboutTeamLabel').textContent = 'Team (' + (data.roles.length + 1 + (data.systemAgent ? 1 : 0)) + ' agents)';
+        document.getElementById('aboutTeamLabel').textContent = 'Team (' + (data.roles.length + 1) + ' agents)';
         if (data.warning) {
           errEl.textContent = data.warning;
           errEl.classList.remove('hidden');
@@ -2569,7 +2483,6 @@
     const EFFORT_CHOICES = ['low', 'medium', 'high', 'xhigh'];
     let roleModalAgent = null;
     let roleModalProjectId = null;
-    let roleModalScope = 'project';
     let roleModalOpener = null;
     let roleModalBusy = false;
 
@@ -2609,28 +2522,18 @@
       document.getElementById('roleResetBtn').disabled = busy;
     }
 
-    function openRoleModal(agent, isLead, opener, scope) {
-      const systemScope = scope === 'system';
-      if (systemScope ? (!agent || (teamData && teamData.running === true)) : (!currentProjectId || !teamData || teamData.running === true)) return;
+    function openRoleModal(agent, isLead, opener) {
+      if (!currentProjectId || !teamData || teamData.running === true) return;
       roleModalAgent = agent;
-      roleModalProjectId = systemScope ? null : currentProjectId;
-      roleModalScope = systemScope ? 'system' : 'project';
+      roleModalProjectId = currentProjectId;
       roleModalOpener = opener || null;
       const defaults = agent.defaults || { model: agent.model, effort: agent.effort };
-      const override = systemScope
-        ? { model: agent.configuredModel || agent.model, effort: agent.configuredEffort || agent.effort }
-        : (agent.override || {});
+      const override = agent.override || {};
       document.getElementById('roleModalTitle').textContent =
         (agent.displayName || roleDisplayName(agent.name)) + ' (' + canonicalRoleId(agent.name) + (isLead ? ', lead' : '') + ')';
-      fillRoleSelect(document.getElementById('roleModel'), defaults.model, (teamData && teamData.models) || [], override.model || '');
+      fillRoleSelect(document.getElementById('roleModel'), defaults.model, teamData.models || [], override.model || '');
       fillRoleSelect(document.getElementById('roleEffort'), defaults.effort, EFFORT_CHOICES, override.effort || '');
-      document.getElementById('roleRules').value = systemScope ? '' : (override.extraRules || '');
-      document.getElementById('roleRules').closest('.role-field').classList.toggle('hidden', systemScope);
-      document.querySelector('#roleForm .role-modal-note').textContent = systemScope
-        ? (agent.pendingRestart
-          ? 'Saved global settings are pending. Restart the launcher to apply them.'
-          : 'Global system settings apply after the launcher restarts.')
-        : 'Applies when the project server starts.';
+      document.getElementById('roleRules').value = override.extraRules || '';
       updateRoleRulesCounter();
       setRoleModalError('');
       setRoleModalBusy(false);
@@ -2642,13 +2545,11 @@
       document.getElementById('roleModal').classList.add('hidden');
       roleModalAgent = null;
       roleModalProjectId = null;
-      roleModalScope = 'project';
       if (roleModalOpener && document.body.contains(roleModalOpener)) roleModalOpener.focus();
       roleModalOpener = null;
     }
 
     function roleOverrideUrl() {
-      if (roleModalScope === 'system') return '/api/system-agent/settings';
       return '/api/projects/' + encodeURIComponent(roleModalProjectId) + '/roles/' + encodeURIComponent(canonicalRoleId(roleModalAgent.name)) + '/override';
     }
 
@@ -2667,12 +2568,6 @@
     }
 
     function saveRoleOverride() {
-      if (roleModalScope === 'system') {
-        return sendRoleOverride('PUT', {
-          model: document.getElementById('roleModel').value || roleModalAgent.defaults.model,
-          effort: document.getElementById('roleEffort').value || roleModalAgent.defaults.effort
-        });
-      }
       const rules = document.getElementById('roleRules').value;
       if (rules.length > RULES_MAX) return setRoleModalError('Extra rules are limited to ' + RULES_MAX + ' characters');
       sendRoleOverride('PUT', {

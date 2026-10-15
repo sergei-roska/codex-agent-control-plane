@@ -57,40 +57,6 @@ The lead uses GPT-6.1 Sol at high effort in a read-only Codex thread. Specialist
 
 The interface shows human role names with machine IDs as secondary labels. New profiles and endpoints use the IDs above. Legacy `orch-*` role endpoints and stored assignments remain compatible through aliases; task storage namespaces are retained so existing sessions can resume.
 
-## Chuck Norris: system repairs
-
-Chuck Norris is the separate system repair agent for this hosting control
-plane. He works on an isolated copy of its source, while project specialists
-continue to work in the selected target project. His profile is
-[`profiles/system/chuck-norris.toml`](profiles/system/chuck-norris.toml), outside
-the ordinary role catalog. He appears separately in the launcher role list.
-The default is GPT-6.1 Sol at high effort. Click his launcher role card to
-change the model or effort, then restart the launcher to apply the saved
-system profile settings. These settings are shared across projects.
-
-Start the launcher with `npm run launcher`. The launcher and `npm start`
-use trusted bootstrap entrypoints that capture the source actually compiled.
-Managed project servers use the same verified server bootstrap. Direct
-`node launcher.js` and `node src/server.js` remain compatible, but cannot
-prove the loaded bytes of their own main entrypoint after a repair.
-
-The launcher advertises `/agents/chuck-norris/agent-card.json` and
-`GET /api/system-agent`. Project servers started by the launcher receive the
-system endpoint and a separate service credential configuration. System RPC
-requires that credential; the ordinary project A2A bearer does not authorize it.
-Execution is lazy and requires verified writer-lane confinement.
-
-The lead uses `request_system_repair` for hosting defects, sending concrete
-incident evidence to Chuck instead of an owner debugging question. Repairs
-return system evidence for replanning; project acceptance, review gates,
-unknown writers and owner-only decisions keep their existing contracts.
-Transport uncertainty and required runtime reloads park as `system_repair`
-without resending ambiguous writes or automatically resuming an owner pause.
-A source patch that needs reload reports `restart_required`; services are not
-restarted automatically. Failed repair reports and checks leave the candidate
-in its isolated lane. After a controlled restart, the same-task recheck requires
-fresh matching hashes from every affected process. See the [system repair contract](docs/adr/chuck-norris-system-repair.md).
-
 ## Role tool surface
 
 Every role gets a fixed tool surface declared in its profile; everything not declared is off. Each thread is started (and resumed) with config overrides that disable Codex apps and plugins, the Codex skills listing, and every user or project MCP server not on the role's allowlist. This cuts roughly 70k input tokens per turn of inherited tool schemas and skill text, and a stable per-role surface keeps prompt caching effective. The lead model does not choose tools.

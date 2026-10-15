@@ -106,7 +106,6 @@ function sessionUsage(db, contextId) {
 function createLauncherApp({
   projects,
   readAuthToken,
-  systemAgent = null,
   createClient = (baseUrl) => new ClientFactory().createFromUrl(baseUrl, '/orchestrator/agent-card.json'),
   createRoleClient = (roleUrl) => new ClientFactory().createFromUrl(`${roleUrl}/agent-card.json`, ''),
   openTasksDb = (file, options) => new Database(file, options),
@@ -121,7 +120,6 @@ function createLauncherApp({
   const logins = new Map();
 
   app.use(express.json());
-  if (systemAgent?.router) app.use(systemAgent.router);
 
   app.get('/favicon.ico', (req, res) => res.status(204).end());
 
@@ -140,28 +138,6 @@ function createLauncherApp({
       return res.status(404).json({ success: false, error: 'Unknown project: ' + id });
     }
     next();
-  });
-
-  app.get('/api/system-agent', (_req, res) => res.json(systemAgent?.descriptor?.() || null));
-
-  app.put('/api/system-agent/settings', (req, res) => {
-    if (!systemAgent?.saveSettings) return res.status(404).json({ success: false, error: 'System agent settings are unavailable' });
-    try {
-      const settings = systemAgent.saveSettings(req.body);
-      res.json({ success: true, ...settings, systemAgent: systemAgent.descriptor() });
-    } catch (error) {
-      res.status(error.statusCode || 500).json({ success: false, error: error.message || 'Invalid system agent settings' });
-    }
-  });
-
-  app.delete('/api/system-agent/settings', (_req, res) => {
-    if (!systemAgent?.resetSettings) return res.status(404).json({ success: false, error: 'System agent settings are unavailable' });
-    try {
-      const settings = systemAgent.resetSettings();
-      res.json({ success: true, ...settings, systemAgent: systemAgent.descriptor() });
-    } catch (error) {
-      res.status(error.statusCode || 500).json({ success: false, error: error.message || 'Could not reset system agent settings' });
-    }
   });
 
   // API: project registry
@@ -585,14 +561,9 @@ function createLauncherApp({
 
   app.get('/api/team', (req, res) => {
     try {
-      const lead = createLeadRole();
-      const roles = Array.from(loadRoles().values());
-      const projectRoles = [lead, ...roles];
       res.json({
-        lead: pickRole(lead),
-        roles: roles.map(pickRole),
-        systemAgent: systemAgent?.descriptor?.() || null,
-        models: [...new Set(projectRoles.map((role) => role.model))].sort(),
+        lead: pickRole(createLeadRole()),
+        roles: Array.from(loadRoles().values()).map(pickRole),
       });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -619,7 +590,6 @@ function createLauncherApp({
     return {
       lead: describe(baseLead),
       roles: [...baseRoles.values()].map(describe),
-      systemAgent: systemAgent?.descriptor?.() || null,
       models: [...new Set(all.map((role) => role.model))].sort(),
       warning,
       running: serverActive(id),
@@ -886,8 +856,6 @@ function createLauncherApp({
   });
 
   // Closes every pending login server; called by the launcher on shutdown.
-  app.closeSystemAgent = async () => systemAgent?.close?.();
-
   app.closeAccountLogins = async () => {
     await Promise.all([...logins.values()].filter((l) => l.status === 'pending').map((l) => endLogin(l, 'failed', 'Launcher stopped')));
   };

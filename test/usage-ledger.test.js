@@ -141,12 +141,3 @@ test('listByTask fills attemptId and runId from the dispatch journal', async () 
   assert.equal(plain.runId, null);
   await state.close();
 });
-
-test('listAll returns every row across tasks, oldest first', async () => {
-  const state = await openStateDatabase({ filePath: ':memory:' });
-  const ledger = new UsageLedger({ db: state.db });
-  ledger.record(worker({ entryId: 'b', taskId: 'task-b', recordedAt: '2026-10-14T00:00:02.000Z' }));
-  ledger.record(worker({ entryId: 'a', taskId: 'task-a', recordedAt: '2026-10-14T00:00:01.000Z' }));
-  assert.deepEqual(ledger.listAll().map((row) => row.entryId), ['a', 'b']);
-  await state.close();
-});
