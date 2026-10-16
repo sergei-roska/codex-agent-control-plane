@@ -401,7 +401,7 @@ function exportAut02Trace(name, { world, serviceInputs = [], workerCalls = null,
 
 const RUN_ID = 'run-1';
 
-test('AUT-03 delivery is default-off and selected only for the owner allowlisted run', async () => {
+test('AUT-03 delivery is default-off and selected only when the project owner opts in', async () => {
   const offWorld = makeWorld({ script: [finish()] });
   let offOptions;
   const offRun = offWorld.appServer.run.bind(offWorld.appServer);
@@ -426,11 +426,12 @@ test('AUT-03 delivery is default-off and selected only for the owner allowlisted
   }, { orchestrator: { aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID]) } });
 });
 
-test('AUT-03 requires both owner opt-in and exact run allowlisting; request claims do not authorize it', async (t) => {
+test('AUT-03 requires owner opt-in; a populated UUID list narrows it and request claims do not authorize it', async (t) => {
   for (const scenario of [
-    { name: 'setting only', enabled: true, ids: new Set(), expected: false },
+    { name: 'setting only with no run restriction', enabled: true, ids: new Set(), expected: true },
     { name: 'allowlist only', enabled: false, ids: new Set([RUN_ID]), expected: false },
-    { name: 'both gates', enabled: true, ids: new Set([RUN_ID]), expected: true },
+    { name: 'owner setting and matching UUID', enabled: true, ids: new Set([RUN_ID]), expected: true },
+    { name: 'owner setting and nonmatching UUID', enabled: true, ids: new Set(['00000000-0000-4000-8000-000000000001']), expected: false },
   ]) {
     await t.test(scenario.name, async () => {
       const world = makeWorld({ script: [finish()] });

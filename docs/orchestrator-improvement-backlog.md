@@ -737,7 +737,7 @@ the global system prompt; enable it only for the lead during the pilot.
 
 The offline exit covers a trusted lead-only pin, worker isolation, resume and
 rollover behavior, unchanged lead tool policy, and a strict default-off
-per-project owner gate combined with the exact UUID allowlist
+per-project owner gate with optional exact UUID run narrowing
 ([authority ADR](adr/aut03-project-opt-in.md)). Full AUT-03 exit still
 requires the authorized paired trial: on the autonomy regression set, the lead
 must preserve all explicit constraints, identify missing decisions rather

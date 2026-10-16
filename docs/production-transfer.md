@@ -28,7 +28,7 @@ Implementation, isolated verification, and live qualification are separate.
 | 2026-10-12 | The auditor runs at phase end, on risk-area changes before dependents, and for unsettled blockers, not every round; routine checks go to the verifier | docs/adr/auditor-dispatch-points.md |
 | 2026-10-12 | Sandboxed acceptance checks can get an owner-enabled per-run scratch directory outside the checkout, /tmp and $HOME | docs/adr/acceptance-per-run-scratch.md |
 | 2026-10-12 | Selective auditor dispatch with verifier acceptance, declared review gates, scoped receipts, and durable correlated evidence; implemented and independently accepted, live trial pending | docs/adr/auditor-dispatch-points.md |
-| 2026-10-16 | AUT-03 activation requires strict per-project owner opt-in AND exact startup UUID allowlisting; default off, offline implementation only | docs/adr/aut03-project-opt-in.md |
+| 2026-10-16 | AUT-03 activation requires strict per-project owner opt-in; a non-empty startup UUID list optionally narrows runs; default off, offline implementation only | docs/adr/aut03-project-opt-in.md |
 | unknown | Keep a shared App Server process; defer unqualified actor isolation and queue activation | docs/adr/phase-c-actor-topology.md |
 | unknown | Defer a mutation proxy without a proven mandatory enforcement route | docs/adr/phase-c-tool-boundary.md |
 | unknown | Defer compensation without durable operation-specific reversal semantics | docs/adr/phase-c-compensation-catalog.md |
@@ -49,10 +49,10 @@ are not promoted to verified fixes.
   run ID could receive the lead skill in any server project sharing that
   process configuration.
 - Remedy: add strict `aut03LeadSkillEnabled` to the trusted project settings
-  file and require its literal `true` value together with exact UUID membership.
-  The setting is default-off and read once at startup; invalid settings fall
-  back to disabled defaults. Request, assignment, and model output remain
-  unable to authorize activation.
+  file and require its literal `true` value. A non-empty startup UUID list can
+  narrow this project opt-in to exact run IDs. The setting is default-off and
+  read once at startup; invalid settings fall back to disabled defaults.
+  Request, assignment, and model output remain unable to authorize activation.
 - Status: implemented in source and covered by offline regressions; no live
   trial, active-project enablement, or service restart was performed.
 - Production: preserve both independent gates, startup provenance, pin/hash
