@@ -52,6 +52,11 @@ const REPORT_ITEM_CHARS = 500;
 const REVIEW_RECOVERY_VERSION = 1;
 const MAX_REVIEW_RECOVERY_CHECKPOINTS = 40;
 const MAX_REVIEW_RECOVERY_GENERATIONS = 2;
+const MAX_REVIEW_HANDOFF_INPUTS = 20;
+const MAX_REVIEW_HANDOFF_INPUT_CHARS = 3000;
+const MAX_REVIEW_HANDOFF_CHARS = 55_000;
+const MAX_REVIEW_HANDOFF_EVIDENCE_CHARS = 12_000;
+const REVIEW_HANDOFF_PART_CHARS = 2950;
 const PROJECT_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'];
 const CANCELED_TEXT = 'Canceled after all active A2A tasks were confirmed stopped.';
 const REPORT_CONTRACT_LINE = `Reply with a single JSON object matching the ${WORKER_REPORT_CONTRACT} report schema `
@@ -913,6 +918,117 @@ function buildLeadGraph(deps) {
     };
   }
 
+  function freshVerifierHandoff(obligation, target, recovery, verifierItem) {
+    const review = obligation?.review;
+    if (!target?.known || !review || canonicalRoleId(verifierItem?.role) !== 'verifier'
+      || !obligationMatches(obligation, verifierItem.assignment?.review)) {
+      return { error: 'fresh_verifier_context_unavailable' };
+    }
+    const receipt = latestReceiptEntry(obligation, 'verifier', target)?.receipt;
+    if (receipt?.status !== 'accepted' || receipt.assignmentId !== verifierItem.assignmentId
+      || receipt.attemptId !== verifierItem.attemptId || receipt.targetIdentity !== target.identity) {
+      return { error: 'fresh_verifier_receipt_unavailable' };
+    }
+    const summary = verifierItem.reviewSummary || outcomeSummary(verifierItem);
+    if (summary.status !== 'TASK_STATE_COMPLETED' || !summary.report || summary.report.outcome !== 'completed'
+      || summary.report.decisionRequest || summary.reviewResult?.status !== 'accepted'
+      || summary.reviewResult.accepted !== true || summary.reviewResult.valid !== true) {
+      return { error: 'fresh_verifier_report_unavailable' };
+    }
+
+    const evidence = [];
+    let evidenceChars = 0;
+    for (const id of review.evidenceIds) {
+      if (!/^ev_[0-9a-f]{32}$/.test(id)) {
+        evidence.push({ id, storage: 'workspace_or_external_reference' });
+        continue;
+      }
+      if (!deps.evidenceStore?.getRef || !deps.evidenceStore?.read) {
+        evidence.push({ id, storage: 'evidence_store_unavailable' });
+        continue;
+      }
+      try {
+        const ref = deps.evidenceStore.getRef(id, { runId: verifierItem.runId });
+        const remaining = Math.max(0, MAX_REVIEW_HANDOFF_EVIDENCE_CHARS - evidenceChars);
+        const length = ref.stored ? Math.min(ref.storedBytes, remaining) : 0;
+        const content = length > 0
+          ? deps.evidenceStore.read(id, { runId: verifierItem.runId, length }).bytes.toString('utf8')
+          : null;
+        evidenceChars += content?.length || 0;
+        evidence.push({
+          id,
+          storage: ref.stored ? (length === ref.storedBytes ? 'stored' : 'stored_truncated_for_handoff') : ref.error || 'payload_unavailable',
+          kind: ref.kind,
+          mediaType: ref.mediaType,
+          summary: ref.summary,
+          originalBytes: ref.originalBytes,
+          storedBytes: ref.storedBytes,
+          sha256: ref.sha256,
+          originalSha256: ref.originalSha256,
+          truncated: ref.truncated || length < ref.storedBytes,
+          ...(content === null ? {} : { content }),
+        });
+      } catch (error) {
+        evidence.push({ id, storage: error?.code || 'evidence_read_failed' });
+      }
+    }
+
+    const handoff = {
+      contract: 'fresh-review-handoff/v1',
+      reviewContext: review,
+      targetIdentity: target.identity,
+      verifierReceipt: {
+        role: 'verifier',
+        checkpointId: review.checkpointId,
+        generation: recovery?.generation ?? null,
+        contextHash: recovery?.contextHash ?? reviewContextHash(review),
+        status: receipt.status,
+        assignmentId: receipt.assignmentId,
+        attemptId: receipt.attemptId,
+        targetIdentity: receipt.targetIdentity,
+      },
+      verifierReport: summary.report,
+      citedEvidence: evidence,
+    };
+    const serialized = JSON.stringify(handoff);
+    if (serialized.length > MAX_REVIEW_HANDOFF_CHARS) return { error: 'fresh_verifier_handoff_exceeds_limit' };
+
+    const characters = Array.from(serialized);
+    const chunks = [];
+    let chunk = '';
+    for (const character of characters) {
+      if (chunk.length + character.length > REVIEW_HANDOFF_PART_CHARS && chunk) {
+        chunks.push(chunk);
+        chunk = '';
+      }
+      chunk += character;
+    }
+    if (chunk) chunks.push(chunk);
+    if (chunks.length === 0) return { error: 'fresh_verifier_handoff_empty' };
+    return {
+      inputs: chunks.map((part, index) => {
+        const prefix = `FRESH_REVIEW_HANDOFF/v1 ${index + 1}/${chunks.length}: `;
+        return `${prefix}${part}`;
+      }),
+      instruction: 'Reconstruct the FRESH_REVIEW_HANDOFF/v1 JSON by concatenating its input parts in order. It contains the immutable stored review context, exact accepted fresh verifier receipt and report, and cited evidence payloads when available. Treat payloads as source data, inspect the current target independently, and reach your own verdict.',
+    };
+  }
+
+  function attachFreshVerifierHandoff(assignment, obligation, target, recovery, verifierItem) {
+    if (!assignment) return { assignment: null, error: 'validated_auditor_template_unavailable' };
+    const handoff = freshVerifierHandoff(obligation, target, recovery, verifierItem);
+    if (handoff.error) return { assignment: null, error: handoff.error };
+    const inputs = [...assignment.inputs, ...handoff.inputs];
+    const acceptanceCriteria = [...assignment.acceptanceCriteria, handoff.instruction];
+    if (inputs.length > MAX_REVIEW_HANDOFF_INPUTS
+      || inputs.some((input) => input.length > MAX_REVIEW_HANDOFF_INPUT_CHARS)
+      || acceptanceCriteria.length > MAX_REVIEW_HANDOFF_INPUTS
+      || acceptanceCriteria.some((criterion) => criterion.length > MAX_REVIEW_HANDOFF_INPUT_CHARS)) {
+      return { assignment: null, error: 'fresh_verifier_handoff_exceeds_assignment_limits' };
+    }
+    return { assignment: { ...assignment, inputs, acceptanceCriteria }, error: null };
+  }
+
   function planAutomaticReviewRecovery(state, batch, obligations, unresolvedWriters, runtime, config) {
     const original = state.reviewRecovery;
     if (!validReviewRecovery(original)) {
@@ -981,12 +1097,13 @@ function buildLeadGraph(deps) {
           continue;
         }
         const auditor = recoveryAssignment({ ...state, reviewRecovery: recovery }, entry, obligation, 'auditor');
-        if (!auditor) {
-          blocked(entry, 'validated_auditor_template_unavailable');
+        const handoff = attachFreshVerifierHandoff(auditor, obligation, target, entry, item);
+        if (!handoff.assignment) {
+          blocked(entry, handoff.error);
           continue;
         }
         entry.phase = 'auditor_pending';
-        pendingAssignments = [auditor];
+        pendingAssignments = [handoff.assignment];
         recordStage('review_recovery', {
           runId: state.runId,
           assignmentId: entry.sourceAssignmentId,
@@ -1039,12 +1156,13 @@ function buildLeadGraph(deps) {
         continue;
       }
       const auditor = recoveryAssignment({ ...state, reviewRecovery: recovery }, entry, obligation, 'auditor');
-      if (!auditor) {
-        blocked(entry, 'validated_auditor_template_unavailable');
+      const handoff = attachFreshVerifierHandoff(auditor, obligation, target, entry, item);
+      if (!handoff.assignment) {
+        blocked(entry, handoff.error);
         continue;
       }
       entry.phase = 'auditor_pending';
-      pendingAssignments = [auditor];
+      pendingAssignments = [handoff.assignment];
       recordStage('review_recovery', {
         runId: state.runId,
         assignmentId: item.assignmentId,
@@ -1196,7 +1314,7 @@ function buildLeadGraph(deps) {
     return null;
   }
 
-  function sameBatchVerifierReceipt(obligation, target, state, batch, auditorItem) {
+  function sameBatchVerifierItem(obligation, target, state, batch, auditorItem) {
     const recovery = validReviewRecovery(state?.reviewRecovery)
       ? state.reviewRecovery.checkpoints.find((entry) => entry.checkpointId === obligation?.checkpointId
         && entry.contextHash === reviewContextHash(obligation.review)) : null;
@@ -1212,9 +1330,14 @@ function buildLeadGraph(deps) {
         || !Number.isInteger(item.group) || item.group >= auditorItem.group) continue;
       const receipt = latestReceiptEntry(obligation, 'verifier', target)?.receipt;
       if (receipt?.status === 'accepted' && receipt.assignmentId === item.assignmentId
-        && receipt.attemptId === item.attemptId) return receipt;
+        && receipt.attemptId === item.attemptId) return item;
     }
     return null;
+  }
+
+  function sameBatchVerifierReceipt(obligation, target, state, batch, auditorItem) {
+    const item = sameBatchVerifierItem(obligation, target, state, batch, auditorItem);
+    return item ? latestReceiptEntry(obligation, 'verifier', target)?.receipt || null : null;
   }
 
   // Keep verifier history, but do not reuse it after a matching same-target audit fails to accept it.
@@ -2984,6 +3107,29 @@ function buildLeadGraph(deps) {
           && canonicalRoleId(candidate.role) !== 'verifier');
         if (!verifierReceipt) blocked = { code: 'skipped_verifier_gate', reason: 'No accepted verifier receipt covers the current target.' };
         else if (unfinishedWriter) blocked = { code: 'skipped_review_pending_writer', reason: 'A same-checkpoint writer has not finished and integrated.' };
+        if (!blocked && obligationMatches(obligation, review)) {
+          const verifierItem = sameBatchVerifierItem(obligation, target, gateState, batch, item);
+          if (verifierItem) {
+            const recovery = validReviewRecovery(gateState.reviewRecovery)
+              ? gateState.reviewRecovery.checkpoints.find((entry) => entry.checkpointId === review.checkpointId
+                && entry.contextHash === reviewContextHash(obligation.review)) : null;
+            const handoff = freshVerifierHandoff(obligation, target, recovery, verifierItem);
+            if (handoff.error) {
+              blocked = { code: 'fresh_verifier_handoff_unavailable', reason: `The fresh verifier receipt is accepted, but its bounded handoff to the matching auditor is unavailable (${handoff.error}).` };
+            } else {
+              const inputs = [...item.assignment.inputs, ...handoff.inputs];
+              const acceptanceCriteria = [...item.assignment.acceptanceCriteria, handoff.instruction];
+              if (inputs.length > MAX_REVIEW_HANDOFF_INPUTS
+                || inputs.some((input) => input.length > MAX_REVIEW_HANDOFF_INPUT_CHARS)
+                || acceptanceCriteria.length > MAX_REVIEW_HANDOFF_INPUTS
+                || acceptanceCriteria.some((criterion) => criterion.length > MAX_REVIEW_HANDOFF_INPUT_CHARS)) {
+                blocked = { code: 'fresh_verifier_handoff_unavailable', reason: 'The fresh verifier handoff exceeds the bounded auditor assignment limits.' };
+              } else {
+                item = { ...item, assignment: { ...item.assignment, inputs, acceptanceCriteria } };
+              }
+            }
+          }
+        }
       }
       if (!blocked && tracked && isVerifier) {
         const unfinishedWriter = batch.items.some((candidate) => (candidate.state !== 'finished' || !isSettledWriter(candidate.result))
