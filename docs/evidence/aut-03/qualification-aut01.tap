@@ -1,0 +1,238 @@
+TAP version 13
+# Subtest: explicit CLI emits a deterministic complete pass report bound to all inputs
+ok 1 - explicit CLI emits a deterministic complete pass report bound to all inputs
+  ---
+  duration_ms: 136.761113
+  type: 'test'
+  ...
+# Subtest: same IDs with a semantically different objective do not claim semantic verification
+ok 2 - same IDs with a semantically different objective do not claim semantic verification
+  ---
+  duration_ms: 75.053256
+  type: 'test'
+  ...
+# Subtest: CLI argument, JSON, version, path, and accepted digest failures are structured blocked reports
+ok 3 - CLI argument, JSON, version, path, and accepted digest failures are structured blocked reports
+  ---
+  duration_ms: 212.280545
+  type: 'test'
+  ...
+# Subtest: changed source and artifact membership are rejected against captured digests
+ok 4 - changed source and artifact membership are rejected against captured digests
+  ---
+  duration_ms: 88.545403
+  type: 'test'
+  ...
+# Subtest: unknown map authority fields, map versions, and invalid map JSON cannot pass
+ok 5 - unknown map authority fields, map versions, and invalid map JSON cannot pass
+  ---
+  duration_ms: 154.045447
+  type: 'test'
+  ...
+# Subtest: explicit profiles are loaded, affect contract validation, and change the fingerprint
+ok 6 - explicit profiles are loaded, affect contract validation, and change the fingerprint
+  ---
+  duration_ms: 120.395292
+  type: 'test'
+  ...
+# Subtest: workspace symlinks and oversized context inputs are blocked before parsing
+ok 7 - workspace symlinks and oversized context inputs are blocked before parsing
+  ---
+  duration_ms: 76.129183
+  type: 'test'
+  ...
+# Subtest: aggregate snapshot budget includes canonical source files
+ok 8 - aggregate snapshot budget includes canonical source files
+  ---
+  duration_ms: 141.285934
+  type: 'test'
+  ...
+# Subtest: analysis leaves the entire workspace unchanged and never executes planned checks
+ok 9 - analysis leaves the entire workspace unchanged and never executes planned checks
+  ---
+  duration_ms: 53.538494
+  type: 'test'
+  ...
+# Subtest: input drift during analysis blocks the snapshot report
+ok 10 - input drift during analysis blocks the snapshot report
+  ---
+  duration_ms: 18.900852
+  type: 'test'
+  ...
+# Subtest: accepted F2 map analyzes deterministically with stable order and checkbox state
+ok 11 - accepted F2 map analyzes deterministically with stable order and checkbox state
+  ---
+  duration_ms: 4.211974
+  type: 'test'
+  ...
+# Subtest: DAG order is stable, cycle witnesses are stable, and dangling edges block graph analysis
+ok 12 - DAG order is stable, cycle witnesses are stable, and dangling edges block graph analysis
+  ---
+  duration_ms: 5.890287
+  type: 'test'
+  ...
+# Subtest: parallel conflicts include transitive dependencies and parent-child writes
+ok 13 - parallel conflicts include transitive dependencies and parent-child writes
+  ---
+  duration_ms: 4.751979
+  type: 'test'
+  ...
+# Subtest: base map findings cover requirement, acceptance, evidence, check, and decision defects
+ok 14 - base map findings cover requirement, acceptance, evidence, check, and decision defects
+  ---
+  duration_ms: 18.680885
+  type: 'test'
+  ...
+# Subtest: projection requires exact inventory, markers, and parallel annotations
+ok 15 - projection requires exact inventory, markers, and parallel annotations
+  ---
+  duration_ms: 2.644829
+  type: 'test'
+  ...
+# Subtest: Markdown scanner ignores fenced/comment examples but rejects malformed hiding constructs
+ok 16 - Markdown scanner ignores fenced/comment examples but rejects malformed hiding constructs
+  ---
+  duration_ms: 0.456877
+  type: 'test'
+  ...
+# Subtest: null and malformed map inputs remain nonthrowing and finding bounds are explicit
+ok 17 - null and malformed map inputs remain nonthrowing and finding bounds are explicit
+  ---
+  duration_ms: 4.164561
+  type: 'test'
+  ...
+# Subtest: F2 compiles complete implementation and verifier proposals through both real contract boundaries
+ok 18 - F2 compiles complete implementation and verifier proposals through both real contract boundaries
+  ---
+  duration_ms: 3.452514
+  type: 'test'
+  ...
+# Subtest: risk union retains tags and precedence and creates an auditor only for gated work
+ok 19 - risk union retains tags and precedence and creates an auditor only for gated work
+  ---
+  duration_ms: 14.832277
+  type: 'test'
+  ...
+# Subtest: selected verifier-scope risk and additional tags strengthen the derived review kind
+ok 20 - selected verifier-scope risk and additional tags strengthen the derived review kind
+  ---
+  duration_ms: 3.558237
+  type: 'test'
+  ...
+# Subtest: lowered declared risk and unsafe task scopes block otherwise valid proposals
+ok 21 - lowered declared risk and unsafe task scopes block otherwise valid proposals
+  ---
+  duration_ms: 7.02333
+  type: 'test'
+  ...
+# Subtest: oversized source excerpts and malformed checks block without truncation
+ok 22 - oversized source excerpts and malformed checks block without truncation
+  ---
+  duration_ms: 6.589786
+  type: 'test'
+  ...
+# Subtest: oversized assignment objectives block every role proposal
+ok 23 - oversized assignment objectives block every role proposal
+  ---
+  duration_ms: 2.717205
+  type: 'test'
+  ...
+# Subtest: every task is compiled and a bad task does not hide a valid sibling
+ok 24 - every task is compiled and a bad task does not hide a valid sibling
+  ---
+  duration_ms: 3.775509
+  type: 'test'
+  ...
+# Subtest: adapter rejects missing structural analysis and malformed tasks as findings
+ok 25 - adapter rejects missing structural analysis and malformed tasks as findings
+  ---
+  duration_ms: 2.239096
+  type: 'test'
+  ...
+# Subtest: candidate F2 context and one-task map validate against pinned bytes
+ok 26 - candidate F2 context and one-task map validate against pinned bytes
+  ---
+  duration_ms: 1.633088
+  type: 'test'
+  ...
+# Subtest: schemas are strict nested contracts and bound safe relative paths
+ok 27 - schemas are strict nested contracts and bound safe relative paths
+  ---
+  duration_ms: 0.597668
+  type: 'test'
+  ...
+# Subtest: caller digest and canonical source bytes are both required
+ok 28 - caller digest and canonical source bytes are both required
+  ---
+  duration_ms: 2.204836
+  type: 'test'
+  ...
+# Subtest: source byte bounds reject an oversized file and a snapshot over the total limit
+ok 29 - source byte bounds reject an oversized file and a snapshot over the total limit
+  ---
+  duration_ms: 58.350137
+  type: 'test'
+  ...
+# Subtest: nested shape, references, and source line bounds fail closed
+ok 30 - nested shape, references, and source line bounds fail closed
+  ---
+  duration_ms: 2.518335
+  type: 'test'
+  ...
+# Subtest: malformed context collections return findings without throwing
+ok 31 - malformed context collections return findings without throwing
+  ---
+  duration_ms: 11.950095
+  type: 'test'
+  ...
+# Subtest: malformed map members and typed paths return findings without throwing
+ok 32 - malformed map members and typed paths return findings without throwing
+  ---
+  duration_ms: 3.239648
+  type: 'test'
+  ...
+# Subtest: write scopes, review risk, and task bindings are cross-validated
+ok 33 - write scopes, review risk, and task bindings are cross-validated
+  ---
+  duration_ms: 1.949625
+  type: 'test'
+  ...
+# Subtest: unsafe paths and symlinked ancestors are rejected
+ok 34 - unsafe paths and symlinked ancestors are rejected
+  ---
+  duration_ms: 1.318127
+  type: 'test'
+  ...
+# Subtest: write scopes reject in-root symlinks at file and ancestor paths
+ok 35 - write scopes reject in-root symlinks at file and ancestor paths
+  ---
+  duration_ms: 2.368953
+  type: 'test'
+  ...
+# Subtest: ordinary new files remain valid beneath an explicitly allowed directory
+ok 36 - ordinary new files remain valid beneath an explicitly allowed directory
+  ---
+  duration_ms: 2.479322
+  type: 'test'
+  ...
+# Subtest: source line extraction accepts LF and CRLF and rejects bare CR and invalid ranges
+ok 37 - source line extraction accepts LF and CRLF and rejects bare CR and invalid ranges
+  ---
+  duration_ms: 0.165423
+  type: 'test'
+  ...
+# Subtest: map artifact bytes and externally supplied context binding are pinned
+ok 38 - map artifact bytes and externally supplied context binding are pinned
+  ---
+  duration_ms: 1.908395
+  type: 'test'
+  ...
+1..38
+# tests 38
+# suites 0
+# pass 38
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1290.727299

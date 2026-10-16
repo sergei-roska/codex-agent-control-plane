@@ -1,13 +1,26 @@
 # Spec Kit integration plan for the harness
 
-Status: implementation roadmap. AUT-05 Phase 0 and AUT-01 offline Phase 1 are
-accepted. [Phase 1 qualification](aut-01-review.md) records exact evidence and
-limits; later runtime and skill interventions remain unqualified.
+Status: implementation roadmap. AUT-05 Phase 0, AUT-01 offline Phase 1, and
+AUT-02 offline fresh-target recovery are accepted. Their review records state
+the exact evidence and limits; live planning quality and economy for later skill
+interventions remain unqualified.
 Updated: 2026-10-15.
 
 Execution guides: [AUT-05 baseline](aut-05-baseline-runbook.md),
-[AUT-05 implementation review](aut-05-review.md), and
-[the next AUT-01 runbook](aut-01-traceability-runbook.md).
+[AUT-05 implementation review](aut-05-review.md),
+[AUT-01 runbook](aut-01-traceability-runbook.md), and
+[AUT-02 runbook](aut-02-fresh-review-runbook.md), and
+[AUT-03 runbook](aut-03-lead-decomposition-runbook.md).
+
+After accepted Phase 1, the next bounded intervention was AUT-02 qualification
+and fresh-target review recovery, now accepted in
+[its review](aut-02-review.md) and
+[decision](evidence/aut-02/acceptance.json). Section 13.1 can run independently of optional
+Phase 2A enrollment and Phase 2B workflow delivery; their runtime and skill
+contracts remain unqualified. The AUT-03 runbook is independently approved,
+its S0 AUT-02 entry condition is satisfied, and offline lead-skill delivery and
+deterministic plumbing are independently verified. Paired planning quality
+and economy remain unqualified pending a separately authorized live cohort.
 
 ## 1. Decision and intended result
 
@@ -821,7 +834,8 @@ Phase 1 is complete only when:
 - Focused and existing project checks have recorded outcomes.
 - Verifier and required auditor evidence cover the integrated candidate.
 - The lead records a bounded AUT-01 pilot result and remaining semantic/runtime
-  limitations. AUT-02/AUT-03/AUT-04 remain unqualified.
+  limitations. At this AUT-01 checkpoint, AUT-02/AUT-03/AUT-04 remain
+  unqualified; see current status in sections 13.1-13.2.
 
 ## 11. Phase 2A: optional runtime dispatch integration
 
@@ -1060,6 +1074,13 @@ catalog loading alone.
 
 ### 13.1 AUT-02 regression
 
+Continue the separately scoped [AUT-02 runbook](aut-02-fresh-review-runbook.md)
+and retain its [accepted qualification status](evidence/aut-02/qualification-status.json)
+and [decision](evidence/aut-02/acceptance.json). Q01-Q14 and the full integration
+suite passed with one explicitly gated live-probe skip; independent verifier
+and auditor reviews approved the final hashes. See [the baseline/final
+comparison](evidence/aut-02/comparison.md) for the supported scope and limits.
+
 Use the historical `review_origin_stale` incident as a regression source. The
 actual code contains multiple stale-target paths; exercise the relevant
 continuation and origin validation boundaries rather than relying on a label.
@@ -1070,6 +1091,12 @@ context. No repeated stale continuation, weakened gate, or reused historical
 origin may count as recovery. Run this with fake transports first.
 
 ### 13.2 AUT-03 lead skill
+
+The [AUT-03 runbook](aut-03-lead-decomposition-runbook.md) is independently
+approved as a plan, and its S0 AUT-02 entry condition is satisfied. AUT-03
+offline lead-only delivery and deterministic plumbing are independently
+verified. Paired planning quality and economy remain pending a separately
+authorized live cohort; no live baseline or effectiveness claim exists.
 
 Trial one versioned, hash-pinned decomposition skill delivered to the lead. It
 consumes canonical context and produces a roadmap, task map, and readiness
@@ -1146,7 +1173,10 @@ Phase 1 checker and its controlled fixture. Actual source/risk/scope ambiguities
 in the chosen feature must be resolved or represented as blocking decisions
 before that feature can receive a passing readiness report.
 
-## 15. First implementation brief
+## 15. Completed Phase 1 implementation brief
+
+The brief below is retained as the completed Phase 1 implementation sequence.
+Current AUT-03 next-step instructions are in the [AUT-03 runbook](aut-03-lead-decomposition-runbook.md): obtain separate authorization and predeclare a paired live cohort before capturing a baseline. The AUT-02 implementation is accepted; do not restart it to begin AUT-03. The Phase 1 sequence below is retained as historical completed-work guidance; do not repeat it or change accepted baseline bytes.
 
 Resolve the accepted baseline in `docs/aut-05-review.md` and complete AUT-01
 entry checkpoint A0. The initial AUT-05 capture is retained; do not repeat it

@@ -4,6 +4,7 @@ const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const { CodexAppServer, laneSandboxPolicy } = require('../src/codex-app-server');
 const { loadSkillCatalog, resolveSkillSelection } = require('../src/skill-catalog');
+const { AUT03_SKILL_ID, AUT03_SKILL_SHA256 } = require('../src/aut03-lead-skill');
 
 class FakeProcess extends EventEmitter {
   constructor(handler) {
@@ -1288,7 +1289,7 @@ test('mcpServerStatus lists status for a thread', async (t) => {
 });
 
 test('selected skills are explicit turn inputs with scoped boundary and hash provenance', async (t) => {
-  const selectedSkills = resolveSkillSelection(loadSkillCatalog(), ['entity-query-analyzer']);
+  const selectedSkills = resolveSkillSelection(loadSkillCatalog(), ['actor-model']);
   let turnInput;
   const fake = fakeSpawn((request, send) => {
     if (request.method === 'initialize') return send({ id: request.id, result: {} });
@@ -1307,8 +1308,8 @@ test('selected skills are explicit turn inputs with scoped boundary and hash pro
   t.after(() => client.close());
   const result = await client.run({ role: { ...role, tools: { mcpServers: [], skills: false } }, cwd: '/tmp/project', input: 'Audit the query', selectedSkills });
   assert.deepEqual(turnInput, [
-    { type: 'skill', name: 'entity-query-analyzer', path: selectedSkills[0].path },
-    { type: 'text', text: '$entity-query-analyzer\nAudit the query' },
+    { type: 'skill', name: 'actor-model', path: selectedSkills[0].path },
+    { type: 'text', text: '$actor-model\nAudit the query' },
   ]);
   const threadStart = fake.getChild().sent.find(({ method }) => method === 'thread/start');
   assert.match(threadStart.params.developerInstructions, /scoped engineering guidance only/);
@@ -1326,11 +1327,44 @@ test('selected skills are explicit turn inputs with scoped boundary and hash pro
   });
 });
 
+test('the lead-only pinned skill is a turn input while lead skill tools stay disabled', async (t) => {
+  const catalog = loadSkillCatalog();
+  const selectedSkills = resolveSkillSelection(catalog, [AUT03_SKILL_ID], {
+    audience: 'lead', pins: [{ id: AUT03_SKILL_ID, sha256: AUT03_SKILL_SHA256 }],
+  });
+  let turnInput;
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') return send({ id: request.id, result: { thread: { id: 'thread-aut03' } } });
+    if (request.method === 'turn/start') {
+      turnInput = request.params.input;
+      send({ id: request.id, result: { turn: { id: 'turn-aut03', status: 'inProgress', items: [] } } });
+      setImmediate(() => {
+        send({ method: 'item/completed', params: { threadId: 'thread-aut03', turnId: 'turn-aut03', item: { type: 'agentMessage', text: 'ok' } } });
+        send({ method: 'turn/completed', params: { threadId: 'thread-aut03', turn: { id: 'turn-aut03', status: 'completed' } } });
+      });
+    }
+    return undefined;
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const result = await client.run({ role: toolRole({ mcpServers: [], skills: false }), cwd: '/tmp/project', input: 'Propose a decomposition', selectedSkills });
+  assert.deepEqual(turnInput, [
+    { type: 'skill', name: AUT03_SKILL_ID, path: selectedSkills[0].path },
+    { type: 'text', text: `$${AUT03_SKILL_ID}\nPropose a decomposition` },
+  ]);
+  assert.deepEqual(result.permissionConfig.selectedSkills, [{ id: AUT03_SKILL_ID, sha256: AUT03_SKILL_SHA256 }]);
+  const threadStart = fake.getChild().sent.find(({ method }) => method === 'thread/start');
+  assert.equal(threadStart.params.config['skills.include_instructions'], false);
+  assert.equal(threadStart.params.config['skills.bundled.enabled'], false);
+  assert.equal(result.permissionConfig.toolPolicy.skills, false);
+});
+
 test('selected skill shape, path, duplicate ids, and hashes are validated before launch', async (t) => {
   const fake = fakeSpawn(baseHandler());
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const valid = resolveSkillSelection(loadSkillCatalog(), ['entity-query-analyzer'])[0];
+  const valid = resolveSkillSelection(loadSkillCatalog(), ['actor-model'])[0];
   await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'x', selectedSkills: [{ ...valid, sha256: '0'.repeat(64) }] }), /hash changed/);
   await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'x', selectedSkills: [{ ...valid, path: '/tmp/../etc/passwd' }] }), /canonical catalog skill/);
   await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'x', selectedSkills: [valid, valid] }), /unique/);
@@ -1365,13 +1399,13 @@ test('a thread created without skills keeps the boundary for a later selected-sk
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
   const first = await client.run({ role, cwd: '/tmp/project', input: 'initial' });
-  const selectedSkills = resolveSkillSelection(loadSkillCatalog(), ['entity-query-analyzer']);
+  const selectedSkills = resolveSkillSelection(loadSkillCatalog(), ['actor-model']);
   const second = await client.run({ role, cwd: '/tmp/project', input: 'with skill', threadId: first.threadId, selectedSkills });
   assert.equal(second.threadId, first.threadId);
   assert.deepEqual(fake.getChild().sent.filter(({ method }) => method === 'thread/start').map((request) => request.params.developerInstructions), [`${role.instructions}\n\n${skillBoundary}\n\n${readingDiscipline}`]);
   assert.equal(fake.getChild().sent.some(({ method }) => method === 'thread/resume'), false);
   assert.deepEqual(fake.getChild().sent.find(({ method, params }) => method === 'turn/start' && params.input.some((item) => item.type === 'skill')).params.input[0], {
-    type: 'skill', name: 'entity-query-analyzer', path: selectedSkills[0].path,
+    type: 'skill', name: 'actor-model', path: selectedSkills[0].path,
   });
 });
 

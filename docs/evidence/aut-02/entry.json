@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "cohort": "aut-02-deterministic-harness-simulations",
+  "capturedAt": "2026-10-15T18:47:54.542642+00:00",
+  "implementationCommit": "cc0958edd54a5c7ddaab02e4844fa69b823af365",
+  "initialWorkingTree": [
+    " M docs/aut-01-review.md",
+    " M docs/orchestrator-improvement-backlog.md",
+    " M docs/spec-kit-luna-integration-plan.md",
+    "?? docs/aut-02-fresh-review-runbook.md"
+  ],
+  "nodeVersion": "v24.21.0",
+  "dependencies": {
+    "version": "1.0.0",
+    "name": "codex-universal-a2a-orchestrator",
+    "dependencies": {
+      "@a2a-js/sdk": {
+        "version": "1.3.0",
+        "resolved": "https://registry.npmjs.org/@a2a-js/sdk/-/sdk-1.3.0.tgz",
+        "overridden": false
+      },
+      "@langchain/core": {
+        "version": "1.2.13",
+        "resolved": "https://registry.npmjs.org/@langchain/core/-/core-1.2.13.tgz",
+        "overridden": false
+      },
+      "@langchain/langgraph-checkpoint-sqlite": {
+        "version": "1.0.4",
+        "resolved": "https://registry.npmjs.org/@langchain/langgraph-checkpoint-sqlite/-/langgraph-checkpoint-sqlite-1.0.4.tgz",
+        "overridden": false
+      },
+      "@langchain/langgraph": {
+        "version": "1.4.18",
+        "resolved": "https://registry.npmjs.org/@langchain/langgraph/-/langgraph-1.4.18.tgz",
+        "overridden": false
+      },
+      "better-sqlite3": {
+        "version": "13.0.3",
+        "resolved": "https://registry.npmjs.org/better-sqlite3/-/better-sqlite3-13.0.3.tgz",
+        "overridden": false
+      },
+      "express": {
+        "version": "5.2.1",
+        "resolved": "https://registry.npmjs.org/express/-/express-5.2.1.tgz",
+        "overridden": false
+      },
+      "kysely": {
+        "version": "0.28.17",
+        "resolved": "https://registry.npmjs.org/kysely/-/kysely-0.28.17.tgz",
+        "overridden": false
+      }
+    }
+  },
+  "baselineHashes": {
+    "src/lead-graph.js": "c982762654c32f295ccc1893f0f3c878922b9b61928cb1c74221e5d3493c136a",
+    "src/a2a-role-service.js": "4ab02f2bd1ec8b14120bb39ccb88fb0137ffe45a9792e52a7d32b3129d410516",
+    "src/contracts.js": "be1966aea45abdaaf498fd53feef0a738b6bb2a642504d70539e45fc9f6d1698",
+    "src/review-policy.js": "0d4ea958db3a0b3566426d4bbe3203d11eedb08dec34f432838f226ad9ba87a6",
+    "src/lead-orchestrator.js": "19774aaef314b394900c755ddf2164173c9ec4225760b6583adf10598e421ad0",
+    "src/durable-store.js": "aa656899122422ca40e3b95eb62a436c5f041a8368f1ae9009a5b4e4114ab326",
+    "src/staging-log.js": "554595dde7bb1a80ea5ac51f7a9ba8c383a7616a213fa9a7a2b5abd0122a7f56",
+    "test/lead-graph.test.js": "99ede84343d70097aacbc361c0d3dadf7c7d38910eeacdcc5b01efb455495bc7",
+    "test/a2a-role-service.test.js": "764b8506766ae194062233a948d7ffcd11bd4603c15824f53316c1c62b7e887e",
+    "test/contracts.test.js": "f453318c9440e1e6b8c965aaa90172fb90b5ee5c6418aac8fa28d0f42ec3c83e",
+    "test/review-policy.test.js": "43020e7df190b61f95d65729c54ba0b162d75f73c1405ad2dba7792f2434b5d9",
+    "package.json": "91fe8e775ca23ca8ff2e2f69c2250b19a7a278faa4aef22f5d826739d8bc99db",
+    "package-lock.json": "5eb972114295361537d7672f000f3f94e95193dc86bc46a7bbcd3380cc6bab60",
+    "docs/aut-02-fresh-review-runbook.md": "77ccec62b72b28a3f5a831e72bb75ca5366cbf6bdc6d87dc08e6066a47e23d7a",
+    "profiles/TEAM.md": "218211a83778abb515a11c8be798c472fa6a7388f1878c07b1a4f4bd81042fd4",
+    "profiles/agents/engineer.toml": "bb29590bc2ac3a2dd1505f292c518dc714cd2defe81652e767b0232cc9a8642d",
+    "profiles/agents/explorer.toml": "182686715f17459158f33ff892482a4cdb621a89a21f3036c49b90033982185b",
+    "profiles/agents/scout.toml": "ff98f3291e52589e6d26cec8a4e320315732694db8dcb1ec5cf70acd2cffba06",
+    "profiles/agents/senior-engineer.toml": "75dc963eb537b9e5350d7391c0ffebd5e75d379b724b316d1d1f76ba89164cbf",
+    "profiles/agents/recovery-engineer.toml": "d69120f1b75ff0b6ebb53bdb19c6a9a82e180b00fd2a5d66a1824a988f99dab0",
+    "profiles/agents/architect.toml": "53e68b690e99858c59fa2145cadaba7268331b3c2ece2f31bc4c4c6910fabeee",
+    "profiles/agents/verifier.toml": "0a019f9d2d522831ed92c3b02d7424956b83aad28b5f76d3db61ce745da0ee19",
+    "profiles/agents/auditor.toml": "bd813a94613a34aac3c4c94442f7176f463419bf2022a9b4b92a0d46e8489a03"
+  },
+  "acceptedDecisions": [
+    {
+      "path": "docs/evidence/aut-05/acceptance.json",
+      "sha256": "8ddd383d689e261839bd311b0c44b58c9929ba9afa7e41364b7bc59e0d679d5d",
+      "verifiedArtifactCount": 13
+    },
+    {
+      "path": "docs/evidence/aut-01/acceptance.json",
+      "sha256": "209653fd170655e1a1d146c2b6d3b69f76f854aa988ddfb6c94186b084b628d1",
+      "verifiedArtifactCount": 26
+    }
+  ],
+  "qualificationCommand": "node --test --test-isolation=none --test-reporter=tap test/contracts.test.js test/review-policy.test.js test/a2a-role-service.test.js test/lead-graph.test.js",
+  "transport": "Injected fake App Server and A2A clients; disposable workspaces and SQLite state. No paid calls.",
+  "liveMetrics": "unavailable",
+  "sourceSnapshot": "artifacts/autonomy/aut-02/baseline/ (ignored scratch; original sources recoverable from implementationCommit)",
+  "historicalIncident": "r215 target-orchestrator historical summary only; original incident source revision unavailable. New measurements are harness simulations."
+}

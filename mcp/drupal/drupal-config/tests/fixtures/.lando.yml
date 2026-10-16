@@ -1,0 +1,4 @@
+name: mock-drupal-site
+recipe: drupal10
+config:
+  webroot: .

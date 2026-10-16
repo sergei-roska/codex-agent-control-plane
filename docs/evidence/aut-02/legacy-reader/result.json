@@ -1,0 +1,58 @@
+{
+  "baselineCommit": "cc0958edd54a5c7ddaab02e4844fa69b823af365",
+  "currentGraphSha256": "6b93da685d44afeadbc573cd84fae2169e0dfc2e949f86c5187bd1a31fb1dd9b",
+  "baselineGraphSha256": "c982762654c32f295ccc1893f0f3c878922b9b61928cb1c74221e5d3493c136a",
+  "baselineContractSha256": "be1966aea45abdaaf498fd53feef0a738b6bb2a642504d70539e45fc9f6d1698",
+  "cases": [
+    {
+      "id": "legacy-to-current",
+      "next": [
+        "decide"
+      ],
+      "status": null,
+      "rejectionCode": "review_receipt_missing",
+      "reviewRecovery": {
+        "version": 1,
+        "checkpoints": []
+      },
+      "historicalReceipts": 2,
+      "leadCalls": 1,
+      "sends": 0,
+      "workerModelCalls": 0
+    },
+    {
+      "id": "current-to-baseline",
+      "next": [
+        "decide"
+      ],
+      "status": null,
+      "rejectionCode": "review_receipt_missing",
+      "historicalReceipts": 2,
+      "recoveryVisible": false,
+      "leadCalls": 1,
+      "sends": 0,
+      "workerModelCalls": 0
+    },
+    {
+      "id": "active-current-to-baseline",
+      "pendingBefore": {
+        "version": 1,
+        "checkpointId": "legacy-checkpoint",
+        "generation": 1,
+        "role": "verifier"
+      },
+      "phaseBefore": "verifier_pending",
+      "statusAfter": null,
+      "nextAfter": [
+        "decide"
+      ],
+      "outboundPrivateMarker": true,
+      "acceptedReceiptsAfter": 0,
+      "boundaryCode": "request_invalid",
+      "finalGateRejection": "review_receipt_missing",
+      "leadCalls": 1,
+      "sends": 1,
+      "workerModelCalls": 0
+    }
+  ]
+}

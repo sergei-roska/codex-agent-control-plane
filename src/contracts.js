@@ -10,7 +10,7 @@ const MAX_CHARS = 3_000;
 const TRUNCATION_SUFFIX = '... [truncated]';
 const WORKER_REPORT_CONTRACT = 'worker-report/v1';
 const ASSIGNMENT_FIELDS = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
-const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom', 'review', 'repair'];
+const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'mcpTools', 'wave', 'continueFrom', 'review', 'repair'];
 const DECISION_BASE_KEYS = ['action', 'assignments', 'final', 'resolutions', 'humanInput'];
 const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks', 'records'];
 const ASSIGNMENT_ARRAY_FIELDS = ASSIGNMENT_FIELDS.filter((field) => field !== 'role' && field !== 'objective');
@@ -43,10 +43,12 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'assignment.writer_scope': Object.freeze(['writer_scope_missing']),
   'assignment.paths': Object.freeze(['path_unsafe', 'path_glob_unsupported']),
   'assignment.skills': Object.freeze(['skill_invalid']),
+  'assignment.mcp_tools': Object.freeze(['mcp_tool_invalid']),
   'assignment.wave': Object.freeze(['wave_invalid', 'wave_scope_overlap']),
   'assignment.continue_from': Object.freeze(['continue_from_unknown', 'continue_from_role', 'continue_from_duplicate']),
   'assignment.review': Object.freeze(['review_context_invalid', 'review_context_missing', 'review_wave_conflict']),
   'dispatch.skill_pins': Object.freeze(['skill_pin_drift']),
+  'dispatch.mcp_tool_pins': Object.freeze(['mcp_tool_pin_drift']),
   'dispatch.writer_admission': Object.freeze(['fenced', 'admission_blocked']),
   'assignment.role_ladder': Object.freeze(['role_ladder_violation', 'architect_constraint']),
   'settle.lane_scope': Object.freeze(['lane_scope_refused']),
@@ -159,6 +161,7 @@ const DECISION_SCHEMA = {
           checks: stringArray,
           stopConditions: stringArray,
           skills: { type: 'array', items: { type: 'string' }, maxItems: 5 },
+          mcpTools: { type: 'array', items: { type: 'string' }, maxItems: 5 },
           wave: { type: ['integer', 'null'], minimum: 1 },
           continueFrom: { type: ['string', 'null'] },
           review: {
@@ -526,10 +529,11 @@ function checkAssignment(assignment, decision, ctx) {
   const keys = Object.keys(assignment);
   const shapeOk = ASSIGNMENT_FIELDS.every((field) => keys.includes(field)) && keys.every((field) => DECISION_ASSIGNMENT_FIELDS.includes(field));
   if (!shapeOk) {
-    throw violation('assignment.shape', 'assignment_shape_invalid', 'Assignment must contain the ordinary fields and may include skills, wave, continueFrom, review, and repair');
+    throw violation('assignment.shape', 'assignment_shape_invalid', 'Assignment must contain the ordinary fields and may include skills, mcpTools, wave, continueFrom, review, and repair');
   }
   // Older checkpoints and callers predate assignment skill routing and waves.
   if (!keys.includes('skills')) assignment.skills = [];
+  if (!keys.includes('mcpTools')) assignment.mcpTools = [];
   if (!keys.includes('wave')) assignment.wave = null;
   if (!keys.includes('continueFrom')) assignment.continueFrom = null;
   if (!keys.includes('review')) assignment.review = null;
@@ -598,6 +602,20 @@ function checkAssignment(assignment, decision, ctx) {
     if (selectable && !selectable.has(id)) throw violation('assignment.skills', 'skill_invalid', `Skill ${id} was not advertised as a candidate`);
     if (catalog && !catalog.has(id)) throw violation('assignment.skills', 'skill_invalid', `Unknown skill: ${id}`);
   }
+  if (!Array.isArray(assignment.mcpTools) || assignment.mcpTools.some((id) => !isNonEmptyString(id))) {
+    throw violation('assignment.mcp_tools', 'mcp_tool_invalid', `Assignment for ${role.name} needs a string array for mcpTools`);
+  }
+  if (assignment.mcpTools.length > 5 || new Set(assignment.mcpTools).size !== assignment.mcpTools.length) {
+    throw violation('assignment.mcp_tools', 'mcp_tool_invalid', `Assignment for ${role.name} may select at most 5 unique MCP tools`);
+  }
+  const selectableMcpTools = ctx.mcpToolCandidateIds ? new Set(ctx.mcpToolCandidateIds) : null;
+  for (const id of assignment.mcpTools) {
+    const item = ctx.mcpToolCatalog?.get(id);
+    if (!item || !role.tools?.mcpServers?.includes(item.configName)
+      || (selectableMcpTools && !selectableMcpTools.has(id))) {
+      throw violation('assignment.mcp_tools', 'mcp_tool_invalid', `MCP tool ${id} was not advertised for role ${role.name}`);
+    }
+  }
   if (assignment.inputs.length === 0) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} requires bounded inputs`);
   if (assignment.evidence.length === 0) throw violation('assignment.shape', 'field_invalid', `Assignment for ${role.name} requires prior evidence`);
   if (role.sandbox !== 'read-only' && assignment.allowedFiles.length === 0) {
@@ -637,7 +655,7 @@ function checkAssignment(assignment, decision, ctx) {
 const SPECIALIST_REQUIRED_KEYS = ['objective', 'allowedFiles'];
 const SPECIALIST_OPTIONAL_KEYS = [
   'role', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions',
-  'skills', 'wave', 'skillPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance', 'continuation', 'review', 'repair',
+  'skills', 'mcpTools', 'wave', 'skillPins', 'mcpToolPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance', 'continuation', 'review', 'repair',
 ];
 const SPECIALIST_ARRAY_KEYS = ['inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
 
@@ -677,9 +695,19 @@ function checkSpecialistRequest(request, role, { workspace } = {}) {
     if (!Array.isArray(request.skills)) throw violation('assignment.shape', 'field_invalid', `Request for ${label} needs a string array for skills`);
     out.skills = request.skills.slice();
   }
+  if (request.mcpTools !== undefined) {
+    if (!Array.isArray(request.mcpTools)) throw violation('assignment.mcp_tools', 'mcp_tool_invalid', `Request for ${label} needs a string array for mcpTools`);
+    out.mcpTools = request.mcpTools.slice();
+  } else {
+    out.mcpTools = [];
+  }
   if (request.skillPins !== undefined) {
     if (!Array.isArray(request.skillPins)) throw violation('assignment.shape', 'field_invalid', `Request for ${label} needs an array for skillPins`);
     out.skillPins = request.skillPins.slice();
+  }
+  if (request.mcpToolPins !== undefined) {
+    if (!Array.isArray(request.mcpToolPins)) throw violation('assignment.mcp_tools', 'mcp_tool_invalid', `Request for ${label} needs an array for mcpToolPins`);
+    out.mcpToolPins = request.mcpToolPins.slice();
   }
   const readOnly = role?.sandbox === 'read-only';
   const canonicalRole = canonicalRoleId(role?.name || role?.id);
@@ -733,7 +761,7 @@ function checkSpecialistRequest(request, role, { workspace } = {}) {
 function checkContinuation(value, label) {
   const bad = (detail) => violation('assignment.shape', 'field_invalid', `Request for ${label}: continuation ${detail}`);
   if (!isPlainObject(value)) throw bad('must be an object');
-  const unknown = Object.keys(value).filter((key) => !['ofAttemptId', 'threadId', 'laneId', 'codexHome', 'reason'].includes(key));
+  const unknown = Object.keys(value).filter((key) => !['ofAttemptId', 'threadId', 'laneId', 'codexHome', 'mcpToolPins', 'reason'].includes(key));
   if (unknown.length) throw bad(`has an unknown key: ${unknown[0]}`);
   if (!isNonEmptyString(value.ofAttemptId)) throw bad('needs a non-empty ofAttemptId');
   if (value.reason !== undefined && value.reason !== 'scope') throw bad('reason must be "scope" when present');
@@ -741,11 +769,18 @@ function checkContinuation(value, label) {
     const field = value[key];
     if (field !== undefined && field !== null && !isNonEmptyString(field)) throw bad(`${key} must be a non-empty string or null`);
   }
+  if (value.mcpToolPins !== undefined && (!Array.isArray(value.mcpToolPins) || value.mcpToolPins.length > 5
+    || value.mcpToolPins.some((pin) => !isPlainObject(pin) || !sameKeys(pin, ['id', 'sha256'])
+      || !isNonEmptyString(pin.id) || !/^[a-f0-9]{64}$/.test(pin.sha256))
+    || new Set(value.mcpToolPins.map((pin) => pin.id)).size !== value.mcpToolPins.length)) {
+    throw bad('mcpToolPins must be a list of at most five unique {id, sha256} pins');
+  }
   return {
     ofAttemptId: value.ofAttemptId,
     threadId: value.threadId ?? null,
     laneId: value.laneId ?? null,
     codexHome: value.codexHome ?? null,
+    ...(value.mcpToolPins !== undefined ? { mcpToolPins: value.mcpToolPins.map(({ id, sha256: hash }) => ({ id, sha256: hash })) } : {}),
     ...(value.reason === 'scope' ? { reason: 'scope' } : {}),
   };
 }

@@ -1,0 +1,13 @@
+{
+    "name": "drupal-mcp/shared-args",
+    "description": "Shared pagination, filtering, sorting, verbosity, and output-size parameters for Drupal MCP tools.",
+    "type": "library",
+    "require": {
+        "php": ">=8.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "DrupalMcp\\SharedArgs\\": "src/"
+        }
+    }
+}

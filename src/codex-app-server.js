@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const { readProcessIdentity, listGroupMembers } = require('./process-quiescence');
 const { classifyCodexError } = require('./contracts');
 const { DEFAULT_SKILLS_ROOT } = require('./skill-catalog');
+const { loadMcpCatalog, resolveMcpToolSelection, mcpToolPins } = require('./mcp-catalog');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_TURN_TIMEOUT_MS = 3_600_000;
@@ -148,9 +149,11 @@ class CodexAppServer {
     exitWaitMs = DEFAULT_EXIT_WAIT_MS,
     cooldownMs = DEFAULT_COOLDOWN_MS,
     codexHome = null,
+    mcpCatalog = loadMcpCatalog(),
   } = {}) {
     this.codexPath = codexPath;
     this.codexHome = codexHome || null;
+    this.mcpCatalog = mcpCatalog;
     this.notificationHandlers = new Map();
     this.spawnImpl = spawnImpl;
     this.requestTimeoutMs = requestTimeoutMs;
@@ -175,6 +178,7 @@ class CodexAppServer {
     this.closed = false;
     this.exitError = null;
     this.loadedThreads = new Set();
+    this.threadMcpPolicies = new Map();
     this.generation = 0;
     this.failedGeneration = 0;
     this.childExited = true;
@@ -639,8 +643,16 @@ class CodexAppServer {
   }
 
   // Fixed per-role tool surface: everything not declared in the role profile is off.
-  async _toolPolicy(role, cwd) {
+  async _toolPolicy(role, cwd, selectedMcpTools = []) {
     const allowed = [...new Set(role.tools?.mcpServers || [])];
+    const selected = resolveMcpToolSelection(this.mcpCatalog,
+      selectedMcpTools.map(({ id }) => id),
+      { allowedServers: allowed, pins: mcpToolPins(selectedMcpTools) });
+    const selectedByServer = new Map();
+    for (const item of selected) {
+      if (!selectedByServer.has(item.configName)) selectedByServer.set(item.configName, []);
+      selectedByServer.get(item.configName).push(item.name);
+    }
     const skills = role.tools?.skills === true;
     const config = { 'features.apps': false, 'features.plugins': false, tool_output_token_limit: toolOutputLimit() };
     if (!skills) {
@@ -651,6 +663,7 @@ class CodexAppServer {
       mcpAllowed: [],
       mcpDisabled: [],
       mcpMissing: [],
+      mcpSelectedTools: mcpToolPins(selected),
       skills,
       apps: false,
       plugins: false,
@@ -658,16 +671,43 @@ class CodexAppServer {
       source: 'config/read',
     };
     const inventory = await this.mcpInventory(cwd);
+    const configuredNames = new Set(inventory.names || []);
     if (inventory.names) {
       const known = new Set(inventory.names);
-      policy.mcpAllowed = allowed.filter((name) => known.has(name));
-      policy.mcpMissing = allowed.filter((name) => !known.has(name));
-      policy.mcpDisabled = inventory.names.filter((name) => !allowed.includes(name));
+      policy.mcpAllowed = allowed.filter((name) => known.has(name) || selectedByServer.has(name));
+      policy.mcpMissing = allowed.filter((name) => !known.has(name) && !selectedByServer.has(name));
+      const managedNames = new Set(this.mcpCatalog.servers.keys());
+      policy.mcpDisabled = inventory.names.filter((name) => !allowed.includes(name)
+        || (managedNames.has(name) && !selectedByServer.has(name)));
       for (const name of policy.mcpDisabled) config[`mcp_servers.${name}.enabled`] = false;
       policy.enforced = true;
     } else {
       policy.mcpMissing = allowed;
       policy.reason = `MCP server enumeration failed: ${inventory.error}`;
+      throw new CodexAppServerError('Cannot enforce the task-level MCP tool limit because MCP server enumeration failed', {
+        failureClass: 'request_rejected',
+      });
+    }
+    policy.mcpAllowed = [...new Set([...policy.mcpAllowed, ...selectedByServer.keys()])];
+    policy.mcpMissing = policy.mcpMissing.filter((name) => !selectedByServer.has(name));
+    for (const name of this.mcpCatalog.servers.keys()) {
+      if (!selectedByServer.has(name) && configuredNames.has(name)) config[`mcp_servers.${name}.enabled`] = false;
+    }
+    for (const [name, toolNames] of selectedByServer) {
+      const server = this.mcpCatalog.servers.get(name);
+      if (!server || !allowed.includes(name)) throw new CodexAppServerError(`MCP server ${name} is not allowed for role ${role.name}`, { failureClass: 'request_rejected' });
+      const autoload = path.join(server.absolutePackagePath, 'vendor', 'autoload.php');
+      const entrypoint = path.join(server.absolutePackagePath, 'bin', 'server.php');
+      if (!fs.existsSync(autoload)) throw new CodexAppServerError(`MCP dependencies are missing for ${name}; install the package dependencies first`, { failureClass: 'request_rejected' });
+      if (!fs.existsSync(entrypoint)) throw new CodexAppServerError(`MCP entrypoint is missing for ${name}`, { failureClass: 'request_rejected' });
+      config[`mcp_servers.${name}.command`] = 'php';
+      config[`mcp_servers.${name}.args`] = [entrypoint];
+      config[`mcp_servers.${name}.cwd`] = server.absolutePackagePath;
+      config[`mcp_servers.${name}.env`] = { PROJECT_ROOT: cwd };
+      config[`mcp_servers.${name}.enabled`] = true;
+      config[`mcp_servers.${name}.required`] = true;
+      config[`mcp_servers.${name}.enabled_tools`] = toolNames;
+      config[`mcp_servers.${name}.disabled_tools`] = [];
     }
     return { config, policy };
   }
@@ -687,12 +727,15 @@ class CodexAppServer {
     }
   }
 
-  async run({ role, cwd, input, onEvent, signal, threadId: existingThreadId, outputSchema, onTurnStart, selectedSkills = [], sandboxPolicy: sandboxPolicyOverride = null } = {}) {
+  async run({ role, cwd, input, onEvent, signal, threadId: existingThreadId, outputSchema, onTurnStart, selectedSkills = [], selectedMcpTools = [], sandboxPolicy: sandboxPolicyOverride = null } = {}) {
     if (!role || !role.name) throw new TypeError('role.name is required');
     if (!cwd) throw new TypeError('cwd is required');
     if (typeof input !== 'string' || !input.trim()) throw new TypeError('input must be a non-empty string');
     if (signal?.aborted) throw abortError();
     const validatedSkills = validateSelectedSkills(selectedSkills);
+    const validatedMcpTools = resolveMcpToolSelection(this.mcpCatalog,
+      selectedMcpTools.map((item) => item?.id),
+      { allowedServers: role.tools?.mcpServers || [], pins: mcpToolPins(selectedMcpTools) });
 
     const ctx = {
       processIdentity: null,
@@ -722,7 +765,7 @@ class CodexAppServer {
       ctx.permissionConfig.selectedSkills = validatedSkills.map(({ id, sha256 }) => ({ id, sha256 }));
     }
     try {
-      const result = await this._run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills: validatedSkills, sandboxPolicyOverride });
+      const result = await this._run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills: validatedSkills, selectedMcpTools: validatedMcpTools, sandboxPolicyOverride });
       return { ...result, execution: executionOf(ctx), usage: this._usageOf(ctx), ...permissionOf(ctx) };
     } catch (error) {
       // Concurrent runs can share one error instance (child failure); give each its own copy.
@@ -739,7 +782,7 @@ class CodexAppServer {
     }
   }
 
-  async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills, sandboxPolicyOverride }) {
+  async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills, selectedMcpTools, sandboxPolicyOverride }) {
     await this.start();
     ctx.generation = this.generation;
     const startup = this.startupInfo;
@@ -752,9 +795,19 @@ class CodexAppServer {
     }
 
     const developerInstructions = [role.instructions || `You are the ${role.name} agent.`, SKILL_BOUNDARY, READING_DISCIPLINE].join('\n\n');
+    const mcpPolicyDigest = JSON.stringify(mcpToolPins(selectedMcpTools));
+    if (existingThreadId) {
+      const priorPolicy = this.threadMcpPolicies.get(existingThreadId);
+      if ((this.loadedThreads.has(existingThreadId) && priorPolicy === undefined)
+        || (priorPolicy !== undefined && priorPolicy !== mcpPolicyDigest)) {
+        throw new CodexAppServerError('The MCP tool selection for this thread is unknown or changed; start a fresh thread', {
+          failureClass: 'request_rejected', threadId: existingThreadId,
+        });
+      }
+    }
     let toolConfig = null;
     if (!existingThreadId || !this.loadedThreads.has(existingThreadId)) {
-      const { config, policy } = await this._toolPolicy(role, cwd);
+      const { config, policy } = await this._toolPolicy(role, cwd, selectedMcpTools);
       toolConfig = config;
       ctx.permissionConfig.toolPolicy = policy;
     }
@@ -772,6 +825,7 @@ class CodexAppServer {
       }, { signal });
       if (threadResult?.thread?.id) {
         this.loadedThreads.add(threadResult.thread.id);
+        this.threadMcpPolicies.set(threadResult.thread.id, mcpPolicyDigest);
         // A brand-new thread has consumed nothing yet.
         if (!this.threadTotals.has(threadResult.thread.id)) this.threadTotals.set(threadResult.thread.id, ZERO_TOTAL);
       }
@@ -791,6 +845,7 @@ class CodexAppServer {
         config: toolConfig,
       }, { signal });
       this.loadedThreads.add(existingThreadId);
+      this.threadMcpPolicies.set(existingThreadId, mcpPolicyDigest);
       ctx.model = resumed?.model || ctx.model;
       ctx.effort = ctx.effort || resumed?.reasoningEffort || null;
     }

@@ -1,0 +1,33 @@
+{
+    "name": "drupal-mcp/static",
+    "type": "project",
+    "description": "Analyze Drupal source files without bootstrapping Drupal: modules, hooks, services, events, plugins, forms, routes, preprocessors, commands, and config sync.",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.1",
+        "mcp/sdk": "^0.6.0",
+        "drupal-mcp/shared-args": "@dev",
+        "symfony/yaml": "^8.1",
+        "nikic/php-parser": "^5.7",
+        "symfony/finder": "^8.1"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../shared-args",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "DrupalMcp\\Static\\": "src/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    }
+}

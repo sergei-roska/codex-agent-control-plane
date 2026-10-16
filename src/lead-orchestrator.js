@@ -11,6 +11,7 @@ const { InMemoryDispatchJournal } = require('./durable-store');
 const { validateAcceptanceContract } = require('./acceptance');
 const { buildLeadGraph, isTerminalTask, pauseMessage } = require('./lead-graph');
 const { loadSkillCatalog } = require('./skill-catalog');
+const { loadMcpCatalog } = require('./mcp-catalog');
 
 const DEFAULT_MAX_ROUNDS = null;
 const DEFAULT_POLL_INTERVAL_MS = 500;
@@ -185,6 +186,9 @@ class LeadOrchestrator {
     snapshot,
     acceptanceScratch = null,
     skillCatalog = loadSkillCatalog(),
+    mcpCatalog = loadMcpCatalog(),
+    aut03TrialRunIds = new Set(),
+    aut03SkillPin,
     sessionThreads = null,
     rolloverTokens = rolloverTokensFromEnv(),
   } = {}) {
@@ -242,6 +246,9 @@ class LeadOrchestrator {
       // Owner-side setting (project-settings.json); never read from the lead's output.
       acceptanceScratch,
       skillCatalog,
+      mcpCatalog,
+      aut03TrialRunIds,
+      ...(aut03SkillPin ? { aut03SkillPin } : {}),
       sessionThreads,
       rolloverTokens,
       sessionDigest: (input) => this._sessionDigest(input),

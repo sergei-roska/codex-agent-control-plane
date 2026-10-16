@@ -1,0 +1,9 @@
+services:
+  test_module.test_service:
+    class: Drupal\test_module\TestService
+    tags:
+      - { name: backend_service }
+  test_module.test_subscriber:
+    class: Drupal\test_module\EventSubscriber\TestSubscriber
+    tags:
+      - { name: event_subscriber }

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 const crypto = require('node:crypto');
 const Database = require('better-sqlite3');
@@ -19,6 +19,15 @@ const {
 const vcs = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' });
 const node = (id, code, extra = {}) => ({ id, argv: [process.execPath, '-e', code], ...extra });
 const tick = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function childOutputCaptureSkipReason() {
+  const result = spawnSync(process.execPath, ['-e', 'process.stdout.write("capture-probe")'], { encoding: 'utf8' });
+  return result.status === 0 && result.stdout === 'capture-probe'
+    ? false
+    : 'sandbox does not permit capturing child-process output';
+}
+
+const CHILD_OUTPUT_CAPTURE_SKIP = childOutputCaptureSkipReason();
 
 function repo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'accept-'));
@@ -70,7 +79,7 @@ test('passing check is accepted', async () => {
   assert.equal(result.admissionHeld, false);
 });
 
-test('failing check is rejected with check_failed', async () => {
+test('failing check is rejected with check_failed', { skip: CHILD_OUTPUT_CAPTURE_SKIP }, async () => {
   const dir = repo();
   const result = await runAcceptance({ workspace: dir, runId: 'r', attempt: 1, contract: { requiredChecks: [node('bad', 'console.error("boom");process.exit(3)')] }, writers: [] });
   assert.equal(result.disposition, 'rejected');
@@ -425,7 +434,7 @@ test('contract_invalid is an accept.contract_valid UNKNOWN and the contract mark
   assert.throws(() => validateAcceptanceContract({ id: 'other', requiredChecks: [] }), TypeError);
 });
 
-test('a check printing 10 MiB stores both streams as evidence, keeps the tails, and names the ids on failure', async () => {
+test('a check printing 10 MiB stores both streams as evidence, keeps the tails, and names the ids on failure', { skip: CHILD_OUTPUT_CAPTURE_SKIP }, async () => {
   const dir = repo();
   const db = new Database(':memory:');
   const store = createEvidenceStore(db);

@@ -12,6 +12,7 @@ const {
 } = require('./contracts');
 const { WriterAdmission } = require('./writer-admission');
 const { loadSkillCatalog, resolveSkillSelection } = require('./skill-catalog');
+const { loadMcpCatalog, resolveMcpToolSelection, mcpToolPins } = require('./mcp-catalog');
 const { canonicalRoleId, legacyRoleId, roleDisplayName } = require('./role-names');
 const { deterministicContextId } = require('./durable-store');
 const { POLICY_ID, computeReviewTarget, reviewResult } = require('./review-policy');
@@ -80,6 +81,41 @@ function assignmentSkillSelection(text, skillCatalog) {
     }
   }
   return resolveSkillSelection(skillCatalog, skills, pins === undefined ? {} : { pins });
+}
+
+function assignmentMcpToolSelection(text, mcpCatalog, allowedServers) {
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith('{')) return [];
+  let value;
+  try { value = JSON.parse(text); } catch (_) {
+    if (/(?:^|[,\s{])(?:"mcpTools"|'mcpTools'|mcpTools|"mcpToolPins"|'mcpToolPins'|mcpToolPins)\s*:/.test(text)) {
+      throw new Error('Structured assignment MCP tool fields must be valid JSON.');
+    }
+    return [];
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const hasTools = Object.hasOwn(value, 'mcpTools');
+  const hasPins = Object.hasOwn(value, 'mcpToolPins');
+  if (!hasTools && !hasPins) return [];
+  if (!Object.hasOwn(value, 'objective') || !Object.hasOwn(value, 'allowedFiles')) {
+    throw new Error('MCP tools can only be selected in a structured assignment request.');
+  }
+  const ids = hasTools ? value.mcpTools : [];
+  if (!Array.isArray(ids) || ids.length > 5
+    || ids.some((id) => typeof id !== 'string' || !id.trim())
+    || new Set(ids).size !== ids.length) {
+    throw new Error('mcpTools must contain at most 5 unique non-empty tool IDs.');
+  }
+  let pins;
+  if (hasPins) {
+    pins = value.mcpToolPins;
+    if (!Array.isArray(pins) || pins.length !== ids.length || pins.some((pin) => !pin || typeof pin !== 'object'
+      || Array.isArray(pin) || Object.keys(pin).sort().join(',') !== 'id,sha256'
+      || typeof pin.id !== 'string' || typeof pin.sha256 !== 'string')) {
+      throw new Error('mcpToolPins must exactly match mcpTools with id and sha256 fields.');
+    }
+  }
+  return resolveMcpToolSelection(mcpCatalog, ids, { allowedServers, ...(pins === undefined ? {} : { pins }) });
 }
 
 const BOUNDARY_CONTRACT = 'boundary-contract/v1';
@@ -283,6 +319,18 @@ function stagingEventId(event) {
   return `role-event:v1:${digest}`;
 }
 
+function reviewContinuationDigest(continuation) {
+  const canonical = {
+    domain: 'codex-agent-control-plane/review-continuation/v1',
+    version: 1,
+    threadId: continuation.threadId ?? null,
+    laneId: continuation.laneId ?? null,
+    codexHome: continuation.codexHome ?? null,
+    ...(Object.hasOwn(continuation, 'mcpToolPins') ? { mcpToolPins: continuation.mcpToolPins } : {}),
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
 function stagingReportPayload(report) {
   if (!report) return { reportValid: false };
   const checks = (Array.isArray(report.checks) ? report.checks : []).slice(0, 50)
@@ -315,7 +363,7 @@ function messageCorrelations(requestContext) {
 
 function makeExecutor({
   roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, activityStore = null, skillCatalog,
-  lanes = null, stagingLog,
+  mcpCatalog, lanes = null, stagingLog,
 }) {
   const writable = role.sandbox !== 'read-only';
   const reservations = new Map();
@@ -414,18 +462,37 @@ function makeExecutor({
       let stagingWriteFailed = false;
       let stagingStarted = false;
       let selectedSkills = [];
+      let selectedMcpTools = [];
       // BUD-2: how a continuation request was served ({ laneAdopted, laneFallback, threadResumed }), else null.
       let continued = null;
       // Thread of the last turn, published as continuation metadata for every finished turn.
       let seenThreadId = null;
+      let finalContinuationTuple = null;
+      let continuationMetadataFinalized = false;
       // laneId only while the lane row still exists, so an adopter can fall back cleanly.
-      const continuationMetadata = () => (seenThreadId ? {
-        continuation: {
+      const continuationMetadata = () => {
+        if (continuationMetadataFinalized) {
+          return finalContinuationTuple ? { continuation: finalContinuationTuple } : {};
+        }
+        return seenThreadId ? {
+          continuation: {
+            threadId: seenThreadId,
+            laneId: lane && lanes?.store?.get?.(lane.id) ? lane.id : null,
+            codexHome: appServer.getCodexHome?.() ?? null,
+            mcpToolPins: mcpToolPins(selectedMcpTools),
+          },
+        } : {};
+      };
+      const finalizeContinuationMetadata = () => {
+        finalContinuationTuple = seenThreadId ? {
           threadId: seenThreadId,
           laneId: lane && lanes?.store?.get?.(lane.id) ? lane.id : null,
           codexHome: appServer.getCodexHome?.() ?? null,
-        },
-      } : {});
+          mcpToolPins: mcpToolPins(selectedMcpTools),
+        } : null;
+        continuationMetadataFinalized = true;
+        return finalContinuationTuple;
+      };
       const failedMetadata = (error) => {
         const base = failureMetadata(error);
         return {
@@ -475,18 +542,54 @@ function makeExecutor({
         goal: structuredRequest?.objective || '',
         checks: [],
       });
-      const originatingReviewTarget = (ofAttemptId, review, isPinnedCheck) => {
+      const originatingReviewTarget = (ofAttemptId, review, type, requireRun = false) => {
         if (!stagingLog || typeof stagingLog.list !== 'function') return null;
-        const type = isPinnedCheck ? 'pinned_check_started' : 'audit_started';
-        const events = stagingLog.list({
-          ...(stagingIds.runId ? { runId: stagingIds.runId } : {}),
-          type,
-          limit: 10000,
-        }).filter((event) => event.attemptId === ofAttemptId
-          && event.payload?.checkpointId === review.checkpointId
-          && typeof event.target === 'string');
-        const targets = [...new Set(events.map((event) => event.target))];
-        return targets.length === 1 ? targets[0] : null;
+        if (requireRun && !stagingIds.runId) return null;
+        try {
+          const events = stagingLog.list({
+            ...(stagingIds.runId ? { runId: stagingIds.runId } : {}),
+            type,
+            limit: 10000,
+          });
+          if (!Array.isArray(events) || events.length >= 10000) return null;
+          const related = events.filter((event) => event.attemptId === ofAttemptId);
+          if (related.length === 0 || related.some((event) => event.type !== type
+            || event.status !== 'started'
+            || event.payload?.kind !== review.kind
+            || event.payload?.checkpointId !== review.checkpointId
+            || typeof event.target !== 'string'
+            || event.role !== canonicalRole
+            || (stagingIds.runId && event.runId !== stagingIds.runId))) return null;
+          const targets = [...new Set(related.map((event) => event.target))];
+          return targets.length === 1 ? targets[0] : null;
+        } catch (_) {
+          return null;
+        }
+      };
+      const originatingReviewContinuationMatches = (ofAttemptId, review, target, continuation) => {
+        if (!stagingIds.runId || !stagingLog || typeof stagingLog.list !== 'function') return 'unknown';
+        try {
+          const events = stagingLog.list({ runId: stagingIds.runId, type: 'review_continuation_emitted', limit: 10000 });
+          if (!Array.isArray(events) || events.length >= 10000) return 'unknown';
+          const related = events.filter((event) => event.attemptId === ofAttemptId);
+          if (related.length !== 1) return 'unknown';
+          const [event] = related;
+          const valid = event.type === 'review_continuation_emitted'
+            && event.status === 'emitted'
+            && event.runId === stagingIds.runId
+            && event.role === canonicalRole
+            && event.target === target
+            && event.payload?.policyId === POLICY_ID
+            && event.payload?.version === 1
+            && event.payload?.kind === review.kind
+            && event.payload?.checkpointId === review.checkpointId
+            && typeof event.payload?.tupleDigest === 'string'
+            && /^[a-f0-9]{64}$/.test(event.payload.tupleDigest);
+          if (!valid) return 'unknown';
+          return event.payload.tupleDigest === reviewContinuationDigest(continuation) ? 'match' : 'mismatch';
+        } catch (_) {
+          return 'unknown';
+        }
       };
       const setReviewOutcome = ({ status, accepted = false, valid = false, verdict = null, reason, targetAfter = null, targetIdentity, stable = false } = {}) => {
         const known = Boolean(reviewTargetBefore?.known && targetAfter?.known);
@@ -572,6 +675,7 @@ function makeExecutor({
             ...(lane ? { laneId: lane.id } : {}),
             permissionConfig: source?.permissionConfig ?? null,
             ...(selectedSkills.length ? { selectedSkills: selectedSkills.map(({ id, sha256 }) => ({ id, sha256 })) } : {}),
+            ...(selectedMcpTools.length ? { selectedMcpTools: mcpToolPins(selectedMcpTools) } : {}),
           },
         };
         if (!usageLedger) return;
@@ -609,11 +713,17 @@ function makeExecutor({
               if (structured.review && (reviewRole || pinnedFallbackCandidate)) {
                 reviewContext = structured.review;
                 pinnedCheckReviewer = pinnedFallbackCandidate;
-                if ((auditRole || pinnedCheckReviewer) && structured.continuation) {
+                const verifierReviewContinuation = verifierRole && reviewContext.kind !== 'investigation';
+                const originType = pinnedCheckReviewer ? 'pinned_check_started'
+                  : auditRole ? 'audit_started' : 'verifier_started';
+                if ((auditRole || pinnedCheckReviewer || verifierReviewContinuation) && structured.continuation) {
+                  const resumableContext = Boolean(structured.continuation.threadId
+                    || structured.continuation.laneId || structured.continuation.codexHome);
                   reviewOriginTarget = originatingReviewTarget(
                     structured.continuation.ofAttemptId,
                     reviewContext,
-                    pinnedCheckReviewer,
+                    originType,
+                    verifierReviewContinuation || resumableContext,
                   );
                   if (!reviewOriginTarget) {
                     throw new BoundaryViolation('review.continuation', 'review_origin_unknown', 'The originating review target is unavailable; start a fresh review.');
@@ -637,6 +747,21 @@ function makeExecutor({
                 if (reviewOriginTarget && reviewOriginTarget !== reviewTargetBefore.identity) {
                   throw new BoundaryViolation('review.continuation', 'review_origin_stale', 'The review target changed since the originating attempt; start a fresh review.');
                 }
+                if (reviewOriginTarget && structured.continuation
+                  && (structured.continuation.threadId || structured.continuation.laneId || structured.continuation.codexHome)) {
+                  const binding = originatingReviewContinuationMatches(
+                    structured.continuation.ofAttemptId,
+                    reviewContext,
+                    reviewOriginTarget,
+                    structured.continuation,
+                  );
+                  if (binding !== 'match') {
+                    const code = binding === 'mismatch' ? 'review_origin_stale' : 'review_origin_unknown';
+                    throw new BoundaryViolation('review.continuation', code, binding === 'mismatch'
+                      ? 'The continuation context does not match its originating review attempt; start a fresh review.'
+                      : 'The originating continuation context is unavailable; start a fresh review.');
+                  }
+                }
                 writeStaging(auditRole ? 'audit_selected' : pinnedCheckReviewer ? 'pinned_check_selected' : 'verifier_selected', 'selected', {
                   kind: reviewContext.kind,
                   checkpointId: reviewContext.checkpointId,
@@ -655,6 +780,14 @@ function makeExecutor({
                   ? new BoundaryViolation('dispatch.skill_pins', 'skill_pin_drift', skillError.message)
                   : new BoundaryViolation('assignment.skills', 'skill_invalid', skillError.message);
               }
+              try {
+                selectedMcpTools = assignmentMcpToolSelection(input, mcpCatalog, role.tools?.mcpServers || []);
+              } catch (mcpError) {
+                const drift = /pin does not match|package path changed/.test(mcpError.message);
+                throw drift
+                  ? new BoundaryViolation('dispatch.mcp_tool_pins', 'mcp_tool_pin_drift', mcpError.message)
+                  : new BoundaryViolation('assignment.mcp_tools', 'mcp_tool_invalid', mcpError.message);
+              }
             } catch (error) {
               if (!(error instanceof BoundaryViolation)) throw error;
               rejection = error;
@@ -662,14 +795,23 @@ function makeExecutor({
             }
           } else {
             selectedSkills = assignmentSkillSelection(input, skillCatalog);
+            try {
+              selectedMcpTools = assignmentMcpToolSelection(input, mcpCatalog, role.tools?.mcpServers || []);
+            } catch (mcpError) {
+              const drift = /pin does not match|package path changed/.test(mcpError.message);
+              rejection = drift
+                ? new BoundaryViolation('dispatch.mcp_tool_pins', 'mcp_tool_pin_drift', mcpError.message)
+                : new BoundaryViolation('assignment.mcp_tools', 'mcp_tool_invalid', mcpError.message);
+              throw rejection;
+            }
           }
         } catch (error) {
           if (auditRole && error instanceof BoundaryViolation) rejection = error;
-          if (auditRole || pinnedCheckReviewer) {
+          if (auditRole || pinnedCheckReviewer || (verifierRole && reviewContext)) {
             const code = error?.violations?.[0]?.code || (stagingWriteFailed ? 'staging_log_unavailable' : 'review_preflight_failed');
             setReviewOutcome({ status: 'rejected', reason: code, targetAfter: reviewTargetBefore, stable: false });
             try {
-              writeStaging(auditRole ? 'audit_failure' : 'pinned_check_failure', 'failed', {
+              writeStaging(auditRole ? 'audit_failure' : pinnedCheckReviewer ? 'pinned_check_failure' : 'verifier_failure', 'failed', {
                 stage: 'preflight',
                 reason: code,
                 checkpointId: reviewContext?.checkpointId || null,
@@ -866,6 +1008,7 @@ function makeExecutor({
                   ? `${text}\n\n${AUDIT_REPORT_GUIDANCE}` : text,
             ...(threadId ? { threadId } : {}),
             selectedSkills,
+            selectedMcpTools,
             outputSchema: WORKER_REPORT_SCHEMA,
             signal: controller.signal,
             ...(reviewExecution ? { onTurnStart: (info) => admission.recordTurnStart(reviewExecution.executionId, info) }
@@ -890,7 +1033,10 @@ function makeExecutor({
               ? (laneLost ? SCOPE_FRESH_LANE_LOST_NOTE : SCOPE_FRESH_NOTE)
               : (laneLost ? CUT_OFF_LANE_LOST_NOTE : CUT_OFF_NOTE);
             const freshInput = `${freshNote}\n${plainInput}`;
-            if (continuation.threadId && !laneLost && sameHome) {
+            const currentMcpPins = mcpToolPins(selectedMcpTools);
+            const priorMcpPins = Array.isArray(continuation.mcpToolPins) ? continuation.mcpToolPins : [];
+            const sameMcpTools = JSON.stringify(priorMcpPins) === JSON.stringify(currentMcpPins);
+            if (continuation.threadId && !laneLost && sameHome && sameMcpTools) {
               try {
                 result = await callRun(continuation.threadId, scope ? scopeResumeInput(structured.allowedFiles, plainInput) : CONTINUE_INPUT);
                 continued.threadResumed = true;
@@ -944,6 +1090,15 @@ function makeExecutor({
           laneDone = true;
           writer = laneOutcome.writerExecution;
           laneCanceled = laneOutcome.canceled;
+        }
+        const emittedContinuation = finalizeContinuationMetadata();
+        if (reviewContext && emittedContinuation) {
+          writeStaging('review_continuation_emitted', 'emitted', {
+            version: 1,
+            kind: reviewContext.kind,
+            checkpointId: reviewContext.checkpointId,
+            tupleDigest: reviewContinuationDigest(emittedContinuation),
+          }, { target: reviewTargetBefore?.identity || null });
         }
         if (runError) throw runError;
         const resultText = typeof result?.text === 'string' ? result.text : '';
@@ -1297,7 +1452,7 @@ function rejectOverlappingTask(executor) {
 /** Mount one independently stored A2A JSON-RPC agent per role. */
 function registerRoleAgents(app, {
   roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger, activityStore,
-  skillCatalog = loadSkillCatalog(), lanes = null, stagingLog = new InMemoryStagingLog(),
+  skillCatalog = loadSkillCatalog(), mcpCatalog = loadMcpCatalog(), lanes = null, stagingLog = new InMemoryStagingLog(),
 }) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
     throw new TypeError('app must be an Express application');
@@ -1321,7 +1476,7 @@ function registerRoleAgents(app, {
     const endpoint = new URL(route, `${origin.origin}/`).toString();
     const card = makeRoleCard({ roleId, role, endpoint });
     const executor = makeExecutor({
-      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, lanes, stagingLog,
+      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, mcpCatalog, lanes, stagingLog,
     });
     const handler = new DefaultRequestHandler(
       card,

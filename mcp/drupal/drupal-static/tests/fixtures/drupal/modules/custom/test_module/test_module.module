@@ -1,0 +1,22 @@
+<?php
+
+/**
+ * Implements hook_node_insert().
+ */
+function test_module_node_insert($node) {
+    // Mock insert logic
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function test_module_form_alter(&$form, $form_state, $form_id) {
+    // Mock form alter logic
+}
+
+/**
+ * Implements template_preprocess_node().
+ */
+function test_module_preprocess_node(&$variables) {
+    $variables['test_variable'] = 'hello';
+}

@@ -1,0 +1,28 @@
+{
+  "source": "direct role-service",
+  "initialTargetsDistinct": true,
+  "sameRunForged": {
+    "state": 4,
+    "accepted": false,
+    "reason": "review_origin_stale"
+  },
+  "crossRunForged": {
+    "state": 4,
+    "accepted": false,
+    "reason": "review_origin_stale"
+  },
+  "appServerCalls": [
+    {
+      "threadId": null,
+      "contextSeen": "candidate A"
+    },
+    {
+      "threadId": null,
+      "contextSeen": "candidate B"
+    },
+    {
+      "threadId": null,
+      "contextSeen": "candidate B"
+    }
+  ]
+}

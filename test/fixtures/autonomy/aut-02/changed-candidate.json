@@ -1,0 +1,26 @@
+{
+  "formatVersion": 1,
+  "provenance": "deterministic offline harness fixture; not a historical incident replay",
+  "goal": "Review a changed trust boundary",
+  "path": "src/file.js",
+  "candidateA": "candidate A\n",
+  "candidateB": "candidate B\n",
+  "review": {
+    "kind": "risk_change",
+    "checkpointId": "aut-02-changed-candidate",
+    "reason": "Review the changed trust boundary",
+    "paths": ["src/file.js"],
+    "evidenceIds": ["aut-02-fixture-evidence"],
+    "prerequisiteFor": []
+  },
+  "expectedReviewRoles": ["orch-verifier", "orch-auditor", "orch-verifier", "orch-auditor"],
+  "expectedLeadTurns": 3,
+  "expectedStaleFailure": "stale_review_continuation",
+  "baseline": {
+    "sourceSnapshot": "artifacts/autonomy/aut-02/baseline/src/lead-graph.js",
+    "sourceSha256": "c982762654c32f295ccc1893f0f3c878922b9b61928cb1c74221e5d3493c136a",
+    "probe": "a stale usage-limited auditor recovers before another lead decision",
+    "command": "node --test --test-isolation=none --test-reporter=tap --test-name-pattern='a stale usage-limited auditor recovers before another lead decision' test/lead-graph.test.js",
+    "outcome": "failed: only the initial verifier/auditor pair was submitted; no fresh pair was selected after stale_review_continuation"
+  }
+}

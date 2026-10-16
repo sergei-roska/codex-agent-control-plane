@@ -1,0 +1,13 @@
+{
+  "scenario": "direct-verifier-origin-a-to-b",
+  "runId": "verifier-run",
+  "checkpointId": "verifier-checkpoint",
+  "originAttemptId": "verifier-a",
+  "retryAttemptId": "verifier-b",
+  "leadToServiceMessages": 3,
+  "appServerCalls": 3,
+  "targetA": "review-target/v1:392b1d042479bcf18c038a04221dd4ac20da92bb91ef53223558b9f3f8429c74",
+  "targetB": "review-target/v1:d2ba0111e35f078bfd4ec273cc7fcdeb3ff8511dc9eeb9cc4b087c9c8feb9be0",
+  "outcome": "accepted",
+  "boundaryCode": null
+}

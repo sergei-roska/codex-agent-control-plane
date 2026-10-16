@@ -1,0 +1,363 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "config_name": "harness-drupal-static",
+      "package_path": "mcp/drupal/drupal-static",
+      "purpose": "Local Drupal source-code and sync-configuration inspection.",
+      "data_sensitivity": "low: local project files only",
+      "runtime_class": "local-filesystem",
+      "tools": [
+        {
+          "name": "list_custom_modules",
+          "description": "List installed custom modules and their paths by scanning the directory structure."
+        },
+        {
+          "name": "find_hook_implementations",
+          "description": "Locate where a specific Drupal hook is implemented across all custom/contrib modules."
+        },
+        {
+          "name": "find_service_definitions",
+          "description": "Map service IDs and PHP classes defined in *.services.yml files."
+        },
+        {
+          "name": "find_event_subscribers",
+          "description": "Identify Symfony event subscribers configured in service files or classes."
+        },
+        {
+          "name": "find_plugin_classes",
+          "description": "Search for classes annotated or registered as plugins of a specific type."
+        },
+        {
+          "name": "find_form_classes",
+          "description": "Map form class names to their PHP file paths."
+        },
+        {
+          "name": "find_controller_handlers",
+          "description": "Map route definitions inside *.routing.yml files to their controller classes and methods."
+        },
+        {
+          "name": "find_preprocess_functions",
+          "description": "Identify theme preprocess functions in .theme and .module files."
+        },
+        {
+          "name": "find_drush_commands",
+          "description": "Scan codebase for classes defining custom Drush commands."
+        },
+        {
+          "name": "trace_runtime_to_code",
+          "description": "Unified entry point to resolve a runtime symbol back to its static file location."
+        },
+        {
+          "name": "summarize_code_inventory",
+          "description": "Generates a narrative overview summarizing custom modules, total routes, and services discovered."
+        },
+        {
+          "name": "read_sync_config",
+          "description": "Reads config/sync/*.yml files statically from disk. Represents the target state in Git vs the active DB state."
+        }
+      ]
+    },
+    {
+      "config_name": "harness-drupal-config",
+      "package_path": "mcp/drupal/drupal-config",
+      "purpose": "Active and synchronized Drupal configuration and state inspection.",
+      "data_sensitivity": "sensitive: live Drupal configuration and state",
+      "runtime_class": "live-drupal-drush",
+      "tools": [
+        {
+          "name": "inspect_config_object",
+          "description": "Read a specific configuration object from active storage, sync directory, or both."
+        },
+        {
+          "name": "trace_config_dependencies",
+          "description": "Trace dependencies (what it requires) and dependents (what requires it) for a configuration object."
+        },
+        {
+          "name": "find_config_owner",
+          "description": "Identify which module or theme provides the default/installation configuration file for a given config object."
+        },
+        {
+          "name": "analyze_config_impact",
+          "description": "Analyze deployment risks, affected domains, and dependents for a configuration object before importing changes."
+        },
+        {
+          "name": "inspect_config_split_state",
+          "description": "List config splits (config_split entities) with their status (active/inactive) and split configuration files."
+        },
+        {
+          "name": "inspect_recipe_state",
+          "description": "Check status, managed configurations, and drift state of applied Drupal Recipes."
+        },
+        {
+          "name": "summarize_deployment_risk",
+          "description": "Generate a risk report of unexported configuration changes (drifts) and active splits before deployment."
+        },
+        {
+          "name": "debug_state_system",
+          "description": "Read key-value data from the Drupal State system for specific allowed keys or profiles. Mirrored for availability in config context; canonical SQL impl lives in drupal-db-ops."
+        },
+        {
+          "name": "diff_active_vs_sync",
+          "description": "Compare active configuration in the database with the configuration file in sync directory."
+        },
+        {
+          "name": "detect_config_drift",
+          "description": "Scan and list all configuration objects whose active database state differs from the sync directory files."
+        }
+      ]
+    },
+    {
+      "config_name": "harness-drupal-content",
+      "package_path": "mcp/drupal/drupal-content",
+      "purpose": "Drupal content model, fields, bundles, workflows, and permissions inspection.",
+      "data_sensitivity": "sensitive: live Drupal metadata and permissions",
+      "runtime_class": "live-drupal-drush",
+      "tools": [
+        {
+          "name": "inspect_content_types",
+          "description": "List node bundles (content types) with label, revision support, and workflow assignment."
+        },
+        {
+          "name": "inspect_media_types",
+          "description": "List media bundles with source plugin ID and translation status."
+        },
+        {
+          "name": "inspect_taxonomy_models",
+          "description": "List taxonomy vocabularies with IDs and labels."
+        },
+        {
+          "name": "inspect_field_usage",
+          "description": "List fields on an entity type. Without bundle returns the field map across all bundles; with bundle returns fields for that bundle only."
+        },
+        {
+          "name": "inspect_reference_graph",
+          "description": "List entity_reference, entity_reference_revisions, image, and file fields showing source bundle \u2192 target entity type and allowed target bundles."
+        },
+        {
+          "name": "summarize_editorial_model",
+          "description": "Compact overview of an entity type: bundle count, top reference edges, and moderation state. Use before deeper inspection tools."
+        },
+        {
+          "name": "inspect_display_modes",
+          "description": "List available view modes and form modes for an entity type and bundle."
+        },
+        {
+          "name": "inspect_revisioning",
+          "description": "Return whether an entity type is revisionable and has a revision UI handler."
+        },
+        {
+          "name": "inspect_translation",
+          "description": "Return whether content_translation is enabled for an entity type and bundle."
+        },
+        {
+          "name": "inspect_moderation",
+          "description": "Return the content_moderation workflow assigned to a bundle and its available states."
+        },
+        {
+          "name": "inspect_entity_types",
+          "description": "List all registered entity types with ID, label, provider module, and storage class. Use to discover valid entity_type_id values."
+        },
+        {
+          "name": "inspect_bundles",
+          "description": "List bundles for an entity type. Call before inspect_fields to discover valid bundle names."
+        },
+        {
+          "name": "inspect_fields",
+          "description": "List fields (name, type, label, required, translatable) for an entity type. Omit bundle to get base fields only."
+        },
+        {
+          "name": "inspect_menus",
+          "description": "List all registered menus with ID and label."
+        },
+        {
+          "name": "inspect_vocabularies",
+          "description": "List taxonomy vocabularies with vid and name."
+        },
+        {
+          "name": "inspect_permissions",
+          "description": "List all user permissions with key, human label, and provider module. Supports query filter."
+        }
+      ]
+    },
+    {
+      "config_name": "harness-drupal-ops",
+      "package_path": "mcp/drupal/drupal-ops",
+      "purpose": "Drupal runtime health, logs, queues, and registry diagnostics.",
+      "data_sensitivity": "high: live operational data and log samples",
+      "runtime_class": "live-drupal-drush",
+      "tools": [
+        {
+          "name": "debug_watchdog",
+          "description": "Query Drupal watchdog (dblog) entries by severity, type, message text, time range, request ID, or user. Use to trace specific errors or audit recent activity."
+        },
+        {
+          "name": "debug_queue_state",
+          "description": "Inspect Drupal queue backends: item counts, age, and claimed-item counts. Use to detect backlogs or stuck workers."
+        },
+        {
+          "name": "debug_cron_state",
+          "description": "Return cron last-run time, staleness status, and lock state. Use when cron-dependent features (mail, indexing, purge) appear delayed."
+        },
+        {
+          "name": "debug_cache_state",
+          "description": "Inspect Drupal cache bins: existence, entry counts, and stale-entry ratios. Use to diagnose stale-content or cache-backend misconfiguration."
+        },
+        {
+          "name": "debug_update_state",
+          "description": "Detect pending schema and entity-definition updates. Use pre- or post-deployment to confirm whether drush updb is needed."
+        },
+        {
+          "name": "debug_environment_summary",
+          "description": "Return Drupal version, maintenance mode, PHP version, and DB driver. Use for quick site-environment orientation at the start of a session."
+        },
+        {
+          "name": "debug_state_system",
+          "description": "Read raw Drupal state store values by exact key, prefix, or preset profile. Use to inspect runtime flags such as maintenance mode, cron timestamps, or install state."
+        },
+        {
+          "name": "debug_runtime_health",
+          "description": "Aggregate health check across cron, pending updates, and maintenance mode. Returns OK or WARNING with alert list. Use as first-call triage when site state is unknown."
+        },
+        {
+          "name": "debug_failed_operations",
+          "description": "Cross-domain failure scan: watchdog errors, stale queues, pending updates, cron staleness. Use for post-deployment triage or incident investigation."
+        },
+        {
+          "name": "inspect_modules",
+          "description": "List enabled Drupal modules with machine name, human name, and version. Use to confirm what is installed or resolve a module's machine name."
+        },
+        {
+          "name": "inspect_services",
+          "description": "List Drupal service container entries with IDs and class names. Use to find a service ID for injection or verify a service is registered."
+        },
+        {
+          "name": "inspect_plugins",
+          "description": "List Drupal plugin instances by type (block, filter, condition, queue worker). Use to discover plugin IDs available for configuration or custom code."
+        },
+        {
+          "name": "inspect_routes",
+          "description": "List or look up Drupal routes by name or path. Use to find a route name for access control, or to identify the controller behind a URL."
+        },
+        {
+          "name": "search_runtime_objects",
+          "description": "Cross-search entity types, modules, and routes by keyword. Use when unsure which registry an object belongs to."
+        }
+      ]
+    },
+    {
+      "config_name": "harness-drupal-render",
+      "package_path": "mcp/drupal/drupal-render",
+      "purpose": "Drupal themes, templates, render arrays, and attachments inspection.",
+      "data_sensitivity": "sensitive: live render and content data",
+      "runtime_class": "live-drupal-drush",
+      "tools": [
+        {
+          "name": "inspect_theme_state",
+          "description": "Returns active theme name, admin theme, base-theme inheritance chain, path, and defined regions."
+        },
+        {
+          "name": "inspect_template_suggestions",
+          "description": "Lists template filename candidates for a theme hook, highest-specificity last. Use to find the correct filename for a theme override."
+        },
+        {
+          "name": "trace_template_resolution",
+          "description": "Resolves a theme hook to its active template: filename, filesystem path, hook type, and associated preprocess functions."
+        },
+        {
+          "name": "find_preprocess_chain",
+          "description": "Returns ordered preprocess function list for a theme hook. Use to audit what runs before a template renders."
+        },
+        {
+          "name": "inspect_render_array",
+          "description": "Builds and returns the render array structure for a node or block, truncated at max_depth. #cache and #attached keys are stripped."
+        },
+        {
+          "name": "inspect_library_attachments",
+          "description": "Returns `#attached` library list and drupalSettings keys from the render array of a node or block."
+        },
+        {
+          "name": "inspect_blocks_and_regions",
+          "description": "Lists blocks placed in the active theme with region, plugin ID, weight, and status. Filter by region machine name to narrow results."
+        },
+        {
+          "name": "inspect_sdc_components",
+          "description": "Lists all registered SDC definitions, or returns full definition for one component. Requires SDC module enabled."
+        },
+        {
+          "name": "summarize_render_path",
+          "description": "Single-call render path summary for a node or block: theme hook, resolved template, preprocess function count, and attached libraries."
+        },
+        {
+          "name": "inspect_themes",
+          "description": "Lists installed themes with machine name, label, default/admin flags, and enabled status."
+        }
+      ]
+    },
+    {
+      "config_name": "harness-drupal-db-ops",
+      "package_path": "mcp/drupal/drupal-db-ops",
+      "purpose": "Direct SQL diagnostics and configuration drift inspection.",
+      "data_sensitivity": "critical: database access and settings.php credentials",
+      "runtime_class": "direct-database",
+      "tools": [
+        {
+          "name": "debug_watchdog",
+          "description": "Query Drupal watchdog logs via SQL. No Drupal container required."
+        },
+        {
+          "name": "debug_queue_state",
+          "description": "Inspect Drupal queue sizes and items via SQL. No Drupal container required."
+        },
+        {
+          "name": "debug_cron_state",
+          "description": "Read Drupal cron execution timestamps and lock status via SQL. No Drupal container required."
+        },
+        {
+          "name": "debug_cache_state",
+          "description": "List cache tables, entry counts, and stale items via SQL. No Drupal container required."
+        },
+        {
+          "name": "debug_update_state",
+          "description": "Query active module schema versions and scan filesystem for pending database updates. No Drupal container required."
+        },
+        {
+          "name": "debug_environment_summary",
+          "description": "Get Drupal version, maintenance mode status, and database details via SQL. No Drupal container required."
+        },
+        {
+          "name": "debug_state_system",
+          "description": "Read Drupal State system variables from key_value table. Mirrored for availability in drupal-db-ops; canonical SQL implementation. No Drupal container required."
+        },
+        {
+          "name": "debug_runtime_health",
+          "description": "Analyze health status (maintenance mode, cron, db) using SQL data. No Drupal container required."
+        },
+        {
+          "name": "debug_failed_operations",
+          "description": "Scan database (watchdog, queue, updates) for system failures. No Drupal container required."
+        },
+        {
+          "name": "inspect_config_object",
+          "description": "Retrieve Drupal active config from DB or sync directory files. No Drupal container required."
+        },
+        {
+          "name": "diff_active_vs_sync",
+          "description": "Diff active DB config against sync directory files. No Drupal container required."
+        },
+        {
+          "name": "detect_config_drift",
+          "description": "Compare active database config table against sync directory files to find drift. No Drupal container required."
+        },
+        {
+          "name": "analyze_config_impact",
+          "description": "Evaluate deployment risk and impact of config changes via SQL diff. No Drupal container required."
+        },
+        {
+          "name": "summarize_deployment_risk",
+          "description": "Summarize overall risk based on configuration drift. No Drupal container required."
+        }
+      ]
+    }
+  ]
+}

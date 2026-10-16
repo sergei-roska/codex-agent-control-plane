@@ -1,0 +1,32 @@
+{
+    "name": "drupal-mcp/config",
+    "type": "project",
+    "description": "Inspect Drupal configuration, dependencies, splits, recipes, state, and active-versus-sync drift through Drush.",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.1",
+        "mcp/sdk": "^0.6.0",
+        "drupal-mcp/shared-args": "@dev",
+        "symfony/process": "^8.1",
+        "symfony/yaml": "^8.1"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../shared-args",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "DrupalMcp\\Config\\": "src/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    }
+}

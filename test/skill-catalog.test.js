@@ -8,10 +8,10 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { DEFAULT_SKILLS_ROOT, loadSkillCatalog, findSkillCandidates, resolveSkillSelection } = require('../src/skill-catalog');
 
-function writeSkill(root, id, { description = 'Review safe execution flows', keywords = '["review", "security"]', body = 'Instructions.' } = {}) {
+function writeSkill(root, id, { description = 'Review safe execution flows', keywords = '["review", "security"]', audience, body = 'Instructions.' } = {}) {
   const directory = path.join(root, id);
   fs.mkdirSync(directory, { recursive: true });
-  const content = `---\nname: ${id}\ndescription: ${description}\nkeywords: ${keywords}\n---\n${body}\n`;
+  const content = `---\nname: ${id}\ndescription: ${description}\nkeywords: ${keywords}\n${audience ? `audience: ${audience}\n` : ''}---\n${body}\n`;
   fs.writeFileSync(path.join(directory, 'SKILL.md'), content);
   return { path: path.join(directory, 'SKILL.md'), content };
 }
@@ -32,7 +32,30 @@ test('loads catalog entries in stable order with full-content hashes and no exte
   assert.equal(catalog.get('a-review').path, a.path);
   assert.equal(catalog.get('z-review').sha256, crypto.createHash('sha256').update(z.content, 'utf8').digest('hex'));
   assert.deepEqual(catalog.get('a-review').mcpServers, []);
+  assert.equal(catalog.get('a-review').audience, 'worker');
   assert.throws(() => loadSkillCatalog({ root: path.join(root, 'missing') }), /ENOENT/);
+});
+
+test('lead-only skills are excluded from worker candidates and worker assignment resolution', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-catalog-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeSkill(root, 'worker-review', { description: 'Review decomposition plans', keywords: '["decomposition"]' });
+  writeSkill(root, 'lead-decomposition', { description: 'Review decomposition plans', keywords: '["decomposition"]', audience: 'lead' });
+  const catalog = loadSkillCatalog({ root });
+  assert.deepEqual(findSkillCandidates(catalog, 'decomposition').map(({ id }) => id), ['worker-review']);
+  assert.deepEqual(findSkillCandidates(catalog, 'decomposition', { audience: 'lead' }).map(({ id }) => id), ['lead-decomposition']);
+  assert.throws(() => resolveSkillSelection(catalog, ['lead-decomposition']), /not available to worker/);
+  assert.equal(resolveSkillSelection(catalog, ['lead-decomposition'], { audience: 'lead' })[0].id, 'lead-decomposition');
+});
+
+test('audience metadata accepts quoted values and rejects unknown audiences', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-catalog-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const entry = writeSkill(root, 'quoted-audience');
+  fs.writeFileSync(entry.path, entry.content.replace('---\nInstructions.', 'audience: "lead"\n---\nInstructions.'));
+  assert.equal(loadSkillCatalog({ root }).get('quoted-audience').audience, 'lead');
+  fs.writeFileSync(entry.path, entry.content.replace('---\nInstructions.', 'audience: admin\n---\nInstructions.'));
+  assert.throws(() => loadSkillCatalog({ root }), /audience must be worker or lead/);
 });
 
 test('returns an empty map for a missing default catalog directory', () => {

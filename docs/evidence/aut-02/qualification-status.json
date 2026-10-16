@@ -1,0 +1,105 @@
+{
+  "milestone": "AUT-02",
+  "status": "accepted",
+  "reason": "mandatory Q01-Q14 evidence, integration checks, and independent verifier/auditor reviews passed",
+  "focusedQualification": {
+    "command": "env -u NODE_TEST_CONTEXT node --test --test-isolation=none --test-reporter=tap test/contracts.test.js test/review-policy.test.js test/a2a-role-service.test.js test/lead-graph.test.js",
+    "result": {
+      "tests": 335,
+      "passed": 333,
+      "failed": 0,
+      "skipped": 2
+    },
+    "tap": "qualification-focused.tap",
+    "skips": [
+      "real A2A SDK client test: sandbox does not permit binding a local HTTP test server",
+      "owner-side acceptanceScratch test: sandbox does not permit writing to /var/tmp"
+    ]
+  },
+  "q01Qualification": {
+    "command": "env -u NODE_TEST_CONTEXT node --test --test-isolation=none --test-reporter=tap --test-name-pattern='a stable usage-limited verifier continues with its exact review context|a stable usage-limited auditor continues with its exact review context' test/lead-graph.test.js",
+    "result": {
+      "tests": 2,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tap": "qualification-q01.tap"
+  },
+  "q01Baseline": {
+    "sourceHash": "6b93da685d44afeadbc573cd84fae2169e0dfc2e949f86c5187bd1a31fb1dd9b",
+    "auditor": {
+      "command": "env -u NODE_TEST_CONTEXT node --test --test-isolation=none --test-reporter=tap --test-name-pattern='a stable usage-limited auditor continues with its exact review context' test/lead-graph.test.js",
+      "result": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0
+      },
+      "tap": "qualification-q01-baseline.tap",
+      "finding": "The usage-limited auditor receipt invalidated the accepted verifier receipt; its continuation was skipped as skipped_verifier_gate and the run paused for human input."
+    },
+    "verifierControl": {
+      "command": "env -u NODE_TEST_CONTEXT node --test --test-isolation=none --test-reporter=tap --test-name-pattern='a stable usage-limited verifier continues with its exact review context' test/lead-graph.test.js",
+      "result": {
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "tap": "qualification-q01-verifier-baseline.tap"
+    }
+  },
+  "q11Qualification": {
+    "command": "env -u NODE_TEST_CONTEXT node --test --test-isolation=none --test-reporter=tap --test-name-pattern='active budget parks an actual stale A2A continuation before recovery planning|retry exhaustion blocks recovery after an actual stale A2A continuation|cancellation blocks recovery after an actual stale A2A continuation|an unresolved writer blocks recovery after an actual stale A2A continuation|owner pause parks before recovery selection after a stale scope continuation rejection' test/lead-graph.test.js",
+    "result": {
+      "tests": 5,
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tap": "qualification-q11.tap"
+  },
+  "traceQualification": {
+    "automaticSelection": "qualification-traces.tap",
+    "directVerifier": "qualification-direct-trace.tap",
+    "sanitizedTraces": [
+      "traces/final/automatic-selection.json",
+      "traces/final/direct-verifier-continuation.json",
+      "traces/final/service-origin-race.json"
+    ]
+  },
+  "integrationSuite": {
+    "requiredCommand": "env -u NODE_TEST_CONTEXT node --test --test-isolation=none --test-reporter=tap test/*.test.js",
+    "status": "complete",
+    "result": {
+      "tests": 1208,
+      "passed": 1207,
+      "failed": 0,
+      "skipped": 1
+    },
+    "tap": "qualification-full.tap",
+    "skips": [
+      "live confinement probe is explicitly gated by CODEX_A2A_LIVE_PROBE=1 and was not enabled"
+    ]
+  },
+  "comparison": "comparison.md",
+  "verifierReport": "verifier-report.md",
+  "auditorReport": "auditor-report.md",
+  "sourceHashes": {
+    "src/a2a-role-service.js": "95281c89bdab68f0aae8e0375b2f72930d9e4fa3868670f66600056144717234",
+    "src/lead-graph.js": "5d43791560e4a7f1d0b7c79ad58f9877ea1919fe31b8ed9705a45aa5c6d6e846",
+    "test/a2a-role-service.test.js": "ab5408a7be89c86bc42c6e70be2e7ef171e3c9255c6ff47da5eb349760076089",
+    "test/contracts.test.js": "756fdd3d5679d010545f5787051bedcf00d81bd36e6ba4202b9519ce390f6ae1",
+    "test/lead-graph.test.js": "dbc0960dfdeaa35359bada36ce6265c12162d92a51bcd03928e115bfa2d46bfe",
+    "test/review-policy.test.js": "9b29a08c93804c0a0d017665d4b7b395516fde646bc4f616c20d5b168421e1f7",
+    "test/acceptance.test.js": "53587ffb6aa36f1a1d95a74d62eea6e910369597e88196a79e697abe21bd9bff",
+    "test/acceptance-scratch.test.js": "22d33323739aa1da6fb853c7f7de245daa6ed48c1e3f21aa0dca1c579ae08579",
+    "test/fixtures/autonomy/aut-02/changed-candidate.json": "dd573afec0a8e74ddfb315f5a18aa04f2828fce0eeb35aaa5bfe7060484e3f00"
+  },
+  "acceptance": {
+    "path": "acceptance.json",
+    "verifier": "APPROVE",
+    "auditor": "APPROVE"
+  }
+}

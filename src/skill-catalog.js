@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const DEFAULT_SKILLS_ROOT = path.resolve(__dirname, '..', 'profiles', 'skills', 'library');
+const DEFAULT_ROUTING_POLICY = path.resolve(__dirname, '..', 'profiles', 'skills', 'routing-policy.json');
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const MAX_ID_LENGTH = 64;
@@ -13,6 +14,7 @@ const MAX_KEYWORDS = 20;
 const MAX_KEYWORD_LENGTH = 48;
 const MAX_FILE_BYTES = 65_536;
 const CATALOG_ROOTS = new WeakMap();
+const INTERNAL_SKILLS = new Set(['aut-03-lead-decomposition-v1']);
 
 function containedBy(root, target) {
   const relative = path.relative(root, target);
@@ -21,25 +23,26 @@ function containedBy(root, target) {
 
 function parseSkill(source, id, filePath) {
   const lines = source.split(/\r?\n/);
-  if (lines[0] !== '---') throw new Error(`${filePath}: missing YAML frontmatter`);
-  const end = lines.indexOf('---', 1);
+  const internalMetadata = INTERNAL_SKILLS.has(id) && lines[0] === 'name: aut-03-lead-decomposition-v1';
+  if (lines[0] !== '---' && !internalMetadata) throw new Error(`${filePath}: missing YAML frontmatter`);
+  const end = lines.indexOf('---', internalMetadata ? 0 : 1);
   if (end < 0) throw new Error(`${filePath}: unterminated YAML frontmatter`);
   const metadata = Object.create(null);
-  for (let index = 1; index < end; index += 1) {
+  for (let index = internalMetadata ? 0 : 1; index < end; index += 1) {
     const line = lines[index];
     if (!line.trim()) continue;
     const match = line.match(/^([a-z_][a-z0-9_]*):\s*(.*?)\s*$/);
     if (!match) throw new Error(`${filePath}:${index + 1}: malformed frontmatter`);
     const [, key, value] = match;
-    if (!['name', 'description', 'keywords'].includes(key)) continue;
+    if (!['name', 'description', 'keywords', 'audience'].includes(key)) continue;
     if (Object.hasOwn(metadata, key)) throw new Error(`${filePath}:${index + 1}: duplicate ${key}`);
     if (key === 'description' && /^>[+-]?$/.test(value)) {
       const folded = [];
       while (index + 1 < end && /^\s+\S/.test(lines[index + 1])) folded.push(lines[++index].trim());
       metadata[key] = folded.join(' ');
-    } else if ((key === 'name' || key === 'description') && value.startsWith('"')) {
+    } else if ((key === 'name' || key === 'description' || key === 'audience') && value.startsWith('"')) {
       try { metadata[key] = JSON.parse(value); } catch (error) { throw new Error(`${filePath}:${index + 1}: invalid quoted ${key}`, { cause: error }); }
-    } else if ((key === 'name' || key === 'description') && value.startsWith("'")) {
+    } else if ((key === 'name' || key === 'description' || key === 'audience') && value.startsWith("'")) {
       if (!value.endsWith("'")) throw new Error(`${filePath}:${index + 1}: invalid quoted ${key}`);
       metadata[key] = value.slice(1, -1).replace(/''/g, "'");
     } else {
@@ -49,6 +52,8 @@ function parseSkill(source, id, filePath) {
   if (!Object.hasOwn(metadata, 'name') || !Object.hasOwn(metadata, 'description')) {
     throw new Error(`${filePath}: frontmatter must contain name and description`);
   }
+  const audience = Object.hasOwn(metadata, 'audience') ? metadata.audience : 'worker';
+  if (!['worker', 'lead'].includes(audience)) throw new Error(`${filePath}: audience must be worker or lead`);
   const name = metadata.name;
   if (name !== id || name.length > MAX_ID_LENGTH || !ID_PATTERN.test(name)) {
     throw new Error(`${filePath}: name must match skill directory id ${id}`);
@@ -71,11 +76,32 @@ function parseSkill(source, id, filePath) {
   }
   if (new Set(keywords).size !== keywords.length) throw new Error(`${filePath}: keywords must be unique`);
   if (!keywords.length) keywords = [...new Set(tokens(`${name} ${description}`))].slice(0, MAX_KEYWORDS);
-  return { id, name, description, keywords, mcpServers: [] };
+  return { id, name, description, keywords, audience, mcpServers: [] };
 }
 
-function loadSkillCatalog({ root = DEFAULT_SKILLS_ROOT } = {}) {
+function loadRoutingPolicy(filePath = DEFAULT_ROUTING_POLICY) {
+  const policy = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  if (!policy || policy.version !== 1 || !policy.skills || typeof policy.skills !== 'object' || Array.isArray(policy.skills)) {
+    throw new Error(`${filePath}: invalid skill routing policy`);
+  }
+  for (const [id, status] of Object.entries(policy.skills)) {
+    if (!ID_PATTERN.test(id) || !['keep', 'adapt', 'defer', 'internal'].includes(status)) {
+      throw new Error(`${filePath}: invalid routing entry for ${id}`);
+    }
+    if ((status === 'internal') !== INTERNAL_SKILLS.has(id)) {
+      throw new Error(`${filePath}: internal status mismatch for ${id}`);
+    }
+  }
+  return new Set(Object.entries(policy.skills)
+    .filter(([, status]) => status === 'keep' || status === 'internal')
+    .map(([id]) => id));
+}
+
+function loadSkillCatalog({ root = DEFAULT_SKILLS_ROOT, routingPolicy = undefined } = {}) {
   const requestedRoot = path.resolve(root);
+  const activeIds = requestedRoot === DEFAULT_SKILLS_ROOT
+    ? loadRoutingPolicy(routingPolicy || DEFAULT_ROUTING_POLICY)
+    : null;
   let rootReal;
   try {
     rootReal = fs.realpathSync(requestedRoot);
@@ -92,6 +118,7 @@ function loadSkillCatalog({ root = DEFAULT_SKILLS_ROOT } = {}) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error(`Malformed skill entry: ${path.join(rootReal, entry.name)}`);
     const id = entry.name;
     if (id.length > MAX_ID_LENGTH || !ID_PATTERN.test(id)) throw new Error(`Invalid skill directory id: ${id}`);
+    if (activeIds && !activeIds.has(id)) continue;
     const directory = path.join(rootReal, id);
     const file = path.join(directory, 'SKILL.md');
     let stat;
@@ -110,6 +137,11 @@ function loadSkillCatalog({ root = DEFAULT_SKILLS_ROOT } = {}) {
     const sha256 = crypto.createHash('sha256').update(contents, 'utf8').digest('hex');
     catalog.set(id, { ...parsed, path: canonicalFile, sha256 });
   }
+  if (activeIds) {
+    for (const id of activeIds) {
+      if (!catalog.has(id)) throw new Error(`Routing policy skill is missing from the library: ${id}`);
+    }
+  }
   CATALOG_ROOTS.set(catalog, rootReal);
   return catalog;
 }
@@ -118,13 +150,15 @@ function tokens(value) {
   return String(value || '').toLowerCase().match(/[a-z0-9]+/g) || [];
 }
 
-function findSkillCandidates(catalog, query, { limit = 12 } = {}) {
+function findSkillCandidates(catalog, query, { limit = 12, audience = 'worker' } = {}) {
   if (!Number.isSafeInteger(limit) || limit < 0) throw new TypeError('limit must be a non-negative safe integer');
+  if (!['worker', 'lead'].includes(audience)) throw new TypeError('audience must be worker or lead');
   const boundedLimit = Math.min(limit, 12);
   const queryTokens = [...new Set(tokens(query))];
   if (!queryTokens.length || !boundedLimit) return [];
   const ranked = [];
   for (const [id, item] of catalog) {
+    if ((item.audience || 'worker') !== audience) continue;
     const nameTokens = new Set(tokens(`${id} ${item.name}`));
     const keywordTokens = new Set((item.keywords || []).flatMap(tokens));
     const descriptionTokens = new Set(tokens(item.description));
@@ -144,8 +178,9 @@ function findSkillCandidates(catalog, query, { limit = 12 } = {}) {
   return ranked.slice(0, boundedLimit).map(({ id, description }) => ({ id, description }));
 }
 
-function resolveSkillSelection(catalog, ids, { pins } = {}) {
+function resolveSkillSelection(catalog, ids, { pins, audience = 'worker' } = {}) {
   if (!Array.isArray(ids)) throw new TypeError('skill ids must be an array');
+  if (!['worker', 'lead'].includes(audience)) throw new TypeError('audience must be worker or lead');
   if (ids.length > 5) throw new TypeError('at most five skills may be selected');
   if (ids.some((id) => typeof id !== 'string' || !ID_PATTERN.test(id)) || new Set(ids).size !== ids.length) {
     throw new TypeError('skill ids must be unique valid ids');
@@ -164,6 +199,7 @@ function resolveSkillSelection(catalog, ids, { pins } = {}) {
   return ids.map((id) => {
     const item = catalog.get(id);
     if (!item) throw new Error(`Unknown skill id: ${id}`);
+    if ((item.audience || 'worker') !== audience) throw new Error(`Skill ${id} is not available to ${audience} audience`);
     if (!HASH_PATTERN.test(item.sha256) || !path.isAbsolute(item.path)) throw new Error(`Malformed catalog entry for skill ${id}`);
     const root = CATALOG_ROOTS.get(catalog);
     if (!root) throw new Error('Skill catalog was not loaded by loadSkillCatalog');
@@ -181,4 +217,4 @@ function resolveSkillSelection(catalog, ids, { pins } = {}) {
   });
 }
 
-module.exports = { DEFAULT_SKILLS_ROOT, loadSkillCatalog, findSkillCandidates, resolveSkillSelection };
+module.exports = { DEFAULT_SKILLS_ROOT, DEFAULT_ROUTING_POLICY, loadSkillCatalog, findSkillCandidates, resolveSkillSelection };

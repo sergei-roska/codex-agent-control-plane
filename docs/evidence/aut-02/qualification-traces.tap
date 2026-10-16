@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: a stale usage-limited auditor recovers before another lead decision
+ok 1 - a stale usage-limited auditor recovers before another lead decision
+  ---
+  duration_ms: 225.389028
+  type: 'test'
+  ...
+# Subtest: a direct-service origin that goes stale after graph preflight recovers automatically
+ok 2 - a direct-service origin that goes stale after graph preflight recovers automatically
+  ---
+  duration_ms: 193.05612
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 682.545182

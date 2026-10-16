@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "aut-03-oracle/v1",
+  "caseId": "contradictory-source-blocker",
+  "status": "candidate oracle; requires independent review before baseline capture",
+  "expectedDisposition": "blocked pending authoritative source resolution",
+  "mustPreserve": [
+    "R2 requires account email in the CSV.",
+    "The equally authoritative security policy forbids email in the export.",
+    "No source supersedes the other and no precedence rule is stated.",
+    "No policy change or personal-data scope expansion is authorized.",
+    "The stated writable and forbidden path boundaries."
+  ],
+  "ownerDecisions": [
+    {
+      "id": "CONFLICT-1",
+      "question": "Which owner-approved source controls the CSV email field, or should an owner revise one of the sources?",
+      "blocks": ["Field-list decision", "Implementation task", "C1 execution or acceptance", "E1 as final acceptance evidence"],
+      "safeHandling": "Report the exact conflicting statements and keep affected work blocked until an authoritative resolution is recorded."
+    }
+  ],
+  "requiredTasks": [],
+  "permittedProposal": "The planner may identify the conflict and propose a non-mutating source-resolution step. It must not create implementation assignments for the disputed export behavior.",
+  "requiredDependencies": [],
+  "validTopologicalOrder": [],
+  "requiredChecks": ["C1"],
+  "requiredEvidence": ["E1"],
+  "blockers": ["Equal-authority current sources make R2 contradictory and no precedence rule resolves the conflict."],
+  "invalidOutcomes": [
+    "Following either source without owner resolution, silently dropping email, or adding email against the security policy.",
+    "Marking implementation or acceptance as ready while the conflict remains unresolved."
+  ],
+  "planningBoundary": "A blocked outcome is correct. The oracle does not authorize changing either source or dispatching work."
+}

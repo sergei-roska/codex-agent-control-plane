@@ -1,0 +1,140 @@
+{
+  "decisionVersion": "aut-03-delivery/v1",
+  "status": "offline_delivery_qualified; paired_trial_not_entered",
+  "verifiedAt": "2026-10-15",
+  "scope": "offline lead-only skill delivery and deterministic plumbing qualification; paired planning quality and economy are not qualified",
+  "predecessorIntegrity": {
+    "aut05": {
+      "decision": "docs/evidence/aut-05/acceptance.json",
+      "status": "baseline_ready",
+      "referencedArtifactsRehashedAtS0": 13,
+      "mismatchesAtS0": 0
+    },
+    "aut01": {
+      "decision": "docs/evidence/aut-01/acceptance.json",
+      "status": "accepted",
+      "referencedArtifactsRehashedAtS0": 26,
+      "mismatchesAtS0": 0,
+      "contextSha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf",
+      "mapSha256": "212f256587a672c4c6de818a67a52e8a0463663258f39756d9409a6e53be3ec8"
+    },
+    "aut02": {
+      "decision": "docs/evidence/aut-02/acceptance.json",
+      "status": "accepted",
+      "referencedArtifactsRehashedAtS0": 26,
+      "sourceAndTestHashesRehashedAtS0": 9,
+      "mismatchesAtS0": 0,
+      "currentHashDivergence": {
+        "expectedAut03Updates": [
+          "src/lead-graph.js",
+          "test/lead-graph.test.js"
+        ],
+        "otherAcceptedSourceAndTestHashesStillMatch": 7
+      }
+    }
+  },
+  "caseSet": {
+    "manifest": "test/fixtures/autonomy/aut-03/cases/manifest.json",
+    "manifestSha256": "62965a3048628359227bf762891a1bd2988f3cfa77588c0c579a3e5624b1a756",
+    "review": "docs/evidence/aut-03/case-review.md",
+    "reviewStatus": "APPROVE",
+    "manifestReferencesRehashed": 11,
+    "mismatches": 0,
+    "baselineCaptureAllowed": false
+  },
+  "design": {
+    "record": "docs/evidence/aut-03/s1-design.md",
+    "independentReview": "APPROVE",
+    "reviewRecord": "docs/evidence/aut-03/s1-design-review.md"
+  },
+  "implementation": {
+    "skillId": "aut-03-lead-decomposition-v1",
+    "skillSha256": "e0f10756e0486cdb827519edd8adfef866d84be449d6a10b1320412648e650ba",
+    "trustedRuntimePin": "src/aut03-lead-skill.js",
+    "allowlist": "CODEX_A2A_AUT03_TRIAL_RUN_IDS; parsed once at server startup; empty by default; strict exact UUIDs",
+    "selectedSkillDelivery": "explicit selectedSkills on every applicable coordinator turn; App Server validates the canonical path and file hash before turn/start",
+    "checkpointAndResume": "skill choice and pin are frozen at intake; allowlist or pin drift rejects before a model call",
+    "sessionIsolation": "skill-on profile includes the pin; skill-on does not reuse legacy null-profile session rows; skill-on/off profiles cannot share a thread",
+    "workerBoundary": "lead audience excluded from worker candidates and assignment selection; untagged legacy catalog entries default to worker",
+    "toolPolicy": "lead tools remain read-only with skills disabled; no MCP, apps, plugins, or new authority"
+  },
+  "verification": {
+    "focused": {
+      "command": "node --test --test-reporter=tap test/skill-catalog.test.js test/lead-graph.test.js test/lead-orchestrator.test.js test/server.test.js test/codex-app-server.test.js test/a2a-role-service.test.js",
+      "passed": 502,
+      "failed": 0,
+      "skipped": 0,
+      "report": "docs/evidence/aut-03/qualification-focused.tap"
+    },
+    "aut01Regression": {
+      "command": "node --test --test-isolation=none --test-reporter=tap test/spec-context.test.js test/spec-analyzer.test.js test/spec-assignment-adapter.test.js test/spec-analyzer-cli.test.js",
+      "passed": 38,
+      "failed": 0,
+      "skipped": 0,
+      "report": "docs/evidence/aut-03/qualification-aut01.tap",
+      "probeCommand": "node docs/evidence/aut-01/qualification-probes.cjs",
+      "probeExitCode": 0,
+      "expectedBlockedProbeCases": 22,
+      "probeReport": "docs/evidence/aut-03/qualification-aut01-probes.log"
+    },
+    "fullSuite": {
+      "command": "env -u NODE_TEST_CONTEXT node --test --test-isolation=none --test-reporter=tap test/*.test.js",
+      "tests": 1227,
+      "passed": 1226,
+      "failed": 0,
+      "skipped": 1,
+      "skipReason": "optional live confinement probe against the installed Codex App Server",
+      "report": "docs/evidence/aut-03/qualification-full.tap"
+    },
+    "diffCheck": "PASS",
+    "asciiCheck": "PASS; 39 AUT-03 text and evidence files checked"
+  },
+  "sourceAndTestHashes": {
+    "src/skill-catalog.js": "fe2908f98175eec56771868e8dceffc6d4384a36a90f0174bedf3652c481e91a",
+    "src/aut03-lead-skill.js": "8ce9fc71b3f827d44c8670430c946f3ec40c2c87bdb961e047eddbab2f8ad5f1",
+    "src/lead-graph.js": "b87dafa7f38adb937f550731e7a2be0074deda1e73fc7c9b41f70a4af765257f",
+    "src/lead-orchestrator.js": "bd4ca4df81de6559f9adecd0b387f6557bba447cb2767adf3126806bcc727d81",
+    "src/server.js": "e0776d6bcc735e6ce5ae0af571a2a4cf6991c8b7d14d63262db778c858724b63",
+    "profiles/skills/library/aut-03-lead-decomposition-v1/SKILL.md": "e0f10756e0486cdb827519edd8adfef866d84be449d6a10b1320412648e650ba",
+    "test/skill-catalog.test.js": "8433c14edd63a2e84b3269429b6680e51fbb6ca5b0bf02423778a7d8d69571b1",
+    "test/lead-graph.test.js": "623fa91ae4f6807d8b148f560b40adbcbafa20b5cab75a7c00c46f0119d5b8f5",
+    "test/lead-orchestrator.test.js": "9b365c5a6c512177d9d67d4d21fd1b5f811175b9950c0fa1cb0350c547ce308d",
+    "test/server.test.js": "ea63a490412adff93b441902ebfdce819a733e38de6f6012bf828463242d87bd",
+    "test/codex-app-server.test.js": "162cad7fdf2fb64faa6223774c678bb8edff64089a5194d72ed644f2bc4a525f"
+  },
+  "evidenceHashes": {
+    "docs/evidence/aut-03/entry.json": "c1f6d340d27f81f75425f89d1ffdcb015290d59cedbcc1ec2adacac89c148f44",
+    "docs/evidence/aut-03/s1-design.md": "a8c6049a4d1fca05520a7258713f89c8820544c9bad4c344e243b67da3c6db0b",
+    "docs/evidence/aut-03/s1-design-review.md": "087732ada9cd7ced8692e145b0d671341c338ec62918efb715055844543c98c4",
+    "docs/evidence/aut-03/case-review.md": "9eec849015851c7f4b2375153fbc88c2ed8f0dff3f7192b5fad8aeff245176ba",
+    "docs/evidence/aut-03/runbook-review.md": "7cf45c5aa04e81d7c006cfd8087a356b1fc8c34f8764a08ef3789a1ad74e5dde",
+    "docs/evidence/aut-03/qualification-focused.tap": "042783d8c2dd44b8b5bca252a3323caf6972e4f2d93811e904a6129425e0eb85",
+    "docs/evidence/aut-03/qualification-aut01.tap": "b3a6b6d504aef213e1c8773065555e51af41b3a264863d129e5d5b65dada1a97",
+    "docs/evidence/aut-03/qualification-aut01-probes.log": "ee76389b8af152b2d68c8536104f85a383005ddef9432ead741b90afcdbfa85a",
+    "docs/evidence/aut-03/qualification-full.tap": "88fc401e01fdfca5f4c801e1e68fc3caf2bc86826c38130dbf0ed99075090cf5",
+    "docs/aut-03-lead-decomposition-runbook.md": "9564ab84bbfb172d338d20b72b7e854ae117df11afb546a6137e28b3c56286de",
+    "docs/orchestrator-improvement-backlog.md": "b96fade58f20437e38c0f5b53f8e1fc8b4bc200324fab5e34ec3bfcf6a9e53a9",
+    "docs/spec-kit-luna-integration-plan.md": "7ff9b822d1e5f9fb17b85f0f62130f2421d5f83ab7eb2a8a0c551488a011a51e"
+  },
+  "independentReviews": {
+    "s1Design": "APPROVE",
+    "caseSemanticsAndHashes": "APPROVE",
+    "runtimeDeliveryVerifier": "APPROVE",
+    "finalAuditor": "APPROVE; see docs/evidence/aut-03/final-audit.md"
+  },
+  "finalAudit": {
+    "status": "APPROVE",
+    "evidence": "docs/evidence/aut-03/final-audit.md",
+    "sourceTestAndEvidencePinsRechecked": 23,
+    "caseManifestReferencesRechecked": 11,
+    "mismatches": 0,
+    "entryStatusHashDeltaRechecked": true
+  },
+  "limitations": [
+    "No live model call, no-skill baseline, paired trial, service restart, session resume, shared DB write, rollout, or commit occurred.",
+    "Planning quality, elapsed time, token growth, cost, savings, and effectiveness are unavailable.",
+    "Case review qualifies future trial inputs only and does not authorize a trial.",
+    "AUT-02 source hashes are historical accepted-state pins; the two listed overlapping files now include AUT-03 changes."
+  ],
+  "nextCheckpoint": "Obtain separate explicit authorization with run IDs, paired-run order/count, budgets, runtime/model pins, and predeclared retention thresholds before capturing any live baseline."
+}

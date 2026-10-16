@@ -1,0 +1,31 @@
+{
+    "name": "drupal-mcp/ops",
+    "description": "Inspect live Drupal runtime health, logs, queues, cron, cache, updates, modules, services, plugins, and routes through Drush.",
+    "type": "project",
+    "require": {
+        "php": ">=8.1",
+        "mcp/sdk": "^0.6.0",
+        "drupal-mcp/shared-args": "@dev",
+        "symfony/process": "^6.0 || ^7.0",
+        "symfony/yaml": "^6.0 || ^7.0"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../shared-args",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "DrupalMcp\\Ops\\": "src/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    }
+}

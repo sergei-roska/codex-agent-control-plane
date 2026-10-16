@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: a stable usage-limited verifier continues with its exact review context
+ok 1 - a stable usage-limited verifier continues with its exact review context
+  ---
+  duration_ms: 182.656231
+  type: 'test'
+  ...
+# Subtest: a stable usage-limited auditor continues with its exact review context
+ok 2 - a stable usage-limited auditor continues with its exact review context
+  ---
+  duration_ms: 122.734274
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 567.529415

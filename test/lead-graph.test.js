@@ -6,23 +6,41 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const express = require('express');
 const { TaskState } = require('@a2a-js/sdk');
+const { ServerCallContext, UnauthenticatedUser } = require('@a2a-js/sdk/server');
 const { uuid6 } = require('@langchain/langgraph-checkpoint');
 const { INTERRUPT } = require('@langchain/langgraph');
 const { LeadOrchestrator, RunNotFoundError } = require('../src/lead-orchestrator');
 const { execFileSync } = require('node:child_process');
 const { UsageLedger } = require('../src/usage-ledger');
 const { loadSkillCatalog } = require('../src/skill-catalog');
+const { AUT03_SKILL_ID, AUT03_SKILL_SHA256 } = require('../src/aut03-lead-skill');
 const { invalidAcceptanceContract } = require('../src/acceptance');
 const { createEvidenceStore } = require('../src/evidence-store');
 const { createActivityStore } = require('../src/activity-store');
 const { SessionThreads } = require('../src/session-threads');
 const { InMemoryStagingLog } = require('../src/staging-log');
+const { registerRoleAgents } = require('../src/a2a-role-service');
 const { boundedOutcomes } = require('../src/lead-graph');
 const { computeReviewTarget } = require('../src/review-policy');
 const {
   DispatchJournal, openStateDatabase, assignmentId, attemptId, deterministicContextId,
 } = require('../src/durable-store');
+
+function isWritableDirectory(directory) {
+  try {
+    fs.accessSync(directory, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function varTmpSkipReason() {
+  if (!fs.existsSync('/var/tmp')) return '/var/tmp is unavailable';
+  if (!isWritableDirectory('/var/tmp')) return 'sandbox does not permit writing to /var/tmp';
+  return false;
+}
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lead-graph-test-'));
 test.after(() => fs.rmSync(tmpRoot, { recursive: true, force: true }));
@@ -76,6 +94,9 @@ const needsDecisionReport = () => report('Need a call', {
 const usageLimitError = () => Object.assign(new Error('You hit your usage limit'), { codexError: { codexErrorInfo: 'usageLimitExceeded' } });
 
 const role = (name, sandbox) => ({ name, description: `${name} agent`, model: 'gpt-test', effort: 'high', sandbox, instructions: 'Test agent' });
+const legacyRoleProfileHash = (profile) => crypto.createHash('sha256')
+  .update(JSON.stringify([profile.name, profile.sandbox, profile.model, profile.effort, profile.instructions || '']), 'utf8')
+  .digest('hex');
 const roles = () => new Map([
   ['orch-builder', role('orch-builder', 'workspace-write')],
   ['orch-explorer', role('orch-explorer', 'read-only')],
@@ -274,7 +295,7 @@ class Session {
     this.journal = new DispatchJournal(this.state);
     this.orchestrator = new LeadOrchestrator({
       appServer: this.world.appServer,
-      roles: roles(),
+      roles: this.options.roles || roles(),
       workspace: this.options.workspace || path.join(tmpRoot, 'workspace'),
       baseUrl: 'http://127.0.0.1:4040',
       clientFactory: this.world.clientFactory,
@@ -324,7 +345,225 @@ function assertAtMostOneSendPerContext(world) {
   for (const [contextId, count] of counts) assert.ok(count <= 1, `contextId ${contextId} was sent ${count} times`);
 }
 
+function exportAut02Trace(name, { world, serviceInputs = [], workerCalls = null, stagingLog, result, state = null } = {}) {
+  const directory = process.env.AUT02_TRACE_DIR;
+  if (!directory) return;
+  const recoveryTypes = new Set(['review_recovery', 'review_target', 'review_result', 'review_gate_skipped']);
+  const staging = (stagingLog?.list?.({ runId: RUN_ID }) || []).filter((event) => recoveryTypes.has(event.type)).map((event) => ({
+    type: event.type,
+    role: event.role || null,
+    status: event.status || null,
+    assignmentId: event.assignmentId || null,
+    attemptId: event.attemptId || null,
+    target: typeof event.target === 'string' ? event.target : null,
+    checkpointId: typeof event.payload?.checkpointId === 'string' ? event.payload.checkpointId : null,
+    generation: Number.isInteger(event.payload?.generation) ? event.payload.generation : null,
+    phase: typeof event.payload?.phase === 'string' ? event.payload.phase : null,
+    reason: typeof event.payload?.reason === 'string' ? event.payload.reason : null,
+    trigger: typeof event.payload?.trigger === 'string' ? event.payload.trigger : null,
+    verifierTestWrite: typeof event.payload?.verifierTestWrite === 'boolean' ? event.payload.verifierTestWrite : null,
+    currentTargetMatches: typeof event.payload?.currentTargetMatches === 'boolean' ? event.payload.currentTargetMatches : null,
+  }));
+  const assignmentSummary = (world?.dispatchInputs || []).map((input) => ({
+    role: input.role || null,
+    assignmentId: input.assignmentId || null,
+    attemptId: input.attemptId || null,
+    checkpointId: input.review?.checkpointId || null,
+    kind: input.review?.kind || null,
+    hasContinuation: Boolean(input.continuation),
+  }));
+  const obligations = (state?.reviewObligations || result?.reviewObligations || []).map((entry) => ({
+    checkpointId: entry.checkpointId,
+    kind: entry.review?.kind || null,
+    prerequisiteCount: entry.review?.prerequisiteFor?.length || 0,
+    pendingWriterCount: entry.pendingAssignmentIds?.length || 0,
+    receipts: (entry.receipts || []).map((receipt) => ({ role: receipt.role, status: receipt.status, target: receipt.targetIdentity || null })),
+  }));
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, `${name}.json`), `${JSON.stringify({
+    version: 1,
+    workspace: '<workspace>',
+    assignments: assignmentSummary,
+    serviceSendCount: serviceInputs.length,
+    serviceSends: serviceInputs.map((input) => ({
+      role: input.role || null,
+      assignmentId: input.assignmentId || null,
+      attemptId: input.attemptId || null,
+      checkpointId: input.review?.checkpointId || null,
+      hasContinuation: Boolean(input.continuation),
+    })),
+    workerCalls,
+    obligations,
+    staging,
+    recoveryGenerationCount: staging.filter((event) => event.type === 'review_recovery' && event.status === 'verifier_queued').length,
+  }, null, 2)}\n`);
+}
+
 const RUN_ID = 'run-1';
+
+test('AUT-03 delivery is default-off and selected only for the owner allowlisted run', async () => {
+  const offWorld = makeWorld({ script: [finish()] });
+  let offOptions;
+  const offRun = offWorld.appServer.run.bind(offWorld.appServer);
+  offWorld.appServer.run = async (args) => { offOptions = args; return offRun(args); };
+  await withSession(offWorld, async (session) => {
+    await session.orchestrator.run({ goal: 'Decompose a task', runId: RUN_ID });
+    assert.equal(Object.hasOwn(offOptions, 'selectedSkills'), false);
+    assert.doesNotMatch(offWorld.prompts[0], new RegExp(AUT03_SKILL_ID));
+  });
+
+  const onWorld = makeWorld({ script: [finish()] });
+  let options;
+  const run = onWorld.appServer.run.bind(onWorld.appServer);
+  onWorld.appServer.run = async (args) => { options = args; return run(args); };
+  await withSession(onWorld, async (session) => {
+    await session.orchestrator.run({ goal: 'Decompose a task', runId: RUN_ID });
+    assert.deepEqual(options.selectedSkills.map(({ id, sha256: hash }) => ({ id, sha256: hash })), [{ id: AUT03_SKILL_ID, sha256: AUT03_SKILL_SHA256 }]);
+    assert.equal(options.role.sandbox, 'read-only');
+    assert.equal(options.role.tools.skills, false);
+    assert.equal(options.role.tools.mcpServers.length, 0);
+    assert.doesNotMatch(onWorld.prompts[0], new RegExp(AUT03_SKILL_ID));
+  }, { orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+});
+
+test('AUT-03 pin is sent on full, delta, and rejected-decision retry turns', async () => {
+  const bad = decision({ action: 'dispatch', assignments: [] });
+  const world = makeWorld({ script: [dispatch(brief('orch-builder')), bad, finish()] });
+  const selected = [];
+  const run = world.appServer.run.bind(world.appServer);
+  world.appServer.run = async (args) => { selected.push(args.selectedSkills); return run(args); };
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Decompose a task', runId: RUN_ID, contextId: 'aut03-lifecycle' });
+    assert.equal(result.status, 'completed');
+    assert.equal(selected.length, 3);
+    for (const skills of selected) assert.deepEqual(skills.map(({ id, sha256: hash }) => ({ id, sha256: hash })), [{ id: AUT03_SKILL_ID, sha256: AUT03_SKILL_SHA256 }]);
+    assert.equal(world.threadArgs[0], undefined);
+    assert.ok(world.threadArgs.slice(1).every((threadId) => threadId === 'lead-thread'));
+  }, { withSessions: true, orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+});
+
+test('AUT-03 resumed runs reject allowlist and pin drift before a lead call', async (t) => {
+  for (const change of [
+    { name: 'allowlist', aut03TrialRunIds: new Set() },
+    { name: 'pin', aut03TrialRunIds: new Set([RUN_ID]), aut03SkillPin: { id: AUT03_SKILL_ID, sha256: '0'.repeat(64) } },
+  ]) {
+    await t.test(change.name, async () => {
+      const world = makeWorld({ script: [finish()] });
+      await withSession(world, async (session) => {
+        const initial = await session.orchestrator.run({ goal: 'Decompose a task', runId: RUN_ID, interruptAfter: ['intake'] });
+        assert.equal(initial.status, 'interrupted_for_test');
+        assert.equal(world.leadTurns, 0);
+        session.options.orchestrator = { aut03TrialRunIds: new Set([RUN_ID]) };
+        if (change.aut03SkillPin) session.options.orchestrator.aut03SkillPin = change.aut03SkillPin;
+        else session.options.orchestrator.aut03TrialRunIds = change.aut03TrialRunIds;
+        await session.restart();
+        await assert.rejects(session.orchestrator.resume({ runId: RUN_ID }), /AUT-03 lead skill run context changed/);
+        assert.equal(world.leadTurns, 0, 'drift is rejected before App Server run');
+      }, { orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+    });
+  }
+});
+
+test('AUT-03 resumes and legacy-null session rollovers carry the selected pin', async (t) => {
+  await t.test('resumed decision turn', async () => {
+    const world = makeWorld({ script: [finish()] });
+    const selections = [];
+    const run = world.appServer.run.bind(world.appServer);
+    world.appServer.run = async (args) => { selections.push(args.selectedSkills); return run(args); };
+    await withSession(world, async (session) => {
+      const stopped = await session.orchestrator.run({ goal: 'Decompose a task', runId: RUN_ID, interruptAfter: ['intake'] });
+      assert.equal(stopped.status, 'interrupted_for_test');
+      const result = await session.orchestrator.resume({ runId: RUN_ID });
+      assert.equal(result.status, 'completed');
+      assert.equal(selections.length, 1);
+      assert.equal(selections[0][0].id, AUT03_SKILL_ID);
+    }, { orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+  });
+  await t.test('legacy null profile hash rolls to a fresh thread', async () => {
+    const world = makeWorld({ script: [finish()] });
+    const selections = [];
+    const run = world.appServer.run.bind(world.appServer);
+    world.appServer.run = async (args) => { selections.push(args.selectedSkills); return run(args); };
+    await withSession(world, async (session) => {
+      session.sessions.upsert({ contextId: 'legacy-null', threadId: 'legacy-thread', codexHome: null, profileSha256: null });
+      const result = await session.orchestrator.run({ goal: 'Decompose a task', runId: RUN_ID, contextId: 'legacy-null' });
+      assert.equal(result.status, 'completed');
+      assert.equal(world.threadArgs[0], undefined);
+      assert.equal(selections[0][0].id, AUT03_SKILL_ID);
+      assert.notEqual(session.sessions.get('legacy-null').profileSha256, null);
+    }, { withSessions: true, orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+  });
+});
+
+test('AUT-03 on and off profiles cannot reuse the same lead session thread', async () => {
+  const world = makeWorld({ script: [finish(), finish()] });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'Allowlisted task', runId: RUN_ID, contextId: 'skill-profile' });
+    assert.equal(world.threadArgs[0], undefined);
+    session.options.orchestrator = { aut03TrialRunIds: new Set() };
+    await session.restart();
+    await session.orchestrator.run({ goal: 'Default-off task', runId: 'run-2', contextId: 'skill-profile' });
+    assert.equal(world.threadArgs[1], undefined);
+  }, { withSessions: true, orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+});
+
+test('AUT-03 pin remains attached after rejected-thread and context-size rollovers', async (t) => {
+  await t.test('rejected resume starts a pinned full-prompt turn', async () => {
+    const world = makeWorld({ script: [finish(), finish()] });
+    const selected = [];
+    const run = world.appServer.run.bind(world.appServer);
+    let rejectExisting = false;
+    world.appServer.run = async (args) => {
+      selected.push(args.selectedSkills);
+      if (rejectExisting && args.threadId) {
+        rejectExisting = false;
+        throw Object.assign(new Error('thread resume rejected'), { failureClass: 'request_rejected' });
+      }
+      return run(args);
+    };
+    await withSession(world, async (session) => {
+      await session.orchestrator.run({ goal: 'First task', runId: RUN_ID, contextId: 'rejected-rollover' });
+      rejectExisting = true;
+      const result = await session.orchestrator.run({ goal: 'Second task', runId: 'run-2', contextId: 'rejected-rollover' });
+      assert.equal(result.status, 'completed');
+      assert.equal(selected.length, 3);
+      for (const skills of selected) assert.equal(skills[0].id, AUT03_SKILL_ID);
+      assert.equal(world.threadArgs.at(-1), undefined);
+    }, { withSessions: true, orchestrator: { aut03TrialRunIds: new Set([RUN_ID, 'run-2']) } });
+  });
+  await t.test('context threshold starts a new pinned thread', async () => {
+    const world = makeWorld({ script: [finish(), finish()] });
+    const selected = [];
+    const run = world.appServer.run.bind(world.appServer);
+    world.appServer.run = async (args) => { selected.push(args.selectedSkills); return run(args); };
+    await withSession(world, async (session) => {
+      await session.orchestrator.run({ goal: 'First task', runId: RUN_ID, contextId: 'context-rollover' });
+      const prior = session.sessions.get('context-rollover');
+      session.sessions.upsert({ ...prior, lastInputTokens: 900000, contextWindow: 1000000 });
+      const result = await session.orchestrator.run({ goal: 'Second task', runId: 'run-2', contextId: 'context-rollover' });
+      assert.equal(result.status, 'completed');
+      assert.equal(world.threadArgs.at(-1), undefined);
+      assert.equal(selected.length, 2);
+      assert.ok(selected.every((skills) => skills[0].id === AUT03_SKILL_ID));
+    }, { withSessions: true, orchestrator: { aut03TrialRunIds: new Set([RUN_ID, 'run-2']) } });
+  });
+});
+
+test('AUT-03 missing and stale selected skills fail before a lead call', async (t) => {
+  for (const mode of ['missing', 'stale']) {
+    await t.test(mode, async () => {
+      const world = makeWorld({ script: [finish()] });
+      const catalog = loadSkillCatalog();
+      if (mode === 'missing') catalog.delete(AUT03_SKILL_ID);
+      else catalog.get(AUT03_SKILL_ID).sha256 = '0'.repeat(64);
+      const trial = { aut03TrialRunIds: new Set([RUN_ID]), skillCatalog: catalog };
+      await withSession(world, async (session) => {
+        await assert.rejects(session.orchestrator.run({ goal: 'Decompose a task', runId: RUN_ID }), mode === 'missing' ? /Unknown skill id/ : /changed since catalog load/);
+        assert.equal(world.leadTurns, 0);
+      }, { orchestrator: trial });
+    });
+  }
+});
 
 test('restart after each dispatch-path node boundary yields the same result with one send', async (t) => {
   const script = () => [dispatch(brief('orch-builder')), finish('Implemented')];
@@ -2010,6 +2249,117 @@ test('verifier test writes can settle a review, while product and unknown mutati
   }, { workspace, orchestrator: { stagingLog } });
 });
 
+test('an ordinary accepted verifier test write leaves the auditor decision to the lead', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src/file.js'), 'candidate');
+  const review = {
+    kind: 'risk_change', checkpointId: 'critical-test-write-recovery', reason: 'Review the boundary',
+    paths: ['src/file.js', 'test/review.test.js'], evidenceIds: ['issue-test-write'], prerequisiteFor: [],
+  };
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-verifier', ['test/review.test.js']), review }),
+      dispatch({ ...brief('orch-auditor', []), review }),
+      finish('Reviewed the changed target.'),
+    ],
+    workerFinal(roleName, contextId, input) {
+      if (roleName !== 'orch-verifier') return reviewWorkerFinal(roleName, contextId, input);
+      fs.writeFileSync(path.join(workspace, 'test/review.test.js'), 'assert.equal(1, 1);\n');
+      const changedPath = 'test/review.test.js';
+      return {
+        state: TaskState.TASK_STATE_COMPLETED,
+        artifacts: [{
+          name: 'report',
+          parts: textParts(report('Focused verification passed.', {
+            filesChanged: [changedPath], filesInspected: ['src/file.js'],
+            checks: [{ command: 'node --test test/review.test.js', result: 'passed', detail: 'passed' }],
+          })),
+          metadata: {
+            writerExecution: releasedWriter([changedPath]),
+            reviewCoverage: {
+              targetKnown: true, targetIdentity: 'post-test-write-target', identityPresent: true,
+              stable: false, status: 'accepted', reason: 'verifier_target_changed_during_review',
+            },
+            review: {
+              policyId: 'auditor-routing/v1', kind: review.kind, checkpointId: review.checkpointId,
+              status: 'accepted', accepted: true, valid: true, verdict: null,
+              reason: 'verifier_target_changed_during_review',
+            },
+          },
+        }],
+      };
+    },
+  });
+
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-verifier', 'orch-auditor']);
+    const verifierReceipt = stagingLog.list({ runId: RUN_ID, type: 'review_result' })
+      .find((event) => event.role === 'verifier');
+    assert.equal(verifierReceipt.status, 'accepted');
+    assert.equal(verifierReceipt.payload.verifierTestWrite, true);
+    assert.equal(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }).length, 0);
+    assert.equal(result.assignments.filter((entry) => entry.role === 'verifier').length, 1);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('a routine verifier test write completes without an auditor or a recovery round', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const review = {
+    kind: 'routine', checkpointId: 'routine-test-write', reason: 'Review the current test target',
+    paths: ['test/review.test.js'], evidenceIds: ['issue-routine-write'], prerequisiteFor: [],
+  };
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test/review.test.js']), review }),
+      finish('The routine test target is reviewed.'),
+    ],
+    workerFinal(_roleName, _contextId, input) {
+      fs.writeFileSync(path.join(workspace, 'test/review.test.js'), 'assert.equal(1, 1);\n');
+      const changedPath = 'test/review.test.js';
+      return {
+        state: TaskState.TASK_STATE_COMPLETED,
+        artifacts: [{
+          name: 'report',
+          parts: textParts(report('Focused verification passed.', {
+            filesChanged: [changedPath], filesInspected: [changedPath],
+            checks: [{ command: 'node --test test/review.test.js', result: 'passed', detail: 'passed' }],
+          })),
+          metadata: {
+            writerExecution: releasedWriter([changedPath]),
+            reviewCoverage: {
+              targetKnown: true, targetIdentity: 'post-test-write-target', identityPresent: true,
+              stable: false, status: 'accepted', reason: 'verifier_target_changed_during_review',
+            },
+            review: {
+              policyId: 'auditor-routing/v1', kind: review.kind, checkpointId: review.checkpointId,
+              status: 'accepted', accepted: true, valid: true, verdict: null,
+              reason: 'verifier_target_changed_during_review',
+            },
+          },
+        }],
+      };
+    },
+  });
+
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Review the routine test target', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-verifier']);
+    assert.equal(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }).length, 0);
+    const receipt = stagingLog.list({ runId: RUN_ID, type: 'review_result' }).find((event) => event.role === 'verifier');
+    assert.equal(receipt.status, 'accepted');
+    assert.equal(receipt.payload.verifierTestWrite, true);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
 test('finish decision restart: accept runs once, the contract survives, and resume input cannot change it', async () => {
   const workspace = gitRepo();
   let runs = 0;
@@ -3420,14 +3770,115 @@ test('a usage-limited writer is continued after the budget resume without a lead
   });
 });
 
+function stableUsageLimitedReviewScenario(limitedRole) {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src/file.js'), 'stable candidate');
+  const review = {
+    kind: 'risk_change', checkpointId: 'critical-stable-limited',
+    reason: 'Review the unchanged trust boundary', paths: ['src/file.js'],
+    evidenceIds: ['issue-stable-limited'], prerequisiteFor: [],
+  };
+  const stagingLog = new InMemoryStagingLog();
+  const calls = { 'orch-verifier': 0, 'orch-auditor': 0 };
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      dispatch({ ...brief('orch-auditor', []), review }),
+      finish('The stable candidate is reviewed.'),
+      finish('The stable candidate is reviewed.'),
+      finish('The stable candidate is reviewed.'),
+      finish('The stable candidate is reviewed.'),
+    ],
+    workerFinal(roleName) {
+      if (roleName === limitedRole && calls[roleName]++ === 0) {
+        return limitedTask(roleName === 'orch-verifier' ? 1 : 2);
+      }
+      return reviewWorkerFinal(roleName);
+    },
+  });
+  return { workspace, review, stagingLog, world };
+}
+
+async function assertStableUsageLimitedReview(limitedRole) {
+  const { workspace, review, stagingLog, world } = stableUsageLimitedReviewScenario(limitedRole);
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Review the unchanged trust boundary', runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    const original = world.dispatchInputs.find((input) => input.role === limitedRole);
+    assert.ok(original);
+    assert.deepEqual(original.review, review);
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed', JSON.stringify({
+      pause: result.pause,
+      roles: world.dispatchInputs.map((input) => input.role),
+      assignments: result.assignments.map((entry) => ({ role: entry.role, status: entry.status, failureKind: entry.failureKind, assignmentId: entry.assignmentId })),
+      receipts: stagingLog.list({ runId: RUN_ID, type: 'review_result' }).map((event) => [event.role, event.status, event.assignmentId]),
+    }));
+    const expectedRoles = limitedRole === 'orch-verifier'
+      ? ['orch-verifier', 'orch-verifier', 'orch-auditor']
+      : ['orch-verifier', 'orch-auditor', 'orch-auditor'];
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), expectedRoles);
+    assert.ok(world.dispatchInputs.every((input) => JSON.stringify(input.review) === JSON.stringify(review)));
+    const continued = world.dispatchInputs.filter((input) => input.continuation);
+    assert.equal(continued.length, 1);
+    assert.equal(continued[0].role, limitedRole);
+    assert.equal(continued[0].assignmentId, `${original.assignmentId}:c1`);
+    assert.deepEqual(continued[0].review, review);
+    assert.deepEqual(continued[0].continuation, {
+      ofAttemptId: attemptId(original.assignmentId),
+      threadId: limitedRole === 'orch-verifier' ? 'th-1' : 'th-2',
+      laneId: null,
+      codexHome: null,
+    });
+    assert.equal(world.sends.length, 3, 'the limited review attempt is continued once');
+    assertAtMostOneSendPerContext(world);
+    assert.equal(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }).length, 0);
+    assert.equal(stagingLog.list({ runId: RUN_ID, type: 'review_gate_skipped' }).length, 0);
+    const receipts = stagingLog.list({ runId: RUN_ID, type: 'review_result' });
+    assert.ok(receipts.every((event) => event.payload.checkpointId === review.checkpointId));
+    assert.ok(receipts.every((event) => event.payload.currentTargetMatches === true));
+    assert.deepEqual(receipts.filter((event) => event.status === 'accepted').map((event) => event.role), [
+      'verifier', 'auditor',
+    ]);
+    const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.deepEqual(snapshot.values.reviewObligations[0].review, review);
+    if (limitedRole === 'orch-auditor') {
+      const pendingAuditor = snapshot.values.reviewObligations[0].receipts
+        .find((entry) => entry.role === 'auditor' && entry.status === 'inconclusive');
+      assert.equal(pendingAuditor.continuationPending, true);
+    }
+    assert.deepEqual(snapshot.values.reviewObligations[0].receipts.filter((entry) => entry.status === 'accepted').map((entry) => [entry.role, entry.status]), [
+      ['verifier', 'accepted'], ['auditor', 'accepted'],
+    ]);
+  }, { workspace, orchestrator: { stagingLog } });
+}
+
+test('a stable usage-limited verifier continues with its exact review context', async () => {
+  await assertStableUsageLimitedReview('orch-verifier');
+});
+
+test('a stable usage-limited auditor continues with its exact review context', async () => {
+  await assertStableUsageLimitedReview('orch-auditor');
+});
+
 test('a usage-limited auditor cannot continue across a changed target and a fresh audit is dispatched', async () => {
   const workspace = gitRepo();
   fs.mkdirSync(path.join(workspace, 'src'));
   fs.mkdirSync(path.join(workspace, 'test'));
   const sourcePath = path.join(workspace, 'src', 'file.js');
   fs.writeFileSync(sourcePath, 'candidate one');
-  const review = { kind: 'risk_change', checkpointId: 'critical-usage', reason: 'Review a trust boundary', paths: ['src/file.js'], evidenceIds: ['issue-usage'] };
+  const review = {
+    kind: 'risk_change',
+    checkpointId: 'critical-usage',
+    reason: 'Review a trust boundary',
+    paths: ['src/file.js'],
+    evidenceIds: ['issue-usage'],
+    prerequisiteFor: [],
+  };
   let auditorCalls = 0;
+  const stagingLog = new InMemoryStagingLog();
   const world = makeWorld({
     script: [
       dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
@@ -3440,7 +3891,6 @@ test('a usage-limited auditor cannot continue across a changed target and a fres
       return reviewWorkerFinal(roleName, contextId, input);
     },
   });
-  const stagingLog = new InMemoryStagingLog();
   await withSession(world, async (session) => {
     const paused = await session.orchestrator.run({ goal: 'Review a trust boundary', runId: RUN_ID });
     assert.equal(paused.status, 'waiting_for_budget');
@@ -3451,11 +3901,1165 @@ test('a usage-limited auditor cannot continue across a changed target and a fres
       'orch-builder', 'orch-verifier', 'orch-auditor', 'orch-verifier', 'orch-auditor',
     ]);
     assert.equal(world.sends.length, 5, 'the stale limited continuation was skipped before submission');
+    assert.ok(world.dispatchInputs.filter((input) => input.review)
+      .every((input) => JSON.stringify(input.review) === JSON.stringify(review)));
+    assert.notEqual(world.dispatchInputs[3].assignmentId, world.dispatchInputs[1].assignmentId);
+    assert.notEqual(world.dispatchInputs[4].assignmentId, world.dispatchInputs[2].assignmentId);
+    const skipped = stagingLog.list({ runId: RUN_ID, type: 'review_gate_skipped' })
+      .find((event) => event.status === 'stale_review_continuation');
+    assert.ok(skipped, 'the stale continuation is recorded as skipped');
+    const staleTarget = stagingLog.list({ runId: RUN_ID, type: 'review_target' })
+      .find((event) => event.status === 'stale' && event.payload.phase === 'before_continuation');
+    assert.ok(staleTarget, 'the captured target mismatch is recorded before continuation submission');
+    const results = stagingLog.list({ runId: RUN_ID, type: 'review_result' });
+    assert.deepEqual(results.slice(-2).map((event) => [event.role, event.status, event.payload.currentTargetMatches]), [
+      ['verifier', 'accepted', true], ['auditor', 'accepted', true],
+    ]);
+    assert.deepEqual(world.dispatchInputs.slice(3).map((input) => input.review), [review, review]);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('a stale usage-limited auditor recovers before another lead decision', async () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/autonomy/aut-02/changed-candidate.json'), 'utf8'));
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const sourcePath = path.join(workspace, fixture.path);
+  fs.writeFileSync(sourcePath, fixture.candidateA);
+  const stagingLog = new InMemoryStagingLog();
+  let auditorCalls = 0;
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', fixture.review.paths), review: fixture.review }),
+      dispatch(
+        { ...brief('orch-verifier', ['test']), review: fixture.review },
+        { ...brief('orch-auditor', []), review: fixture.review },
+      ),
+      finish('The candidate has been reviewed.'),
+      finish('The candidate has been reviewed.'),
+      finish('The candidate has been reviewed.'),
+      finish('The candidate has been reviewed.'),
+    ],
+    workerFinal(roleName, contextId, input) {
+      if (roleName === 'orch-auditor' && auditorCalls++ === 0) return limitedTask(1);
+      return reviewWorkerFinal(roleName, contextId, input);
+    },
+  });
+
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: fixture.goal, runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    fs.writeFileSync(sourcePath, fixture.candidateB);
+
+    let result;
+    let resumeError;
+    try {
+      result = await session.orchestrator.resume({ runId: RUN_ID });
+    } catch (error) {
+      resumeError = error;
+    }
+    const traceState = (await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } })).values;
+    exportAut02Trace('automatic-selection', { world, stagingLog, result, state: traceState });
+    const recoveryEvents = stagingLog.list({ runId: RUN_ID, type: 'review_recovery' });
+    assert.deepEqual(recoveryEvents.map((event) => event.status), ['verifier_queued', 'auditor_queued']);
+    const reviews = world.dispatchInputs.filter((input) => input.role === 'orch-verifier' || input.role === 'orch-auditor');
+    assert.deepEqual(reviews.map((input) => input.role), fixture.expectedReviewRoles);
+    assert.deepEqual(reviews.slice(-2).map((input) => input.review), [fixture.review, fixture.review]);
+    assert.ok(reviews.at(-2).assignmentId !== reviews.at(0).assignmentId);
+    assert.ok(reviews.at(-1).assignmentId !== reviews.at(1).assignmentId);
     assert.ok(stagingLog.list({ runId: RUN_ID, type: 'review_gate_skipped' })
       .some((event) => event.status === 'stale_review_continuation'));
-    assert.ok(stagingLog.list({ runId: RUN_ID, type: 'review_target' })
-      .some((event) => event.status === 'stale' && event.payload.phase === 'before_continuation'));
+    assert.equal(world.leadTurns, fixture.expectedLeadTurns);
+    assert.equal(resumeError, undefined, 'automatic recovery should reach the final lead turn without another recovery decision');
+    assert.equal(result.status, 'completed');
   }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('a stale limited continuation survives restart after recovery is queued but before submission', async () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/autonomy/aut-02/changed-candidate.json'), 'utf8'));
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const sourcePath = path.join(workspace, fixture.path);
+  fs.writeFileSync(sourcePath, fixture.candidateA);
+  const stagingLog = new InMemoryStagingLog();
+  let auditorCalls = 0;
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', fixture.review.paths), review: fixture.review }),
+      dispatch(
+        { ...brief('orch-verifier', ['test']), review: fixture.review },
+        { ...brief('orch-auditor', []), review: fixture.review },
+      ),
+      finish('The candidate has been reviewed.'),
+    ],
+    workerFinal(roleName, contextId, input) {
+      if (roleName === 'orch-auditor' && auditorCalls++ === 0) return limitedTask(1);
+      return reviewWorkerFinal(roleName, contextId, input);
+    },
+  });
+
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: fixture.goal, runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    fs.writeFileSync(sourcePath, fixture.candidateB);
+    const stopped = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['verify'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+
+    let snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(snapshot.values.batch, null);
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].generation, 1);
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].phase, 'verifier_pending');
+    assert.equal(snapshot.values.pendingAssignments[0].role, 'orch-verifier');
+    await session.restart();
+    snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].generation, 1);
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].phase, 'verifier_pending');
+    assert.equal(snapshot.values.pendingAssignments[0].role, 'orch-verifier');
+
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.filter((input) => ['orch-verifier', 'orch-auditor'].includes(input.role)).map((input) => input.role), fixture.expectedReviewRoles);
+    assert.deepEqual(world.dispatchInputs.slice(-2).map((input) => input.review), [fixture.review, fixture.review]);
+    assert.equal(world.sends.length, 5, 'the stale continuation is skipped and the persisted fresh pair is sent once');
+    for (const input of [world.dispatchInputs[2], ...world.dispatchInputs.slice(-2)]) {
+      assert.equal(session.journal.get(attemptId(input.assignmentId)).state, 'finished');
+    }
+    assert.deepEqual(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }).map((event) => event.status), ['verifier_queued', 'auditor_queued']);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('recovery preserves nonempty prerequisites for multiple pending checkpoints through restart', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  for (const file of ['a.js', 'b.js', 'c.js']) fs.writeFileSync(path.join(workspace, 'src', file), `${file} candidate A`);
+  const reviews = {
+    a: { kind: 'risk_change', checkpointId: 'critical-a', reason: 'Review A', paths: ['src/a.js'], evidenceIds: ['issue-a'], prerequisiteFor: [] },
+    b: { kind: 'risk_change', checkpointId: 'critical-b', reason: 'Review B', paths: ['src/b.js'], evidenceIds: ['issue-b'], prerequisiteFor: [] },
+    c: { kind: 'risk_change', checkpointId: 'critical-c', reason: 'Review C after A and B', paths: ['src/c.js'], evidenceIds: ['issue-c'], prerequisiteFor: ['critical-a', 'critical-b'] },
+  };
+  const stagingLog = new InMemoryStagingLog();
+  let initialCAuditorCalls = 0;
+  const world = makeWorld({
+    script: [
+      dispatch(brief('orch-explorer', [])),
+      dispatch(
+        { ...brief('orch-verifier', ['test']), review: reviews.c },
+        { ...brief('orch-auditor', []), review: reviews.c },
+      ),
+      dispatch(
+        { ...brief('orch-verifier', ['test']), review: reviews.a },
+        { ...brief('orch-auditor', []), review: reviews.a },
+        { ...brief('orch-verifier', ['test']), review: reviews.b },
+        { ...brief('orch-auditor', []), review: reviews.b },
+      ),
+      finish('All linked review checkpoints are current.'),
+    ],
+    workerFinal(roleName, contextId, input) {
+      const review = input.review;
+      if (!review) return reviewWorkerFinal(roleName, contextId, input);
+      const writer = roleName === 'orch-builder';
+      const auditor = roleName === 'orch-auditor';
+      if (auditor && review.checkpointId === 'critical-c' && initialCAuditorCalls++ === 0) return limitedTask(1);
+      const changedPaths = writer ? [review.paths[0]] : [];
+      const summary = writer ? 'Implementation complete.'
+        : auditor ? 'VERDICT: pass\nThe declared scope is safe.' : 'Focused verification passed.';
+      return {
+        state: TaskState.TASK_STATE_COMPLETED,
+        artifacts: [{
+          name: 'report',
+          parts: textParts(report(summary, {
+            filesChanged: changedPaths,
+            filesInspected: writer ? [] : [review.paths[0]],
+            checks: writer ? [] : [{ command: 'inspect declared checkpoint', result: 'passed', detail: 'passed' }],
+          })),
+          metadata: { writerExecution: releasedWriter(changedPaths) },
+        }],
+      };
+    },
+  });
+
+  await withSession(world, async (session) => {
+    const initialStop = await session.orchestrator.run({ goal: 'Review the linked checkpoints', runId: RUN_ID, interruptAfter: ['verify'] });
+    assert.equal(initialStop.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    await session.orchestrator.graph.updateState(config, {
+      reviewObligations: [reviews.a, reviews.b].map((review) => ({
+        checkpointId: review.checkpointId, review, pendingAssignmentIds: [], receipts: [],
+      })),
+    });
+    const paused = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    fs.writeFileSync(path.join(workspace, 'src/c.js'), 'c.js candidate B');
+    const stopped = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['verify'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    let snapshot = await session.orchestrator.graph.getState(config);
+    const cObligation = snapshot.values.reviewObligations.find((entry) => entry.checkpointId === 'critical-c');
+    assert.deepEqual(cObligation.review, reviews.c);
+    assert.equal(snapshot.values.reviewRecovery.checkpoints.find((entry) => entry.checkpointId === 'critical-c').phase, 'verifier_pending');
+    assert.deepEqual(snapshot.values.pendingAssignments[0].review, reviews.c);
+    await session.restart();
+    snapshot = await session.orchestrator.graph.getState(config);
+    assert.deepEqual(snapshot.values.pendingAssignments[0].review, reviews.c);
+
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    const cReviews = world.dispatchInputs.filter((input) => input.review?.checkpointId === 'critical-c');
+    assert.deepEqual(cReviews.map((input) => input.role), ['orch-verifier', 'orch-auditor', 'orch-verifier', 'orch-auditor']);
+    assert.ok(cReviews.every((input) => JSON.stringify(input.review) === JSON.stringify(reviews.c)));
+    assert.deepEqual(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }).map((event) => event.status), ['verifier_queued', 'auditor_queued']);
+    const completed = await session.orchestrator.graph.getState(config);
+    assert.deepEqual(completed.values.reviewObligations.find((entry) => entry.checkpointId === 'critical-c').review, reviews.c);
+    assert.deepEqual(completed.values.reviewObligations.map((entry) => entry.checkpointId).sort(), ['critical-a', 'critical-b', 'critical-c']);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('a blocked recovery reason survives restart beside the complete review context', async () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/autonomy/aut-02/changed-candidate.json'), 'utf8'));
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const sourcePath = path.join(workspace, fixture.path);
+  fs.writeFileSync(sourcePath, fixture.candidateA);
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test']), review: fixture.review }),
+      finish('The candidate has been reviewed.'),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+
+  await withSession(world, async (session) => {
+    const stopped = await session.orchestrator.run({ goal: fixture.goal, runId: RUN_ID, interruptAfter: ['dispatch'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    const snapshot = await session.orchestrator.graph.getState(config);
+    const recovery = snapshot.values.reviewRecovery;
+    await session.orchestrator.graph.updateState(config, {
+      reviewRecovery: {
+        ...recovery,
+        checkpoints: recovery.checkpoints.map((entry) => ({
+          ...entry, generation: 2, phase: 'replan_required', blockedReason: 'recovery_generation_limit',
+        })),
+      },
+    });
+
+    const result = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['decide'] });
+    assert.equal(result.status, 'interrupted_for_test');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-verifier']);
+    assert.ok(world.prompts.at(-1).includes('"generation":2,"phase":"replan_required","blockedReason":"recovery_generation_limit"'));
+    const durable = await session.orchestrator.graph.getState(config);
+    const entry = durable.values.reviewRecovery.checkpoints[0];
+    assert.equal(entry.generation, 2);
+    assert.equal(entry.phase, 'replan_required');
+    assert.equal(entry.blockedReason, 'recovery_generation_limit');
+    assert.equal(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' })
+      .some((event) => event.status === 'blocked' && event.payload.reason === 'recovery_generation_limit'), false);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('a stale verifier selected alone retains skill pins and receives a read-only auditor recovery', async (t) => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/autonomy/aut-02/changed-candidate.json'), 'utf8'));
+  const skillRoot = fs.mkdtempSync(path.join(tmpRoot, 'aut-02-recovery-skill-'));
+  t.after(() => fs.rmSync(skillRoot, { recursive: true, force: true }));
+  const skillDir = path.join(skillRoot, 'api-design');
+  fs.mkdirSync(skillDir);
+  const skillContents = '---\nname: api-design\ndescription: Design stable APIs.\nkeywords: ["api", "interface"]\n---\nUse stable interfaces.\n';
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillContents);
+  const skillCatalog = loadSkillCatalog({ root: skillRoot });
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const sourcePath = path.join(workspace, fixture.path);
+  fs.writeFileSync(sourcePath, fixture.candidateA);
+  const stagingLog = new InMemoryStagingLog();
+  let verifierCalls = 0;
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', fixture.review.paths), review: fixture.review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review: fixture.review, skills: ['api-design'] }),
+      finish('The candidate has been reviewed.'),
+    ],
+    workerFinal(roleName, contextId, input) {
+      if (roleName === 'orch-verifier' && verifierCalls++ === 0) return limitedTask(1);
+      return reviewWorkerFinal(roleName, contextId, input);
+    },
+  });
+
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: fixture.goal, runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    fs.writeFileSync(sourcePath, fixture.candidateB);
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    const reviews = world.dispatchInputs.filter((input) => ['orch-verifier', 'orch-auditor'].includes(input.role));
+    assert.deepEqual(reviews.map((input) => input.role), ['orch-verifier', 'orch-verifier', 'orch-auditor']);
+    assert.deepEqual(reviews.slice(-2).map((input) => input.review), [fixture.review, fixture.review]);
+    const expectedPin = { id: 'api-design', sha256: crypto.createHash('sha256').update(skillContents).digest('hex') };
+    assert.deepEqual(reviews.filter((input) => input.role === 'orch-verifier').map((input) => input.skillPins), [[expectedPin], [expectedPin]]);
+    const recovery = stagingLog.list({ runId: RUN_ID, type: 'review_recovery' });
+    assert.deepEqual(recovery.map((event) => event.status), ['verifier_queued', 'auditor_queued']);
+    assert.equal(result.status, 'completed');
+  }, { workspace, orchestrator: { stagingLog, skillCatalog } });
+});
+
+test('a usage-limited recovery verifier keeps its generation through restart before auditor dispatch', async () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/autonomy/aut-02/changed-candidate.json'), 'utf8'));
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const sourcePath = path.join(workspace, fixture.path);
+  fs.writeFileSync(sourcePath, fixture.candidateA);
+  const stagingLog = new InMemoryStagingLog();
+  let verifierCalls = 0;
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', fixture.review.paths), review: fixture.review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review: fixture.review }),
+      finish('The candidate has been reviewed.'),
+    ],
+    workerFinal(roleName, contextId, input) {
+      if (roleName === 'orch-verifier' && verifierCalls++ < 2) return limitedTask(1);
+      return reviewWorkerFinal(roleName, contextId, input);
+    },
+  });
+
+  await withSession(world, async (session) => {
+    const firstPause = await session.orchestrator.run({ goal: fixture.goal, runId: RUN_ID });
+    assert.equal(firstPause.status, 'waiting_for_budget');
+    fs.writeFileSync(sourcePath, fixture.candidateB);
+    const secondPause = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(secondPause.status, 'waiting_for_budget');
+    assert.deepEqual(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }).map((event) => event.status), ['verifier_queued']);
+    await session.restart();
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    const events = stagingLog.list({ runId: RUN_ID, type: 'review_recovery' });
+    assert.deepEqual(events.map((event) => event.status), ['verifier_queued', 'auditor_queued']);
+    assert.equal(result.status, 'completed');
+    assert.equal(world.dispatchInputs.filter((input) => input.role === 'orch-auditor').length, 1);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('replan recovery requires a fresh verifier before its stored auditor can complete', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const review = { kind: 'risk_change', checkpointId: 'fresh-review-replan', reason: 'Review the boundary', paths: ['src/file.js'], evidenceIds: ['issue-replan'] };
+  const stagingLog = new InMemoryStagingLog();
+  const rolesMap = roles();
+  const workerRoles = [];
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      dispatch({ ...brief('orch-auditor', []), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      finish('The current candidate has been reviewed.'),
+    ],
+    workerFinal(roleName) {
+      workerRoles.push(roleName);
+      return reviewWorkerFinal(roleName);
+    },
+  });
+  const events = [];
+  await withSession(world, async (session) => {
+    const first = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID, interruptAfter: ['verify'], onEvent: (event) => events.push(event) });
+    assert.equal(first.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    let snapshot = await session.orchestrator.graph.getState(config);
+    const obligation = snapshot.values.reviewObligations.find((entry) => entry.checkpointId === review.checkpointId);
+    assert.equal(obligation.receipts.find((entry) => entry.role === 'verifier')?.status, 'accepted');
+    await session.orchestrator.graph.updateState(config, {
+      reviewRecovery: {
+        ...snapshot.values.reviewRecovery,
+        checkpoints: snapshot.values.reviewRecovery.checkpoints.map((entry) => ({
+          ...entry,
+          phase: 'replan_required',
+          blockedReason: 'fresh_verifier_not_accepted',
+          templates: {
+            ...entry.templates,
+            auditor: {
+              ...entry.templates.auditor,
+              roleProfileSha256: legacyRoleProfileHash(rolesMap.get('orch-auditor')),
+            },
+          },
+        })),
+      },
+    });
+
+    const verified = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['collect'], onEvent: (event) => events.push(event) });
+    assert.equal(verified.status, 'interrupted_for_test');
+    assert.ok(events.some((event) => event.type === 'decision_rejected'
+      && event.violations.some((violation) => violation.code === 'verifier_receipt_missing')),
+    JSON.stringify({ events: events.filter((event) => event.type === 'decision_rejected'), prompts: world.prompts, assignments: world.dispatchInputs }));
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-verifier', 'orch-verifier']);
+    const integrated = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['verify'], onEvent: (event) => events.push(event) });
+    assert.equal(integrated.status, 'interrupted_for_test');
+    snapshot = await session.orchestrator.graph.getState(config);
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].phase, 'auditor_pending', JSON.stringify({
+      recovery: snapshot.values.reviewRecovery.checkpoints[0],
+      receipts: snapshot.values.reviewObligations[0].receipts,
+      recoveryEvents: stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }),
+      skipped: stagingLog.list({ runId: RUN_ID, type: 'review_gate_skipped' }),
+    }));
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].blockedReason, 'fresh_verifier_not_accepted');
+    assert.equal(snapshot.values.pendingAssignments[0].role, 'orch-auditor');
+
+    const completed = await session.orchestrator.resume({ runId: RUN_ID, onEvent: (event) => events.push(event) });
+    assert.equal(completed.status, 'completed');
+    snapshot = await session.orchestrator.graph.getState(config);
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].phase, 'complete');
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].blockedReason, null);
+    assert.deepEqual(workerRoles, ['orch-verifier', 'orch-verifier', 'orch-auditor']);
+    assert.deepEqual(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' })
+      .map((event) => [event.status, event.payload.trigger]), [['auditor_queued', 'fresh_verifier_accepted']]);
+  }, { workspace, roles: rolesMap, orchestrator: { stagingLog } });
+});
+
+test('same-batch later auditor uses only the fresh earlier-group verifier receipt during replan', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src/file.js'), 'candidate');
+  const review = { kind: 'risk_change', checkpointId: 'ordered-replan-review', reason: 'Review the boundary', paths: ['src/file.js'], evidenceIds: ['issue-ordered-replan'], prerequisiteFor: [] };
+  const stagingLog = new InMemoryStagingLog();
+  const workerRoles = [];
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      dispatch(
+        { ...waveBrief('orch-verifier', ['test'], 1), review },
+        { ...waveBrief('orch-auditor', [], 2), review },
+      ),
+      finish('The current candidate has been reviewed.'),
+    ],
+    workerFinal(roleName) {
+      workerRoles.push(roleName);
+      return reviewWorkerFinal(roleName);
+    },
+  });
+  await withSession(world, async (session) => {
+    const first = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID, interruptAfter: ['verify'] });
+    assert.equal(first.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    let snapshot = await session.orchestrator.graph.getState(config);
+    const obligation = snapshot.values.reviewObligations.find((entry) => entry.checkpointId === review.checkpointId);
+    const oldVerifier = obligation.receipts.find((entry) => entry.role === 'verifier' && entry.status === 'accepted');
+    assert.ok(oldVerifier);
+    await session.orchestrator.graph.updateState(config, {
+      reviewObligations: snapshot.values.reviewObligations.map((entry) => entry.checkpointId === review.checkpointId
+        ? { ...entry, receipts: [...entry.receipts, {
+          assignmentId: `${RUN_ID}:historical-auditor`,
+          attemptId: `${RUN_ID}:historical-auditor:t1`,
+          role: 'auditor',
+          status: 'accepted',
+          targetIdentity: oldVerifier.targetIdentity,
+          verdict: 'pass',
+          reason: null,
+        }] } : entry),
+      reviewRecovery: {
+        ...snapshot.values.reviewRecovery,
+        checkpoints: snapshot.values.reviewRecovery.checkpoints.map((entry) => ({
+          ...entry, phase: 'replan_required', blockedReason: 'fresh_auditor_not_accepted',
+        })),
+      },
+    });
+
+    const replanned = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['collect'] });
+    assert.equal(replanned.status, 'interrupted_for_test');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-verifier', 'orch-verifier']);
+    snapshot = await session.orchestrator.graph.getState(config);
+    assert.equal(snapshot.values.batch.items[1].state, 'pending');
+    assert.equal(snapshot.values.batch.items[1].role, 'orch-auditor');
+
+    const audited = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['collect'] });
+    assert.equal(audited.status, 'interrupted_for_test');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-verifier', 'orch-verifier', 'orch-auditor']);
+    const integratedAudit = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['verify'] });
+    assert.equal(integratedAudit.status, 'interrupted_for_test');
+    const newVerifier = world.dispatchInputs[1];
+    const auditor = world.dispatchInputs[2];
+    assert.deepEqual(newVerifier.review, review);
+    assert.deepEqual(auditor.review, review);
+    assert.deepEqual(world.dispatchInputs.slice(1).map((input) => input.wave), [1, 2]);
+    const verifierReceipt = stagingLog.list({ runId: RUN_ID, type: 'review_result' })
+      .find((event) => event.assignmentId === assignmentId(RUN_ID, 2, 0));
+    const auditorReceipt = stagingLog.list({ runId: RUN_ID, type: 'review_result' })
+      .find((event) => event.assignmentId === assignmentId(RUN_ID, 2, 1));
+    assert.equal(verifierReceipt.status, 'accepted');
+    assert.equal(auditorReceipt.status, 'accepted');
+    assert.equal(auditorReceipt.target, verifierReceipt.target);
+    snapshot = await session.orchestrator.graph.getState(config);
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].phase, 'complete');
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].blockedReason, null);
+    assert.deepEqual(workerRoles, ['orch-verifier', 'orch-verifier', 'orch-auditor']);
+    assert.deepEqual(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }), []);
+
+    const completed = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(completed.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-verifier', 'orch-verifier', 'orch-auditor']);
+  }, { workspace, orchestrator: { stagingLog, parallelWriters: true } });
+});
+
+test('historical receipts stay gated when replanned audit assignment is unavailable', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  const review = { kind: 'risk_change', checkpointId: 'blocked-review-replan', reason: 'Review the boundary', paths: ['src/file.js'], evidenceIds: ['issue-blocked-replan'] };
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      dispatch({ ...brief('orch-auditor', []), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      dispatch(brief('orch-builder', ['src/file.js'])),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  const events = [];
+  await withSession(world, async (session) => {
+    const first = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID, interruptAfter: ['verify'] });
+    assert.equal(first.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    let snapshot = await session.orchestrator.graph.getState(config);
+    const obligation = snapshot.values.reviewObligations.find((entry) => entry.checkpointId === review.checkpointId);
+    const verifierReceipt = obligation.receipts.find((entry) => entry.role === 'verifier' && entry.status === 'accepted');
+    assert.ok(verifierReceipt?.targetIdentity);
+    const historicalAuditor = {
+      assignmentId: `${RUN_ID}:r0:historical-auditor`,
+      attemptId: `${RUN_ID}:r0:historical-auditor:t1`,
+      role: 'auditor',
+      status: 'accepted',
+      targetIdentity: verifierReceipt.targetIdentity,
+      verdict: 'pass',
+      reason: null,
+    };
+    await session.orchestrator.graph.updateState(config, {
+      reviewObligations: snapshot.values.reviewObligations.map((entry) => entry.checkpointId === review.checkpointId
+        ? { ...entry, receipts: [...entry.receipts, historicalAuditor] } : entry),
+      reviewRecovery: {
+        ...snapshot.values.reviewRecovery,
+        checkpoints: snapshot.values.reviewRecovery.checkpoints.map((entry) => entry.checkpointId === review.checkpointId
+          ? {
+            ...entry,
+            phase: 'replan_required',
+            blockedReason: 'fresh_verifier_not_accepted',
+            templates: { ...entry.templates, auditor: { ...entry.templates.auditor, roleProfileSha256: '0'.repeat(64) } },
+          } : entry),
+      },
+    });
+
+    const freshVerifier = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['collect'], onEvent: (event) => events.push(event) });
+    assert.equal(freshVerifier.status, 'interrupted_for_test');
+    assert.ok(events.some((event) => event.type === 'decision_rejected'
+      && event.violations.some((violation) => violation.code === 'verifier_receipt_missing')));
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-verifier', 'orch-verifier']);
+
+    const integrated = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['verify'], onEvent: (event) => events.push(event) });
+    assert.equal(integrated.status, 'interrupted_for_test');
+    snapshot = await session.orchestrator.graph.getState(config);
+    const recovery = snapshot.values.reviewRecovery.checkpoints.find((entry) => entry.checkpointId === review.checkpointId);
+    assert.equal(recovery.phase, 'replan_required');
+    assert.equal(recovery.blockedReason, 'validated_auditor_template_unavailable');
+    assert.equal(snapshot.values.reviewObligations[0].receipts.filter((entry) => entry.status === 'accepted').length, 3);
+
+    const rejectedWriter = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['decide'], onEvent: (event) => events.push(event) });
+    assert.equal(rejectedWriter.status, 'interrupted_for_test');
+    assert.ok(events.some((event) => event.type === 'decision_rejected'
+      && event.violations.some((violation) => violation.code === 'review_checkpoint_pending')));
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-verifier', 'orch-verifier']);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+function directServiceStaleReviewScenario() {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const sourcePath = path.join(workspace, 'test', 'file.js');
+  fs.writeFileSync(sourcePath, 'candidate A');
+  const review = {
+    kind: 'risk_change', checkpointId: 'service-origin', reason: 'Review the current boundary',
+    paths: ['test/file.js'], evidenceIds: ['issue-service'], prerequisiteFor: [],
+  };
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review, continueFrom: assignmentId(RUN_ID, 1, 0) }),
+      finish('Reviewed current candidate.'),
+    ],
+  });
+  const rolesMap = roles();
+  let workerCalls = 0;
+  world.appServer.run = async (options) => {
+    if (options.role.name === 'coordinator') {
+      world.prompts.push(options.input);
+      const next = world.script[world.leadTurns++];
+      if (typeof next === 'function') return { threadId: 'lead-thread', status: 'completed', text: await next(options) };
+      return { threadId: 'lead-thread', status: 'completed', text: next };
+    }
+    workerCalls += 1;
+    const auditor = options.role.name === 'orch-auditor';
+    const verifierTestWrite = options.role.name === 'orch-verifier' && workerCalls === 2;
+    if (options.role.name === 'orch-verifier' && workerCalls === 1) {
+      const error = new Error('Transient review turn failure');
+      error.threadId = 'verifier-origin-thread';
+      throw error;
+    }
+    if (verifierTestWrite) fs.writeFileSync(sourcePath, 'candidate C');
+    return {
+      threadId: `service-thread-${workerCalls}`,
+      status: 'completed',
+      text: report(auditor ? 'VERDICT: pass\nThe current boundary is safe.' : 'Focused verification passed.', {
+        filesChanged: verifierTestWrite ? ['test/file.js'] : [],
+        filesInspected: ['test/file.js'],
+        checks: [{ command: 'inspect current boundary', result: 'passed', detail: 'Current candidate inspected.' }],
+      }),
+    };
+  };
+  const context = new ServerCallContext({ user: new UnauthenticatedUser() });
+  const agents = registerRoleAgents(express(), {
+    roles: rolesMap, appServer: world.appServer, workspace, baseUrl: 'http://127.0.0.1:7777', stagingLog,
+  });
+  const serviceInputs = [];
+  world.clientFactory = {
+    async createFromUrl(url) {
+      const roleName = decodeURIComponent(new URL(url).pathname.split('/').at(-2));
+      const handler = agents.get(roleName).handler;
+      return {
+        async sendMessage(params) {
+          const input = JSON.parse(params.message.parts[0].content.value);
+          serviceInputs.push({ role: roleName, ...input });
+          if (input.continuation && roleName === 'orch-verifier' && fs.readFileSync(sourcePath, 'utf8') === 'candidate A') {
+            fs.writeFileSync(sourcePath, 'candidate B');
+          }
+          return { task: await handler.sendMessage(params, context) };
+        },
+        async getTask(params) { return handler.getTask(params, context); },
+        async listTasks(params) { return handler.listTasks(params, context); },
+        async cancelTask(params) { return handler.cancelTask(params, context); },
+      };
+    },
+  };
+  return { workspace, sourcePath, review, stagingLog, world, rolesMap, serviceInputs, getWorkerCalls: () => workerCalls };
+}
+
+test('active budget parks an actual stale A2A continuation before recovery planning', async () => {
+  const { workspace, sourcePath, stagingLog, world, serviceInputs, getWorkerCalls } = directServiceStaleReviewScenario();
+  await withSession(world, async (session) => {
+    const initial = await session.orchestrator.run({
+      goal: 'Review the boundary', runId: RUN_ID, interruptAfter: ['verify'],
+    });
+    assert.equal(initial.status, 'interrupted_for_test');
+    const stale = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['collect'] });
+    assert.equal(stale.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    const snapshot = await session.orchestrator.graph.getState(config);
+    const item = snapshot.values.batch.items.find((entry) => entry.result.failureKind === 'request_invalid');
+    assert.ok(item, 'the stored batch contains the direct-service rejection');
+    assert.deepEqual(item.result.serviceBoundary.results.map((entry) => entry.code), ['review_origin_stale']);
+    await session.orchestrator.graph.updateState(config, { budget: { source: 'lead' } });
+    const paused = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(paused.status, 'waiting_for_budget');
+    assert.equal(paused.pause.source, 'lead');
+    const after = await session.orchestrator.graph.getState(config);
+    assert.equal(after.values.reviewRecovery.checkpoints[0].phase, 'idle');
+    const preserved = after.values.batch?.items.find((entry) => entry.result.reviewResult?.reason === 'review_origin_stale')
+      || after.values.outcomes.find((entry) => entry.reviewResult?.reason === 'review_origin_stale');
+    assert.ok(preserved, JSON.stringify({ batch: after.values.batch, outcomes: after.values.outcomes }));
+    assert.equal(serviceInputs.length, 2, 'no fresh verifier request was sent');
+    assert.equal(getWorkerCalls(), 1, 'no fresh verifier model call was made');
+    assert.equal(fs.readFileSync(sourcePath, 'utf8'), 'candidate B');
+    assert.deepEqual(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }), []);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('retry exhaustion blocks recovery after an actual stale A2A continuation', async () => {
+  const { workspace, sourcePath, stagingLog, world, serviceInputs, getWorkerCalls } = directServiceStaleReviewScenario();
+  await withSession(world, async (session) => {
+    const initial = await session.orchestrator.run({
+      goal: 'Review the boundary', runId: RUN_ID, interruptAfter: ['verify'],
+    });
+    assert.equal(initial.status, 'interrupted_for_test');
+    const stale = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['collect'] });
+    assert.equal(stale.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    let snapshot = await session.orchestrator.graph.getState(config);
+    const item = snapshot.values.batch.items.find((entry) => entry.result.failureKind === 'request_invalid');
+    assert.ok(item, 'the stored batch contains the direct-service rejection');
+    assert.deepEqual(item.result.serviceBoundary.results.map((entry) => entry.code), ['review_origin_stale']);
+    assert.equal(item.result.reviewResult.reason, 'review_origin_stale');
+    assert.equal(snapshot.values.batch.items.length, 1);
+    assert.equal(serviceInputs.length, 2);
+    assert.equal(getWorkerCalls(), 1, 'the stale continuation was rejected before another model call');
+    assert.equal(fs.readFileSync(sourcePath, 'utf8'), 'candidate B');
+
+    const recoveryBefore = snapshot.values.reviewRecovery;
+    await session.orchestrator.graph.updateState(config, {
+      reviewRecovery: {
+        ...recoveryBefore,
+        checkpoints: recoveryBefore.checkpoints.map((entry) => ({ ...entry, generation: 2 })),
+      },
+    });
+    const stopped = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(stopped.status, 'input_required');
+    snapshot = await session.orchestrator.graph.getState(config);
+    const recovery = snapshot.values.reviewRecovery.checkpoints[0];
+    assert.equal(recovery.generation, 2);
+    assert.equal(recovery.phase, 'replan_required');
+    assert.equal(recovery.blockedReason, 'recovery_generation_limit');
+    assert.equal(snapshot.values.pendingAssignments, null);
+    assert.equal(serviceInputs.length, 2, 'no fresh verifier request was sent');
+    assert.equal(getWorkerCalls(), 1, 'no fresh verifier model call was made');
+    assert.deepEqual(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' })
+      .map((event) => [event.status, event.payload.reason]), [['blocked', 'recovery_generation_limit']]);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('cancellation blocks recovery after an actual stale A2A continuation', async () => {
+  const { workspace, sourcePath, stagingLog, world, serviceInputs, getWorkerCalls } = directServiceStaleReviewScenario();
+  const controller = new AbortController();
+  await withSession(world, async (session) => {
+    const initial = await session.orchestrator.run({
+      goal: 'Review the boundary', runId: RUN_ID, interruptAfter: ['verify'],
+    });
+    assert.equal(initial.status, 'interrupted_for_test');
+    const stale = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['collect'] });
+    assert.equal(stale.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    const snapshot = await session.orchestrator.graph.getState(config);
+    const item = snapshot.values.batch.items.find((entry) => entry.result.failureKind === 'request_invalid');
+    assert.ok(item, 'the stored batch contains the direct-service rejection');
+    assert.deepEqual(item.result.serviceBoundary.results.map((entry) => entry.code), ['review_origin_stale']);
+    controller.abort();
+    const canceled = await session.orchestrator.resume({ runId: RUN_ID, signal: controller.signal });
+    assert.equal(canceled.status, 'canceled');
+    const after = await session.orchestrator.graph.getState(config);
+    const recovery = after.values.reviewRecovery.checkpoints[0];
+    assert.equal(recovery.generation, 0);
+    assert.equal(recovery.phase, 'idle');
+    assert.equal(recovery.blockedReason, null);
+    assert.equal(after.values.pendingAssignments, null);
+    const preserved = after.values.batch?.items.find((entry) => entry.result.failureKind === 'request_invalid')
+      || after.values.outcomes.find((entry) => entry.reviewResult?.reason === 'review_origin_stale');
+    assert.ok(preserved, 'the canceled run preserves the stale service rejection');
+    assert.equal(preserved.result?.reviewResult?.reason || preserved.reviewResult.reason, 'review_origin_stale');
+    assert.equal(serviceInputs.length, 2, 'no fresh verifier request was sent');
+    assert.equal(getWorkerCalls(), 1, 'no fresh verifier model call was made');
+    assert.deepEqual(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }), []);
+    assert.equal(fs.readFileSync(sourcePath, 'utf8'), 'candidate B');
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('an unresolved writer blocks recovery after an actual stale A2A continuation', async () => {
+  const { workspace, sourcePath, stagingLog, world, serviceInputs, getWorkerCalls } = directServiceStaleReviewScenario();
+  const writerAssignmentId = `${RUN_ID}:synthetic-writer`;
+  const writerAttemptId = attemptId(writerAssignmentId);
+  const writerContextId = deterministicContextId(writerAttemptId);
+  world.admission.rows.set(writerContextId, admissionRow(writerContextId, 'unresolved'));
+  world.admission.canProve = false;
+
+  await withSession(world, async (session) => {
+    const initial = await session.orchestrator.run({
+      goal: 'Review the boundary', runId: RUN_ID, interruptAfter: ['verify'],
+    });
+    assert.equal(initial.status, 'interrupted_for_test');
+    const stale = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['collect'] });
+    assert.equal(stale.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    const snapshot = await session.orchestrator.graph.getState(config);
+    const item = snapshot.values.batch.items.find((entry) => entry.result.failureKind === 'request_invalid');
+    assert.ok(item, 'the stored batch contains the direct-service rejection');
+    assert.deepEqual(item.result.serviceBoundary.results.map((entry) => entry.code), ['review_origin_stale']);
+    await session.orchestrator.graph.updateState(config, {
+      unresolvedWriters: [{
+        attemptId: writerAttemptId,
+        assignmentId: writerAssignmentId,
+        role: 'orch-builder',
+        contextId: writerContextId,
+        taskId: `task-${writerContextId}`,
+        allowedFiles: ['src/file.js'],
+      }],
+    });
+    const paused = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'writer_unresolved');
+    assert.equal(world.admission.reconciles.length, 1);
+    assert.equal(serviceInputs.length, 2, 'no fresh verifier request was sent');
+    assert.equal(getWorkerCalls(), 1, 'no fresh verifier model call was made');
+    const after = await session.orchestrator.graph.getState(config);
+    const recovery = after.values.reviewRecovery.checkpoints[0];
+    assert.equal(recovery.phase, 'idle');
+    assert.equal(recovery.blockedReason, null);
+    assert.equal(after.values.pendingAssignments, null);
+    assert.equal(after.values.unresolvedWriters.length, 1);
+    const preserved = after.values.batch?.items.find((entry) => entry.result.failureKind === 'request_invalid')
+      || after.values.outcomes.find((entry) => entry.reviewResult?.reason === 'review_origin_stale');
+    assert.ok(preserved, 'reconciliation preserves the stale service rejection');
+    assert.equal(preserved.result?.reviewResult?.reason || preserved.reviewResult.reason, 'review_origin_stale');
+    assert.ok(paused.pause.attempts.some((entry) => entry.attemptId === writerAttemptId));
+    assert.deepEqual(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }), []);
+    assert.equal(fs.readFileSync(sourcePath, 'utf8'), 'candidate B');
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('a direct-service origin that goes stale after graph preflight recovers automatically', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const sourcePath = path.join(workspace, 'test', 'file.js');
+  fs.writeFileSync(sourcePath, 'candidate A');
+  const review = {
+    kind: 'risk_change', checkpointId: 'service-origin', reason: 'Review the current boundary',
+    paths: ['test/file.js'], evidenceIds: ['issue-service'], prerequisiteFor: [],
+  };
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review, continueFrom: assignmentId(RUN_ID, 1, 0) }),
+      finish('Reviewed current candidate.'),
+    ],
+  });
+  const rolesMap = roles();
+  let workerCalls = 0;
+  world.appServer.run = async (options) => {
+    if (options.role.name === 'coordinator') {
+      world.prompts.push(options.input);
+      const next = world.script[world.leadTurns++];
+      if (typeof next === 'function') return { threadId: 'lead-thread', status: 'completed', text: await next(options) };
+      return { threadId: 'lead-thread', status: 'completed', text: next };
+    }
+    workerCalls += 1;
+    const auditor = options.role.name === 'orch-auditor';
+    const verifierTestWrite = options.role.name === 'orch-verifier' && workerCalls === 2;
+    if (options.role.name === 'orch-verifier' && workerCalls === 1) {
+      const error = new Error('Transient review turn failure');
+      error.threadId = 'verifier-origin-thread';
+      throw error;
+    }
+    if (verifierTestWrite) fs.writeFileSync(sourcePath, 'candidate C');
+    return {
+      threadId: `service-thread-${workerCalls}`,
+      status: 'completed',
+      text: report(auditor ? 'VERDICT: pass\nThe current boundary is safe.' : 'Focused verification passed.', {
+        filesChanged: verifierTestWrite ? ['test/file.js'] : [],
+        filesInspected: ['test/file.js'],
+        checks: [{ command: 'inspect current boundary', result: 'passed', detail: 'Current candidate inspected.' }],
+      }),
+    };
+  };
+  const app = express();
+  const context = new ServerCallContext({ user: new UnauthenticatedUser() });
+  const agents = registerRoleAgents(app, {
+    roles: rolesMap, appServer: world.appServer, workspace, baseUrl: 'http://127.0.0.1:7777', stagingLog,
+  });
+  const serviceInputs = [];
+  world.clientFactory = {
+    async createFromUrl(url) {
+      const roleName = decodeURIComponent(new URL(url).pathname.split('/').at(-2));
+      const handler = agents.get(roleName).handler;
+      return {
+        async sendMessage(params) {
+          const input = JSON.parse(params.message.parts[0].content.value);
+          serviceInputs.push({ role: roleName, ...input });
+          if (input.continuation && roleName === 'orch-verifier' && fs.readFileSync(sourcePath, 'utf8') === 'candidate A') {
+            fs.writeFileSync(sourcePath, 'candidate B');
+          }
+          return { task: await handler.sendMessage(params, context) };
+        },
+        async getTask(params) { return handler.getTask(params, context); },
+        async listTasks(params) { return handler.listTasks(params, context); },
+        async cancelTask(params) { return handler.cancelTask(params, context); },
+      };
+    },
+  };
+
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID });
+    const traceState = (await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } })).values;
+    exportAut02Trace('service-origin-race', { world, serviceInputs, workerCalls, stagingLog, result, state: traceState });
+    if (result.status !== 'completed') throw new Error(JSON.stringify({ pause: result.pause, assignments: result.assignments, leadTurns: world.leadTurns, serviceInputs, recovery: stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }) }));
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 3, 'recovery completes before the scripted finish decision');
+    const recoveryEvents = stagingLog.list({ runId: RUN_ID, type: 'review_recovery' });
+    assert.deepEqual(recoveryEvents.map((event) => [event.status, event.payload.generation]), [
+      ['verifier_queued', 1], ['auditor_queued', 1],
+    ]);
+    const stale = result.assignments.find((entry) => entry.failureKind === 'request_invalid');
+    assert.deepEqual(stale.serviceBoundary.results.map((entry) => entry.code), ['review_origin_stale']);
+    assert.equal(stale.reviewResult.reason, 'review_origin_stale');
+    assert.equal(stale.reviewCoverage.stable, false);
+    assert.deepEqual(serviceInputs.map((input) => input.role), ['orch-verifier', 'orch-verifier', 'orch-verifier', 'orch-auditor']);
+    assert.deepEqual(serviceInputs.map((input) => input.review), [review, review, review, review]);
+    assert.equal(workerCalls, 3, 'the stale continuation is rejected before App Server execution');
+    const initialVerifier = result.assignments.find((entry) => entry.role === 'verifier' && entry.assignmentId === assignmentId(RUN_ID, 1, 0));
+    assert.equal(serviceInputs[1].continuation.ofAttemptId, initialVerifier.attemptId);
+    assert.equal(serviceInputs[2].continuation, undefined, 'fresh verification starts without the stale origin');
+    const recoveryVerifierReceipt = stagingLog.list({ runId: RUN_ID, type: 'review_result' })
+      .find((event) => event.assignmentId === serviceInputs[2].assignmentId);
+    assert.equal(recoveryVerifierReceipt.status, 'accepted');
+    assert.equal(recoveryVerifierReceipt.payload.verifierTestWrite, true);
+    assert.equal(serviceInputs.filter((input) => input.role === 'orch-verifier' && !input.continuation).length, 2);
+    const graphPreflight = stagingLog.list({ runId: RUN_ID, type: 'review_target' })
+      .find((event) => event.payload.phase === 'before_continuation' && event.role === 'verifier');
+    assert.equal(graphPreflight.status, 'known', 'the original target remains current through graph preflight');
+    assert.equal(serviceInputs.length, 4, 'the stale origin causes exactly one service rejection');
+    assert.equal(fs.readFileSync(sourcePath, 'utf8'), 'candidate C', 'fresh verifier writes only the authorized test target after recovery');
+  }, { workspace, roles: rolesMap, orchestrator: { stagingLog } });
+});
+
+test('a stable review scope continuation keeps its origin and exact checkpoint context', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'test/file.js'), 'candidate A');
+  const review = {
+    kind: 'routine', checkpointId: 'stable-scope-origin', reason: 'Review the current boundary',
+    paths: ['test/file.js'], evidenceIds: ['issue-stable-origin'], prerequisiteFor: [],
+  };
+  const stagingLog = new InMemoryStagingLog();
+  const first = assignmentId(RUN_ID, 1, 0);
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review, continueFrom: first }),
+      finish('The current target is reviewed.'),
+    ],
+  });
+  const rolesMap = roles();
+  let workerCalls = 0;
+  world.appServer.run = async (options) => {
+    if (options.role.name === 'coordinator') {
+      world.prompts.push(options.input);
+      const next = world.script[world.leadTurns++];
+      if (typeof next === 'function') return { threadId: 'lead-thread', status: 'completed', text: await next(options) };
+      return { threadId: 'lead-thread', status: 'completed', text: next };
+    }
+    workerCalls += 1;
+    if (workerCalls === 1) {
+      const error = new Error('Transient review turn failure');
+      error.threadId = 'verifier-origin-thread';
+      throw error;
+    }
+    if (workerCalls === 2) fs.writeFileSync(path.join(workspace, 'test/file.js'), 'candidate B');
+    return {
+      threadId: 'scope-continuation-thread', status: 'completed',
+      text: report('Focused verification passed.', {
+        filesChanged: ['test/file.js'],
+        filesInspected: ['test/file.js'],
+        checks: [{ command: 'inspect current boundary', result: 'passed', detail: 'Current candidate inspected.' }],
+      }),
+    };
+  };
+  const context = new ServerCallContext({ user: new UnauthenticatedUser() });
+  const agents = registerRoleAgents(express(), {
+    roles: rolesMap, appServer: world.appServer, workspace, baseUrl: 'http://127.0.0.1:7777', stagingLog,
+  });
+  const serviceInputs = [];
+  world.clientFactory = {
+    async createFromUrl(url) {
+      const roleName = decodeURIComponent(new URL(url).pathname.split('/').at(-2));
+      const handler = agents.get(roleName).handler;
+      return {
+        async sendMessage(params) {
+          const input = JSON.parse(params.message.parts[0].content.value);
+          serviceInputs.push({ role: roleName, ...input });
+          return { task: await handler.sendMessage(params, context) };
+        },
+        async getTask(params) { return handler.getTask(params, context); },
+        async listTasks(params) { return handler.listTasks(params, context); },
+        async cancelTask(params) { return handler.cancelTask(params, context); },
+      };
+    },
+  };
+
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(workerCalls, 2, 'the stable scope origin is allowed to reach the App Server');
+    assert.deepEqual(serviceInputs.map((input) => input.review), [review, review]);
+    assert.deepEqual(serviceInputs[1].continuation, {
+      ofAttemptId: attemptId(first), threadId: 'verifier-origin-thread', laneId: null,
+      codexHome: null, mcpToolPins: [], reason: 'scope',
+    });
+    assert.equal(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }).length, 0);
+    assert.deepEqual(stagingLog.list({ runId: RUN_ID, type: 'review_result' })
+      .filter((event) => event.status === 'accepted').map((event) => event.role), ['verifier']);
+  }, { workspace, roles: rolesMap, orchestrator: { stagingLog } });
+});
+
+test('owner pause parks before recovery selection after a stale scope continuation rejection', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const sourcePath = path.join(workspace, 'test/file.js');
+  fs.writeFileSync(sourcePath, 'candidate A');
+  const review = {
+    kind: 'risk_change', checkpointId: 'paused-scope-recovery', reason: 'Review the current boundary',
+    paths: ['test/file.js'], evidenceIds: ['issue-paused-scope'], prerequisiteFor: [],
+  };
+  const stagingLog = new InMemoryStagingLog();
+  const first = assignmentId(RUN_ID, 1, 0);
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review, continueFrom: first }),
+      finish('Reviewed the current target.'),
+    ],
+  });
+  const rolesMap = roles();
+  let workerCalls = 0;
+  world.appServer.run = async (options) => {
+    if (options.role.name === 'coordinator') {
+      world.prompts.push(options.input);
+      const next = world.script[world.leadTurns++];
+      if (typeof next === 'function') return { threadId: 'lead-thread', status: 'completed', text: await next(options) };
+      return { threadId: 'lead-thread', status: 'completed', text: next };
+    }
+    workerCalls += 1;
+    const error = new Error('Transient review turn failure');
+    error.threadId = 'verifier-origin-thread';
+    throw error;
+  };
+  const context = new ServerCallContext({ user: new UnauthenticatedUser() });
+  const agents = registerRoleAgents(express(), {
+    roles: rolesMap, appServer: world.appServer, workspace, baseUrl: 'http://127.0.0.1:7777', stagingLog,
+  });
+  const serviceInputs = [];
+  const serviceResponses = [];
+  let activeSession;
+  let pauseOnStaleContinuation = false;
+  world.clientFactory = {
+    async createFromUrl(url) {
+      const roleName = decodeURIComponent(new URL(url).pathname.split('/').at(-2));
+      const handler = agents.get(roleName).handler;
+      return {
+        async sendMessage(params) {
+          const input = JSON.parse(params.message.parts[0].content.value);
+          serviceInputs.push({ role: roleName, ...input });
+          if (input.continuation && roleName === 'orch-verifier') {
+            fs.writeFileSync(sourcePath, 'candidate B');
+            pauseOnStaleContinuation = true;
+          }
+          return { task: await handler.sendMessage(params, context) };
+        },
+        async getTask(params) {
+          const task = await handler.getTask(params, context);
+          if (pauseOnStaleContinuation && roleName === 'orch-verifier' && task.status?.state === TaskState.TASK_STATE_FAILED) {
+            pauseOnStaleContinuation = false;
+            serviceResponses.push(task);
+            assert.equal(activeSession.orchestrator.requestPause(RUN_ID), true);
+          }
+          return task;
+        },
+        async listTasks(params) { return handler.listTasks(params, context); },
+        async cancelTask(params) { return handler.cancelTask(params, context); },
+      };
+    },
+  };
+
+  await withSession(world, async (session) => {
+    activeSession = session;
+    const result = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID });
+    const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(result.status, 'input_required');
+    assert.equal(result.pause.kind, 'owner_pause');
+    assert.equal(workerCalls, 1, 'the stale direct continuation is rejected before a model call');
+    assert.deepEqual(serviceInputs.map((input) => input.review), [review, review]);
+    assert.equal(serviceInputs[1].continuation.reason, 'scope');
+    assert.equal(serviceResponses[0].status.state, TaskState.TASK_STATE_FAILED);
+    assert.equal(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }).length, 0);
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].generation, 0);
+    assert.equal(snapshot.values.reviewObligations[0].checkpointId, review.checkpointId);
+    assert.equal(snapshot.values.pendingAssignments, null);
+  }, { workspace, roles: rolesMap, orchestrator: { stagingLog } });
+});
+
+test('an unknown direct-service continuation origin blocks recovery without guessing staleness', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'test'));
+  const sourcePath = path.join(workspace, 'test/file.js');
+  fs.writeFileSync(sourcePath, 'candidate A');
+  const review = {
+    kind: 'risk_change', checkpointId: 'service-origin-unknown', reason: 'Review the current boundary',
+    paths: ['test/file.js'], evidenceIds: ['issue-service-unknown'], prerequisiteFor: [],
+  };
+  const backingLog = new InMemoryStagingLog();
+  let hideContinuationBinding = false;
+  const stagingLog = {
+    record: (event) => backingLog.record(event),
+    list(filter) {
+      if (hideContinuationBinding && filter?.type === 'review_continuation_emitted') return [];
+      return backingLog.list(filter);
+    },
+  };
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review, continueFrom: assignmentId(RUN_ID, 1, 0) }),
+      finish('Reviewed the current target.'),
+      finish('Reviewed the current target.'),
+      finish('Reviewed the current target.'),
+    ],
+  });
+  const rolesMap = roles();
+  let workerCalls = 0;
+  world.appServer.run = async (options) => {
+    if (options.role.name === 'coordinator') {
+      world.prompts.push(options.input);
+      const next = world.script[world.leadTurns++];
+      return { threadId: 'lead-thread', status: 'completed', text: next };
+    }
+    workerCalls += 1;
+    const error = new Error('Transient review turn failure');
+    error.threadId = 'verifier-origin-thread';
+    throw error;
+  };
+  const app = express();
+  const context = new ServerCallContext({ user: new UnauthenticatedUser() });
+  const agents = registerRoleAgents(app, {
+    roles: rolesMap, appServer: world.appServer, workspace, baseUrl: 'http://127.0.0.1:7777', stagingLog,
+  });
+  const serviceInputs = [];
+  world.clientFactory = {
+    async createFromUrl(url) {
+      const roleName = decodeURIComponent(new URL(url).pathname.split('/').at(-2));
+      const handler = agents.get(roleName).handler;
+      return {
+        async sendMessage(params) {
+          const input = JSON.parse(params.message.parts[0].content.value);
+          serviceInputs.push({ role: roleName, ...input });
+          hideContinuationBinding = Boolean(input.continuation);
+          try {
+            return { task: await handler.sendMessage(params, context) };
+          } finally {
+            hideContinuationBinding = false;
+          }
+        },
+        async getTask(params) { return handler.getTask(params, context); },
+        async listTasks(params) { return handler.listTasks(params, context); },
+        async cancelTask(params) { return handler.cancelTask(params, context); },
+      };
+    },
+  };
+
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID });
+    assert.equal(result.status, 'input_required');
+    const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    const unknown = result.assignments.find((entry) => entry.failureKind === 'request_invalid');
+    assert.ok(unknown);
+    assert.deepEqual(unknown.serviceBoundary.results.map((entry) => entry.code), ['review_origin_unknown']);
+    assert.equal(unknown.reviewResult.reason, 'review_origin_unknown');
+    assert.equal(unknown.effects, 'none');
+    assert.equal(workerCalls, 1, 'the unknown continuation is rejected before App Server execution');
+    assert.equal(serviceInputs.length, 2);
+    assert.equal(fs.readFileSync(sourcePath, 'utf8'), 'candidate A');
+    assert.equal(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }).some((event) => event.status === 'verifier_queued'), false);
+    assert.equal(snapshot.values.batch, null);
+    assert.equal(snapshot.values.pendingAssignments, null);
+    assert.equal(snapshot.values.reviewObligations[0].checkpointId, review.checkpointId);
+    assert.equal(snapshot.values.reviewObligations[0].receipts.some((entry) => entry.status === 'accepted'), false);
+  }, { workspace, roles: rolesMap, orchestrator: { stagingLog } });
 });
 
 test('limited items of one wave are continued concurrently under parallelWriters', async () => {
@@ -3795,7 +5399,7 @@ test('a failing pinned agent check feeds the acceptance loop', async () => {
   }, { workspace, orchestrator: { runCheckImpl: hostRunRefused } });
 });
 
-test('the owner-side acceptanceScratch option reaches the sandboxed check; a proposal field cannot enable it', { skip: !fs.existsSync('/var/tmp') }, async () => {
+test('the owner-side acceptanceScratch option reaches the sandboxed check; a proposal field cannot enable it', { skip: varTmpSkipReason() }, async () => {
   const baseDir = fs.mkdtempSync('/var/tmp/lead-scratch-');
   try {
     const workspace = gitRepo();
@@ -4382,7 +5986,9 @@ test('check_changed: only an explicit PRD change reaches the owner, who may appr
 const { createLeadRole } = require('../src/role-catalog');
 const { loadEffectiveRoles, writeOverridesFile, RULES_HEADING } = require('../src/role-overrides');
 
-const profileHash = (r) => crypto.createHash('sha256').update(JSON.stringify([r.name, r.sandbox, r.model, r.effort, r.instructions || '']), 'utf8').digest('hex');
+const profileHash = (r) => crypto.createHash('sha256')
+  .update(JSON.stringify([r.name, r.sandbox, r.model, r.effort, r.instructions || '', r.tools?.mcpServers || [], r.tools?.skills === true]), 'utf8')
+  .digest('hex');
 // What the project server does at start: the effective roles for the orchestrator options.
 const loadEffective = (file) => {
   const { roles: effective, leadRole } = loadEffectiveRoles({ file, roles: roles(), leadRole: createLeadRole() });

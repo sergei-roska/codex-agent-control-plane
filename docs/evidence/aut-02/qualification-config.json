@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "scope": "Deterministic graph fixture configuration, read from frozen pre-change test helpers; not effective live service configuration. Direct service fixture roles are declared and hashed with the overlaid test source.",
+  "provenance": "artifacts/autonomy/aut-02/baseline/test/lead-graph.test.js:91 and Session.open",
+  "roles": {
+    "orch-builder": {
+      "name": "orch-builder",
+      "description": "orch-builder agent",
+      "model": "gpt-test",
+      "effort": "high",
+      "sandbox": "workspace-write",
+      "instructions": "Test agent"
+    },
+    "orch-explorer": {
+      "name": "orch-explorer",
+      "description": "orch-explorer agent",
+      "model": "gpt-test",
+      "effort": "high",
+      "sandbox": "read-only",
+      "instructions": "Test agent"
+    },
+    "orch-architect": {
+      "name": "orch-architect",
+      "description": "orch-architect agent",
+      "model": "gpt-test",
+      "effort": "high",
+      "sandbox": "read-only",
+      "instructions": "Test agent"
+    },
+    "orch-verifier": {
+      "name": "orch-verifier",
+      "description": "orch-verifier agent",
+      "model": "gpt-test",
+      "effort": "high",
+      "sandbox": "workspace-write",
+      "instructions": "Test agent"
+    },
+    "orch-auditor": {
+      "name": "orch-auditor",
+      "description": "orch-auditor agent",
+      "model": "gpt-test",
+      "effort": "high",
+      "sandbox": "read-only",
+      "instructions": "Test agent"
+    }
+  },
+  "reviewPolicy": "auditor-routing/v1",
+  "targetContract": "review-target/v1",
+  "requiredChecks": [],
+  "checkPins": [],
+  "state": "Disposable SQLite via openStateDatabase; restart closes and reopens file and rebuilds graph.",
+  "transports": "makeWorld injected fake AppServer and A2A. Actual role-service integration uses real registerRoleAgents with fake AppServer; no network model requests.",
+  "pollIntervalMs": 0,
+  "reconcileWaitMs": 20,
+  "baselineSourceCommit": "cc0958edd54a5c7ddaab02e4844fa69b823af365",
+  "forbiddenEffects": [
+    "stale-origin model execution",
+    "accepted wrong-target receipt",
+    "checkpoint scope mutation",
+    "unauthorized writer",
+    "automatic owner pause or budget bypass",
+    "duplicate effective submission"
+  ]
+}

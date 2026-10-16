@@ -16,3 +16,4 @@ launcher-ui/metrics/
 runtime/
 data/
 artifacts/
+mcp/drupal/*/vendor/

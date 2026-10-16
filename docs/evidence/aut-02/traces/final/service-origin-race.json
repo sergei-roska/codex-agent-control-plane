@@ -1,0 +1,220 @@
+{
+  "version": 1,
+  "workspace": "<workspace>",
+  "assignments": [],
+  "serviceSendCount": 4,
+  "serviceSends": [
+    {
+      "role": "orch-verifier",
+      "assignmentId": "run-1:r1:a0",
+      "attemptId": null,
+      "checkpointId": "service-origin",
+      "hasContinuation": false
+    },
+    {
+      "role": "orch-verifier",
+      "assignmentId": "run-1:r2:a0",
+      "attemptId": null,
+      "checkpointId": "service-origin",
+      "hasContinuation": true
+    },
+    {
+      "role": "orch-verifier",
+      "assignmentId": "run-1:r3:a0",
+      "attemptId": null,
+      "checkpointId": "service-origin",
+      "hasContinuation": false
+    },
+    {
+      "role": "orch-auditor",
+      "assignmentId": "run-1:r4:a0",
+      "attemptId": null,
+      "checkpointId": "service-origin",
+      "hasContinuation": false
+    }
+  ],
+  "workerCalls": 3,
+  "obligations": [
+    {
+      "checkpointId": "service-origin",
+      "kind": "risk_change",
+      "prerequisiteCount": 0,
+      "pendingWriterCount": 0,
+      "receipts": [
+        {
+          "role": "verifier",
+          "status": "inconclusive",
+          "target": "review-target/v1:ec963672dd98b9385e6b743461e5b98efaf144d7a1c5de853d9c74c553d17e8b"
+        },
+        {
+          "role": "verifier",
+          "status": "inconclusive",
+          "target": "review-target/v1:1bf9297aa1d2b94e9d0a585628afd3c26c2e807611ecf3fd7fb5531b2decd50a"
+        },
+        {
+          "role": "verifier",
+          "status": "accepted",
+          "target": "review-target/v1:d23f4a0cb9f9a907a3e28e7253ccc6b3daedfd8a23e2e3af89779ea30272e1ef"
+        },
+        {
+          "role": "auditor",
+          "status": "accepted",
+          "target": "review-target/v1:d23f4a0cb9f9a907a3e28e7253ccc6b3daedfd8a23e2e3af89779ea30272e1ef"
+        }
+      ]
+    }
+  ],
+  "staging": [
+    {
+      "type": "review_target",
+      "role": "verifier",
+      "status": "known",
+      "assignmentId": "run-1:r1:a0",
+      "attemptId": "run-1:r1:a0:t1",
+      "target": "review-target/v1:ec963672dd98b9385e6b743461e5b98efaf144d7a1c5de853d9c74c553d17e8b",
+      "checkpointId": "service-origin",
+      "generation": null,
+      "phase": "before_submit",
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_result",
+      "role": "verifier",
+      "status": "inconclusive",
+      "assignmentId": "run-1:r1:a0",
+      "attemptId": "run-1:r1:a0:t1",
+      "target": "review-target/v1:ec963672dd98b9385e6b743461e5b98efaf144d7a1c5de853d9c74c553d17e8b",
+      "checkpointId": "service-origin",
+      "generation": null,
+      "phase": null,
+      "reason": "verification_execution_failed",
+      "trigger": null,
+      "verifierTestWrite": false,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_target",
+      "role": "verifier",
+      "status": "known",
+      "assignmentId": "run-1:r2:a0",
+      "attemptId": "run-1:r2:a0:t1",
+      "target": "review-target/v1:ec963672dd98b9385e6b743461e5b98efaf144d7a1c5de853d9c74c553d17e8b",
+      "checkpointId": "service-origin",
+      "generation": null,
+      "phase": "before_continuation",
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_result",
+      "role": "verifier",
+      "status": "inconclusive",
+      "assignmentId": "run-1:r2:a0",
+      "attemptId": "run-1:r2:a0:t1",
+      "target": "review-target/v1:1bf9297aa1d2b94e9d0a585628afd3c26c2e807611ecf3fd7fb5531b2decd50a",
+      "checkpointId": "service-origin",
+      "generation": null,
+      "phase": null,
+      "reason": "review_origin_stale",
+      "trigger": null,
+      "verifierTestWrite": false,
+      "currentTargetMatches": false
+    },
+    {
+      "type": "review_recovery",
+      "role": "verifier",
+      "status": "verifier_queued",
+      "assignmentId": "run-1:r2:a0",
+      "attemptId": "run-1:r2:a0:t1",
+      "target": "review-target/v1:1bf9297aa1d2b94e9d0a585628afd3c26c2e807611ecf3fd7fb5531b2decd50a",
+      "checkpointId": "service-origin",
+      "generation": 1,
+      "phase": null,
+      "reason": null,
+      "trigger": "review_origin_stale",
+      "verifierTestWrite": null,
+      "currentTargetMatches": null
+    },
+    {
+      "type": "review_target",
+      "role": "verifier",
+      "status": "known",
+      "assignmentId": "run-1:r3:a0",
+      "attemptId": "run-1:r3:a0:t1",
+      "target": "review-target/v1:1bf9297aa1d2b94e9d0a585628afd3c26c2e807611ecf3fd7fb5531b2decd50a",
+      "checkpointId": "service-origin",
+      "generation": null,
+      "phase": "before_submit",
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_result",
+      "role": "verifier",
+      "status": "accepted",
+      "assignmentId": "run-1:r3:a0",
+      "attemptId": "run-1:r3:a0:t1",
+      "target": "review-target/v1:d23f4a0cb9f9a907a3e28e7253ccc6b3daedfd8a23e2e3af89779ea30272e1ef",
+      "checkpointId": "service-origin",
+      "generation": null,
+      "phase": null,
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": true,
+      "currentTargetMatches": false
+    },
+    {
+      "type": "review_recovery",
+      "role": "auditor",
+      "status": "auditor_queued",
+      "assignmentId": "run-1:r2:a0",
+      "attemptId": "run-1:r2:a0:t1",
+      "target": "review-target/v1:d23f4a0cb9f9a907a3e28e7253ccc6b3daedfd8a23e2e3af89779ea30272e1ef",
+      "checkpointId": "service-origin",
+      "generation": 1,
+      "phase": null,
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": null
+    },
+    {
+      "type": "review_target",
+      "role": "auditor",
+      "status": "known",
+      "assignmentId": "run-1:r4:a0",
+      "attemptId": "run-1:r4:a0:t1",
+      "target": "review-target/v1:d23f4a0cb9f9a907a3e28e7253ccc6b3daedfd8a23e2e3af89779ea30272e1ef",
+      "checkpointId": "service-origin",
+      "generation": null,
+      "phase": "before_submit",
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_result",
+      "role": "auditor",
+      "status": "accepted",
+      "assignmentId": "run-1:r4:a0",
+      "attemptId": "run-1:r4:a0:t1",
+      "target": "review-target/v1:d23f4a0cb9f9a907a3e28e7253ccc6b3daedfd8a23e2e3af89779ea30272e1ef",
+      "checkpointId": "service-origin",
+      "generation": null,
+      "phase": null,
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": false,
+      "currentTargetMatches": true
+    }
+  ],
+  "recoveryGenerationCount": 1
+}

@@ -29,6 +29,8 @@ const { StagingLog } = require('./staging-log');
 const { validateAcceptanceContract, formatAcceptance, invalidAcceptanceContract } = require('./acceptance');
 const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
 const { loadSkillCatalog } = require('./skill-catalog');
+const { loadMcpCatalog } = require('./mcp-catalog');
+const { parseTrialRunIds } = require('./aut03-lead-skill');
 const { canonicalRoleId, roleDisplayName } = require('./role-names');
 runtimeIdentity.seal();
 
@@ -693,6 +695,7 @@ async function startServer({
   budgetWatcherOptions = {},
 } = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new RangeError('port must be an integer from 0 to 65535');
+  const aut03TrialRunIds = parseTrialRunIds(process.env.CODEX_A2A_AUT03_TRIAL_RUN_IDS ?? '');
   if (typeof workspace !== 'string' || !workspace || !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`workspace must be an existing directory: ${workspace}`);
   }
@@ -725,6 +728,7 @@ async function startServer({
       onSourceFile: (file, source) => runtimeIdentity.captureProfileSource(file, source),
     });
     const skillCatalog = loadSkillCatalog();
+    const mcpCatalog = loadMcpCatalog();
     const app = express();
     // Until startup reconciliation and route registration finish, JSON-RPC calls get a retryable 503 (not 404).
     let ready = false;
@@ -771,14 +775,15 @@ async function startServer({
     const activityStore = createActivityStore(state.db);
     const sessionThreads = new SessionThreads({ db: state.db });
     const orchestrator = orchestratorFactory({
-      appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog,
+      appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog, mcpCatalog,
+      aut03TrialRunIds,
       checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, stagingLog, activityStore, evidenceStore, sessionThreads,
       parallelWriters: worktreeMode,
       ...(acceptanceScratch ? { acceptanceScratch } : {}),
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
-      roles, appServer, workspace, baseUrl, admission, usageLedger, activityStore, skillCatalog,
+      roles, appServer, workspace, baseUrl, admission, usageLedger, activityStore, skillCatalog, mcpCatalog,
       stagingLog,
       lanes: worktreeMode ? lanes : null,
       taskStoreFactory: (roleId) => createTaskStore(state, roleId),

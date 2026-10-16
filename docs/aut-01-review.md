@@ -52,6 +52,8 @@ can be considered equivalent. No runtime gate, enrollment, installed skill,
 model call, product repair, planned product test or live project action follows
 from this offline acceptance.
 
-Next: assess a separate intervention plan after the requested quota boundary.
+Next: [AUT-02 fresh-target review recovery](aut-02-fresh-review-runbook.md),
+a separately scoped qualification and intervention. Its runbook is prepared;
+implementation and live execution have not started.
 AUT-01 source and evidence are retained as a separate change following the
 AUT-05 baseline commit `a3b28a5`.

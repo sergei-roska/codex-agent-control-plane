@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: active budget parks an actual stale A2A continuation before recovery planning
+ok 1 - active budget parks an actual stale A2A continuation before recovery planning
+  ---
+  duration_ms: 186.277556
+  type: 'test'
+  ...
+# Subtest: retry exhaustion blocks recovery after an actual stale A2A continuation
+ok 2 - retry exhaustion blocks recovery after an actual stale A2A continuation
+  ---
+  duration_ms: 145.832599
+  type: 'test'
+  ...
+# Subtest: cancellation blocks recovery after an actual stale A2A continuation
+ok 3 - cancellation blocks recovery after an actual stale A2A continuation
+  ---
+  duration_ms: 125.503623
+  type: 'test'
+  ...
+# Subtest: an unresolved writer blocks recovery after an actual stale A2A continuation
+ok 4 - an unresolved writer blocks recovery after an actual stale A2A continuation
+  ---
+  duration_ms: 113.90208
+  type: 'test'
+  ...
+# Subtest: owner pause parks before recovery selection after a stale scope continuation rejection
+ok 5 - owner pause parks before recovery selection after a stale scope continuation rejection
+  ---
+  duration_ms: 92.336012
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 967.228249

@@ -1,0 +1,277 @@
+{
+  "version": 1,
+  "workspace": "<workspace>",
+  "assignments": [
+    {
+      "role": "orch-builder",
+      "assignmentId": "run-1:r1:a0",
+      "attemptId": null,
+      "checkpointId": "aut-02-changed-candidate",
+      "kind": "risk_change",
+      "hasContinuation": false
+    },
+    {
+      "role": "orch-verifier",
+      "assignmentId": "run-1:r2:a0",
+      "attemptId": null,
+      "checkpointId": "aut-02-changed-candidate",
+      "kind": "risk_change",
+      "hasContinuation": false
+    },
+    {
+      "role": "orch-auditor",
+      "assignmentId": "run-1:r2:a1",
+      "attemptId": null,
+      "checkpointId": "aut-02-changed-candidate",
+      "kind": "risk_change",
+      "hasContinuation": false
+    },
+    {
+      "role": "orch-verifier",
+      "assignmentId": "run-1:r3:a0",
+      "attemptId": null,
+      "checkpointId": "aut-02-changed-candidate",
+      "kind": "risk_change",
+      "hasContinuation": false
+    },
+    {
+      "role": "orch-auditor",
+      "assignmentId": "run-1:r4:a0",
+      "attemptId": null,
+      "checkpointId": "aut-02-changed-candidate",
+      "kind": "risk_change",
+      "hasContinuation": false
+    }
+  ],
+  "serviceSendCount": 0,
+  "serviceSends": [],
+  "workerCalls": null,
+  "obligations": [
+    {
+      "checkpointId": "aut-02-changed-candidate",
+      "kind": "risk_change",
+      "prerequisiteCount": 0,
+      "pendingWriterCount": 0,
+      "receipts": [
+        {
+          "role": "verifier",
+          "status": "accepted",
+          "target": "review-target/v1:c7cffed0ca538b8ba69200957d17cf4768cbbd250b5d1746b3e530a038814e6a"
+        },
+        {
+          "role": "auditor",
+          "status": "inconclusive",
+          "target": "review-target/v1:c7cffed0ca538b8ba69200957d17cf4768cbbd250b5d1746b3e530a038814e6a"
+        },
+        {
+          "role": "verifier",
+          "status": "accepted",
+          "target": "review-target/v1:4e3a53080de1632e9b6a3e37f2910d07ce65b4779b4628d4d6bede1b7bfae594"
+        },
+        {
+          "role": "auditor",
+          "status": "accepted",
+          "target": "review-target/v1:4e3a53080de1632e9b6a3e37f2910d07ce65b4779b4628d4d6bede1b7bfae594"
+        }
+      ]
+    }
+  ],
+  "staging": [
+    {
+      "type": "review_target",
+      "role": "engineer",
+      "status": "known",
+      "assignmentId": "run-1:r1:a0",
+      "attemptId": "run-1:r1:a0:t1",
+      "target": "review-target/v1:c7cffed0ca538b8ba69200957d17cf4768cbbd250b5d1746b3e530a038814e6a",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": null,
+      "phase": "before_submit",
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_target",
+      "role": "verifier",
+      "status": "known",
+      "assignmentId": "run-1:r2:a0",
+      "attemptId": "run-1:r2:a0:t1",
+      "target": "review-target/v1:c7cffed0ca538b8ba69200957d17cf4768cbbd250b5d1746b3e530a038814e6a",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": null,
+      "phase": "before_submit",
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_result",
+      "role": "verifier",
+      "status": "accepted",
+      "assignmentId": "run-1:r2:a0",
+      "attemptId": "run-1:r2:a0:t1",
+      "target": "review-target/v1:c7cffed0ca538b8ba69200957d17cf4768cbbd250b5d1746b3e530a038814e6a",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": null,
+      "phase": null,
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": false,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_target",
+      "role": "auditor",
+      "status": "known",
+      "assignmentId": "run-1:r2:a1",
+      "attemptId": "run-1:r2:a1:t1",
+      "target": "review-target/v1:c7cffed0ca538b8ba69200957d17cf4768cbbd250b5d1746b3e530a038814e6a",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": null,
+      "phase": "before_submit",
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_result",
+      "role": "auditor",
+      "status": "inconclusive",
+      "assignmentId": "run-1:r2:a1",
+      "attemptId": "run-1:r2:a1:t1",
+      "target": "review-target/v1:c7cffed0ca538b8ba69200957d17cf4768cbbd250b5d1746b3e530a038814e6a",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": null,
+      "phase": null,
+      "reason": "role_service_review_coverage_unknown",
+      "trigger": null,
+      "verifierTestWrite": false,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_target",
+      "role": "auditor",
+      "status": "stale",
+      "assignmentId": "run-1:r2:a1:c1",
+      "attemptId": "run-1:r2:a1:c1:t1",
+      "target": "review-target/v1:c7cffed0ca538b8ba69200957d17cf4768cbbd250b5d1746b3e530a038814e6a",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": null,
+      "phase": "before_continuation",
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": false
+    },
+    {
+      "type": "review_gate_skipped",
+      "role": "auditor",
+      "status": "stale_review_continuation",
+      "assignmentId": "run-1:r2:a1:c1",
+      "attemptId": "run-1:r2:a1:c1:t1",
+      "target": "review-target/v1:c7cffed0ca538b8ba69200957d17cf4768cbbd250b5d1746b3e530a038814e6a",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": null,
+      "phase": null,
+      "reason": "The review target changed while the prior role turn was usage-limited; start a fresh review of the current target.",
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": null
+    },
+    {
+      "type": "review_recovery",
+      "role": "verifier",
+      "status": "verifier_queued",
+      "assignmentId": "run-1:r2:a1:c1",
+      "attemptId": "run-1:r2:a1:c1:t1",
+      "target": "review-target/v1:4e3a53080de1632e9b6a3e37f2910d07ce65b4779b4628d4d6bede1b7bfae594",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": 1,
+      "phase": null,
+      "reason": null,
+      "trigger": "stale_review_continuation",
+      "verifierTestWrite": null,
+      "currentTargetMatches": null
+    },
+    {
+      "type": "review_target",
+      "role": "verifier",
+      "status": "known",
+      "assignmentId": "run-1:r3:a0",
+      "attemptId": "run-1:r3:a0:t1",
+      "target": "review-target/v1:4e3a53080de1632e9b6a3e37f2910d07ce65b4779b4628d4d6bede1b7bfae594",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": null,
+      "phase": "before_submit",
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_result",
+      "role": "verifier",
+      "status": "accepted",
+      "assignmentId": "run-1:r3:a0",
+      "attemptId": "run-1:r3:a0:t1",
+      "target": "review-target/v1:4e3a53080de1632e9b6a3e37f2910d07ce65b4779b4628d4d6bede1b7bfae594",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": null,
+      "phase": null,
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": false,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_recovery",
+      "role": "auditor",
+      "status": "auditor_queued",
+      "assignmentId": "run-1:r2:a1:c1",
+      "attemptId": "run-1:r2:a1:c1:t1",
+      "target": "review-target/v1:4e3a53080de1632e9b6a3e37f2910d07ce65b4779b4628d4d6bede1b7bfae594",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": 1,
+      "phase": null,
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": null
+    },
+    {
+      "type": "review_target",
+      "role": "auditor",
+      "status": "known",
+      "assignmentId": "run-1:r4:a0",
+      "attemptId": "run-1:r4:a0:t1",
+      "target": "review-target/v1:4e3a53080de1632e9b6a3e37f2910d07ce65b4779b4628d4d6bede1b7bfae594",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": null,
+      "phase": "before_submit",
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": null,
+      "currentTargetMatches": true
+    },
+    {
+      "type": "review_result",
+      "role": "auditor",
+      "status": "accepted",
+      "assignmentId": "run-1:r4:a0",
+      "attemptId": "run-1:r4:a0:t1",
+      "target": "review-target/v1:4e3a53080de1632e9b6a3e37f2910d07ce65b4779b4628d4d6bede1b7bfae594",
+      "checkpointId": "aut-02-changed-candidate",
+      "generation": null,
+      "phase": null,
+      "reason": null,
+      "trigger": null,
+      "verifierTestWrite": false,
+      "currentTargetMatches": true
+    }
+  ],
+  "recoveryGenerationCount": 1
+}

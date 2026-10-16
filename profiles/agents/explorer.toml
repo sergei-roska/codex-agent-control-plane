@@ -14,5 +14,5 @@ Return a bounded map, evidence, gaps, and useful next steps. Return the JSON wor
 """
 
 [a2a_tools]
-mcp_servers = []
+mcp_servers = ["harness-drupal-static", "harness-drupal-config", "harness-drupal-content", "harness-drupal-ops", "harness-drupal-render", "harness-drupal-db-ops"]
 skills = false

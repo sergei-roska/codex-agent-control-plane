@@ -696,7 +696,16 @@ Exit evidence: representative plans yield a complete traceability map, every
 derived task passes the dispatch contract, and analysis detects seeded coverage,
 dependency, and scope-boundary defects without changing files.
 
-### AUT-02 - Fresh-target review recovery [P1, idea]
+### AUT-02 - Fresh-target review recovery [P1, accepted]
+
+AUT-02 is accepted for deterministic offline fresh-target recovery. The focused
+qualification passed 333 tests with 0 failures and 2 sandbox-specific skips;
+the full project suite passed 1207 tests with 0 failures and 1 explicitly gated
+live-probe skip. Q01 passed 2/2, Q11 passed 5/5, and independent verifier and
+auditor reviews approved the mandatory Q01-Q14 evidence. See the
+[acceptance decision](evidence/aut-02/acceptance.json),
+[review](aut-02-review.md), [baseline/final comparison](evidence/aut-02/comparison.md),
+and [qualification status](evidence/aut-02/qualification-status.json).
 
 When an implementation changes a reviewed candidate, invalidate its old
 receipts and require a verifier, followed by an auditor where the checkpoint
@@ -710,7 +719,15 @@ automatically dispatches a correctly bound fresh review, and the current-target
 verifier/auditor receipts pass without a repeated preflight rejection or gate
 bypass.
 
-### AUT-03 - Lead spec-decomposition skill [P2, idea]
+### AUT-03 - Lead spec-decomposition skill [P2, offline delivery qualified; paired trial pending]
+
+The [AUT-03 runbook](aut-03-lead-decomposition-runbook.md) is prepared and
+independently approved in [its review record](evidence/aut-03/runbook-review.md).
+Its AUT-02 acceptance entry condition is satisfied. AUT-03 implementation has
+completed for offline lead-only delivery and deterministic plumbing; final
+audit approved. The independent case set and delivery verification are recorded under
+`docs/evidence/aut-03/`. No live baseline or paired planning trial was captured;
+quality and economy remain unqualified pending a separately authorized cohort.
 
 Trial one versioned, hash-pinned skill for converting a short user goal and
 canonical project documents into a roadmap, requirement map, dependency-ordered
@@ -718,11 +735,13 @@ tasks, and a dispatch-readiness report. Keep user authority, scope boundaries,
 and the existing assignment contract explicit. Prefer the skill over expanding
 the global system prompt; enable it only for the lead during the pilot.
 
-Exit evidence: on the autonomy regression set, the lead preserves all explicit
-constraints, identifies missing decisions rather than inventing them, and
-produces dispatchable tasks with no coverage or dependency defects. Retain the
-skill only if it improves these outcomes without unacceptable prompt or token
-growth.
+The offline exit covers a trusted lead-only pin, worker isolation, resume and
+rollover behavior, and unchanged lead tool policy. Full AUT-03 exit still
+requires the authorized paired trial: on the autonomy regression set, the lead
+must preserve all explicit constraints, identify missing decisions rather
+than inventing them, and produce dispatchable tasks with no coverage or
+dependency defects. Retain the skill only if it improves these outcomes without
+unacceptable prompt or token growth.
 
 ### AUT-04 - Read-only structured evidence tools [P2, idea]
 

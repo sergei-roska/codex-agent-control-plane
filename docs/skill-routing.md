@@ -8,6 +8,13 @@ agent metadata, and evaluation files are included. This copy makes the runtime
 independent of that source directory. The existing `orch-*` team skills remain
 outside the imported library.
 
+`profiles/skills/routing-policy.json` gates assignment availability. The
+individual audit and rationale for every current source skill are in
+`docs/skill-routing-audit.md`. Only the five KEEP entries are currently
+selectable for worker assignments. ADAPT and DEFER folders stay copied but are
+excluded from the runtime catalog until adapted or reconsidered. The separate
+internal AUT-03 lead skill remains controlled by its existing trial allowlist.
+
 Importing a folder does not execute its scripts, install its dependencies, or
 connect an MCP server. For example, codebase indexing and search skills still
 need their corresponding MCP services. These are governed by each role's
@@ -15,12 +22,12 @@ existing `a2a_tools.mcp_servers` policy.
 
 ## Selection
 
-The runtime builds a trusted catalog from the library's `SKILL.md` metadata.
-Each entry has an ID, description, local path, and SHA256 instruction hash.
-The lead sees all compact IDs and a shortlist containing at most 12 relevant
-descriptions. The shortlist uses lexical matching as a hint; the lead can choose
-any trusted catalog ID based on the task's meaning, including tasks written in
-a different language from the skill description.
+The runtime builds a trusted catalog from active library entries and their
+`SKILL.md` metadata. Each entry has an ID, description, local path, and SHA256
+instruction hash. The lead sees active IDs and a shortlist containing at most
+12 relevant descriptions. The shortlist uses lexical matching as a hint; the
+lead can choose any trusted active ID based on the task's meaning, including
+tasks written in a different language from the skill description.
 
 Every new structured assignment includes `skills`, an array of zero to five
 unique IDs. Unrelated tasks can use `[]`. Older assignment payloads without
@@ -33,7 +40,8 @@ hashes. Both the assignment and its pins are retained in the dispatch checkpoint
 Before a worker starts, the A2A executor resolves and validates the selection.
 The Codex client sends the selected skills as explicit `skill` input items in
 `turn/start`. Full instruction bodies are loaded for selected skills only.
-The global skill listing, plugins, apps, and existing MCP policy are unchanged.
+Plugins and apps remain disabled for worker roles. Drupal MCP access is separately
+selected through `mcpTools`; see `docs/mcp-routing.md`.
 
 ## Boundaries and provenance
 

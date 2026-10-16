@@ -1,0 +1,46 @@
+TAP version 13
+# Subtest: a stale usage-limited auditor recovers before another lead decision
+not ok 1 - a stale usage-limited auditor recovers before another lead decision
+  ---
+  duration_ms: 177.107735
+  type: 'test'
+  location: '/home/sr/Projects/Workspace/codex-agent-control-plane/test/lead-graph.test.js:3479:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        'orch-verifier',
+        'orch-auditor',
+    -   'orch-verifier',
+    -   'orch-auditor'
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 'orch-verifier'
+    1: 'orch-auditor'
+    2: 'orch-verifier'
+    3: 'orch-auditor'
+  actual:
+    0: 'orch-verifier'
+    1: 'orch-auditor'
+  operator: 'deepStrictEqual'
+  stack: |-
+    withSession.workspace.workspace (/home/sr/Projects/Workspace/codex-agent-control-plane/test/lead-graph.test.js:3516:12)
+    async withSession (/home/sr/Projects/Workspace/codex-agent-control-plane/test/lead-graph.test.js:308:12)
+    async TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/lead-graph.test.js:3503:3)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 404.225231

@@ -1,0 +1,30 @@
+{
+    "name": "drupal-mcp/db-ops",
+    "description": "Read Drupal operational and configuration data directly from SQL when a bootstrapped Drupal runtime is unavailable.",
+    "type": "project",
+    "require": {
+        "php": ">=8.1",
+        "mcp/sdk": "^0.6.0",
+        "drupal-mcp/shared-args": "@dev",
+        "symfony/yaml": "^6.0 || ^7.0"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../shared-args",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "DrupalMcp\\DbOps\\": "src/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    }
+}

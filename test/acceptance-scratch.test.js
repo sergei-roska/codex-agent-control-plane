@@ -30,6 +30,19 @@ const CONFIG = (baseDir) => ({ env: ['TEAMWORK_TEST_SCRATCH_ROOT'], baseDir });
 // The base of these tests lives in the OS temp dir, which the production default refuses.
 const OPEN = { scratchForbiddenRoots: [] };
 const tick = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function isWritableDirectory(directory) {
+  try {
+    fs.accessSync(directory, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function varTmpSkipReason() {
+  if (!fs.existsSync('/var/tmp')) return '/var/tmp is unavailable';
+  if (!isWritableDirectory('/var/tmp')) return 'sandbox does not permit writing to /var/tmp';
+  return false;
+}
 
 function recordingExec(onCall, reply = { exitCode: 0, stdout: '', stderr: '' }) {
   const calls = [];
@@ -218,7 +231,7 @@ test('the default refuses a base inside /tmp or the temp dir, and the workspace'
   fs.rmSync(inTmp, { recursive: true, force: true });
 });
 
-test('the default accepts a base outside /tmp and the workspace (real path, 0700)', { skip: !fs.existsSync('/var/tmp') }, () => {
+test('the default accepts a base outside /tmp and the workspace (real path, 0700)', { skip: varTmpSkipReason() }, () => {
   const ws = repo();
   const root = fs.realpathSync(fs.mkdtempSync('/var/tmp/scratch-default-'));
   try {

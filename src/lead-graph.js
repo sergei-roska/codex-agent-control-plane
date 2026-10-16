@@ -9,13 +9,18 @@ const {
 const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
 const {
   DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, BoundaryViolation, parseWorkerReport, classifyCodexError, executionGroups,
-  checkDecisionRecordsShape,
+  checkDecisionRecordsShape, safeRelativePath,
 } = require('./contracts');
 const {
   runAcceptance, assessWithoutChecks, unrunAcceptance, validateAgentChecks, AGENT_CHECK_TOOLS, currentPins, repinChecks, describePinChanges,
 } = require('./acceptance');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
 const { loadSkillCatalog, findSkillCandidates, resolveSkillSelection } = require('./skill-catalog');
+const { loadMcpCatalog, findMcpToolCandidates, resolveMcpToolSelection, mcpToolPins } = require('./mcp-catalog');
+const {
+  AUT03_SKILL_ID, AUT03_SKILL_SHA256, expectedLeadSkillContext,
+  resolveLeadSelectedSkills, sameLeadSkillContext,
+} = require('./aut03-lead-skill');
 const { canonicalRoleId, getRole, roleDisplayName } = require('./role-names');
 const { InMemoryStagingLog } = require('./staging-log');
 const {
@@ -44,6 +49,9 @@ const TEXT_EVIDENCE_THRESHOLD = TEXT_PROJECTION_HEAD + TEXT_PROJECTION_TAIL;
 const DIGEST_SUMMARY_CHARS = 300;
 const REPORT_CAPS = { filesChanged: 100, filesInspected: 20, risks: 20, checks: 20, scopeExpansion: 20 };
 const REPORT_ITEM_CHARS = 500;
+const REVIEW_RECOVERY_VERSION = 1;
+const MAX_REVIEW_RECOVERY_CHECKPOINTS = 40;
+const MAX_REVIEW_RECOVERY_GENERATIONS = 2;
 const PROJECT_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'];
 const CANCELED_TEXT = 'Canceled after all active A2A tasks were confirmed stopped.';
 const REPORT_CONTRACT_LINE = `Reply with a single JSON object matching the ${WORKER_REPORT_CONTRACT} report schema `
@@ -169,6 +177,12 @@ function assignmentResult(task, { onOversize } = {}) {
   const joined = artifactTexts.filter(Boolean).join('\n');
   const text = joined || statusMessage || history.at(-1) || '';
   const failureKind = status?.message?.metadata?.failureKind;
+  const serviceBoundary = status?.message?.metadata?.boundary;
+  const serviceBoundaryResults = Array.isArray(serviceBoundary?.results) ? serviceBoundary.results.slice(0, 10).map((entry) => ({
+    predicate: typeof entry?.predicate === 'string' ? entry.predicate.slice(0, 80) : null,
+    code: typeof entry?.code === 'string' ? entry.code.slice(0, 80) : null,
+    result: typeof entry?.result === 'string' ? entry.result.slice(0, 32) : null,
+  })) : [];
   const writerExecution = artifacts.map((artifact) => artifact.metadata?.writerExecution).find((entry) => entry && typeof entry === 'object')
     || (status?.message?.metadata?.writerExecution && typeof status.message.metadata.writerExecution === 'object' ? status.message.metadata.writerExecution : null);
   const effects = status?.message?.metadata?.effects;
@@ -221,6 +235,7 @@ function assignmentResult(task, { onOversize } = {}) {
     ...(typeof failureKind === 'string' ? { failureKind } : {}),
     ...(writerExecution ? { writerExecution } : {}),
     ...(typeof effects === 'string' ? { effects } : {}),
+    ...(serviceBoundaryResults.length > 0 ? { serviceBoundary: { results: serviceBoundaryResults } } : {}),
     ...(continuation && typeof continuation === 'object' && !Array.isArray(continuation) ? { continuation } : {}),
     ...(reviewCoverage ? { reviewCoverage } : {}),
     ...(reviewResultMetadata ? { reviewResult: reviewResultMetadata } : {}),
@@ -246,8 +261,8 @@ function sha256(text) {
 }
 
 // Pinned run context: workspace, role/team rules, and project instruction files.
-function readPinned({ roles, leadRole, workspace, skillCatalog }) {
-  const rules = [...roles.values()].map((role) => [role.name, role.sandbox, role.model, role.effort, role.instructions || ''])
+function readPinned({ roles, leadRole, workspace, skillCatalog, mcpCatalog }) {
+  const rules = [...roles.values()].map((role) => [role.name, role.sandbox, role.model, role.effort, role.instructions || '', role.tools?.mcpServers || [], role.tools?.skills === true])
     .sort((a, b) => (a[0] < b[0] ? -1 : 1));
   const projectInstructions = [];
   for (const name of PROJECT_INSTRUCTION_FILES) {
@@ -262,12 +277,21 @@ function readPinned({ roles, leadRole, workspace, skillCatalog }) {
     projectInstructions,
     skills: [...(skillCatalog || new Map()).values()].map(({ id, sha256: hash }) => ({ id, sha256: hash }))
       .sort((a, b) => a.id.localeCompare(b.id)),
+    mcpTools: [...(mcpCatalog || new Map()).values()].map(({ id, sha256: hash }) => ({ id, sha256: hash }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
   };
 }
 
 // Per-role profile hash pinned into each attempt's boundary contract.
 function roleProfileSha256(role) {
-  return sha256(JSON.stringify([role.name, role.sandbox, role.model, role.effort, role.instructions || '']));
+  return sha256(JSON.stringify([role.name, role.sandbox, role.model, role.effort, role.instructions || '', role.tools?.mcpServers || [], role.tools?.skills === true]));
+}
+
+function legacyRoleProfileHashesWithoutMcp(role) {
+  const profile = [role.name, role.sandbox, role.model, role.effort, role.instructions || ''];
+  const hashes = new Set([sha256(JSON.stringify([...profile, role.tools?.skills === true]))]);
+  if (role.tools?.skills !== true) hashes.add(sha256(JSON.stringify(profile)));
+  return hashes;
 }
 
 const BOUNDARY_CONTRACT_ID = 'boundary-contract/v1';
@@ -607,12 +631,14 @@ const RULE_REMINDERS = {
   'decision.investigate_first': `Investigate first: dispatch a read-only explorer first; use auditor only for a concrete risk-boundary question. ${INVESTIGATION_RULE} ${OWNER_ONLY_RULE}`,
   'decision.acceptance_checks': `${CHECK_RULE} Use null to propose nothing.`,
   'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds when it is owner-only; a dispatch of only read-only roles may leave them open while you investigate them.',
-  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, continueFrom, and review; role must be an available role id.',
+  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, mcpTools, wave, continueFrom, and review; role must be an available role id.',
   'assignment.review': 'Use review:null for unrelated read-only or non-material administrative/document work. Material implementation declares {kind, checkpointId, reason, paths, evidenceIds, prerequisiteFor}, using prerequisiteFor:[] by default. Verifier and auditor must cite the same checkpoint, scope, reason, evidence IDs, and prerequisiteFor. A new gated verifier may link the exact complete set of pending critical checkpoint IDs; its matching auditor repeats the list. Routine material work needs verifier evidence; critical work needs verifier then auditor evidence.',
   'decision.review_gate': 'A required review receipt is missing, failed, stale, or has unknown target identity. Dispatch the verifier first; for critical work dispatch the auditor after a passing verifier. A single new gated verifier may cross pending critical gates only when it links their exact complete ID set and has no co-dispatched writer; its auditor repeats that link. All original and new critical checkpoints still need current-target verifier and auditor receipts before finish. Repair may continue under the same checkpoint; unrelated writers wait for critical audit completion.',
   'assignment.continue_from': 'continueFrom is null or the assignmentId of a finished outcome of this run with the same role; each such id may be used by one assignment of a decision.',
   'assignment.wave': 'wave is an integer >= 1 or null; consecutive assignments with the same wave run concurrently, and writers in one wave need pairwise disjoint allowedFiles. Reviewers cannot share a wave with writers; run verifier before auditor in successive execution groups of the same decision when possible.',
   'assignment.skills': 'Select at most 5 unique skill IDs from the trusted listed skill IDs; use [] when none apply.',
+  'assignment.mcp_tools': 'Select the minimum useful MCP tool IDs for the exact task. Use [] by default and never exceed 5 unique IDs. Only select IDs listed in the trusted MCP catalog; live Drupal tools can return sensitive data, and drupal-db-ops includes settings.php execution.',
+  'dispatch.mcp_tool_pins': 'The selected MCP tool catalog changed after planning. Re-read the current catalog and select tools again before dispatch.',
   'assignment.role_ladder': 'Respect the role ladder: recovery-engineer follows an engineer attempt, senior-engineer follows recovery-engineer, and architect needs prior evidence and one narrow decision.',
   'dispatch.writer_unresolved': 'Do not dispatch writable roles while writer outcomes are unresolved; use read-only roles.',
 };
@@ -623,12 +649,14 @@ const LeadState = Annotation.Root({
   goal: last(() => ''),
   runId: last(() => ''),
   pinned: last(() => null),
+  leadSkillContext: last(() => null),
   threadId: last(() => null),
   round: last(() => 0),
   attemptedRoles: last(() => []),
   outcomes: last(() => []),
   pendingAssignments: last(() => null),
   reviewObligations: last(() => []),
+  reviewRecovery: last(() => ({ version: REVIEW_RECOVERY_VERSION, checkpoints: [] })),
   batch: last(() => null),
   openDecisions: last(() => []),
   closedDecisions: last(() => []),
@@ -685,6 +713,7 @@ const LeadState = Annotation.Root({
  *   emit(onEvent, event), checkpointer?,
  *   admission?: WriterAdmission, reconcileWaitMs?: number,
  *   sessionThreads?: SessionThreads, sessionDigest?({ contextId, runId, runIds, state }) -> string, rolloverTokens?: number,
+ *   aut03TrialRunIds?: Set<string>, aut03SkillPin?: { id, sha256 },
  *   parallelWriters?: boolean, usageLedger?: UsageLedger, activityStore?: ActivityStore, evidenceStore?: EvidenceStore, runCheckImpl?, snapshot?,
  *   acceptanceScratch?: { env: string[], baseDir: string } (owner setting),
  *   stagingLog?: StagingLog,
@@ -696,6 +725,9 @@ function buildLeadGraph(deps) {
     appServer, roles, leadRole, workspace, maxRounds, journal, pollIntervalMs,
   } = deps;
   const skillCatalog = deps.skillCatalog || loadSkillCatalog();
+  const mcpCatalog = deps.mcpCatalog || loadMcpCatalog();
+  const trialRunIds = deps.aut03TrialRunIds instanceof Set ? deps.aut03TrialRunIds : new Set();
+  const skillPin = deps.aut03SkillPin || { id: AUT03_SKILL_ID, sha256: AUT03_SKILL_SHA256 };
   const { admission } = deps;
   const stagingLog = deps.stagingLog || new InMemoryStagingLog();
   const reconcileWaitMs = Number.isFinite(deps.reconcileWaitMs) ? deps.reconcileWaitMs : DEFAULT_RECONCILE_WAIT_MS;
@@ -710,6 +742,422 @@ function buildLeadGraph(deps) {
     const base = { type, ...event };
     const eventId = `stage:v1:${sha256(JSON.stringify(base))}`;
     return stagingLog.record({ eventId, ...base });
+  }
+
+  function validReviewRecovery(value) {
+    const validTemplate = (role, template) => template && typeof template === 'object' && !Array.isArray(template)
+      && canonicalRoleId(template.role) === role
+      && Array.isArray(template.allowedFiles) && template.allowedFiles.length <= 20
+      && template.allowedFiles.every((file) => typeof file === 'string' && file.length > 0 && file.length <= 3000)
+      && Array.isArray(template.skills) && template.skills.length <= 5
+      && template.skills.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 128)
+      && Array.isArray(template.skillPins) && template.skillPins.length <= 5
+      && template.skillPins.every((pin) => pin && typeof pin.id === 'string' && typeof pin.sha256 === 'string'
+        && /^[a-f0-9]{64}$/.test(pin.sha256))
+      && (template.mcpTools === undefined || (Array.isArray(template.mcpTools) && template.mcpTools.length <= 5
+        && template.mcpTools.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 160)))
+      && (template.mcpToolPins === undefined || (Array.isArray(template.mcpToolPins) && template.mcpToolPins.length <= 5
+        && template.mcpToolPins.every((pin) => pin && typeof pin.id === 'string' && typeof pin.sha256 === 'string'
+          && /^[a-f0-9]{64}$/.test(pin.sha256))))
+      && typeof template.roleProfileSha256 === 'string' && /^[a-f0-9]{64}$/.test(template.roleProfileSha256);
+    return Boolean(value && value.version === REVIEW_RECOVERY_VERSION && Array.isArray(value.checkpoints)
+      && value.checkpoints.length <= MAX_REVIEW_RECOVERY_CHECKPOINTS
+      && new Set(value.checkpoints.map((entry) => entry?.checkpointId)).size === value.checkpoints.length
+      && value.checkpoints.every((entry) => entry && entry.version === REVIEW_RECOVERY_VERSION
+        && typeof entry.checkpointId === 'string' && entry.checkpointId.length > 0 && entry.checkpointId.length <= 160
+        && typeof entry.contextHash === 'string' && /^[a-f0-9]{64}$/.test(entry.contextHash)
+        && Number.isInteger(entry.generation) && entry.generation >= 0
+        && entry.generation <= MAX_REVIEW_RECOVERY_GENERATIONS
+        && (entry.blockedReason === undefined || entry.blockedReason === null
+          || (typeof entry.blockedReason === 'string' && entry.blockedReason.length > 0 && entry.blockedReason.length <= 128))
+        && (entry.lastRecoveryTarget === null || (typeof entry.lastRecoveryTarget === 'string' && entry.lastRecoveryTarget.length <= 256))
+        && (entry.sourceAssignmentId === null || (typeof entry.sourceAssignmentId === 'string' && entry.sourceAssignmentId.length <= 256))
+        && (entry.sourceAttemptId === null || (typeof entry.sourceAttemptId === 'string' && entry.sourceAttemptId.length <= 256))
+        && ['idle', 'verifier_pending', 'auditor_pending', 'complete', 'replan_required'].includes(entry.phase)
+        && entry.templates && typeof entry.templates === 'object' && !Array.isArray(entry.templates)
+        && Object.keys(entry.templates).every((role) => ['verifier', 'auditor'].includes(role)
+          && validTemplate(role, entry.templates[role]))));
+  }
+
+  function reviewContextHash(review) {
+    return sha256(JSON.stringify({
+      kind: review.kind,
+      checkpointId: review.checkpointId,
+      reason: review.reason,
+      paths: [...review.paths].sort(),
+      evidenceIds: [...review.evidenceIds].sort(),
+      prerequisiteFor: [...(review.prerequisiteFor || [])].sort(),
+    }));
+  }
+
+  function captureReviewRecoveryTemplates(previous, assignments) {
+    if (!validReviewRecovery(previous)) return previous;
+    const checkpoints = previous.checkpoints.map((entry) => ({ ...entry, templates: { ...entry.templates } }));
+    for (const assignment of assignments) {
+      const role = canonicalRoleId(assignment.role);
+      if (!['verifier', 'auditor'].includes(role) || !assignment.review
+        || (!isGatedReview(assignment.review) && assignment.review.kind !== 'routine')) continue;
+      const profile = getRole(roles, assignment.role);
+      if (!profile) continue;
+      const contextHash = reviewContextHash(assignment.review);
+      let entry = checkpoints.find((candidate) => candidate.checkpointId === assignment.review.checkpointId);
+      if (!entry) {
+        if (checkpoints.length >= MAX_REVIEW_RECOVERY_CHECKPOINTS) continue;
+        entry = {
+          version: REVIEW_RECOVERY_VERSION,
+          checkpointId: assignment.review.checkpointId,
+          contextHash,
+          generation: 0,
+          lastRecoveryTarget: null,
+          phase: 'idle',
+          blockedReason: null,
+          sourceAssignmentId: null,
+          sourceAttemptId: null,
+          templates: {},
+        };
+        checkpoints.push(entry);
+      }
+      if (entry.contextHash !== contextHash) continue;
+      entry.templates[role] = {
+        role: assignment.role,
+        allowedFiles: [...(assignment.allowedFiles || [])],
+        skills: [...(assignment.skills || [])],
+        skillPins: (assignment.skillPins || []).map(({ id, sha256: hash }) => ({ id, sha256: hash })),
+        mcpTools: [...(assignment.mcpTools || [])],
+        mcpToolPins: (assignment.mcpToolPins || []).map(({ id, sha256: hash }) => ({ id, sha256: hash })),
+        roleProfileSha256: roleProfileSha256(profile),
+      };
+    }
+    for (const assignment of assignments) {
+      const review = assignment.review;
+      if (canonicalRoleId(assignment.role) !== 'verifier' || !isGatedReview(review)) continue;
+      const entry = checkpoints.find((candidate) => candidate.checkpointId === review.checkpointId);
+      if (!entry || entry.contextHash !== reviewContextHash(review) || entry.templates.auditor) continue;
+      const auditor = [...roles.values()].find((profile) => canonicalRoleId(profile.name) === 'auditor' && profile.sandbox === 'read-only');
+      if (!auditor) continue;
+      entry.templates.auditor = {
+        role: auditor.name,
+        allowedFiles: [],
+        skills: [],
+        skillPins: [],
+        mcpTools: [],
+        mcpToolPins: [],
+        roleProfileSha256: roleProfileSha256(auditor),
+      };
+    }
+    return { version: REVIEW_RECOVERY_VERSION, checkpoints };
+  }
+
+  function recoveryAssignment(state, entry, obligation, roleName) {
+    const template = entry?.templates?.[roleName];
+    const review = obligation?.review;
+    const mcpTools = Array.isArray(template?.mcpTools) ? template.mcpTools : [];
+    const mcpPins = Array.isArray(template?.mcpToolPins) ? template.mcpToolPins : [];
+    if (!validReviewRecovery(state.reviewRecovery) || !template || !review
+      || entry.contextHash !== reviewContextHash(review)
+      || canonicalRoleId(template.role) !== roleName
+      || !Array.isArray(template.allowedFiles) || !Array.isArray(template.skills)
+      || !Array.isArray(template.skillPins) || template.skills.length > 5
+      || mcpTools.length > 5 || mcpPins.length > 5
+      || template.allowedFiles.some((file) => !safeRelativePath(file))
+      || !Array.isArray(review.paths) || !Array.isArray(review.evidenceIds)) return null;
+    const profile = getRole(roles, template.role);
+    if (!profile) return null;
+    const currentProfileMatches = roleProfileSha256(profile) === template.roleProfileSha256;
+    const allowedMcpServers = profile.tools?.mcpServers;
+    const legacyMcpPolicyIsSafe = allowedMcpServers === undefined
+      || (Array.isArray(allowedMcpServers)
+        && allowedMcpServers.every((name) => typeof name === 'string' && mcpCatalog.servers.has(name)));
+    const toolFreeLegacyProfileMatches = template.skills.length === 0 && template.skillPins.length === 0
+      && mcpTools.length === 0 && mcpPins.length === 0
+      && legacyMcpPolicyIsSafe
+      && legacyRoleProfileHashesWithoutMcp(profile).has(template.roleProfileSha256);
+    if (!currentProfileMatches && !toolFreeLegacyProfileMatches) return null;
+    if (roleName === 'verifier') {
+      if (profile.sandbox === 'read-only' || template.allowedFiles.length === 0 || template.allowedFiles.length > 20
+        || template.allowedFiles.some((file) => typeof file !== 'string' || !isTestCheckPath(file, workspace))) return null;
+    } else if (profile.sandbox !== 'read-only' || template.allowedFiles.length !== 0) return null;
+    try {
+      resolveSkillSelection(skillCatalog, template.skills, { pins: template.skillPins });
+      resolveMcpToolSelection(mcpCatalog, mcpTools, {
+        pins: mcpPins,
+        allowedServers: profile.tools?.mcpServers || [],
+      });
+    } catch (_) {
+      return null;
+    }
+    return {
+      role: template.role,
+      objective: `Review the current workspace for checkpoint ${review.checkpointId}. The candidate changed after a prior review; use only the current target and stored checkpoint scope.`,
+      allowedFiles: [...template.allowedFiles],
+      inputs: [`Checkpoint: ${review.checkpointId}`],
+      evidence: [...review.evidenceIds],
+      acceptanceCriteria: [`Complete the ${roleName} review for the exact stored checkpoint context.`],
+      checks: roleName === 'verifier' ? ['Run the relevant checks within the stored verifier scope.'] : ['Evaluate the current target and report a verdict.'],
+      stopConditions: ['Stop if the current target, stored checkpoint context, or allowed scope is unavailable.'],
+      skills: [...template.skills],
+      skillPins: template.skillPins.map(({ id, sha256: hash }) => ({ id, sha256: hash })),
+      mcpTools: [...mcpTools],
+      mcpToolPins: mcpPins.map(({ id, sha256: hash }) => ({ id, sha256: hash })),
+      wave: null,
+      continueFrom: null,
+      review: {
+        kind: review.kind,
+        checkpointId: review.checkpointId,
+        reason: review.reason,
+        paths: [...review.paths],
+        evidenceIds: [...review.evidenceIds],
+        prerequisiteFor: [...(review.prerequisiteFor || [])],
+      },
+      _reviewRecovery: { version: REVIEW_RECOVERY_VERSION, checkpointId: review.checkpointId, generation: entry.generation, role: roleName },
+    };
+  }
+
+  function planAutomaticReviewRecovery(state, batch, obligations, unresolvedWriters, runtime, config) {
+    const original = state.reviewRecovery;
+    if (!validReviewRecovery(original)) {
+      for (const item of batch.items) {
+        if (item.reviewSkipped && ['stale_review_continuation', 'stale_review_target'].includes(item.result?.status)) {
+          recordStage('review_recovery', {
+            runId: state.runId,
+            assignmentId: item.assignmentId,
+            attemptId: item.attemptId,
+            role: canonicalRoleId(item.role),
+            status: 'blocked',
+            payload: { policyId: POLICY_ID, checkpointId: item.assignment?.review?.checkpointId || null, reason: 'recovery_state_invalid' },
+          });
+        }
+      }
+      return { recovery: original, pendingAssignments: null };
+    }
+    const checkpoints = original.checkpoints.map((entry) => ({ ...entry, templates: { ...entry.templates } }));
+    const recovery = { version: REVIEW_RECOVERY_VERSION, checkpoints };
+    let pendingAssignments = null;
+    const findObligation = (checkpointId) => obligations.find((entry) => entry.checkpointId === checkpointId);
+    const findRecovery = (checkpointId) => checkpoints.find((entry) => entry.checkpointId === checkpointId);
+    const blocked = (entry, reason) => {
+      entry.phase = 'replan_required';
+      entry.blockedReason = reason;
+      recordStage('review_recovery', {
+        runId: state.runId,
+        assignmentId: entry.sourceAssignmentId,
+        attemptId: entry.sourceAttemptId,
+        role: null,
+        status: 'blocked',
+        payload: { policyId: POLICY_ID, checkpointId: entry.checkpointId, generation: entry.generation, reason },
+      });
+    };
+    const admissionBlock = () => {
+      if (state.status) return 'run_status_set';
+      if (state.budget) return 'budget_gate_active';
+      if (ownerPauseRequested(config)) return 'owner_pause_requested';
+      if (runtime.signal?.aborted) return 'run_canceled';
+      if (batch.items.some((item) => item.result?.failureKind === 'usage_limit')) return 'worker_usage_limit';
+      if (unresolvedWriters.length > 0) return 'writer_unresolved';
+      const limit = roundLimit(state);
+      if (limit !== null && state.round >= limit) return 'dispatch_round_limit';
+      return null;
+    };
+
+    for (const item of batch.items) {
+      const marker = item.reviewRecovery;
+      if (!marker || marker.version !== REVIEW_RECOVERY_VERSION) continue;
+      const entry = findRecovery(marker.checkpointId);
+      const obligation = findObligation(marker.checkpointId);
+      if (!entry || !obligation || !obligationMatches(obligation, obligation.review)
+        || marker.generation !== entry.generation || marker.role !== canonicalRoleId(item.role)) continue;
+      const target = targetForReview({ ...state, reviewObligations: obligations }, obligation.review);
+      if (marker.role === 'verifier' && entry.phase === 'verifier_pending') {
+        if (item.result?.failureKind === 'usage_limit' && item.result.continuation) continue;
+        const verifierReceipt = latestReceiptEntry(obligation, 'verifier', target)?.receipt;
+        const freshVerifierAccepted = verifierReceipt?.status === 'accepted'
+          && verifierReceipt.assignmentId === item.assignmentId && verifierReceipt.attemptId === item.attemptId;
+        if (!target.known || !freshVerifierAccepted) {
+          blocked(entry, target.known ? 'fresh_verifier_not_accepted' : 'current_target_unknown');
+          continue;
+        }
+        if (!isGatedReview(obligation.review)) {
+          entry.phase = 'complete';
+          continue;
+        }
+        const auditor = recoveryAssignment({ ...state, reviewRecovery: recovery }, entry, obligation, 'auditor');
+        if (!auditor) {
+          blocked(entry, 'validated_auditor_template_unavailable');
+          continue;
+        }
+        entry.phase = 'auditor_pending';
+        pendingAssignments = [auditor];
+        recordStage('review_recovery', {
+          runId: state.runId,
+          assignmentId: entry.sourceAssignmentId,
+          attemptId: entry.sourceAttemptId,
+          role: 'auditor',
+          target: target.identity,
+          status: 'auditor_queued',
+          payload: { policyId: POLICY_ID, checkpointId: entry.checkpointId, generation: entry.generation },
+        });
+        break;
+      }
+      if (marker.role === 'auditor' && entry.phase === 'auditor_pending') {
+        if (item.result?.failureKind === 'usage_limit' && item.result.continuation) continue;
+        const receipt = latestReceiptEntry(obligation, 'auditor', target);
+        if (target.known && receipt?.receipt.status === 'accepted'
+          && receipt.receipt.assignmentId === item.assignmentId && receipt.receipt.attemptId === item.attemptId) {
+          entry.phase = 'complete';
+          entry.blockedReason = null;
+        }
+        else blocked(entry, target.known ? 'fresh_auditor_not_accepted' : 'current_target_unknown');
+      }
+    }
+
+    for (const item of batch.items) {
+      const review = item.assignment?.review;
+      const entry = review && findRecovery(review.checkpointId);
+      const obligation = review && findObligation(review.checkpointId);
+      if (!review || item.reviewRecovery || canonicalRoleId(item.role) !== 'verifier'
+        || entry?.phase !== 'replan_required'
+        || !['fresh_verifier_not_accepted', 'fresh_auditor_not_accepted'].includes(entry.blockedReason)
+        || !obligation || !obligationMatches(obligation, review)
+        || entry.contextHash !== reviewContextHash(review) || item.reviewSkipped || item.reviewReused) continue;
+      const target = targetForReview({ ...state, reviewObligations: obligations }, obligation.review);
+      const receipt = latestReceiptEntry(obligation, 'verifier', target);
+      if (!target.known || receipt?.receipt.status !== 'accepted'
+        || receipt.receipt.assignmentId !== item.assignmentId || receipt.receipt.attemptId !== item.attemptId) continue;
+      const bundledAuditor = batch.items.find((candidate) => candidate.state === 'finished'
+        && !candidate.reviewSkipped && !candidate.reviewRecovery
+        && canonicalRoleId(candidate.role) === 'auditor'
+        && obligationMatches(obligation, candidate.assignment?.review)
+        && Number.isInteger(candidate.group) && Number.isInteger(item.group)
+        && candidate.group > item.group);
+      if (bundledAuditor) {
+        const auditReceipt = latestReceiptEntry(obligation, 'auditor', target)?.receipt;
+        if (auditReceipt?.status === 'accepted' && auditReceipt.assignmentId === bundledAuditor.assignmentId
+          && auditReceipt.attemptId === bundledAuditor.attemptId) {
+          entry.phase = 'complete';
+          entry.blockedReason = null;
+        } else blocked(entry, 'fresh_auditor_not_accepted');
+        continue;
+      }
+      const auditor = recoveryAssignment({ ...state, reviewRecovery: recovery }, entry, obligation, 'auditor');
+      if (!auditor) {
+        blocked(entry, 'validated_auditor_template_unavailable');
+        continue;
+      }
+      entry.phase = 'auditor_pending';
+      pendingAssignments = [auditor];
+      recordStage('review_recovery', {
+        runId: state.runId,
+        assignmentId: item.assignmentId,
+        attemptId: item.attemptId,
+        role: 'auditor',
+        target: target.identity,
+        status: 'auditor_queued',
+        payload: { policyId: POLICY_ID, checkpointId: entry.checkpointId, generation: entry.generation, trigger: 'fresh_verifier_accepted' },
+      });
+      break;
+    }
+
+    const admissionFailure = admissionBlock();
+    if (pendingAssignments && admissionFailure) {
+      const entry = findRecovery(pendingAssignments[0]._reviewRecovery.checkpointId);
+      if (entry) blocked(entry, admissionFailure);
+      pendingAssignments = null;
+    }
+    if (pendingAssignments || admissionFailure) {
+      return { recovery, pendingAssignments };
+    }
+
+    for (const item of batch.items) {
+      const review = item.assignment?.review;
+      const role = canonicalRoleId(item.role);
+      if (!review || !['verifier', 'auditor'].includes(role) || review.kind === 'pinned_check') continue;
+      const resultStatus = item.result?.status;
+      const receipt = obligations.find((entry) => entry.checkpointId === review.checkpointId)?.receipts
+        ?.findLast((entry) => entry.attemptId === item.attemptId && entry.role === role) || null;
+      const stalePreflight = item.reviewSkipped
+        && ['stale_review_continuation', 'stale_review_target'].includes(resultStatus);
+      const staleReceipt = receipt?.status === 'stale' && receipt.reason === 'review_target_changed_during_review';
+      const serviceReview = item.reviewSummary?.reviewResult || outcomeSummary(item).reviewResult;
+      const serviceCoverage = item.reviewSummary?.reviewCoverage || outcomeSummary(item).reviewCoverage;
+      const trustedEndpointRejection = item.result?.failureKind === 'request_invalid'
+        && item.result?.effects === 'none'
+        && item.result?.serviceBoundary?.results?.some((entry) => entry.code === 'review_origin_stale')
+        && serviceReview?.policyId === POLICY_ID
+        && serviceReview.kind === review.kind
+        && serviceReview.checkpointId === review.checkpointId
+        && serviceReview.status === 'rejected'
+        && serviceReview.accepted === false
+        && serviceReview.valid === false
+        && serviceReview.reason === 'review_origin_stale';
+      const targetChangeReason = role === 'verifier' ? 'verifier_target_changed_during_review' : 'review_target_changed';
+      const trustedUnstableReview = serviceReview?.policyId === POLICY_ID
+        && serviceReview.kind === review.kind
+        && serviceReview.checkpointId === review.checkpointId
+        && ((serviceReview.status === 'inconclusive' && serviceReview.valid === false)
+          || (serviceReview.status === 'accepted' && serviceReview.valid === true && serviceReview.accepted === true))
+        && (serviceReview.reason === targetChangeReason || serviceCoverage?.reason === targetChangeReason)
+        && serviceCoverage?.targetKnown === true
+        && serviceCoverage.identityPresent === true
+        && serviceCoverage.stable === false;
+      if (!stalePreflight && !staleReceipt && !trustedEndpointRejection && !trustedUnstableReview) continue;
+      const obligation = findObligation(review.checkpointId);
+      const entry = findRecovery(review.checkpointId);
+      if (!obligation || !obligationMatches(obligation, review) || !entry
+        || entry.contextHash !== reviewContextHash(obligation.review)) continue;
+      const gate = currentGateState({ ...state, reviewObligations: obligations, reviewRecovery: recovery }, obligation);
+      if (trustedUnstableReview && role === 'verifier' && gate.verifier) continue;
+      const captured = item.reviewTarget;
+      const current = targetForReview({ ...state, reviewObligations: obligations }, obligation.review);
+      if (!captured?.known || !current.known || (!(trustedEndpointRejection || trustedUnstableReview) && captured.identity === current.identity)
+        || (trustedUnstableReview && captured.identity === current.identity)) {
+        blocked(entry, !captured?.known || !current.known ? 'origin_or_current_target_unknown' : 'stale_signal_without_target_change');
+        continue;
+      }
+      if (entry.generation >= MAX_REVIEW_RECOVERY_GENERATIONS || entry.lastRecoveryTarget === current.identity) {
+        blocked(entry, entry.generation >= MAX_REVIEW_RECOVERY_GENERATIONS ? 'recovery_generation_limit' : 'repeated_stale_target');
+        continue;
+      }
+      if ((obligation.pendingAssignmentIds || []).length > 0) {
+        blocked(entry, 'checkpoint_writer_pending');
+        continue;
+      }
+      const admissionFailure = admissionBlock();
+      if (admissionFailure) {
+        blocked(entry, admissionFailure);
+        continue;
+      }
+      const generation = entry.generation + 1;
+      const candidate = { ...entry, generation, lastRecoveryTarget: current.identity, phase: 'verifier_pending' };
+      candidate.blockedReason = null;
+      const nextRecovery = {
+        version: REVIEW_RECOVERY_VERSION,
+        checkpoints: checkpoints.map((value) => value.checkpointId === entry.checkpointId ? candidate : value),
+      };
+      const verifier = recoveryAssignment({ ...state, reviewRecovery: nextRecovery }, candidate, obligation, 'verifier');
+      if (!verifier) {
+        blocked(entry, 'validated_verifier_template_unavailable');
+        continue;
+      }
+      candidate.sourceAssignmentId = item.assignmentId;
+      candidate.sourceAttemptId = item.attemptId;
+      pendingAssignments = [verifier];
+      recordStage('review_recovery', {
+        runId: state.runId,
+        assignmentId: item.assignmentId,
+        attemptId: item.attemptId,
+        role: 'verifier',
+        target: current.identity,
+        status: 'verifier_queued',
+        payload: {
+          policyId: POLICY_ID,
+          checkpointId: entry.checkpointId,
+          generation,
+          trigger: stalePreflight ? resultStatus : staleReceipt ? 'stale_review_receipt' : 'review_origin_stale',
+        },
+      });
+      return { recovery: nextRecovery, pendingAssignments };
+    }
+    return { recovery, pendingAssignments: null };
   }
 
   function targetForReview(state, review) {
@@ -748,6 +1196,27 @@ function buildLeadGraph(deps) {
     return null;
   }
 
+  function sameBatchVerifierReceipt(obligation, target, state, batch, auditorItem) {
+    const recovery = validReviewRecovery(state?.reviewRecovery)
+      ? state.reviewRecovery.checkpoints.find((entry) => entry.checkpointId === obligation?.checkpointId
+        && entry.contextHash === reviewContextHash(obligation.review)) : null;
+    if (!target?.known || recovery?.phase !== 'replan_required'
+      || !['fresh_verifier_not_accepted', 'fresh_auditor_not_accepted'].includes(recovery.blockedReason)
+      || !auditorItem || canonicalRoleId(auditorItem.role) !== 'auditor'
+      || !obligationMatches(obligation, auditorItem.assignment?.review)
+      || !Number.isInteger(auditorItem.group)) return null;
+    for (const item of batch?.items || []) {
+      if (item === auditorItem || item.state !== 'finished' || item.reviewSkipped
+        || item.reviewRecovery || canonicalRoleId(item.role) !== 'verifier'
+        || !obligationMatches(obligation, item.assignment?.review)
+        || !Number.isInteger(item.group) || item.group >= auditorItem.group) continue;
+      const receipt = latestReceiptEntry(obligation, 'verifier', target)?.receipt;
+      if (receipt?.status === 'accepted' && receipt.assignmentId === item.assignmentId
+        && receipt.attemptId === item.attemptId) return receipt;
+    }
+    return null;
+  }
+
   // Keep verifier history, but do not reuse it after a matching same-target audit fails to accept it.
   function rejectedVerifierReceipt(obligation, target) {
     const entry = latestReceiptEntry(obligation, 'verifier', target);
@@ -756,13 +1225,21 @@ function buildLeadGraph(deps) {
     for (let index = receipts.length - 1; index > entry.index; index -= 1) {
       const receipt = receipts[index];
       if (receipt.role !== 'auditor' || receipt.targetIdentity !== target.identity || receipt.status === 'stale') continue;
+      if (receipt.continuationPending === true) continue;
       if (receipt.status === 'accepted' && receipt.verdict === 'pass') return null;
       return receipt;
     }
     return null;
   }
 
-  function matchingReceipt(obligation, role, target) {
+  function matchingReceipt(obligation, role, target, state, batch, auditorItem) {
+    const recovery = validReviewRecovery(state?.reviewRecovery)
+      ? state.reviewRecovery.checkpoints.find((entry) => entry.checkpointId === obligation?.checkpointId
+        && entry.contextHash === reviewContextHash(obligation.review)) : null;
+    const sameBatchVerifier = role === 'verifier'
+      ? sameBatchVerifierReceipt(obligation, target, state, batch, auditorItem) : null;
+    if (['verifier_pending', 'replan_required'].includes(recovery?.phase) && !sameBatchVerifier) return null;
+    if (role === 'auditor' && recovery?.phase === 'auditor_pending') return null;
     const entry = latestReceiptEntry(obligation, role, target);
     if (!entry || entry.receipt.status !== 'accepted') return null;
     if (role === 'verifier' && rejectedVerifierReceipt(obligation, target)) return null;
@@ -775,8 +1252,8 @@ function buildLeadGraph(deps) {
     const target = targetForReview(state, review);
     return {
       target,
-      verifier: matchingReceipt(obligation, 'verifier', target),
-      auditor: matchingReceipt(obligation, 'auditor', target),
+      verifier: matchingReceipt(obligation, 'verifier', target, state),
+      auditor: matchingReceipt(obligation, 'auditor', target, state),
     };
   }
 
@@ -1320,6 +1797,7 @@ function buildLeadGraph(deps) {
       ...(analysis.report ? {} : { text: analysis.text ?? '' }),
       failureKind: result.failureKind || null,
       ...(result.continuation ? { continuation: result.continuation } : {}),
+      ...(result.serviceBoundary ? { serviceBoundary: result.serviceBoundary } : {}),
       ...(result.reviewCoverage ? { reviewCoverage: result.reviewCoverage } : {}),
       ...(result.reviewResult ? { reviewResult: result.reviewResult } : {}),
       scopeViolations: violations,
@@ -1503,6 +1981,8 @@ function buildLeadGraph(deps) {
               targetIdentity: target.known ? target.identity : null,
               verdict: evidence.verdict,
               reason,
+              ...(role === 'auditor' && summary.failureKind === 'usage_limit' && summary.continuation
+                ? { continuationPending: true } : {}),
             };
             receipts.push(receipt);
             recordStage('review_result', {
@@ -1562,6 +2042,7 @@ function buildLeadGraph(deps) {
   const openDecisionsSection = (state) => 'Open worker decisions (resolve each in resolutions, or list it in humanInput.relatedDecisionIds when owner-only; a dispatch of only read-only roles may keep them open while you investigate):\n' + JSON.stringify(state.openDecisions.map(({ id, role, request }) => ({ id, role, request })));
 
   function reviewObligationsSection(state) {
+    const recoveryValid = validReviewRecovery(state.reviewRecovery);
     const entries = (state.reviewObligations || []).map((obligation) => {
       const gate = currentGateState(state, obligation);
       const verifierRejection = rejectedVerifierReceipt(obligation, gate.target);
@@ -1573,9 +2054,14 @@ function buildLeadGraph(deps) {
         evidenceIds: obligation.review.evidenceIds,
         prerequisiteFor: obligation.review.prerequisiteFor || [],
       };
+      const recoveryEntry = recoveryValid
+        ? state.reviewRecovery.checkpoints.find((value) => value.checkpointId === obligation.checkpointId) : null;
       return {
         checkpointId: obligation.checkpointId,
         review,
+        recovery: recoveryValid
+          ? (recoveryEntry ? { generation: recoveryEntry.generation, phase: recoveryEntry.phase, blockedReason: recoveryEntry.blockedReason || null } : null)
+          : { stateValid: false, phase: 'replan_required', blockedReason: 'recovery_state_invalid' },
         targetKnown: gate.target?.known === true,
         pendingAssignments: obligation.pendingAssignmentIds || [],
         verifier: gate.verifier?.assignmentId || null,
@@ -1584,7 +2070,7 @@ function buildLeadGraph(deps) {
         auditor: gate.auditor?.assignmentId || null,
       };
     });
-    return `Checkpoint review obligations (a receipt counts only for current content, pins, policy, and run context; legacy outcomes without metadata are not receipts). If verifierRefreshRequired is true, a later matching auditor did not accept the verifier evidence on the unchanged target; dispatch a fresh verifier with the exact stored review context before another auditor. Reuse each review object exactly as stored, including every array; do not reconstruct or alter its fields. Do not alter the checkpoint scope:\n${JSON.stringify(entries)}`;
+    return `Checkpoint review obligations (a receipt counts only for current content, pins, policy, and run context; legacy outcomes without metadata are not receipts). If verifierRefreshRequired is true, a later matching auditor did not accept the verifier evidence on the unchanged target; dispatch a fresh verifier with the exact stored review context before another auditor. If recovery.phase is replan_required, honor recovery.blockedReason and do not repeat a stale continuation; use a normal explicit replan or stop when evidence is unavailable. Reuse each review object exactly as stored, including every array; do not reconstruct or alter its fields. Do not alter the checkpoint scope:\n${JSON.stringify(entries)}`;
   }
 
   // Optional notes shared by the full and the delta prompt (acceptance, goal investigation, human answers, rejection).
@@ -1623,7 +2109,10 @@ function buildLeadGraph(deps) {
     sections.push(roundsLine(state), checksLine(state));
     sections.push(reviewObligationsSection(state));
     if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
-    if (extras.goalChanged) sections.push(`Available skill candidates (choose 0-5 relevant IDs for each assignment; no skill is required for unrelated work):\n${JSON.stringify(extras.skillCandidates)}`);
+    if (extras.goalChanged) {
+      sections.push(`Available skill candidates (choose 0-5 relevant IDs for each assignment; no skill is required for unrelated work):\n${JSON.stringify(extras.skillCandidates)}`);
+      sections.push(`Available MCP tool candidates (choose the minimum useful IDs; use [] when no MCP tool is needed; maximum 5 per assignment):\n${JSON.stringify(extras.mcpToolCandidates)}`);
+    }
     sections.push(openDecisionsSection(state));
     sections.push(...stateNotes(state));
     const fresh = state.outcomes.slice(extras.seenOutcomes);
@@ -1651,6 +2140,10 @@ function buildLeadGraph(deps) {
       `Available skill candidates (choose 0-5 relevant IDs for each assignment; no skill is required for unrelated work):\n${JSON.stringify(extras.skillCandidates)}`,
       `Available skill IDs and names (trusted selectable IDs):\n${JSON.stringify(extras.skillNames)}`,
       'The candidate descriptions are lexical hints. You may select any listed skill ID based on semantic relevance to the task, even when it was not in the candidate shortlist.',
+      `Available MCP tool IDs and names (trusted selectable IDs):\n${JSON.stringify(extras.mcpToolNames)}`,
+      `Available MCP tool candidates (select the minimum useful IDs; use [] when no MCP tool is needed; maximum 5 per assignment):\n${JSON.stringify(extras.mcpToolCandidates)}`,
+      'MCP selection rule: use no tools by default; select only the smallest set that materially helps this assignment. drupal-static reads local project files. Other Drupal servers query live Drupal or a database and can return sensitive operational, configuration, permission, render, log, or state data. Select live tools only when the task specifically needs that live state. drupal-db-ops includes the target project settings.php to obtain DB credentials. These tools are read-oriented, but their results remain sensitive.',
+      'MCP candidate descriptions are lexical hints. You may select any trusted listed MCP tool ID based on semantic relevance, even when it was not in the candidate shortlist.',
     ];
     if (extras.sessionDigest) sections.splice(1 + goal.length + 1, 0, `Session so far (this lead thread is new; the earlier conversation of this session is summarized here, background only):\n${extras.sessionDigest}`);
     if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
@@ -1660,6 +2153,7 @@ function buildLeadGraph(deps) {
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(outcomesForPrompt(state.outcomes)));
     sections.push([
       'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, continueFrom, review, and repair. Set repair:null for ordinary work. Use review:null for unrelated read-only work and non-material administrative or document-only changes. For material implementation set review to {kind,checkpointId,reason,paths,evidenceIds,prerequisiteFor}; use prerequisiteFor:[] by default. Use routine for ordinary material changes, risk_change for trust-boundary/security/authority/recovery/concurrency/migration/public-contract changes, performance for performance requirements, component_complete for an integrated independently usable component, investigation for diagnostic audit only, and owner_request for an explicit owner audit. Do not classify risk by filenames. Routine material changes need a verifier after integration; they do not trigger an auditor. Critical changes need a passing verifier first and then a bounded auditor before dependent writes or finish. Verifier and auditor must use the same kind, checkpointId, reason, paths, evidenceIds, and prerequisiteFor. A checkpoint review context is immutable: do not downgrade its kind or narrow its paths during repair or review; create a new checkpoint for a new scope. If other critical checkpoints are pending, one new gated verifier may include prerequisiteFor:[...] naming the exact complete set of currently incomplete critical checkpoint IDs (up to 20 unique IDs, each at most 160 characters); its matching auditor repeats the same list. This admits only that verifier scope: do not combine it with unrelated writers, do not dispatch multiple linked scopes, and wait to finish until every original and new checkpoint has its own current-target verifier and auditor receipt. If critical checkpoint gates block an authorized repair, one writable engineer, recovery-engineer, or senior-engineer may be dispatched alone with review:null and repair:{checkpointIds:[...]} naming the exact complete set of currently incomplete critical checkpoint IDs (up to 20 unique IDs, each at most 160 characters). Keep allowedFiles bounded. This repair scope only permits work on those checkpoint obligations; it does not permit unrelated writers, and it preserves each stored review context. Repair admission invalidates prior receipts and requires a fresh current-target verifier followed by a fresh current-target auditor for every listed checkpoint before finish. Unknown or changed targets block the write. The verifier and auditor may run in successive execution groups of one decision after verifier evidence is evaluated. An investigation never satisfies acceptance.',
+      'Every assignment also needs mcpTools. Use [] by default and choose the minimum useful MCP tool IDs only when the task needs them. Never exceed five unique IDs. MCP server access is resolved from the role profile and narrowed to those exact tool names for this assignment.',
       `${ASSIGNMENT_SCOPE_RULE} ${PATH_RULE}`,
       'Record durable semantic lessons in records (max 20): {id,kind,status,summary,evidenceIds,relatedIds,adrPath}. Use stable IDs for problems/decisions, relate remedies and verification records to problem IDs, and keep proposed, accepted, implemented, and tested states distinct. Architecture records require a safe workspace-relative Markdown ADR path; all other records use adrPath:null. Use records:[] when there is nothing material to record. Do not claim a fix or verification that the evidence does not establish.',
       'Briefing rules: in each assignment inputs and evidence, give exact file paths with line ranges and the facts already established, so workers do not re-explore; reuse explorer findings by quoting the relevant paths and ranges. Do not read large files yourself: read at most a few narrow ranges and dispatch an explorer for broad reading.',
@@ -1720,10 +2214,14 @@ function buildLeadGraph(deps) {
   async function intake(state, config) {
     const runtime = runtimeOf(config);
     if (!isNonEmptyString(state.goal)) throw new TypeError('goal must be a non-empty string');
-    const current = readPinned({ roles, leadRole, workspace, skillCatalog });
-    if (!state.pinned) return { pinned: current };
+    const expectedSkillContext = expectedLeadSkillContext(state.runId, trialRunIds, skillPin);
+    if (state.leadSkillContext && !sameLeadSkillContext(state.leadSkillContext, expectedSkillContext)) {
+      throw new Error('AUT-03 lead skill run context changed; start a new run ID');
+    }
+    const current = readPinned({ roles, leadRole, workspace, skillCatalog, mcpCatalog });
+    if (!state.pinned) return { pinned: current, leadSkillContext: expectedSkillContext };
     runtime.pendingNotes = [...(runtime.pendingNotes || []), ...instructionChanges(state.pinned, current)];
-    return { pinned: current };
+    return { pinned: current, leadSkillContext: expectedSkillContext };
   }
 
   // A canceled run ends at finish. STOP-01: when the abort was a shutdown stop (the signal reason says so)
@@ -1749,13 +2247,25 @@ function buildLeadGraph(deps) {
     // Before notes are consumed or a dispatch is planned: everything before interrupt() re-runs on resume.
     if (ownerPauseRequested(config)) interrupt({ kind: 'owner_pause', message: OWNER_PAUSE_MESSAGE });
 
+    const expectedSkillContext = expectedLeadSkillContext(state.runId, trialRunIds, skillPin);
+    let leadSkillContext = state.leadSkillContext;
+    if (!leadSkillContext) {
+      if (runtime.resumed && expectedSkillContext.enabled) {
+        throw new Error('AUT-03 lead skill run context is missing; start a new run ID');
+      }
+      leadSkillContext = expectedSkillContext;
+    } else if (!sameLeadSkillContext(leadSkillContext, expectedSkillContext)) {
+      throw new Error('AUT-03 lead skill run context changed; start a new run ID');
+    }
+    const selectedLeadSkills = resolveLeadSelectedSkills(leadSkillContext, skillCatalog);
+
     const notes = [...(runtime.pendingNotes || [])];
     runtime.pendingNotes = [];
     const update = { redecide: false };
     if (runtime.resumed) {
       runtime.resumed = false;
       notes.push('This run was resumed after an interruption (restart, pause, or usage limit). A previous lead turn may have been repeated. Outcomes marked interrupted or outcome_unknown have unknown workspace effects.');
-      const current = readPinned({ roles, leadRole, workspace, skillCatalog });
+      const current = readPinned({ roles, leadRole, workspace, skillCatalog, mcpCatalog });
       notes.push(...instructionChanges(state.pinned, current));
       update.pinned = current;
       // A resume is new human intent: the automatic-retry allowance starts over.
@@ -1768,9 +2278,16 @@ function buildLeadGraph(deps) {
       role: outcome.role,
       summary: (outcome.report?.summary || outcome.text || outcome.reportError || '').slice(0, 300),
     })).slice(-12);
-    const skillCandidates = findSkillCandidates(skillCatalog, [state.goal, ...priorSkillContext.map((item) => item.summary)].join('\n'), { limit: 12 });
-    const skillNames = [...skillCatalog.values()].map(({ id, name }) => ({ id, name }));
+    const skillCandidates = findSkillCandidates(skillCatalog, [state.goal, ...priorSkillContext.map((item) => item.summary)].join('\n'), { limit: 12, audience: 'worker' });
+    const skillNames = [...skillCatalog.values()].filter((item) => (item.audience || 'worker') === 'worker').map(({ id, name }) => ({ id, name }));
     const candidateIds = skillNames.map(({ id }) => id);
+    const mcpAllowedServers = [...new Set([...roles.values()].flatMap((role) => role.tools?.mcpServers || []))].sort();
+    const mcpToolNames = [...mcpCatalog.values()].filter((item) => mcpAllowedServers.includes(item.configName))
+      .map(({ id, name, configName, dataSensitivity }) => ({ id, name, server: configName, dataSensitivity }));
+    const mcpToolCandidateIds = mcpToolNames.map(({ id }) => id);
+    const mcpToolCandidates = findMcpToolCandidates(mcpCatalog,
+      [state.goal, ...priorSkillContext.map((item) => item.summary)].join('\n'),
+      { limit: 12, allowedServers: mcpAllowedServers });
     // SES-01: one lead thread per session. An in-run rejection retry keeps its current thread;
     // resumed runs re-check the persisted profile hash before reusing a session thread.
     const contextId = runtime.contextId ?? state.contextId ?? null;
@@ -1779,13 +2296,16 @@ function buildLeadGraph(deps) {
     const session = sessions ? sessions.get(contextId) : null;
     // ROLE-01: the lead profile (project overrides included). A thread started under another profile keeps
     // the old instructions, so a changed hash rolls the session over to a new thread.
-    const leadProfileSha256 = roleProfileSha256(leadRole);
+    const leadProfileSha256 = leadSkillContext.enabled
+      ? sha256(JSON.stringify([roleProfileSha256(leadRole), { enabled: true, pin: leadSkillContext.pin }]))
+      : roleProfileSha256(leadRole);
     let threadId = null;
     let rolledOver = false;
     const retrySameThread = update.retryDecide ?? state.retryDecide;
     if (retrySameThread && state.threadId) threadId = state.threadId;
     else if (session?.threadId) {
-      const sameProfile = !session.profileSha256 || session.profileSha256 === leadProfileSha256;
+      const sameProfile = session.profileSha256 === leadProfileSha256
+        || (!leadSkillContext.enabled && !session.profileSha256);
       if (sameProfile && session.codexHome === codexHome && (session.lastInputTokens == null || session.lastInputTokens <= rolloverThreshold(session.contextWindow))) threadId = session.threadId;
       else rolledOver = true;
     }
@@ -1797,7 +2317,7 @@ function buildLeadGraph(deps) {
       const sessionDigest = delta || !session?.threadId || !deps.sessionDigest ? '' : await deps.sessionDigest({ contextId, runId: state.runId, runIds: session.runIds, state });
       const seenGoal = sameThread ? state.leadSeenGoal : null;
       return decisionPrompt(state, {
-        notes, skillCandidates, skillNames, delta, sessionDigest,
+        notes, skillCandidates, skillNames, mcpToolCandidates, mcpToolNames, delta, sessionDigest,
         seenOutcomes: sameThread ? (state.leadSeenOutcomes || 0) : 0,
         goalChanged: seenGoal !== goalKey,
       });
@@ -1810,6 +2330,7 @@ function buildLeadGraph(deps) {
       cwd: workspace,
       input: await turnInputs(resumeThreadId),
       ...(resumeThreadId ? { threadId: resumeThreadId } : {}),
+      ...(selectedLeadSkills.length ? { selectedSkills: selectedLeadSkills } : {}),
       outputSchema: DECISION_SCHEMA,
       signal,
       ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
@@ -1835,6 +2356,7 @@ function buildLeadGraph(deps) {
     } finally {
       activity?.end(activityOutcome);
     }
+    update.leadSkillContext = leadSkillContext;
     update.threadId = leadResult.threadId || state.threadId;
     // The thread has now seen this turn's goal and outcomes (a new thread got them in its full prompt).
     update.leadSeenOutcomes = state.outcomes.length;
@@ -1890,6 +2412,8 @@ function buildLeadGraph(deps) {
         continuable: new Map(state.outcomes.filter((outcome) => !outcome.kind && outcome.assignmentId).map((outcome) => [outcome.assignmentId, outcome.role])),
         skillCatalog,
         skillCandidateIds: candidateIds,
+        mcpToolCatalog: mcpCatalog,
+        mcpToolCandidateIds,
         knownProblemIds: knownProblemIdsForDecision(decision.records),
         // LL-6 investigate first.
         investigations: investigationsOf(state),
@@ -1922,7 +2446,7 @@ function buildLeadGraph(deps) {
           if (canonicalRoleId(assignment.role) !== 'auditor' || !isGatedReview(assignment.review)) continue;
           const obligation = activeObligation(state, assignment.review);
           const priorReceipt = obligationMatches(obligation, assignment.review)
-            ? matchingReceipt(obligation, 'verifier', targetForReview(state, assignment.review)) : null;
+            ? matchingReceipt(obligation, 'verifier', targetForReview(state, assignment.review), state) : null;
           const earlierVerifier = decision.assignments.some((candidate, candidateIndex) => candidateIndex < decision.assignments.indexOf(assignment)
             && canonicalRoleId(candidate.role) === 'verifier' && sameReviewScope(candidate.review, assignment.review));
           if (!priorReceipt && !earlierVerifier) {
@@ -2033,6 +2557,10 @@ function buildLeadGraph(deps) {
     update.reviewObligations = reviewObligationsForDispatch(state, decision.assignments, dispatchRound);
     const pendingAssignments = decision.assignments.map((assignment) => {
       const selected = resolveSkillSelection(skillCatalog, assignment.skills || []);
+      const role = getRole(roles, assignment.role);
+      const selectedMcp = resolveMcpToolSelection(mcpCatalog, assignment.mcpTools || [], {
+        allowedServers: role?.tools?.mcpServers || [],
+      });
       const repairCapture = assignment.repair ? assignment.repair.checkpointIds.map((checkpointId) => {
         const obligation = (state.reviewObligations || []).find((entry) => entry.checkpointId === checkpointId);
         const target = obligation?.review ? targetForReview(state, obligation.review) : null;
@@ -2048,8 +2576,11 @@ function buildLeadGraph(deps) {
         ...(repairCapture ? { _repairCapture: repairCapture } : {}),
         skills: selected.map(({ id }) => id),
         skillPins: selected.map(({ id, sha256: hash }) => ({ id, sha256: hash })),
+        mcpTools: selectedMcp.map(({ id }) => id),
+        mcpToolPins: mcpToolPins(selectedMcp),
       };
     });
+    update.reviewRecovery = captureReviewRecoveryTemplates(state.reviewRecovery, pendingAssignments);
     return { ...update, pendingAssignments };
   }
 
@@ -2117,7 +2648,13 @@ function buildLeadGraph(deps) {
     // A dispatched assignment is pinned before checkpointing. Never update its hash on resume.
     const skillIds = item.assignment?.skills || [];
     const skillPins = item.assignment?.skillPins || [];
-    if (!row) resolveSkillSelection(skillCatalog, skillIds, { pins: skillPins });
+    if (!row) {
+      resolveSkillSelection(skillCatalog, skillIds, { pins: skillPins });
+      resolveMcpToolSelection(mcpCatalog, item.assignment?.mcpTools || [], {
+        pins: item.assignment?.mcpToolPins || [],
+        allowedServers: role?.tools?.mcpServers || [],
+      });
+    }
 
     if (!row) {
       journal.recordSubmitting({
@@ -2207,6 +2744,8 @@ function buildLeadGraph(deps) {
 
   async function dispatch(state, config) {
     const { signal } = runtimeOf(config);
+    if (signal?.aborted) return canceledUpdate(signal);
+    if (ownerPauseRequested(config)) interrupt({ kind: 'owner_pause', message: OWNER_PAUSE_MESSAGE });
     let batch = state.batch;
     const update = {};
     if (!batch) {
@@ -2223,10 +2762,15 @@ function buildLeadGraph(deps) {
         items: state.pendingAssignments.map((assignment, index) => {
           const skillPins = assignment.skillPins || [];
           resolveSkillSelection(skillCatalog, assignment.skills || [], { pins: skillPins });
+          const mcpPins = assignment.mcpToolPins || [];
+          resolveMcpToolSelection(mcpCatalog, assignment.mcpTools || [], {
+            pins: mcpPins,
+            allowedServers: getRole(roles, assignment.role)?.tools?.mcpServers || [],
+          });
           const assignmentId = makeAssignmentId(state.runId, round, index);
           const attemptId = makeAttemptId(assignmentId);
           const role = getRole(roles, assignment.role);
-          const { _repairCapture, ...assignmentFields } = assignment;
+          const { _repairCapture, _reviewRecovery, ...assignmentFields } = assignment;
           // LL-5: continue the thread of an earlier outcome with the new (usually expanded) scope.
           const origin = assignment.continueFrom ? state.outcomes.find((outcome) => !outcome.kind && outcome.assignmentId === assignment.continueFrom) : null;
           return {
@@ -2238,12 +2782,14 @@ function buildLeadGraph(deps) {
             sandbox: role.sandbox,
             assignment: assignmentFields,
             ...(_repairCapture ? { repairCapture: _repairCapture } : {}),
+            ...(_reviewRecovery ? { reviewRecovery: _reviewRecovery } : {}),
             ...(origin ? {
               continuation: {
                 ofAttemptId: origin.attemptId,
                 threadId: origin.continuation?.threadId ?? null,
                 laneId: origin.continuation?.laneId ?? null,
                 codexHome: origin.continuation?.codexHome ?? null,
+                ...(Array.isArray(origin.continuation?.mcpToolPins) ? { mcpToolPins: origin.continuation.mcpToolPins } : {}),
                 reason: 'scope',
               },
             } : {}),
@@ -2255,6 +2801,7 @@ function buildLeadGraph(deps) {
               sandbox: role.sandbox,
               roleProfileSha256: roleProfileSha256(role),
               skillPins: skillPins.map(({ id, sha256: hash }) => ({ id, sha256: hash })),
+              mcpToolPins: mcpPins.map(({ id, sha256: hash }) => ({ id, sha256: hash })),
             },
             state: 'pending',
             taskId: null,
@@ -2429,7 +2976,8 @@ function buildLeadGraph(deps) {
       }
       if (!blocked && tracked && isAuditor && review.kind !== 'pinned_check') {
         const obligation = activeObligation(gateState, review);
-        const verifierReceipt = obligationMatches(obligation, review) ? matchingReceipt(obligation, 'verifier', target) : null;
+        const verifierReceipt = obligationMatches(obligation, review)
+          ? matchingReceipt(obligation, 'verifier', target, gateState, batch, item) : null;
         const unfinishedWriter = batch.items.some((candidate) => (candidate.state !== 'finished' || !isSettledWriter(candidate.result))
           && candidate.assignment?.review?.checkpointId === review.checkpointId
           && getRole(roles, candidate.role)?.sandbox !== 'read-only'
@@ -2466,7 +3014,7 @@ function buildLeadGraph(deps) {
 
       if (tracked && (isVerifier || isAuditor)) {
         const obligation = activeObligation(gateState, review);
-        const receipt = obligationMatches(obligation, review) ? matchingReceipt(obligation, role, target) : null;
+        const receipt = obligationMatches(obligation, review) ? matchingReceipt(obligation, role, target, gateState) : null;
         if (receipt) {
           recordStage('review_evidence_reused', {
             runId: item.runId,
@@ -2602,6 +3150,7 @@ function buildLeadGraph(deps) {
           sandbox: item.sandbox,
           assignment: item.assignment,
           ...(item.reviewTarget ? { reviewTarget: item.reviewTarget } : {}),
+          ...(item.reviewRecovery ? { reviewRecovery: item.reviewRecovery } : {}),
           ...(item.contract ? { contract: item.contract } : {}),
         },
         continuation: item.result.continuation,
@@ -2645,6 +3194,7 @@ function buildLeadGraph(deps) {
       const { pause: _pause, ...persistedGuard } = loopGuard;
       loopGuard = persistedGuard;
     }
+    const recoveryPlan = planAutomaticReviewRecovery(state, batch, integrated.reviewObligations, unresolvedWriters, runtime, config);
     const changes = summaries.filter((outcome) => integratedChange(outcome));
     return {
       outcomes: [...state.outcomes, ...summaries.map(({ loopEvidenceIdentity: _identity, ...outcome }) => outcome)],
@@ -2654,6 +3204,8 @@ function buildLeadGraph(deps) {
       reviewObligations: integrated.reviewObligations,
       batch: null,
       continuable,
+      reviewRecovery: recoveryPlan.recovery,
+      ...(recoveryPlan.pendingAssignments ? { pendingAssignments: recoveryPlan.pendingAssignments } : {}),
       ...(loopGuard ? { loopGuard } : {}),
       ...(loopPause ? {
         ...escalate(state, 'loop_detected', `Repeated work paused after ${loopPause.attempts} completed rounds with unchanged evidence: ${loopPause.description}${loopReferences ? ` (attempts: ${loopReferences})` : ''}. Continue with a different approach, change the goal, or accept the current result as is.`, `The same scoped work repeated ${loopPause.attempts} times without relevant new evidence.`),
@@ -2785,6 +3337,7 @@ function buildLeadGraph(deps) {
         sandbox: origin.sandbox,
         assignment: origin.assignment,
         ...(origin.reviewTarget ? { reviewTarget: origin.reviewTarget } : {}),
+        ...(origin.reviewRecovery ? { reviewRecovery: origin.reviewRecovery } : {}),
         group: 0,
         ...(origin.contract ? { contract: origin.contract } : {}),
         continuation: {
@@ -3128,7 +3681,8 @@ function buildLeadGraph(deps) {
   const afterHumanInput = (state) => (state.status === 'completed' ? 'accept' : 'decide');
   // A legacy checkpoint parked at an owner pause with a system request continues through the legacy node.
   const afterLegacyPause = (state) => (state.systemRequest ? 'system_pause' : 'dispatch');
-  const afterOwnerPause = (state) => (state.systemRequest ? 'system_pause' : collectRoute(state));
+  const afterOwnerPause = (state) => (state.systemRequest ? 'system_pause'
+    : state.pendingAssignments ? 'dispatch' : collectRoute(state));
   const collectRoute = (state) => {
     if (state.status === 'canceled') return 'verify';
     if (state.batch.items.some((item) => item.state === 'pending')) return 'dispatch';
@@ -3138,15 +3692,17 @@ function buildLeadGraph(deps) {
     if (state.status !== 'canceled' && ownerPauseRequested(config)) return 'owner_pause';
     return collectRoute(state);
   };
-  const afterVerify = (state) => {
+  const afterVerify = (state, config) => {
     if (state.status === 'canceled') return 'finish';
     if (state.unresolvedWriters.length > 0) return 'reconcile';
     if (state.budget) return 'budget_pause';
     if (state.humanRequest) return 'human_input';
     if (state.checkReview) return 'review_check';
+    if (state.pendingAssignments) return ownerPauseRequested(config) ? 'pause_before_dispatch' : 'dispatch';
     return 'decide';
   };
-  const afterReconcile = (state) => (state.budget ? 'budget_pause' : 'decide');
+  const afterReconcile = (state) => (state.budget ? 'budget_pause'
+    : state.pendingAssignments && state.unresolvedWriters.length === 0 ? 'dispatch' : 'decide');
   // A normal finish always sets the result. A finish resumed from a stop has none: unresolved writers
   // are reconciled first (the canceled run skipped that), then the lead plans again.
   const afterFinish = (state) => {
@@ -3156,6 +3712,7 @@ function buildLeadGraph(deps) {
   const afterContinueLimited = (state) => {
     if (state.status) return 'finish';
     if (state.batch) return 'dispatch';
+    if (state.pendingAssignments) return 'dispatch';
     return state.checkReview ? 'review_check' : 'decide';
   };
 
@@ -3184,8 +3741,8 @@ function buildLeadGraph(deps) {
     .addEdge('dispatch', 'collect')
     .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify', 'owner_pause'])
     .addConditionalEdges('owner_pause', afterOwnerPause, ['system_pause', 'dispatch', 'verify'])
-    .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'human_input', 'review_check', 'decide'])
-    .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'decide'])
+    .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'human_input', 'review_check', 'pause_before_dispatch', 'dispatch', 'decide'])
+    .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'dispatch', 'decide'])
     .addConditionalEdges('human_input', afterHumanInput, ['accept', 'decide'])
     .addEdge('system_pause', 'decide')
     .addEdge('budget_pause', 'continue_limited')

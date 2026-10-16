@@ -1,0 +1,37 @@
+TAP version 13
+# Subtest: a stable usage-limited auditor continues with its exact review context
+not ok 1 - a stable usage-limited auditor continues with its exact review context
+  ---
+  duration_ms: 183.360339
+  type: 'test'
+  location: '/tmp/aut02-q01-baseline/test/lead-graph.test.js:3694:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"pause":{"kind":"human_decision","decisionId":"run-1:h1","escalation":"loop_detected","reason":"loop_detected","question":"The lead decision failed validation 3 times in a row (review_receipt_missing): Review checkpoint critical-stable-limited needs a passing verifier receipt for the current target. Continue to replan with a note, change the goal, or accept the current result as is.","options":[{"id":"continue","description":"Continue: another attempt using this run's configured round allowance, with your answer as a note to the lead"},{"id":"accept_as_is","description":"Accept as is: finish now with the current result (acceptance still runs)"},{"id":"change_goal","description":"Change goal: your answer replaces the goal, with a fresh round budget"}],"recommendation":"continue","evidenceChecked":[],"independentWork":"","relatedDecisionIds":[],"message":"Human decision needed (loop_detected): The lead decision failed validation 3 times in a row (review_receipt_missing): Review checkpoint critical-stable-limited needs a passing verifier receipt for the current target. Continue to replan with a note, change the goal, or accept the current result as is.\nOptions:\n  - continue: Continue: another attempt using this run's configured round allowance, with your answer as a note to the lead\n  - accept_as_is: Accept as is: finish now with the current result (acceptance still runs)\n  - change_goal: Change goal: your answer replaces the goal, with a fresh round budget\nRecommendation: continue\nDecision ID: run-1:h1\nAnswer by sending a message to this task with your answer, optionally naming a choice (option id) and the decision ID."},"roles":["orch-verifier","orch-auditor"],"assignments":[{"role":"verifier","status":"TASK_STATE_COMPLETED","failureKind":null,"assignmentId":"run-1:r1:a0"},{"role":"auditor","status":"TASK_STATE_FAILED","failureKind":"usage_limit","assignmentId":"run-1:r2:a0"},{"role":"auditor","status":"skipped_verifier_gate","failureKind":null,"assignmentId":"run-1:r2:a0:c1"}],"receipts":[["verifier","accepted","run-1:r1:a0"],["auditor","inconclusive","run-1:r2:a0"]]}
+    + actual - expected
+    
+    + 'input_required'
+    - 'completed'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'completed'
+  actual: 'input_required'
+  operator: 'strictEqual'
+  stack: |-
+    withSession.workspace.workspace (/tmp/aut02-q01-baseline/test/lead-graph.test.js:3645:12)
+    async withSession (/tmp/aut02-q01-baseline/test/lead-graph.test.js:325:12)
+    async assertStableUsageLimitedReview (/tmp/aut02-q01-baseline/test/lead-graph.test.js:3638:3)
+    async TestContext.<anonymous> (/tmp/aut02-q01-baseline/test/lead-graph.test.js:3695:3)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 442.194042

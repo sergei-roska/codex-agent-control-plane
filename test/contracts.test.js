@@ -353,13 +353,20 @@ test('prerequisite review links normalize legacy contexts and are restricted to 
   const review = { kind: 'risk_change', checkpointId: 'cp-new', reason: 'Verify the prerequisite', paths: ['src/file.js'], evidenceIds: ['e-1'] };
   const verifier = assignment({ role: 'orch-verifier', allowedFiles: ['test'], review: structuredClone(review) });
   validateDecision(dispatch([verifier]), ctx());
+  assert.deepEqual(verifier.review, {
+    kind: 'risk_change', checkpointId: 'cp-new', reason: 'Verify the prerequisite',
+    paths: ['src/file.js'], evidenceIds: ['e-1'], prerequisiteFor: [],
+  });
   assert.deepEqual(verifier.review.prerequisiteFor, []);
   const linkedVerifier = assignment({
     role: 'orch-verifier', allowedFiles: ['test'],
     review: { ...review, prerequisiteFor: ['critical-1'] },
   });
   validateDecision(dispatch([linkedVerifier]), ctx());
-  assert.deepEqual(linkedVerifier.review.prerequisiteFor, ['critical-1']);
+  assert.deepEqual(linkedVerifier.review, {
+    kind: 'risk_change', checkpointId: 'cp-new', reason: 'Verify the prerequisite',
+    paths: ['src/file.js'], evidenceIds: ['e-1'], prerequisiteFor: ['critical-1'],
+  });
   throws(dispatch([assignment({ role: 'orch-builder', allowedFiles: ['src/file.js'], review: { ...review, prerequisiteFor: ['critical-1'] } })]), ctx(), /only on a gated verifier scope/);
   throws(dispatch([assignment({ role: 'orch-verifier', allowedFiles: ['test'], review: { ...review, prerequisiteFor: ['critical-1', 'critical-1'] } })]), ctx(), /must be unique/);
 });

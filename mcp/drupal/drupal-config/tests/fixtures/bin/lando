@@ -1,0 +1,155 @@
+#!/usr/bin/env php
+<?php
+
+namespace {
+    class Drupal {
+        public static function hasContainer() { return true; }
+        public static function config($name) {
+            return new class($name) {
+                private $name;
+                public function __construct($name) { $this->name = $name; }
+                public function isNew() { return $this->name === 'nonexistent'; }
+                public function getRawData() {
+                    if ($this->name === 'system.site') {
+                        return ['name' => 'Mock Drupal Site', 'mail' => 'admin@example.com'];
+                    }
+                    return ['key' => 'value'];
+                }
+                public function get() {
+                    return $this->getRawData();
+                }
+            };
+        }
+        
+        public static function service($id) {
+            if ($id === 'config.storage') {
+                return new class {
+                    public function listAll() {
+                        return ['system.site', 'user.settings'];
+                    }
+                    public function read($name) {
+                        if ($name === 'system.site') {
+                            return ['dependencies' => []];
+                        }
+                        return ['dependencies' => ['config' => ['system.site']]];
+                    }
+                };
+            }
+            if ($id === 'config.storage.sync') {
+                return new class {
+                    public function listAll() {
+                        return ['system.site', 'user.settings'];
+                    }
+                };
+            }
+            if ($id === 'config.manager') {
+                return new class {};
+            }
+            return null;
+        }
+        
+        public static function database() {
+            return new class {
+                public function select($table, $alias) {
+                    return new class {
+                        public function fields($alias, $fields) { return $this; }
+                        public function condition($field, $value, $operator = '=') { return $this; }
+                        public function execute() {
+                            return new \ArrayIterator([
+                                (object)[
+                                    'name' => 'system.cron_last',
+                                    'value' => serialize(12345678)
+                                ]
+                            ]);
+                        }
+                    };
+                }
+                public function escapeLike($string) {
+                    return addcslashes($string, '\%_');
+                }
+            };
+        }
+        
+        public static function state() {
+            return new class {
+                public function get($key) {
+                    if ($key === 'system.cron_last') return 12345678;
+                    if ($key === 'install_profile') return 'standard';
+                    return null;
+                }
+            };
+        }
+        
+        public static function moduleHandler() {
+            return new class {
+                public function getModuleList() {
+                    return [];
+                }
+                public function moduleExists($module) {
+                    return $module === 'config_split';
+                }
+            };
+        }
+        
+        public static function entityTypeManager() {
+            return new class {
+                public function getStorage($type) {
+                    if ($type === 'config_split') {
+                        return new class {
+                            public function loadMultiple($names = null) {
+                                return [
+                                    new class {
+                                        public function id() { return 'dev'; }
+                                        public function label() { return 'Development'; }
+                                        public function status() { return true; }
+                                        public function get($field) {
+                                            if ($field === 'folder') return 'config/splits/dev';
+                                            return [];
+                                        }
+                                    }
+                                ];
+                            }
+                        };
+                    }
+                    return null;
+                }
+            };
+        }
+    }
+}
+
+namespace Drupal\Core\Recipe {
+    class Recipe {}
+}
+
+namespace {
+    // Intercept Lando command
+    $args = $argv;
+    array_shift($args); // remove script name
+
+if (empty($args)) {
+    echo "Lando version v3.6.4\n";
+    exit(0);
+}
+
+if ($args[0] === 'version') {
+    echo "v3.6.4\n";
+    exit(0);
+}
+
+if ($args[0] === 'drush') {
+    array_shift($args); // remove drush
+    
+    // Find php-eval
+    $evalIdx = array_search('php-eval', $args);
+    if ($evalIdx !== false && isset($args[$evalIdx + 1])) {
+        $wrapper = $args[$evalIdx + 1];
+        try {
+            eval($wrapper);
+        } catch (\Throwable $e) {
+            echo json_encode(['error' => 'PHP_EXECUTION_ERROR', 'message' => $e->getMessage()]);
+        }
+        exit(0);
+    }
+}
+}

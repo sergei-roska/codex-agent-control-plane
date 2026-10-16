@@ -1,0 +1,31 @@
+{
+    "name": "drupal-mcp/content",
+    "description": "Inspect Drupal content models: entity types, bundles, fields, references, taxonomies, displays, translation, moderation, and permissions.",
+    "type": "project",
+    "require": {
+        "php": ">=8.1",
+        "mcp/sdk": "^0.6.0",
+        "drupal-mcp/shared-args": "@dev",
+        "symfony/process": "^6.0 || ^7.0",
+        "symfony/yaml": "^6.0 || ^7.0"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../shared-args",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "DrupalMcp\\Content\\": "src/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    }
+}

@@ -56,6 +56,30 @@ test('prerequisite links are part of immutable scope and target identity', (t) =
   );
 });
 
+test('every normalized review field is part of matching and target identity', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'review-policy-fields-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.writeFileSync(path.join(root, 'src', 'file.js'), 'candidate');
+  const baseline = {
+    kind: 'risk_change', checkpointId: 'cp-1', reason: 'boundary change',
+    paths: ['src/file.js'], evidenceIds: ['evidence-1'], prerequisiteFor: ['critical-1'],
+  };
+  const baselineTarget = computeReviewTarget({ workspace: root, review: baseline, runId: 'run-1' });
+  for (const [field, value] of Object.entries({
+    kind: 'performance', checkpointId: 'cp-2', reason: 'different reason',
+    paths: ['src'], evidenceIds: ['evidence-2'], prerequisiteFor: ['critical-2'],
+  })) {
+    const changed = { ...baseline, [field]: value };
+    assert.equal(sameReviewScope(baseline, changed), false, `${field} must remain immutable`);
+    assert.notEqual(
+      computeReviewTarget({ workspace: root, review: changed, runId: 'run-1' }).identity,
+      baselineTarget.identity,
+      `${field} must affect target identity`,
+    );
+  }
+});
+
 test('review results must inspect the declared scope and pass all reported checks', () => {
   const outcome = {
     status: 'TASK_STATE_COMPLETED',

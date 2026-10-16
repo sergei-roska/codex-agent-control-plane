@@ -15,6 +15,7 @@ const { WriterAdmission } = require('../src/writer-admission');
 const { validateAcceptanceContract } = require('../src/acceptance');
 const { createRuntimeIdentity } = require('../src/runtime-identity');
 const { createAuthMiddleware } = require('../src/local-auth');
+const { parseTrialRunIds } = require('../src/aut03-lead-skill');
 
 // Test files run in parallel processes; keep workspace locks private to this process.
 process.env.CODEX_A2A_WORKSPACE_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-ws-lock-'));
@@ -381,6 +382,38 @@ test('startup passes checkpointer and journal to the orchestrator factory', asyn
     assert.deepEqual(options.stagingLog.list(), []);
     assert.equal(options.leadRole.name, 'coordinator');
     assert.ok(options.skillCatalog instanceof Map);
+    assert.deepEqual(options.aut03TrialRunIds, new Set());
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('AUT-03 startup parses only exact UUID allowlist values', async (t) => {
+  const id = '123e4567-e89b-42d3-a456-426614174000';
+  assert.deepEqual(parseTrialRunIds(''), new Set());
+  assert.deepEqual(parseTrialRunIds(id), new Set([id]));
+  assert.throws(() => parseTrialRunIds(`${id},${id}`), /unique lowercase UUIDs/);
+  assert.throws(() => parseTrialRunIds(`${id},not-a-uuid`), /unique lowercase UUIDs/);
+  assert.throws(() => parseTrialRunIds(id.toUpperCase()), /unique lowercase UUIDs/);
+
+  const previous = process.env.CODEX_A2A_AUT03_TRIAL_RUN_IDS;
+  t.after(() => {
+    if (previous === undefined) delete process.env.CODEX_A2A_AUT03_TRIAL_RUN_IDS;
+    else process.env.CODEX_A2A_AUT03_TRIAL_RUN_IDS = previous;
+  });
+  process.env.CODEX_A2A_AUT03_TRIAL_RUN_IDS = id;
+  let options;
+  const dir = tmpDir();
+  const runtime = await startServer({
+    listen: false,
+    stateFile: ':memory:',
+    tokenFile: path.join(dir, 'token'),
+    appServer: CHATGPT_APP_SERVER(),
+    orchestratorFactory(value) { options = value; return { async run() {} }; },
+  });
+  try {
+    assert.deepEqual(options.aut03TrialRunIds, new Set([id]));
   } finally {
     await runtime.close();
     fs.rmSync(dir, { recursive: true, force: true });

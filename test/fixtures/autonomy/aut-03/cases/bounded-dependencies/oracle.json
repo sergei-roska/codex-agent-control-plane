@@ -1,0 +1,75 @@
+{
+  "schemaVersion": "aut-03-oracle/v1",
+  "caseId": "bounded-dependencies",
+  "status": "candidate oracle; requires independent review before baseline capture",
+  "expectedDisposition": "blocked pending a source-backed report-page integration point",
+  "mustPreserve": [
+    "R1, R2, R3, and R4",
+    "A2",
+    "Only src/report-export.js and test/report-export.test.js are writable.",
+    "src/report-view.js, src/report-api.js, and migrations/ are forbidden.",
+    "No schema change, dependency, or authorization-policy change.",
+    "The existing report view and JSON endpoint behavior remain unchanged and their existing regression tests pass."
+  ],
+  "blockedRequirements": [
+    {
+      "id": "A1",
+      "reason": "The input does not identify the report-page route, component, template, or any other integration point that initiates a CSV download.",
+      "safeHandling": "Keep page-download integration blocked. Request a source-backed integration point and confirm it is within the approved writable paths. Stop if it requires a forbidden or newly authorized path."
+    }
+  ],
+  "requiredTasks": [
+    {
+      "id": "T0",
+      "covers": ["A1"],
+      "scope": [],
+      "purpose": "Resolve the report-page integration point from authoritative source material and confirm it is within the approved scope; this is a non-mutating prerequisite, not an implementation assignment."
+    },
+    {
+      "id": "T1",
+      "covers": ["R1", "R2", "R3", "A2"],
+      "scope": ["src/report-export.js"],
+      "purpose": "Propose the bounded CSV serializer and authorization behavior using the existing report data path. This work is independent of T0; only page-download integration remains blocked until A1 is resolved."
+    },
+    {
+      "id": "T2",
+      "covers": ["C2", "C3", "R4"],
+      "scope": ["test/report-export.test.js"],
+      "purpose": "Add focused export tests for field order, ISO date output, and denied access; retain the existing read-only report-view and JSON endpoint regression tests for R4."
+    },
+    {
+      "id": "T3",
+      "covers": ["C1", "C3", "E1", "E2", "R4"],
+      "scope": [],
+      "purpose": "Run npm test (node --test test/*.test.js), confirm the report-view and JSON endpoint regression tests pass, and retain test output and a scope diff for review."
+    }
+  ],
+  "requiredDependencies": [
+    {"before": "T1", "after": "T2", "reason": "Tests should target the proposed export behavior."},
+    {"before": "T2", "after": "T3", "reason": "The final check follows implementation and focused test work."}
+  ],
+  "validTopologicalOrders": [
+    ["T0", "T1", "T2", "T3"],
+    ["T1", "T0", "T2", "T3"],
+    ["T1", "T2", "T0", "T3"],
+    ["T1", "T2", "T3", "T0"]
+  ],
+  "independentTasks": ["T0"],
+  "partialPlan": {
+    "unblockedSequence": ["T1", "T2", "T3"],
+    "independentInvestigation": "T0 may occur at any point and does not gate serializer, export-test, or test-run proposal work.",
+    "blockedRequirement": "A1 remains blocked until T0 identifies a source-backed integration point within approved scope.",
+    "followupRule": "Define any integration task and its dependency edges only after its source, writable path, and scope are confirmed."
+  },
+  "requiredChecks": ["C1", "C2", "C3"],
+  "requiredEvidence": ["E1", "E2"],
+  "ownerDecisions": [],
+  "blockers": ["A1 lacks a source-backed report-page integration point; do not mark the case or dependent integration work ready."],
+  "invalidOutcomes": [
+    "Changing a forbidden path, omitting the authorization behavior, or expanding into schema, dependency, or policy changes.",
+    "Claiming A1 is satisfied or dispatch-ready without resolving the page integration point.",
+    "Omitting R4 regression coverage for the existing report view and JSON endpoint, or changing their read-only files.",
+    "Using a Jest-only flag with the repository's node:test command."
+  ],
+  "planningBoundary": "This oracle assesses proposal structure only. It does not accept an implementation, execute checks, resolve the missing integration point, or authorize dispatch."
+}

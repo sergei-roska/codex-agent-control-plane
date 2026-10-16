@@ -1,0 +1,72 @@
+{
+  "schemaVersion": "aut-03-case-set/v1",
+  "status": "frozen specification; independently reviewed and approved for future trial preparation",
+  "purpose": "Declare the small case set for future paired AUT-03 lead planning trials.",
+  "baselineCapture": "prohibited until an independent reviewer approves the synthetic inputs and oracle expectations and entry.json declares trial conditions.",
+  "anchor": {
+    "id": "accepted-f2-pilot-price",
+    "source": "accepted AUT-01 fixture; reference only; do not copy or modify",
+    "files": [
+      {
+        "path": "test/fixtures/spec-kit/pilot-price/context/accepted-context.json",
+        "sha256": "026bc8e85e8c5edc4ef232e008eede4995ef16c36cb914cb8d4dab914b72a581"
+      },
+      {
+        "path": "test/fixtures/spec-kit/pilot-price/context/pilot-context.json",
+        "sha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf"
+      },
+      {
+        "path": "test/fixtures/spec-kit/pilot-price/specs/pilot-price/traceability.json",
+        "sha256": "212f256587a672c4c6de818a67a52e8a0463663258f39756d9409a6e53be3ec8"
+      }
+    ],
+    "acceptanceManifest": "docs/evidence/aut-01/acceptance.json"
+  },
+  "syntheticCases": [
+    {
+      "id": "bounded-dependencies",
+      "kind": "synthetic",
+      "input": "bounded-dependencies/input.md",
+      "oracle": "bounded-dependencies/oracle.json",
+      "sha256": {
+        "input": "4d269d915263551f82fbe962b01f711cddc99ff6335fa8d838114b1ab9df619c",
+        "oracle": "4811593346459aff20d9de29e3ac0a2cce689ebccfc07cf04971bc4fa397f7c7"
+      }
+    },
+    {
+      "id": "owner-decision-required",
+      "kind": "synthetic",
+      "input": "owner-decision-required/input.md",
+      "oracle": "owner-decision-required/oracle.json",
+      "sha256": {
+        "input": "5c6e4e96e81299ba0c53d2184cddb89c3e1cabb3e6d4179fa4147f4cd4b9234b",
+        "oracle": "d4589e5fd2acc9363d977f8a7476c046205b019e8d6cce1b615ff8ce2ee588c0"
+      }
+    },
+    {
+      "id": "contradictory-source-blocker",
+      "kind": "synthetic",
+      "input": "contradictory-source-blocker/input.md",
+      "oracle": "contradictory-source-blocker/oracle.json",
+      "sha256": {
+        "input": "c00f21f35af0f607652cbd5d50dc0114ca67f3064eebbe59aa02cf04140e82db",
+        "oracle": "6b501e890570d6950eb84dacb8a9ee2a272b097f78fdfa18356b3425699cb0bd"
+      },
+      "additionalInputs": [
+        {
+          "path": "contradictory-source-blocker/product-security-policy.md",
+          "sha256": "d493c058f8cceb0b94487a5c2bd3aef8445161b9d5115f32d2e94f81c1d1a3d9"
+        },
+        {
+          "path": "contradictory-source-blocker/product-report-requirements.md",
+          "sha256": "8660bc95ef3336162b774aa8453602bade7f5e753901b0b4844157f77b7361e8"
+        }
+      ]
+    }
+  ],
+  "interpretationLimits": [
+    "The accepted F2 context and map are reference-only structural anchors; this set does not introduce or claim an accepted AUT-01 context or map for any synthetic case.",
+    "Synthetic case inputs and oracles are authored candidate evaluation material, not accepted evidence or observed model results.",
+    "No live model outputs, baseline outputs, scores, cost findings, or effectiveness conclusions are included."
+  ]
+}

@@ -1,0 +1,12 @@
+uuid: 8c3e8006-2580-482d-8869-d41a7d77bfb8
+name: 'Mock Drupal Site (Sync)'
+mail: admin@example.com
+slogan: 'Built to be scanned'
+page:
+  403: ''
+  404: ''
+  front: /node
+admin_compact_mode: false
+weight_select_max: 100
+langcode: en
+default_langcode: en

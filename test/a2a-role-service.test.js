@@ -1357,17 +1357,20 @@ test('auditor continuations require a known unchanged originating review target'
   fs.writeFileSync(target, 'original');
   const stagingLog = new InMemoryStagingLog();
   const metadata = { runId: 'continuation-run', assignmentId: 'reviewer-1', attemptId: 'attempt-1' };
-  const request = JSON.parse(auditRequest(auditReview('risk_change', ['scope.txt'])));
+  const fullReview = { ...auditReview('risk_change', ['scope.txt']), prerequisiteFor: ['critical-1'] };
+  const request = JSON.parse(auditRequest(fullReview));
   const report = auditReport('VERDICT: pass', { filesInspected: ['scope.txt'] });
   let calls = 0;
+  let receivedInput = '';
   try {
-    const firstService = makeService({ async run() { calls += 1; return okResult(report); } }, {
+    const firstService = makeService({ async run(options) { calls += 1; receivedInput = options.input; return okResult(report); } }, {
       roles: auditorRoles, workspace: root, stagingLog,
     });
     const first = taskResult(await firstService.agents.get('auditor').handler.sendMessage(
       sendParams(message(JSON.stringify(request), undefined, metadata)), firstService.context,
     ));
     assert.equal(first.status.state, 3);
+    assert.ok(receivedInput.includes(JSON.stringify(fullReview)), 'App Server input must retain all six review fields');
 
     const unchangedService = makeService({ async run() { calls += 1; return okResult(report); } }, {
       roles: auditorRoles, workspace: root, stagingLog,
@@ -1386,7 +1389,7 @@ test('auditor continuations require a known unchanged originating review target'
     });
     const stale = taskResult(await staleService.agents.get('auditor').handler.sendMessage(
       sendParams(message(JSON.stringify({ ...request, continuation: { ofAttemptId: 'attempt-1', threadId: null, laneId: null, codexHome: null } }), undefined, {
-        ...metadata, attemptId: 'attempt-3',
+        ...metadata, assignmentId: 'reviewer-2', attemptId: 'attempt-3',
       })), staleService.context,
     ));
     assert.equal(stale.status.state, 4);
@@ -1398,7 +1401,7 @@ test('auditor continuations require a known unchanged originating review target'
     });
     const unknown = taskResult(await unknownService.agents.get('auditor').handler.sendMessage(
       sendParams(message(JSON.stringify({ ...request, continuation: { ofAttemptId: 'missing-attempt', threadId: null, laneId: null, codexHome: null } }), undefined, {
-        ...metadata, attemptId: 'attempt-4',
+        ...metadata, assignmentId: 'reviewer-3', attemptId: 'attempt-4',
       })), unknownService.context,
     ));
     assert.equal(unknown.status.state, 4);
@@ -1406,6 +1409,430 @@ test('auditor continuations require a known unchanged originating review target'
     assert.equal(calls, 2, 'unknown continuations must not invoke Codex');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('direct review continuations bind thread lane and codex home to their origin attempt', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-review-continuation-binding-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const target = path.join(root, 'scope.txt');
+  fs.writeFileSync(target, 'candidate A');
+  const stagingLog = new InMemoryStagingLog();
+  const calls = [];
+  const appServer = {
+    getCodexHome() { return 'home-A'; },
+    async run(options) {
+      calls.push(options);
+      return { ...okResult(auditReport('VERDICT: pass', { filesInspected: ['scope.txt'] })), threadId: `thread-${calls.length}` };
+    },
+  };
+  const request = auditRequest(auditReview('risk_change', ['scope.txt']));
+  const sendReview = async (attemptId, continuation) => {
+    const service = makeService(appServer, { roles: auditorRoles, workspace: root, stagingLog });
+    const input = continuation ? JSON.stringify({ ...JSON.parse(request), continuation }) : request;
+    return taskResult(await service.agents.get('auditor').handler.sendMessage(
+      sendParams(message(input, undefined, { runId: 'binding-run', assignmentId: `review-${attemptId}`, attemptId })), service.context,
+    ));
+  };
+
+  const first = await sendReview('binding-A');
+  assert.equal(first.status.state, 3);
+  fs.writeFileSync(target, 'candidate B');
+  const second = await sendReview('binding-B');
+  assert.equal(second.status.state, 3);
+  const origin = second.artifacts[0].metadata.continuation;
+  assert.deepEqual(origin, { threadId: 'thread-2', laneId: null, codexHome: 'home-A' });
+
+  for (const [field, value] of [
+    ['threadId', 'thread-1'],
+    ['laneId', 'lane-from-another-attempt'],
+    ['codexHome', 'home-from-another-attempt'],
+  ]) {
+    const before = calls.length;
+    const failed = await sendReview(`mismatch-${field}`, {
+      ofAttemptId: 'binding-B', ...origin, [field]: value,
+    });
+    assert.equal(failed.status.state, 4, `${field} mismatch must fail before App Server execution`);
+    assert.equal(failed.status.message.metadata.review.reason, 'review_origin_stale');
+    assert.equal(calls.length, before, `${field} mismatch must not call App Server`);
+  }
+
+  const sameOrigin = await sendReview('matching-B', { ofAttemptId: 'binding-B', ...origin });
+  assert.equal(sameOrigin.status.state, 3, 'matching origin tuple remains resumable');
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2].threadId, 'thread-2');
+});
+
+test('direct review resumable context distinguishes unknown bindings from proven tuple mismatches', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-review-continuation-evidence-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'scope.txt'), 'candidate');
+
+  for (const evidenceCase of ['missing', 'malformed', 'unknown-version', 'ambiguous', 'unavailable']) {
+    const stagingLog = new InMemoryStagingLog();
+    let calls = 0;
+    const appServer = { async run() { calls += 1; return { ...okResult(auditReport('VERDICT: pass', { filesInspected: ['scope.txt'] })), threadId: 'origin-thread' }; } };
+    const originService = makeService(appServer, { roles: auditorRoles, workspace: root, stagingLog });
+    const origin = taskResult(await originService.agents.get('auditor').handler.sendMessage(
+      sendParams(message(auditRequest(auditReview('risk_change', ['scope.txt'])), undefined, {
+        runId: 'binding-evidence-run', assignmentId: 'binding-origin', attemptId: 'binding-origin',
+      })), originService.context,
+    ));
+    assert.equal(origin.status.state, 3);
+    const binding = [...stagingLog.events.values()].find((event) => event.type === 'review_continuation_emitted');
+    assert.ok(binding);
+    if (evidenceCase === 'malformed') {
+      stagingLog.events.set(binding.eventId, {
+        ...binding,
+        payload: { ...binding.payload, tupleDigest: 'not-a-digest' },
+      });
+    } else if (evidenceCase === 'unknown-version') {
+      stagingLog.events.set(binding.eventId, {
+        ...binding,
+        payload: { ...binding.payload, version: 2 },
+      });
+    } else if (evidenceCase === 'ambiguous') {
+      stagingLog.events.set('duplicate-continuation-binding', {
+        ...binding,
+        eventId: 'duplicate-continuation-binding',
+      });
+    } else if (evidenceCase === 'unavailable') {
+      const actualList = stagingLog.list.bind(stagingLog);
+      stagingLog.list = (filter) => {
+        if (filter.type === 'review_continuation_emitted') throw new Error('binding unavailable');
+        return actualList(filter);
+      };
+    } else {
+      stagingLog.events.delete(binding.eventId);
+    }
+    const continuationService = makeService({ async run() { calls += 1; return okResult(auditReport()); } }, {
+      roles: auditorRoles, workspace: root, stagingLog,
+    });
+    const continuation = taskResult(await continuationService.agents.get('auditor').handler.sendMessage(
+      sendParams(message(JSON.stringify({
+        ...JSON.parse(auditRequest(auditReview('risk_change', ['scope.txt']))),
+        continuation: { ofAttemptId: 'binding-origin', threadId: 'origin-thread', laneId: null, codexHome: null },
+      }), undefined, { runId: 'binding-evidence-run', assignmentId: `binding-next-${evidenceCase}`, attemptId: `binding-next-${evidenceCase}` })),
+      continuationService.context,
+    ));
+    assert.equal(continuation.status.state, 4, evidenceCase);
+    assert.equal(continuation.status.message.metadata.review.reason, 'review_origin_unknown', evidenceCase);
+    assert.equal(calls, 1, 'missing or corrupt tuple evidence must reject before App Server execution');
+
+    const freshService = makeService(appServer, { roles: auditorRoles, workspace: root, stagingLog });
+    const fresh = taskResult(await freshService.agents.get('auditor').handler.sendMessage(
+      sendParams(message(JSON.stringify({
+        ...JSON.parse(auditRequest(auditReview('risk_change', ['scope.txt']))),
+        continuation: { ofAttemptId: 'binding-origin', threadId: null, laneId: null, codexHome: null },
+      }), undefined, { runId: 'binding-evidence-run', assignmentId: `binding-fresh-${evidenceCase}`, attemptId: `binding-fresh-${evidenceCase}` })),
+      freshService.context,
+    ));
+    assert.equal(fresh.status.state, 3, 'clearing resumable fields permits a fresh execution');
+    assert.equal(calls, 2);
+  }
+});
+
+test('auditor continuations fail closed for missing, other-run, corrupt, and ambiguous origins', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-audit-origin-evidence-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'scope.txt'), 'candidate');
+
+  for (const originCase of ['missing', 'other-run', 'corrupt', 'conflicting-corrupt', 'ambiguous', 'overflow']) {
+    const stagingLog = new InMemoryStagingLog();
+    let runId = originCase === 'other-run' ? 'continuation-run' : 'origin-run';
+    let calls = 0;
+    const firstService = makeService({ async run() { calls += 1; return okResult(auditReport('VERDICT: pass', { filesInspected: ['scope.txt'] })); } }, {
+      roles: auditorRoles, workspace: root, stagingLog,
+    });
+    if (originCase !== 'missing') {
+      const first = taskResult(await firstService.agents.get('auditor').handler.sendMessage(
+        sendParams(message(auditRequest(auditReview('risk_change', ['scope.txt'])), undefined, {
+          runId, assignmentId: 'reviewer-1', attemptId: 'origin-attempt',
+        })), firstService.context,
+      ));
+      assert.equal(first.status.state, 3, `${originCase} setup review`);
+    }
+    if (['corrupt', 'conflicting-corrupt', 'ambiguous', 'overflow'].includes(originCase)) {
+      const event = [...stagingLog.events.values()].find((entry) => entry.type === 'audit_started');
+      assert.ok(event, `${originCase} setup must produce origin evidence`);
+      if (originCase === 'corrupt') {
+        stagingLog.events.set(event.eventId, { ...event, target: null });
+      } else if (originCase === 'conflicting-corrupt') {
+        stagingLog.events.set('corrupt-origin', { ...event, eventId: 'corrupt-origin', target: null });
+      } else if (originCase === 'ambiguous') {
+        stagingLog.events.set('ambiguous-origin', { ...event, eventId: 'ambiguous-origin', target: 'review-target/v1:other' });
+      }
+    }
+    if (originCase === 'overflow') {
+      const actualList = stagingLog.list.bind(stagingLog);
+      stagingLog.list = (filter) => {
+        const listed = actualList(filter);
+        return [
+          ...listed,
+          ...Array.from({ length: 10000 - listed.length }, (_, index) => ({
+            ...listed[0], eventId: `overflow-${index}`, attemptId: `unrelated-${index}`,
+          })),
+        ];
+      };
+    }
+    if (originCase === 'other-run') {
+      runId = 'another-run';
+    }
+    const continuedService = makeService({ async run() { calls += 1; return okResult(auditReport('VERDICT: pass', { filesInspected: ['scope.txt'] })); } }, {
+      roles: auditorRoles, workspace: root, stagingLog,
+    });
+    const continuation = originCase === 'missing' ? 'missing-attempt' : 'origin-attempt';
+    const continuedRequest = JSON.stringify({
+      ...JSON.parse(auditRequest(auditReview('risk_change', ['scope.txt']))),
+      continuation: { ofAttemptId: continuation, threadId: null, laneId: null, codexHome: null },
+    });
+    const failed = taskResult(await continuedService.agents.get('auditor').handler.sendMessage(
+      sendParams(message(continuedRequest, undefined, {
+        runId, assignmentId: 'reviewer-2', attemptId: `${originCase}-continuation`,
+      })), continuedService.context,
+    ));
+    assert.equal(failed.status.state, 4, originCase);
+    assert.equal(failed.status.message.metadata.review.reason, 'review_origin_unknown', originCase);
+    assert.equal(calls, originCase === 'missing' ? 0 : 1, `${originCase} must fail before appServer.run`);
+  }
+});
+
+test('direct verifier continuation requires its originating target and preserves same-target control', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-verifier-continuation-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const target = path.join(root, 'scope.txt');
+  fs.writeFileSync(target, 'candidate A');
+  const calls = [];
+  const review = {
+    kind: 'routine', checkpointId: 'verifier-checkpoint', reason: 'Verify the current candidate.',
+    paths: ['scope.txt'], evidenceIds: ['evidence-1'], prerequisiteFor: [],
+  };
+  const lane = { id: 'verifier-lane', path: path.join(root, 'lane'), workspacePath: root, base: 'base' };
+  const writerExecution = {
+    executionId: null, state: null, reason: null, effects: 'none',
+    lane: { id: lane.id, state: 'not_integrated', reason: 'no_changes' },
+    delta: { known: true, headChanged: false, changedPaths: [], changedPathCount: 0, source: 'lane_collection' },
+  };
+  const laneStore = new Map([[lane.id, lane]]);
+  let laneExistedAtCompletion = false;
+  const lanes = {
+    async available() { return true; },
+    async prepare() { return { lane }; },
+    store: laneStore,
+    markRunning() {},
+    laneInput(_lane, input) { return input; },
+    sandboxPolicy() { return {}; },
+    recordTurnStart() {},
+    async complete() {
+      laneExistedAtCompletion = Boolean(laneStore.get(lane.id));
+      laneStore.delete(lane.id);
+      return { canceled: false, writerExecution };
+    },
+  };
+  const service = makeService({
+    async run(options) {
+      calls.push(options);
+      return {
+        ...okResult(JSON.stringify(validReport({
+          summary: 'Verified the current candidate.',
+          filesInspected: ['scope.txt'],
+          checks: [{ command: 'inspect scope', result: 'passed', detail: 'Current scope inspected.' }],
+        }))),
+        threadId: 'verifier-thread-a',
+      };
+    },
+  }, { roles: verifierRoles, workspace: root, lanes });
+  const request = structured({ objective: 'Verify the current candidate.', allowedFiles: ['tests'], review });
+  const first = taskResult(await service.agents.get('verifier').handler.sendMessage(
+    sendParams(message(request, undefined, { runId: 'verifier-run', assignmentId: 'verifier-1', attemptId: 'verifier-a' })), service.context,
+  ));
+  assert.equal(first.status.state, 3);
+  assert.equal(calls.length, 1);
+  assert.equal(laneExistedAtCompletion, true);
+  assert.equal(first.artifacts[0].metadata.continuation.laneId, null, 'published tuple reflects lane removal during completion');
+  const firstTarget = first.artifacts[0].metadata.reviewCoverage.targetIdentity;
+
+  const forgedRequest = JSON.stringify({
+    ...JSON.parse(request),
+    continuation: { ofAttemptId: 'verifier-a', threadId: 'different-thread', laneId: null, codexHome: null },
+  });
+  const forged = taskResult(await service.agents.get('verifier').handler.sendMessage(
+    sendParams(message(forgedRequest, undefined, { runId: 'verifier-run', assignmentId: 'verifier-forged', attemptId: 'verifier-forged' })), service.context,
+  ));
+  assert.equal(forged.status.state, 4);
+  assert.equal(forged.status.message.metadata.failureKind, 'request_invalid');
+  assert.equal(forged.status.message.metadata.effects, 'none');
+  assert.equal(forged.status.message.metadata.boundary.results[0].code, 'review_origin_stale');
+  assert.equal(forged.status.message.metadata.review.reason, 'review_origin_stale');
+  assert.equal(calls.length, 1, 'forged verifier thread must fail before the App Server boundary');
+
+  const continuedRequest = JSON.stringify({
+    ...JSON.parse(request),
+    continuation: { ofAttemptId: 'verifier-a', threadId: 'verifier-thread-a', laneId: null, codexHome: null },
+  });
+  const unchanged = taskResult(await service.agents.get('verifier').handler.sendMessage(
+    sendParams(message(continuedRequest, undefined, { runId: 'verifier-run', assignmentId: 'verifier-2', attemptId: 'verifier-same' })), service.context,
+  ));
+  assert.equal(calls.length, 2, 'same-target verifier continuation reaches the injected App Server boundary');
+  assert.equal(calls[1].threadId, 'verifier-thread-a');
+  assert.equal(unchanged.status.state, 3);
+  assert.equal(unchanged.artifacts[0].metadata.review.accepted, true);
+  assert.equal(unchanged.artifacts[0].metadata.reviewCoverage.stable, true);
+  assert.equal(unchanged.artifacts[0].metadata.reviewCoverage.targetIdentity, firstTarget);
+
+  fs.writeFileSync(target, 'candidate B');
+  const continued = taskResult(await service.agents.get('verifier').handler.sendMessage(
+    sendParams(message(continuedRequest, undefined, { runId: 'verifier-run', assignmentId: 'verifier-3', attemptId: 'verifier-b' })), service.context,
+  ));
+  if (process.env.AUT02_TRACE_DIR) {
+    const failureMetadata = continued.status.message?.metadata || {};
+    const resultMetadata = continued.artifacts?.[0]?.metadata || continued.status.message.metadata;
+    const trace = {
+      scenario: 'direct-verifier-origin-a-to-b',
+      runId: 'verifier-run',
+      checkpointId: review.checkpointId,
+      originAttemptId: 'verifier-a',
+      retryAttemptId: 'verifier-b',
+      leadToServiceMessages: 3,
+      appServerCalls: calls.length,
+      targetA: firstTarget,
+      targetB: resultMetadata.reviewCoverage?.targetIdentity || null,
+      outcome: resultMetadata.review.reason || resultMetadata.review.status || null,
+      boundaryCode: failureMetadata.boundary?.results?.[0]?.code || null,
+    };
+    fs.mkdirSync(process.env.AUT02_TRACE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(process.env.AUT02_TRACE_DIR, 'direct-verifier-continuation.json'), `${JSON.stringify(trace, null, 2)}\n`);
+  }
+  assert.equal(calls.length, 2, 'stale verifier continuation must fail before the injected App Server boundary');
+  assert.equal(continued.status.state, 4);
+  assert.equal(continued.status.message.metadata.failureKind, 'request_invalid');
+  assert.equal(continued.status.message.metadata.effects, 'none');
+  assert.equal(continued.status.message.metadata.boundary.results[0].code, 'review_origin_stale');
+  assert.deepEqual(
+    [continued.status.message.metadata.review.policyId, continued.status.message.metadata.review.kind,
+      continued.status.message.metadata.review.checkpointId, continued.status.message.metadata.review.status,
+      continued.status.message.metadata.review.reason, continued.status.message.metadata.review.accepted,
+      continued.status.message.metadata.review.valid, continued.status.message.metadata.review.verdict],
+    ['auditor-routing/v1', 'routine', 'verifier-checkpoint', 'rejected', 'review_origin_stale', false, false, null],
+  );
+  assert.deepEqual(continued.status.message.metadata.review.reviewCoverage, {
+    targetKnown: true,
+    targetIdentity: continued.status.message.metadata.review.reviewCoverage.targetIdentity,
+    stable: false,
+    reason: 'review_origin_stale',
+  });
+});
+
+test('direct verifier continuation fails closed for missing, cross-run, corrupt, and ambiguous origins', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-verifier-origin-evidence-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'scope.txt'), 'candidate');
+  const review = {
+    kind: 'routine', checkpointId: 'verifier-origin-checkpoint', reason: 'Verify the current candidate.',
+    paths: ['scope.txt'], evidenceIds: ['evidence-1'], prerequisiteFor: [],
+  };
+  const request = structured({ objective: 'Verify the current candidate.', allowedFiles: ['tests'], review });
+  const lane = { id: 'verifier-origin-lane', path: path.join(root, 'lane'), workspacePath: root, base: 'base' };
+  const writerExecution = {
+    executionId: null, state: null, reason: null, effects: 'none',
+    lane: { id: lane.id, state: 'not_integrated', reason: 'no_changes' },
+    delta: { known: true, headChanged: false, changedPaths: [], changedPathCount: 0, source: 'lane_collection' },
+  };
+  const lanes = {
+    async available() { return true; },
+    async prepare() { return { lane }; },
+    markRunning() {},
+    laneInput(_lane, input) { return input; },
+    sandboxPolicy() { return {}; },
+    recordTurnStart() {},
+    async complete() { return { canceled: false, writerExecution }; },
+  };
+
+  for (const originCase of ['missing', 'cross-run', 'missing-run', 'corrupt', 'conflicting-corrupt', 'wrong-role', 'ambiguous', 'overflow', 'unavailable']) {
+    const stagingLog = new InMemoryStagingLog();
+    let calls = 0;
+    const appServer = {
+      async run() {
+        calls += 1;
+        return {
+          ...okResult(JSON.stringify(validReport({
+            summary: 'Verified the current candidate.',
+            filesInspected: ['scope.txt'],
+            checks: [{ command: 'inspect scope', result: 'passed', detail: 'Current scope inspected.' }],
+          }))),
+          threadId: 'verifier-origin-thread',
+        };
+      },
+    };
+    const originRunId = 'verifier-origin-run';
+    if (originCase !== 'missing' && originCase !== 'unavailable') {
+      const originService = makeService(appServer, {
+        roles: verifierRoles, workspace: root, lanes, stagingLog,
+      });
+      const origin = taskResult(await originService.agents.get('verifier').handler.sendMessage(
+        sendParams(message(request, undefined, { runId: originRunId, assignmentId: 'verifier-origin', attemptId: 'origin-attempt' })), originService.context,
+      ));
+      assert.equal(origin.status.state, 3, `${originCase} setup`);
+    }
+    if (['corrupt', 'conflicting-corrupt', 'wrong-role', 'ambiguous', 'overflow'].includes(originCase)) {
+      const event = [...stagingLog.events.values()].find((entry) => entry.type === 'verifier_started');
+      assert.ok(event, `${originCase} setup must produce verifier origin evidence`);
+      if (originCase === 'corrupt') {
+        stagingLog.events.set(event.eventId, { ...event, target: null });
+      } else if (originCase === 'conflicting-corrupt') {
+        stagingLog.events.set('corrupt-verifier-origin', { ...event, eventId: 'corrupt-verifier-origin', target: null });
+      } else if (originCase === 'wrong-role') {
+        stagingLog.events.set('wrong-role-verifier-origin', { ...event, eventId: 'wrong-role-verifier-origin', role: 'auditor' });
+      } else if (originCase === 'ambiguous') {
+        stagingLog.events.set('ambiguous-verifier-origin', { ...event, eventId: 'ambiguous-verifier-origin', target: 'review-target/v1:other' });
+      }
+    }
+    if (originCase === 'overflow') {
+      const actualList = stagingLog.list.bind(stagingLog);
+      stagingLog.list = (filter) => {
+        const listed = actualList(filter);
+        return [
+          ...listed,
+          ...Array.from({ length: 10000 - listed.length }, (_, index) => ({
+            ...listed[0], eventId: `overflow-${index}`, attemptId: `unrelated-${index}`,
+          })),
+        ];
+      };
+    }
+    if (originCase === 'unavailable') {
+      stagingLog.list = () => { throw new Error('staging evidence unavailable'); };
+    }
+    const runId = originCase === 'cross-run' ? 'another-verifier-run'
+      : originCase === 'missing-run' ? undefined : originRunId;
+    const attemptId = originCase === 'missing' ? 'missing-attempt' : 'origin-attempt';
+    const continuedRequest = JSON.stringify({
+      ...JSON.parse(request),
+      continuation: { ofAttemptId: attemptId, threadId: 'verifier-origin-thread', laneId: null, codexHome: null },
+    });
+    const continuedService = makeService(appServer, {
+      roles: verifierRoles, workspace: root, lanes, stagingLog,
+    });
+    const failed = taskResult(await continuedService.agents.get('verifier').handler.sendMessage(
+      sendParams(message(continuedRequest, undefined, { runId, assignmentId: 'verifier-retry', attemptId: `${originCase}-attempt` })), continuedService.context,
+    ));
+    assert.equal(failed.status.state, 4, originCase);
+    assert.equal(failed.status.message.metadata.boundary.results[0].code, 'review_origin_unknown', originCase);
+    assert.equal(calls, ['missing', 'unavailable'].includes(originCase) ? 0 : 1, `${originCase} must fail before appServer.run`);
   }
 });
 
@@ -1448,6 +1875,41 @@ test('pinned-check fallback continuations fail closed when origin evidence is mi
   assert.equal(failed.status.message.metadata.review.reason, 'review_origin_unknown');
   assert.equal(calls, 0);
   assert.equal(stagingLog.list({ type: 'pinned_check_started' }).length, 0);
+});
+
+test('pinned-check fallback continuation accepts a known unchanged origin', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-pinned-continuation-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'scope.txt'), 'candidate');
+  const stagingLog = new InMemoryStagingLog();
+  const review = auditReview('pinned_check', ['scope.txt']);
+  const request = structured({ objective: 'Review the pinned check.', allowedFiles: [], review });
+  const report = auditReport('VERDICT: preserve', { filesInspected: ['scope.txt'] });
+  let calls = 0;
+  const makePinnedService = () => makeService({
+    async run() { calls += 1; return { ...okResult(report), threadId: 'pinned-thread' }; },
+  }, { roles: pinnedFallbackRoles, workspace: root, stagingLog });
+  const firstService = makePinnedService();
+  const first = taskResult(await firstService.agents.get('explorer').handler.sendMessage(
+    sendParams(message(request, undefined, { runId: 'pinned-run', assignmentId: 'reviewer-1', attemptId: 'pinned-attempt-1' })), firstService.context,
+  ));
+  assert.equal(first.status.state, 3);
+  assert.equal(first.artifacts[0].metadata.review.accepted, true);
+
+  const continuedRequest = JSON.stringify({
+    ...JSON.parse(request),
+    continuation: { ofAttemptId: 'pinned-attempt-1', threadId: null, laneId: null, codexHome: null },
+  });
+  const continuedService = makePinnedService();
+  const continued = taskResult(await continuedService.agents.get('explorer').handler.sendMessage(
+    sendParams(message(continuedRequest, undefined, { runId: 'pinned-run', assignmentId: 'reviewer-2', attemptId: 'pinned-attempt-2' })), continuedService.context,
+  ));
+  assert.equal(continued.status.state, 3);
+  assert.equal(continued.artifacts[0].metadata.review.accepted, true);
+  assert.equal(calls, 2);
 });
 
 test('verifier binds coverage to the post-verification target after an authorized test-file write', async () => {
@@ -1677,8 +2139,14 @@ test('staging events correlate direct audits and store bounded redacted report s
   })), context));
   assert.equal(result.status.state, 3);
   const events = stagingLog.list({ runId: 'run-7' });
-  assert.deepEqual(events.map((event) => event.type), ['role_selected', 'audit_selected', 'audit_started', 'audit_result']);
+  assert.deepEqual(events.map((event) => event.type), [
+    'role_selected', 'audit_selected', 'audit_started', 'review_continuation_emitted', 'audit_result',
+  ]);
   assert.ok(events.every((event) => event.assignmentId === 'assignment-8' && event.attemptId === 'attempt-9'));
+  const continuationBinding = events.find((event) => event.type === 'review_continuation_emitted');
+  assert.deepEqual(Object.keys(continuationBinding.payload).sort(), ['checkpointId', 'kind', 'policyId', 'tupleDigest', 'version']);
+  assert.equal(continuationBinding.payload.version, 1);
+  assert.match(continuationBinding.payload.tupleDigest, /^[a-f0-9]{64}$/);
   const payload = events.at(-1).payload;
   assert.match(payload.summary, /Bearer \[REDACTED\]/);
   assert.doesNotMatch(payload.summary, /abcdefghijklmnop/);

@@ -1,0 +1,33 @@
+TAP version 13
+# AUT-02-REPLAY-MANIFEST {"schemaVersion":1,"baselineCommit":"cc0958edd54a5c7ddaab02e4844fa69b823af365","baselineSourceHashes":{"src/lead-graph.js":"c982762654c32f295ccc1893f0f3c878922b9b61928cb1c74221e5d3493c136a","src/a2a-role-service.js":"4ab02f2bd1ec8b14120bb39ccb88fb0137ffe45a9792e52a7d32b3129d410516","src/contracts.js":"be1966aea45abdaaf498fd53feef0a738b6bb2a642504d70539e45fc9f6d1698","src/review-policy.js":"0d4ea958db3a0b3566426d4bbe3203d11eedb08dec34f432838f226ad9ba87a6"},"overlayHashes":{"test/contracts.test.js":"756fdd3d5679d010545f5787051bedcf00d81bd36e6ba4202b9519ce390f6ae1","test/review-policy.test.js":"9b29a08c93804c0a0d017665d4b7b395516fde646bc4f616c20d5b168421e1f7","test/a2a-role-service.test.js":"ab5408a7be89c86bc42c6e70be2e7ef171e3c9255c6ff47da5eb349760076089","test/lead-graph.test.js":"c5e7644579933d03e3b306c14fa74e3c689e3e87c084420ebaa162643aaa22ab","test/fixtures/autonomy/aut-02/changed-candidate.json":"dd573afec0a8e74ddfb315f5a18aa04f2828fce0eeb35aaa5bfe7060484e3f00"},"nodeVersion":"v24.21.0","dependencyLink":{"path":"/home/sr/Projects/Workspace/codex-agent-control-plane/node_modules","policy":"read-only by convention"},"testNamePattern":"direct verifier continuation requires its originating target and preserves same-target control","testFiles":["test/contracts.test.js","test/review-policy.test.js","test/a2a-role-service.test.js","test/lead-graph.test.js"],"command":"/home/sr/.nvm/versions/node/v24.21.0/bin/node \"--test\" \"--test-isolation=none\" \"--test-reporter=tap\" \"--test-name-pattern=direct verifier continuation requires its originating target and preserves same-target control\" \"test/contracts.test.js\" \"test/review-policy.test.js\" \"test/a2a-role-service.test.js\" \"test/lead-graph.test.js\"","baselineWorkspace":"temporary archive under os.tmpdir; removed after execution","counts":{"tests":1,"pass":0,"fail":1,"skipped":0,"cancelled":0,"todo":0},"runnerExitCode":1,"outcome":"failed"}
+# Subtest: direct verifier continuation requires its originating target and preserves same-target control
+not ok 1 - direct verifier continuation requires its originating target and preserves same-target control
+  ---
+  duration_ms: 26.246631
+  type: 'test'
+  location: '/tmp/aut02-replay-baseline-24a3iG/workspace/test/a2a-role-service.test.js:1609:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    3 !== 4
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 4
+  actual: 3
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/aut02-replay-baseline-24a3iG/workspace/test/a2a-role-service.test.js:1674:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 297.398539

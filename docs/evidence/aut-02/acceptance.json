@@ -1,0 +1,202 @@
+{
+  "decisionVersion": "aut-02-fresh-target-review-recovery/v1",
+  "status": "accepted",
+  "milestone": "AUT-02 fresh-target review recovery",
+  "implementationBaseCommit": "cc0958edd54a5c7ddaab02e4844fa69b823af365",
+  "acceptedScope": "Deterministic offline graph recovery from stale review continuations, direct review-origin enforcement, and current-target verifier/auditor receipt sequencing.",
+  "nodeVersion": "v24.21.0",
+  "mandatoryMatrix": {
+    "Q01": "pass",
+    "Q02": "pass",
+    "Q03": "pass",
+    "Q04": "pass",
+    "Q05": "pass",
+    "Q06": "pass",
+    "Q07": "pass",
+    "Q08": "pass",
+    "Q09": "pass",
+    "Q10": "pass",
+    "Q11": "pass",
+    "Q12": "pass",
+    "Q13": "pass",
+    "Q14": "pass"
+  },
+  "verification": {
+    "focused": {
+      "command": "env -u NODE_TEST_CONTEXT node --test --test-isolation=none --test-reporter=tap test/contracts.test.js test/review-policy.test.js test/a2a-role-service.test.js test/lead-graph.test.js",
+      "tests": 335,
+      "passed": 333,
+      "failed": 0,
+      "skipped": 2,
+      "evidence": "docs/evidence/aut-02/qualification-focused.tap"
+    },
+    "Q01": {
+      "finalTests": 2,
+      "finalPassed": 2,
+      "baselineAuditorTests": 1,
+      "baselineAuditorPassed": 0,
+      "baselineAuditorFailed": 1,
+      "evidence": [
+        "docs/evidence/aut-02/qualification-q01-baseline.tap",
+        "docs/evidence/aut-02/qualification-q01-verifier-baseline.tap",
+        "docs/evidence/aut-02/qualification-q01.tap"
+      ]
+    },
+    "Q11": {
+      "tests": 5,
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "docs/evidence/aut-02/qualification-q11.tap"
+    },
+    "fullProjectSuite": {
+      "command": "env -u NODE_TEST_CONTEXT node --test --test-isolation=none --test-reporter=tap test/*.test.js",
+      "tests": 1208,
+      "passed": 1207,
+      "failed": 0,
+      "skipped": 1,
+      "skipReason": "The live confinement probe is gated by CODEX_A2A_LIVE_PROBE=1 and was not enabled.",
+      "evidence": "docs/evidence/aut-02/qualification-full.tap"
+    },
+    "syntaxAndDiffChecks": "passed"
+  },
+  "independentReviews": {
+    "verifier": {
+      "decision": "APPROVE",
+      "report": "docs/evidence/aut-02/verifier-report.md",
+      "reviewedHashCount": 9
+    },
+    "auditor": {
+      "decision": "APPROVE",
+      "report": "docs/evidence/aut-02/auditor-report.md",
+      "targetedTestsPassed": 12,
+      "rehashedAut01AndAut05Artifacts": 39,
+      "reviewedHashCount": 9
+    }
+  },
+  "sourceHashes": {
+    "src/a2a-role-service.js": "95281c89bdab68f0aae8e0375b2f72930d9e4fa3868670f66600056144717234",
+    "src/lead-graph.js": "5d43791560e4a7f1d0b7c79ad58f9877ea1919fe31b8ed9705a45aa5c6d6e846",
+    "test/a2a-role-service.test.js": "ab5408a7be89c86bc42c6e70be2e7ef171e3c9255c6ff47da5eb349760076089",
+    "test/contracts.test.js": "756fdd3d5679d010545f5787051bedcf00d81bd36e6ba4202b9519ce390f6ae1",
+    "test/lead-graph.test.js": "dbc0960dfdeaa35359bada36ce6265c12162d92a51bcd03928e115bfa2d46bfe",
+    "test/review-policy.test.js": "9b29a08c93804c0a0d017665d4b7b395516fde646bc4f616c20d5b168421e1f7",
+    "test/acceptance.test.js": "53587ffb6aa36f1a1d95a74d62eea6e910369597e88196a79e697abe21bd9bff",
+    "test/acceptance-scratch.test.js": "22d33323739aa1da6fb853c7f7de245daa6ed48c1e3f21aa0dca1c579ae08579",
+    "test/fixtures/autonomy/aut-02/changed-candidate.json": "dd573afec0a8e74ddfb315f5a18aa04f2828fce0eeb35aaa5bfe7060484e3f00"
+  },
+  "artifacts": [
+    {
+      "path": "docs/aut-02-review.md",
+      "sha256": "c3ad9d85278709b9a213e89a7867dc5a98223ae59ac0db5f62954b3c96803198"
+    },
+    {
+      "path": "docs/evidence/aut-02/qualification-status.json",
+      "sha256": "ee35fc2a84cca73a121ead067451929431d0934a2aa5c0e49fce2b62113c0f46"
+    },
+    {
+      "path": "docs/evidence/aut-02/entry.json",
+      "sha256": "1ed1e70d3c6047bc765ae8ce6eadcc39533b9c6d4b0f58bc8b8ec21eec11106f"
+    },
+    {
+      "path": "docs/evidence/aut-02/qualification-config.json",
+      "sha256": "8d25aa247920c9d97e767fe0328226b3d9895f5b9c482c618bf7733759ced516"
+    },
+    {
+      "path": "docs/evidence/aut-02/existing-baseline.tap",
+      "sha256": "f2056c814acb8a6a49cf531f0be051da9e9d69684b0ca476bb128eaa8b1e9c96"
+    },
+    {
+      "path": "docs/evidence/aut-02/graph-baseline.tap",
+      "sha256": "d68ad038b3cccb38ecd4a665c6315853e833fc45fe292f5e98e94e84145dd31b"
+    },
+    {
+      "path": "docs/evidence/aut-02/direct-baseline.tap",
+      "sha256": "a90c8a34003c31b41a18f66305264184366409c4087e186af514c41044f6a332"
+    },
+    {
+      "path": "docs/evidence/aut-02/direct-stale-baseline-original.tap",
+      "sha256": "82df6da3cf1288ab6bad7d60e6a66facb4d31dc69f07c721d1f0875cd8fc1cad"
+    },
+    {
+      "path": "docs/evidence/aut-02/qualification-q01-baseline.tap",
+      "sha256": "28755bfb95635da415a35f539804195b5fdbb7e58c8f15c1a8ffae3110cf0b51"
+    },
+    {
+      "path": "docs/evidence/aut-02/qualification-q01-verifier-baseline.tap",
+      "sha256": "b26fbb3026f29d0f6b76a36e6ef94c26d57cb74386b006606ef67b377526fa7b"
+    },
+    {
+      "path": "docs/evidence/aut-02/qualification-q01.tap",
+      "sha256": "e7ee9577185d581e6f844080b9a7165c58b4ab455207da92cba181c25879ac1e"
+    },
+    {
+      "path": "docs/evidence/aut-02/qualification-q11.tap",
+      "sha256": "dceeccc172248cbc716e8daec21e1737218598009e1f5fdb68751018f7f14204"
+    },
+    {
+      "path": "docs/evidence/aut-02/qualification-focused.tap",
+      "sha256": "8327183cef21b7cc82d64879cd64b65c0c15418b2f6600dfbd2186463c8d6de0"
+    },
+    {
+      "path": "docs/evidence/aut-02/qualification-full.tap",
+      "sha256": "bc6e3852ca001421b336e30afd7a5e056c334a07e56b1692ecdff036da880f76"
+    },
+    {
+      "path": "docs/evidence/aut-02/qualification-traces.tap",
+      "sha256": "0213bf3b7504c8a01c0dde23eb9513f742f3917b04af847eacb07de7a46e4a53"
+    },
+    {
+      "path": "docs/evidence/aut-02/qualification-direct-trace.tap",
+      "sha256": "4a23874ac92eebe88026bacf101f5877c253cffac9fbbde3cb3e22f68e377882"
+    },
+    {
+      "path": "docs/evidence/aut-02/traces/final/automatic-selection.json",
+      "sha256": "bfa995244eb4684cf8366c42ead0bcac4c53acf04aaaafe822b4c58630c2a470"
+    },
+    {
+      "path": "docs/evidence/aut-02/traces/final/direct-verifier-continuation.json",
+      "sha256": "076a376fdfd266e81202f1ae75c51cd25a283c7452b9c1df4ae028e798b7b6c5"
+    },
+    {
+      "path": "docs/evidence/aut-02/traces/final/service-origin-race.json",
+      "sha256": "155edde116e9a4fa5a11d53e80596dfa26af9499799ddf7b7fc9f43f538cc5b6"
+    },
+    {
+      "path": "docs/evidence/aut-02/challenge/regression-report.md",
+      "sha256": "55c09d283840292751bc639768657feb685cc1bf73e7cdd932ec57672648d832"
+    },
+    {
+      "path": "docs/evidence/aut-02/challenge/thread-origin-regression-output.txt",
+      "sha256": "c854b3836a438520afcfc2ba9793cfdd0a4e2e4b7ce561e9652e483583a4e3c5"
+    },
+    {
+      "path": "docs/evidence/aut-02/comparison.md",
+      "sha256": "f4705c500836b6846f64723193125a4a147f9f965eddf22c4eec5437af66d15d"
+    },
+    {
+      "path": "docs/evidence/aut-02/verifier-report.md",
+      "sha256": "7841ad91630b1c09c7b85e0b1b0be3bf14b6b5b8aa57e47ee417d83174143b90"
+    },
+    {
+      "path": "docs/evidence/aut-02/auditor-report.md",
+      "sha256": "26d23e333475f3991788e0d6ffb904cdb162205fcb12ee62713f9d920eb3eb58"
+    },
+    {
+      "path": "docs/evidence/aut-02/legacy-reader/result.json",
+      "sha256": "af3e4e38bb37efaa2bc7fa9d5b972110566d4e3dbce7f5a98b8c2efd9737790a"
+    },
+    {
+      "path": "docs/evidence/aut-02/recovery-design.md",
+      "sha256": "84baacf8b8f4efe8eee23d9deedab997ec714afc30d640b1cc3b7fa2cc98ffd1"
+    }
+  ],
+  "limitations": [
+    "Qualification uses deterministic harness simulations with fake transports and disposable state.",
+    "Live lead decision quality, tokens, monetary cost, owner escalation rates, and production recovery duration are unavailable.",
+    "The full suite skips the live confinement probe unless CODEX_A2A_LIVE_PROBE=1 is explicitly enabled.",
+    "No running service, existing session, shared database, or production rollout was changed."
+  ],
+  "rollbackBoundary": "Retain review obligations, receipts, failed history, and the direct origin guard. If reverting the direct service, quiesce review continuations first; reverting to baseline while continuations remain active restores the demonstrated stale-context defect.",
+  "nextCheckpoint": "AUT-03 runbook S0 is satisfied by this acceptance. AUT-03 implementation has not started and remains separate work."
+}

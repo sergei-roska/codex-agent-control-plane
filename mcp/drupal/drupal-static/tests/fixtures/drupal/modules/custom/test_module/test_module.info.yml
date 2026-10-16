@@ -1,0 +1,5 @@
+name: 'Test Module'
+type: module
+description: 'A mock module for static analysis testing.'
+package: Custom
+core_version_requirement: ^10

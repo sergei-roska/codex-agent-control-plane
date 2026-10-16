@@ -1,0 +1,16 @@
+anonymous: Anonymous
+verify_mail: true
+notify:
+  status_blocked: false
+  status_activated: true
+  status_canceled: false
+  register_admin_created: true
+  register_no_approval_required: true
+  register_pending_approval: true
+  password_reset: true
+register: visitors_admin_approval
+password_reset_timeout: 86400
+password_strength: true
+dependencies:
+  config:
+    - system.site
