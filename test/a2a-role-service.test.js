@@ -78,6 +78,7 @@ test('publishes distinct role cards and routes each task to its role', async () 
 
   assert.equal(agents.get('orch-planner').card.name, 'Planner');
   assert.equal(agents.get('orch-planner').card.skills.length, 1);
+  assert.ok(agents.get('orch-planner').card.skills.every(({ id }) => id !== 'aut-03-lead-decomposition-v1'));
   assert.deepEqual(agents.get('orch-planner').card.securityRequirements, [{ schemes: { bearerAuth: { list: [] } } }]);
   assert.equal(agents.get('orch-planner').card.securitySchemes.bearerAuth.scheme.$case, 'httpAuthSecurityScheme');
   assert.equal(agents.get('orch-reviewer').card.name, 'Reviewer');

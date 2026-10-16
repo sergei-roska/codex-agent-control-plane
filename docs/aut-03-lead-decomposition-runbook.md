@@ -92,7 +92,21 @@ every applicable full, delta, and resumed coordinator turn, including after
 thread rollover. A changed or unavailable pin must stop or start a fresh
 full-context lead thread under the declared policy; do not mix old-thread skill
 instructions with a new version. Ordinary runs have the skill off by default.
-The AUT-03 trial opt-in applies only to the lead and the named trial runs.
+Activation requires both the strict owner setting
+`aut03LeadSkillEnabled: true` in the version 1 launcher-selected
+`project-settings.json` schema and exact membership in the startup-parsed
+`CODEX_A2A_AUT03_TRIAL_RUN_IDS` UUID allowlist. The setting defaults to false;
+missing fields remain off, and non-boolean values invalidate the settings
+document and fall back to disabled defaults. The settings file is read once at
+server startup, so edit it only while the project server is stopped. Neither
+the run request, assignment JSON, nor lead output can set or override it.
+
+For an isolated trial, use a disposable project copy with a separate settings
+file containing `{"version":1,"aut03LeadSkillEnabled":true}` and start that
+project with only the intended exact UUID in
+`CODEX_A2A_AUT03_TRIAL_RUN_IDS`. Keep the active project's setting false or
+absent. Roll back by setting the owner field to false (or removing it) and
+restarting the isolated server; changed run context must use a new run ID.
 
 ## 4. Skill input and output contract
 

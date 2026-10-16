@@ -736,7 +736,9 @@ and the existing assignment contract explicit. Prefer the skill over expanding
 the global system prompt; enable it only for the lead during the pilot.
 
 The offline exit covers a trusted lead-only pin, worker isolation, resume and
-rollover behavior, and unchanged lead tool policy. Full AUT-03 exit still
+rollover behavior, unchanged lead tool policy, and a strict default-off
+per-project owner gate combined with the exact UUID allowlist
+([authority ADR](adr/aut03-project-opt-in.md)). Full AUT-03 exit still
 requires the authorized paired trial: on the autonomy regression set, the lead
 must preserve all explicit constraints, identify missing decisions rather
 than inventing them, and produce dispatchable tasks with no coverage or

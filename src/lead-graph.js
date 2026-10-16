@@ -718,7 +718,7 @@ const LeadState = Annotation.Root({
  *   emit(onEvent, event), checkpointer?,
  *   admission?: WriterAdmission, reconcileWaitMs?: number,
  *   sessionThreads?: SessionThreads, sessionDigest?({ contextId, runId, runIds, state }) -> string, rolloverTokens?: number,
- *   aut03TrialRunIds?: Set<string>, aut03SkillPin?: { id, sha256 },
+ *   aut03TrialRunIds?: Set<string>, aut03LeadSkillEnabled?: boolean, aut03SkillPin?: { id, sha256 },
  *   parallelWriters?: boolean, usageLedger?: UsageLedger, activityStore?: ActivityStore, evidenceStore?: EvidenceStore, runCheckImpl?, snapshot?,
  *   acceptanceScratch?: { env: string[], baseDir: string } (owner setting),
  *   stagingLog?: StagingLog,
@@ -732,6 +732,7 @@ function buildLeadGraph(deps) {
   const skillCatalog = deps.skillCatalog || loadSkillCatalog();
   const mcpCatalog = deps.mcpCatalog || loadMcpCatalog();
   const trialRunIds = deps.aut03TrialRunIds instanceof Set ? deps.aut03TrialRunIds : new Set();
+  const aut03LeadSkillEnabled = deps.aut03LeadSkillEnabled === true;
   const skillPin = deps.aut03SkillPin || { id: AUT03_SKILL_ID, sha256: AUT03_SKILL_SHA256 };
   const { admission } = deps;
   const stagingLog = deps.stagingLog || new InMemoryStagingLog();
@@ -2511,7 +2512,7 @@ function buildLeadGraph(deps) {
   async function intake(state, config) {
     const runtime = runtimeOf(config);
     if (!isNonEmptyString(state.goal)) throw new TypeError('goal must be a non-empty string');
-    const expectedSkillContext = expectedLeadSkillContext(state.runId, trialRunIds, skillPin);
+    const expectedSkillContext = expectedLeadSkillContext(state.runId, trialRunIds, aut03LeadSkillEnabled, skillPin);
     if (state.leadSkillContext && !sameLeadSkillContext(state.leadSkillContext, expectedSkillContext)) {
       throw new Error('AUT-03 lead skill run context changed; start a new run ID');
     }
@@ -2544,7 +2545,7 @@ function buildLeadGraph(deps) {
     // Before notes are consumed or a dispatch is planned: everything before interrupt() re-runs on resume.
     if (ownerPauseRequested(config)) interrupt({ kind: 'owner_pause', message: OWNER_PAUSE_MESSAGE });
 
-    const expectedSkillContext = expectedLeadSkillContext(state.runId, trialRunIds, skillPin);
+    const expectedSkillContext = expectedLeadSkillContext(state.runId, trialRunIds, aut03LeadSkillEnabled, skillPin);
     let leadSkillContext = state.leadSkillContext;
     if (!leadSkillContext) {
       if (runtime.resumed && expectedSkillContext.enabled) {

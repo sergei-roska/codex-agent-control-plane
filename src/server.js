@@ -764,10 +764,12 @@ async function startServer({
     });
     // Owner project settings (opt-ins such as the acceptance scratch directory) are read once here as well.
     let acceptanceScratch = null;
+    let aut03LeadSkillEnabled = false;
     if (projectSettingsFile) {
       const settings = readSettingsFile(projectSettingsFile);
       if (settings.warning) console.warn(`[settings] ${settings.warning}`);
       acceptanceScratch = resolveAcceptanceScratch(settings, projectSettingsFile);
+      aut03LeadSkillEnabled = settings.aut03LeadSkillEnabled === true;
     }
     const usageLedger = new UsageLedger({ db: state.db });
     const stagingLog = new StagingLog({ db: state.db });
@@ -777,6 +779,7 @@ async function startServer({
     const orchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog, mcpCatalog,
       aut03TrialRunIds,
+      aut03LeadSkillEnabled,
       checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, stagingLog, activityStore, evidenceStore, sessionThreads,
       parallelWriters: worktreeMode,
       ...(acceptanceScratch ? { acceptanceScratch } : {}),

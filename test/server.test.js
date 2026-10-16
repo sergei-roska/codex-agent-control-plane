@@ -383,6 +383,7 @@ test('startup passes checkpointer and journal to the orchestrator factory', asyn
     assert.equal(options.leadRole.name, 'coordinator');
     assert.ok(options.skillCatalog instanceof Map);
     assert.deepEqual(options.aut03TrialRunIds, new Set());
+    assert.equal(options.aut03LeadSkillEnabled, false);
   } finally {
     await runtime.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -405,15 +406,19 @@ test('AUT-03 startup parses only exact UUID allowlist values', async (t) => {
   process.env.CODEX_A2A_AUT03_TRIAL_RUN_IDS = id;
   let options;
   const dir = tmpDir();
+  const settingsFile = path.join(dir, 'project-settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ version: 1, aut03LeadSkillEnabled: true }));
   const runtime = await startServer({
     listen: false,
     stateFile: ':memory:',
     tokenFile: path.join(dir, 'token'),
+    projectSettingsFile: settingsFile,
     appServer: CHATGPT_APP_SERVER(),
     orchestratorFactory(value) { options = value; return { async run() {} }; },
   });
   try {
     assert.deepEqual(options.aut03TrialRunIds, new Set([id]));
+    assert.equal(options.aut03LeadSkillEnabled, true);
   } finally {
     await runtime.close();
     fs.rmSync(dir, { recursive: true, force: true });

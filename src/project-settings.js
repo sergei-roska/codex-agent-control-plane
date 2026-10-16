@@ -65,14 +65,20 @@ function normalizeAcceptanceScratch(input) {
   return out;
 }
 
-/** Validates a whole settings document. Returns { acceptanceScratch } (null when disabled). */
+/** Validates a whole settings document. Owner opt-ins are strict and default off. */
 function validateSettingsDocument(doc) {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new ProjectSettingsError('Settings file must be an object');
   if (doc.version !== SETTINGS_VERSION) throw new ProjectSettingsError(`Unsupported settings version ${JSON.stringify(doc.version)}`);
   for (const key of Object.keys(doc)) {
-    if (!['version', 'acceptanceScratch', 'updatedAt'].includes(key)) throw new ProjectSettingsError(`Unknown settings field: ${key}`);
+    if (!['version', 'acceptanceScratch', 'aut03LeadSkillEnabled', 'updatedAt'].includes(key)) throw new ProjectSettingsError(`Unknown settings field: ${key}`);
   }
-  return { acceptanceScratch: normalizeAcceptanceScratch(doc.acceptanceScratch) };
+  if (doc.aut03LeadSkillEnabled !== undefined && typeof doc.aut03LeadSkillEnabled !== 'boolean') {
+    throw new ProjectSettingsError('aut03LeadSkillEnabled must be a boolean');
+  }
+  return {
+    acceptanceScratch: normalizeAcceptanceScratch(doc.acceptanceScratch),
+    aut03LeadSkillEnabled: doc.aut03LeadSkillEnabled === true,
+  };
 }
 
 /**
@@ -80,7 +86,7 @@ function validateSettingsDocument(doc) {
  * `warning`; a broken file never enables anything. This never throws.
  */
 function readSettingsFile(file) {
-  const defaults = { acceptanceScratch: null };
+  const defaults = { acceptanceScratch: null, aut03LeadSkillEnabled: false };
   let raw;
   try {
     raw = fs.readFileSync(file, 'utf8');

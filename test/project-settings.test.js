@@ -58,24 +58,28 @@ describe('normalizeAcceptanceScratch', () => {
 
 describe('settings file', () => {
   it('missing file means everything disabled', () => {
-    assert.deepEqual(readSettingsFile(file), { acceptanceScratch: null, warning: null });
+    assert.deepEqual(readSettingsFile(file), { acceptanceScratch: null, aut03LeadSkillEnabled: false, warning: null });
   });
 
   it('reads a valid file and resolves the default base dir next to it', () => {
     writeRaw({ version: 1, acceptanceScratch: { env: ['TEAMWORK_TEST_SCRATCH_ROOT'] } });
     const settings = readSettingsFile(file);
     assert.equal(settings.warning, null);
+    assert.equal(settings.aut03LeadSkillEnabled, false);
     assert.deepEqual(resolveAcceptanceScratch(settings, file), { env: ['TEAMWORK_TEST_SCRATCH_ROOT'], baseDir: path.join(path.dirname(file), 'acceptance-scratch') });
     writeRaw({ version: 1, acceptanceScratch: { env: ['X'], baseDir: '/var/tmp/cp' } });
     assert.equal(resolveAcceptanceScratch(readSettingsFile(file), file).baseDir, '/var/tmp/cp');
     assert.equal(resolveAcceptanceScratch({ acceptanceScratch: null }, file), null);
+    writeRaw({ version: 1, aut03LeadSkillEnabled: true });
+    assert.equal(readSettingsFile(file).aut03LeadSkillEnabled, true);
   });
 
   it('an invalid or unreadable file enables nothing and warns', () => {
-    for (const raw of ['{ nope', { version: 2 }, { version: 1, acceptanceScratch: { env: ['PATH'] } }, { version: 1, other: true }, [1]]) {
+    for (const raw of ['{ nope', { version: 2 }, { version: 1, acceptanceScratch: { env: ['PATH'] } }, { version: 1, other: true }, [1], ...[null, 0, 1, 'true', {}].map((value) => ({ version: 1, aut03LeadSkillEnabled: value }))]) {
       writeRaw(raw);
       const settings = readSettingsFile(file);
       assert.equal(settings.acceptanceScratch, null);
+      assert.equal(settings.aut03LeadSkillEnabled, false);
       assert.match(settings.warning, /Project settings ignored/);
     }
     fs.rmSync(file);

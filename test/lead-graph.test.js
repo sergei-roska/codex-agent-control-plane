@@ -423,7 +423,30 @@ test('AUT-03 delivery is default-off and selected only for the owner allowlisted
     assert.equal(options.role.tools.skills, false);
     assert.equal(options.role.tools.mcpServers.length, 0);
     assert.doesNotMatch(onWorld.prompts[0], new RegExp(AUT03_SKILL_ID));
-  }, { orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+  }, { orchestrator: { aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID]) } });
+});
+
+test('AUT-03 requires both owner opt-in and exact run allowlisting; request claims do not authorize it', async (t) => {
+  for (const scenario of [
+    { name: 'setting only', enabled: true, ids: new Set(), expected: false },
+    { name: 'allowlist only', enabled: false, ids: new Set([RUN_ID]), expected: false },
+    { name: 'both gates', enabled: true, ids: new Set([RUN_ID]), expected: true },
+  ]) {
+    await t.test(scenario.name, async () => {
+      const world = makeWorld({ script: [finish()] });
+      let options;
+      const run = world.appServer.run.bind(world.appServer);
+      world.appServer.run = async (args) => { options = args; return run(args); };
+      await withSession(world, async (session) => {
+        await session.orchestrator.run({
+          goal: 'Decompose a task', runId: RUN_ID,
+          metadata: { aut03LeadSkillEnabled: true },
+          assignment: { aut03LeadSkillEnabled: true },
+        });
+        assert.equal(Object.hasOwn(options, 'selectedSkills'), scenario.expected);
+      }, { orchestrator: { aut03LeadSkillEnabled: scenario.enabled, aut03TrialRunIds: scenario.ids } });
+    });
+  }
 });
 
 test('AUT-03 pin is sent on full, delta, and rejected-decision retry turns', async () => {
@@ -439,13 +462,14 @@ test('AUT-03 pin is sent on full, delta, and rejected-decision retry turns', asy
     for (const skills of selected) assert.deepEqual(skills.map(({ id, sha256: hash }) => ({ id, sha256: hash })), [{ id: AUT03_SKILL_ID, sha256: AUT03_SKILL_SHA256 }]);
     assert.equal(world.threadArgs[0], undefined);
     assert.ok(world.threadArgs.slice(1).every((threadId) => threadId === 'lead-thread'));
-  }, { withSessions: true, orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+  }, { withSessions: true, orchestrator: { aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID]) } });
 });
 
 test('AUT-03 resumed runs reject allowlist and pin drift before a lead call', async (t) => {
   for (const change of [
     { name: 'allowlist', aut03TrialRunIds: new Set() },
-    { name: 'pin', aut03TrialRunIds: new Set([RUN_ID]), aut03SkillPin: { id: AUT03_SKILL_ID, sha256: '0'.repeat(64) } },
+    { name: 'owner setting', aut03LeadSkillEnabled: false },
+    { name: 'pin', aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID]), aut03SkillPin: { id: AUT03_SKILL_ID, sha256: '0'.repeat(64) } },
   ]) {
     await t.test(change.name, async () => {
       const world = makeWorld({ script: [finish()] });
@@ -453,13 +477,14 @@ test('AUT-03 resumed runs reject allowlist and pin drift before a lead call', as
         const initial = await session.orchestrator.run({ goal: 'Decompose a task', runId: RUN_ID, interruptAfter: ['intake'] });
         assert.equal(initial.status, 'interrupted_for_test');
         assert.equal(world.leadTurns, 0);
-        session.options.orchestrator = { aut03TrialRunIds: new Set([RUN_ID]) };
+        session.options.orchestrator = { aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID]) };
         if (change.aut03SkillPin) session.options.orchestrator.aut03SkillPin = change.aut03SkillPin;
-        else session.options.orchestrator.aut03TrialRunIds = change.aut03TrialRunIds;
+        else if (change.aut03TrialRunIds) session.options.orchestrator.aut03TrialRunIds = change.aut03TrialRunIds;
+        else session.options.orchestrator.aut03LeadSkillEnabled = change.aut03LeadSkillEnabled;
         await session.restart();
         await assert.rejects(session.orchestrator.resume({ runId: RUN_ID }), /AUT-03 lead skill run context changed/);
         assert.equal(world.leadTurns, 0, 'drift is rejected before App Server run');
-      }, { orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+      }, { orchestrator: { aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID]) } });
     });
   }
 });
@@ -477,7 +502,7 @@ test('AUT-03 resumes and legacy-null session rollovers carry the selected pin', 
       assert.equal(result.status, 'completed');
       assert.equal(selections.length, 1);
       assert.equal(selections[0][0].id, AUT03_SKILL_ID);
-    }, { orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+    }, { orchestrator: { aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID]) } });
   });
   await t.test('legacy null profile hash rolls to a fresh thread', async () => {
     const world = makeWorld({ script: [finish()] });
@@ -491,7 +516,7 @@ test('AUT-03 resumes and legacy-null session rollovers carry the selected pin', 
       assert.equal(world.threadArgs[0], undefined);
       assert.equal(selections[0][0].id, AUT03_SKILL_ID);
       assert.notEqual(session.sessions.get('legacy-null').profileSha256, null);
-    }, { withSessions: true, orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+    }, { withSessions: true, orchestrator: { aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID]) } });
   });
 });
 
@@ -500,11 +525,11 @@ test('AUT-03 on and off profiles cannot reuse the same lead session thread', asy
   await withSession(world, async (session) => {
     await session.orchestrator.run({ goal: 'Allowlisted task', runId: RUN_ID, contextId: 'skill-profile' });
     assert.equal(world.threadArgs[0], undefined);
-    session.options.orchestrator = { aut03TrialRunIds: new Set() };
+    session.options.orchestrator = { aut03LeadSkillEnabled: false, aut03TrialRunIds: new Set([RUN_ID]) };
     await session.restart();
     await session.orchestrator.run({ goal: 'Default-off task', runId: 'run-2', contextId: 'skill-profile' });
     assert.equal(world.threadArgs[1], undefined);
-  }, { withSessions: true, orchestrator: { aut03TrialRunIds: new Set([RUN_ID]) } });
+  }, { withSessions: true, orchestrator: { aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID]) } });
 });
 
 test('AUT-03 pin remains attached after rejected-thread and context-size rollovers', async (t) => {
@@ -529,7 +554,7 @@ test('AUT-03 pin remains attached after rejected-thread and context-size rollove
       assert.equal(selected.length, 3);
       for (const skills of selected) assert.equal(skills[0].id, AUT03_SKILL_ID);
       assert.equal(world.threadArgs.at(-1), undefined);
-    }, { withSessions: true, orchestrator: { aut03TrialRunIds: new Set([RUN_ID, 'run-2']) } });
+    }, { withSessions: true, orchestrator: { aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID, 'run-2']) } });
   });
   await t.test('context threshold starts a new pinned thread', async () => {
     const world = makeWorld({ script: [finish(), finish()] });
@@ -545,7 +570,7 @@ test('AUT-03 pin remains attached after rejected-thread and context-size rollove
       assert.equal(world.threadArgs.at(-1), undefined);
       assert.equal(selected.length, 2);
       assert.ok(selected.every((skills) => skills[0].id === AUT03_SKILL_ID));
-    }, { withSessions: true, orchestrator: { aut03TrialRunIds: new Set([RUN_ID, 'run-2']) } });
+    }, { withSessions: true, orchestrator: { aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID, 'run-2']) } });
   });
 });
 
@@ -556,7 +581,7 @@ test('AUT-03 missing and stale selected skills fail before a lead call', async (
       const catalog = loadSkillCatalog();
       if (mode === 'missing') catalog.delete(AUT03_SKILL_ID);
       else catalog.get(AUT03_SKILL_ID).sha256 = '0'.repeat(64);
-      const trial = { aut03TrialRunIds: new Set([RUN_ID]), skillCatalog: catalog };
+      const trial = { aut03LeadSkillEnabled: true, aut03TrialRunIds: new Set([RUN_ID]), skillCatalog: catalog };
       await withSession(world, async (session) => {
         await assert.rejects(session.orchestrator.run({ goal: 'Decompose a task', runId: RUN_ID }), mode === 'missing' ? /Unknown skill id/ : /changed since catalog load/);
         assert.equal(world.leadTurns, 0);

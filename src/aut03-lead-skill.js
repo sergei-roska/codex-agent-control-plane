@@ -17,8 +17,8 @@ function parseTrialRunIds(value = '') {
   return new Set(ids);
 }
 
-function expectedLeadSkillContext(runId, trialRunIds, skillPin = { id: AUT03_SKILL_ID, sha256: AUT03_SKILL_SHA256 }) {
-  const enabled = trialRunIds instanceof Set && trialRunIds.has(runId);
+function expectedLeadSkillContext(runId, trialRunIds, ownerEnabled = false, skillPin = { id: AUT03_SKILL_ID, sha256: AUT03_SKILL_SHA256 }) {
+  const enabled = ownerEnabled === true && trialRunIds instanceof Set && trialRunIds.has(runId);
   const allowlist = [...(trialRunIds instanceof Set ? trialRunIds : [])].sort();
   const allowlistSha256 = crypto.createHash('sha256').update(JSON.stringify(allowlist)).digest('hex');
   return {
