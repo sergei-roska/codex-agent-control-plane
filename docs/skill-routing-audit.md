@@ -56,3 +56,29 @@ most five skills per assignment and normally selects fewer.
   allowlist and is not available to worker assignments.
 - Selecting a skill supplies guidance only. It never grants files, tools,
   external access, rollback rights, or approval authority.
+
+## Additional source comparison
+
+On 2026-10-16, the listed skills in
+`/home/sr/Projects/Workspace/agent-factory/.codex/skills` were compared with the
+Harness library. Eighteen of the 19 named folders are already present and
+byte-identical. `eval-ops` is absent.
+
+| Skill | Decision | Harness fit and routing condition |
+| --- | --- | --- |
+| `eval-ops` | DEFER | Do not import as-is. It prescribes an `evals.json` runner, Pass@k/JUnit reports, OpenTelemetry plus Langfuse/Phoenix, DSPy prompt optimization, and prompt commits/rollback. These are not the Harness evaluation contract and can conflict with its gated AUT-05 workflow. Harness already has a bounded offline evaluator and its own metric, evidence, and live-run rules in `src/autonomy-evaluation.js` and `docs/aut-05-baseline-runbook.md`. Reconsider only after rewriting the skill around those contracts and keeping live evaluation or prompt changes behind their existing authorization gates. |
+
+## External candidate review
+
+On 2026-10-16, `madsnorgaard/drupal-agent-resources/drupal-expert` was reviewed
+from skills.sh and its public GitHub source. Decision: adapt before importing.
+It has useful Drupal guidance on dependency injection, access checks, safe
+queries, cache metadata, config schema, and Drupal 10/11 compatibility. Its
+raw workflow also requires asking the user before custom work, assumes DDEV or
+Docker and Drupal 10/11, and suggests mutating commands such as `drush updb`,
+`drush en`, `drush pmu`, config import/export, field deletion, `phpcbf`, and
+prompted generators. Those actions must stay subject to project discovery and
+Harness task authorization. It also directs agents to inspect third-party web
+content; skills.sh currently reports a medium Snyk W011 warning for that
+exposure. Use the security boundary already in Harness if adapting these
+principles. No files were imported and no installation command was run.
