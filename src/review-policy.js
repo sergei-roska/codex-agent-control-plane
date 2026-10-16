@@ -160,6 +160,12 @@ function auditVerdict(report) {
   return match ? match[1] : null;
 }
 
+function explicitVerifierVerdict(report) {
+  const first = String(report?.summary || '').split(/\r?\n/, 1)[0];
+  const match = /^VERDICT: (pass|fail|inconclusive)(?=$|\s|[.!:,;])/.exec(first);
+  return match ? match[1] : null;
+}
+
 function inspectedScopeMatch(filesInspected, review) {
   if (!review || !Array.isArray(review.paths)) return true;
   const normalize = (value) => {
@@ -233,6 +239,12 @@ function reviewResult(outcome, role, review = null) {
     if (!verdict) return { ...base, reason: 'audit_verdict_missing_or_invalid' };
     if (verdict !== 'pass') return { ...base, verdict, reason: `audit_verdict_${verdict}` };
     return { valid: true, status: 'accepted', verdict, reason: null };
+  }
+  if (role === 'verifier') {
+    const verdict = explicitVerifierVerdict(report);
+    if (verdict === 'fail' || verdict === 'inconclusive') {
+      return { ...base, verdict, reason: `verifier_verdict_${verdict}` };
+    }
   }
   return { valid: true, status: 'accepted', verdict: null, reason: null };
 }

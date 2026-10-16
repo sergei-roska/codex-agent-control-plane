@@ -111,6 +111,7 @@ test('auditor verdict must be the complete standalone first line', () => {
   for (const summary of [
     'VERDICT: pass. Authority/release: PASS',
     'VERDICT: pass (verified)',
+    'VERDICT: pass - checkpoint summary',
     'Audit complete.\nVERDICT: pass',
     'VERDICT: inconclusive details',
   ]) {
@@ -152,4 +153,48 @@ test('a writable verifier accepts only a proven empty lane with stable review co
   assert.equal(rejected((value) => { value.boundary = { results: [{ result: 'PASS', advisory: true, code: 'attested_scope_violation' }] }; }).reason, 'review_scope_violation');
   assert.equal(reviewResult({ ...outcome, status: 'TASK_STATE_CANCELED' }, 'verifier', review).valid, false);
   assert.equal(reviewResult(outcome, 'auditor', review).reason, 'review_writer_unsettled');
+});
+
+test('verifier explicit negative verdicts reject otherwise passing evidence', () => {
+  const outcome = {
+    status: 'TASK_STATE_COMPLETED',
+    sandbox: 'read-only',
+    report: {
+      outcome: 'completed', summary: 'VERDICT: fail\nThe candidate has a defect.',
+      filesInspected: ['src/file.js'], checks: [{ result: 'passed' }], decisionRequest: null,
+    },
+  };
+
+  for (const [summary, verdict] of [
+    ['VERDICT: fail\nThe candidate has a defect.', 'fail'],
+    ['VERDICT: inconclusive\nRequired evidence is missing.', 'inconclusive'],
+    ['VERDICT: fail - checkpoint cp-1\nThe candidate has a defect.', 'fail'],
+    ['VERDICT: inconclusive - checkpoint cp-1\nRequired evidence is missing.', 'inconclusive'],
+  ]) {
+    outcome.report.summary = summary;
+    assert.deepEqual(reviewResult(outcome, 'verifier', review), {
+      valid: false,
+      status: 'inconclusive',
+      verdict,
+      reason: `verifier_verdict_${verdict}`,
+    }, summary);
+  }
+
+  outcome.report.summary = 'VERDICT: pass - checkpoint cp-1';
+  assert.equal(reviewResult(outcome, 'verifier', review).status, 'accepted');
+  outcome.report.summary = 'Focused verification passed.';
+  assert.equal(reviewResult(outcome, 'verifier', review).status, 'accepted');
+
+  outcome.report.summary = 'VERDICT: fail - checkpoint cp-1';
+  outcome.report.checks[0].result = 'failed';
+  assert.equal(reviewResult(outcome, 'verifier', review).reason, 'review_checks_failed_or_unrun');
+  outcome.report.checks[0].result = 'passed';
+  outcome.reviewCoverage = { targetKnown: false, targetIdentity: null, stable: false };
+  outcome.sandbox = 'workspace-write';
+  outcome.writerExecution = {
+    state: null,
+    lane: { state: 'not_integrated', reason: 'no_changes' },
+    delta: { known: true, headChanged: false, changedPaths: [], changedPathCount: 0, source: 'lane_collection' },
+  };
+  assert.equal(reviewResult(outcome, 'verifier', review).reason, 'review_target_unknown_or_changed');
 });

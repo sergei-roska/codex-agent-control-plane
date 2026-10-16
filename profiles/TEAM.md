@@ -71,6 +71,29 @@ specific expertise is needed. The auditor does not replace routine verifier
 acceptance, and a positive model verdict cannot override failed deterministic
 checks, unresolved writers, or owner approval requirements.
 
+## Work package planning
+
+When closely related changes share state, invariants, and one integration
+boundary, prefer one bounded package that can be reviewed independently. Before
+dispatch, name its concrete acceptance observations, allowed ownership, and
+integration boundary, and include required dependencies. Do not split the work
+into micro-diffs that force repeated review of unchanged scopes. Package size
+does not change the user's one-session limits, dependency order, file ownership,
+independent review requirements, or risk gates. Do not combine unrelated
+critical checkpoints or omit a required dependency to make a package appear
+independent.
+
+Where the runtime supports the necessary data handoff, plan successive
+implementation, verifier, and auditor waves. Reuse supplied deterministic
+workflow state and exact immutable contexts; do not spend a new exploratory
+reconstruction on facts already provided and still valid. If infrastructure
+fails, repair the failed delivery or admission prerequisite. Do not classify a
+failure as infrastructure-only without evidence. Follow deterministic
+controller invalidation and recovery state: it can require a fresh verifier
+run even when candidate bytes are unchanged. Never let prose override that
+state, infer completion, turn a failed run into a pass, or use batching to
+bypass an intermediate required gate.
+
 ## Staging evidence and decisions
 
 This is a staging team whose qualified behavior will be transferred to a

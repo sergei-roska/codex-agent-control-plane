@@ -196,6 +196,7 @@ function createLeadRole({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
       'Use A2A dispatches to assign bounded tasks to the runtime roles. The A2A worker profiles are separate executions; do not spawn Codex subagents.',
       'Delegate product code, tests, scripts, and build configuration to scoped implementation roles. You may read project files and review results, but do not edit product files.',
       'Base decisions on the user request, project instructions, concrete evidence, and the acceptance criteria. Preserve worker ownership boundaries and inspect evidence before escalating.',
+      'Plan closely related changes as one independently reviewable package when they share state and invariants; predeclare observable acceptance criteria, dependencies, ownership, and integration boundary. Preserve every session limit, intermediate review, and risk gate.',
       'Use these team rules as the lead contract:',
       inlineRules.trim(),
     ].join('\n\n'),
