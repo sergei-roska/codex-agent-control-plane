@@ -1,0 +1,637 @@
+{
+  "schemaVersion": "aut-03-s08-qualification/v1",
+  "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+  "contextSha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf",
+  "normalization": "Projected the returned tasks array unchanged into the analyzer map; the map envelope contains only schemaVersion, featureId, contextSha256, and tasks. Added exactly three artifact bindings whose hashes were calculated from evaluator-generated spec.md, plan.md, and tasks.md projections. No task field, role, identifier, write path, or task meaning was repaired.",
+  "execution": "Ran the existing offline spec analyzer, which invokes the real assignment adapter. No tests or task commands were run.",
+  "cases": [
+    {
+      "arm": "skill-off",
+      "caseId": "pilot-price-f2",
+      "taskId": "31534413-7377-4faf-9479-147079092c80",
+      "rawOutputPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/output.txt",
+      "rawOutputSha256": "b65529db4043d2dcfa4f02158fc33eb6e0166b195b8e8b6a191b863374b864f9",
+      "trialPlanSha256": "3c511602933bdb9da9d9ee0a48a891d6b83027dbcd5b5f247e9acdb4c0475429",
+      "generatedArtifactHashes": [
+        {
+          "role": "spec",
+          "path": "specs/pilot-price/spec.md",
+          "sha256": "56bf9d826e148140628c1876dd311a007223a93e09d353fdfc3806d01f4debf0"
+        },
+        {
+          "role": "plan",
+          "path": "specs/pilot-price/plan.md",
+          "sha256": "23abd3c943bd01924336ad7530814bb919fcc2e85fdafdcca653e84345c0b3a6"
+        },
+        {
+          "role": "tasks",
+          "path": "specs/pilot-price/tasks.md",
+          "sha256": "adcb7765cba8652de2fbe31a8eea502d56740cebf5a866fd3ad41ca8cf6d3d5f"
+        }
+      ],
+      "traceabilitySha256": "a5967c262299633a863df23665b34c7ecb049f12d40e941bce444da272276e9f",
+      "analyzerExitCode": 1,
+      "analyzerVerdict": "blocked",
+      "analyzerFingerprint": "38ae9d5c4f892b2456d1d9d67b4e14071230dbdd9beeb095da17a30795a81b83",
+      "findings": [
+        {
+          "code": "assignment_compile_failed",
+          "severity": "error",
+          "path": "$.tasks.repair-price.engineer",
+          "taskIds": [
+            "repair-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "assignment_compile_failed",
+          "severity": "error",
+          "path": "$.tasks.repair-price.verifier",
+          "taskIds": [
+            "repair-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "assignment_compile_failed",
+          "severity": "error",
+          "path": "$.tasks.verify-price.engineer",
+          "taskIds": [
+            "verify-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "assignment_compile_failed",
+          "severity": "error",
+          "path": "$.tasks.verify-price.verifier",
+          "taskIds": [
+            "verify-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "assignment_contract_invalid",
+          "severity": "error",
+          "path": "$.tasks.repair-price.engineer",
+          "taskIds": [
+            "repair-price"
+          ],
+          "requirementIds": [],
+          "expected": "both exported contract validators pass",
+          "actual": "allowedFiles_size_limit"
+        },
+        {
+          "code": "assignment_contract_invalid",
+          "severity": "error",
+          "path": "$.tasks.repair-price.verifier",
+          "taskIds": [
+            "repair-price"
+          ],
+          "requirementIds": [],
+          "expected": "both exported contract validators pass",
+          "actual": "review_size_limit"
+        },
+        {
+          "code": "assignment_contract_invalid",
+          "severity": "error",
+          "path": "$.tasks.verify-price.engineer",
+          "taskIds": [
+            "verify-price"
+          ],
+          "requirementIds": [],
+          "expected": "both exported contract validators pass",
+          "actual": "allowedFiles_size_limit"
+        },
+        {
+          "code": "assignment_contract_invalid",
+          "severity": "error",
+          "path": "$.tasks.verify-price.verifier",
+          "taskIds": [
+            "verify-price"
+          ],
+          "requirementIds": [],
+          "expected": "both exported contract validators pass",
+          "actual": "review_size_limit"
+        },
+        {
+          "code": "graph_skipped_invalid_references",
+          "severity": "error",
+          "path": "$",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "object_required",
+          "severity": "error",
+          "path": "$.tasks[0].writePaths[0]",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "object_required",
+          "severity": "error",
+          "path": "$.tasks[1].writePaths[0]",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "projection_task_missing",
+          "severity": "error",
+          "path": "$.tasks",
+          "taskIds": [
+            "repair-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "projection_task_missing",
+          "severity": "error",
+          "path": "$.tasks",
+          "taskIds": [
+            "verify-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "risk_rule_missing",
+          "severity": "error",
+          "path": "$.tasks.repair-price.writePaths",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "risk_rule_missing",
+          "severity": "error",
+          "path": "$.tasks.verify-price.writePaths",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "task_id_invalid",
+          "severity": "error",
+          "path": "$.tasks[0].id",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "task_id_invalid",
+          "severity": "error",
+          "path": "$.tasks[1].id",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "task_role_invalid",
+          "severity": "error",
+          "path": "$.tasks[1].role",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "write_scope_denied",
+          "severity": "error",
+          "path": "$.tasks.repair-price.writePaths",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": "every write path is within accepted allow scope and outside deny scope",
+          "actual": null
+        },
+        {
+          "code": "write_scope_denied",
+          "severity": "error",
+          "path": "$.tasks.verify-price.writePaths",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": "every write path is within accepted allow scope and outside deny scope",
+          "actual": null
+        }
+      ],
+      "passes": {
+        "snapshot": "passed",
+        "context": "passed",
+        "traceability": "blocked",
+        "graph": "blocked",
+        "projection": "blocked",
+        "assignments": "blocked",
+        "drift": "passed"
+      },
+      "assignmentValidation": [
+        {
+          "taskId": "repair-price",
+          "kind": "engineer",
+          "validation": {
+            "ok": false,
+            "errors": [
+              {
+                "code": "allowedFiles_size_limit"
+              }
+            ]
+          }
+        },
+        {
+          "taskId": "repair-price",
+          "kind": "verifier",
+          "validation": {
+            "ok": false,
+            "errors": [
+              {
+                "code": "review_size_limit"
+              }
+            ]
+          }
+        },
+        {
+          "taskId": "verify-price",
+          "kind": "engineer",
+          "validation": {
+            "ok": false,
+            "errors": [
+              {
+                "code": "allowedFiles_size_limit"
+              }
+            ]
+          }
+        },
+        {
+          "taskId": "verify-price",
+          "kind": "verifier",
+          "validation": {
+            "ok": false,
+            "errors": [
+              {
+                "code": "review_size_limit"
+              }
+            ]
+          }
+        }
+      ],
+      "adapterContractPassed": false,
+      "inputHashesBefore": {
+        "canonical/GOAL.txt": "666a1d5f055274475714f1e6fe8510079dc3bd787bdf079251525a5d39968bf7",
+        "canonical/CHECKS.json": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860",
+        "canonical/FIXTURE.md": "83aaa2fa7bf0b8c899c487c4589195295c8884b091faeb882ca7e83ce64d44f4",
+        "canonical/canonical-input.md": "7e20c26ccaa8ce95c1725707b7b6325c7098730ef9c6d823f7583b05c0c98e4c",
+        "canonical/requirements.md": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0",
+        "product/src/price.js": "775708a5693f857c2493b6e662e1e3ebbb6da9050d05123222f9c817fff5acc0",
+        "product/test/price.test.js": "f0532faca004df9074aed1f3094ee087851e689f3050e0389e26d8d03e0ef0b6",
+        "product/package.json": "54f5009c7b5705040063e83e6d6b20a5110b3e56c668cc6c85369de31195aadf",
+        "product/CHECKS.json": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860"
+      },
+      "inputHashesAfter": {
+        "canonical/GOAL.txt": "666a1d5f055274475714f1e6fe8510079dc3bd787bdf079251525a5d39968bf7",
+        "canonical/CHECKS.json": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860",
+        "canonical/FIXTURE.md": "83aaa2fa7bf0b8c899c487c4589195295c8884b091faeb882ca7e83ce64d44f4",
+        "canonical/canonical-input.md": "7e20c26ccaa8ce95c1725707b7b6325c7098730ef9c6d823f7583b05c0c98e4c",
+        "canonical/requirements.md": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0",
+        "product/src/price.js": "775708a5693f857c2493b6e662e1e3ebbb6da9050d05123222f9c817fff5acc0",
+        "product/test/price.test.js": "f0532faca004df9074aed1f3094ee087851e689f3050e0389e26d8d03e0ef0b6",
+        "product/package.json": "54f5009c7b5705040063e83e6d6b20a5110b3e56c668cc6c85369de31195aadf",
+        "product/CHECKS.json": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860"
+      },
+      "inputsUnchanged": true
+    },
+    {
+      "arm": "skill-on",
+      "caseId": "pilot-price-f2",
+      "taskId": "5320ac49-ae98-45b9-90ee-dcfacb4b3d8d",
+      "rawOutputPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/output.txt",
+      "rawOutputSha256": "8893d680c61aa86314058a5f4115d24e6e32740a8df498354a28358be005b137",
+      "trialPlanSha256": "5f2ff5704e0efa0c3744fcaa24cb8ac0714ac6e6007e2ffc50b73589318e2da6",
+      "generatedArtifactHashes": [
+        {
+          "role": "spec",
+          "path": "specs/pilot-price/spec.md",
+          "sha256": "34cc38254d9d2a6643a34b9716dacf918c4fa0368b3480bf87c9d0a46c9c3b54"
+        },
+        {
+          "role": "plan",
+          "path": "specs/pilot-price/plan.md",
+          "sha256": "f37a6291e8b381af505eb7cf699c7a6b9f6796155ec31a5b7a30daea87a45957"
+        },
+        {
+          "role": "tasks",
+          "path": "specs/pilot-price/tasks.md",
+          "sha256": "20e9e4df92bbb41384a13b18f807552a44160a28ae36017829a548d6e4b0a945"
+        }
+      ],
+      "traceabilitySha256": "6dab16b1ba838d89f20e4bab4040d3b56b28c2af5bbddeb29944cd8753943ce9",
+      "analyzerExitCode": 1,
+      "analyzerVerdict": "blocked",
+      "analyzerFingerprint": "3121efa5f9837b1bd41fbb25efc8f0945bda861bc0bdd8cf8917618182322711",
+      "findings": [
+        {
+          "code": "assignment_compile_failed",
+          "severity": "error",
+          "path": "$.tasks.repair-price.engineer",
+          "taskIds": [
+            "repair-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "assignment_compile_failed",
+          "severity": "error",
+          "path": "$.tasks.repair-price.verifier",
+          "taskIds": [
+            "repair-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "assignment_compile_failed",
+          "severity": "error",
+          "path": "$.tasks.verify-price.engineer",
+          "taskIds": [
+            "verify-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "assignment_compile_failed",
+          "severity": "error",
+          "path": "$.tasks.verify-price.verifier",
+          "taskIds": [
+            "verify-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "assignment_contract_invalid",
+          "severity": "error",
+          "path": "$.tasks.repair-price.engineer",
+          "taskIds": [
+            "repair-price"
+          ],
+          "requirementIds": [],
+          "expected": "both exported contract validators pass",
+          "actual": "allowedFiles_size_limit"
+        },
+        {
+          "code": "assignment_contract_invalid",
+          "severity": "error",
+          "path": "$.tasks.repair-price.verifier",
+          "taskIds": [
+            "repair-price"
+          ],
+          "requirementIds": [],
+          "expected": "both exported contract validators pass",
+          "actual": "review_size_limit"
+        },
+        {
+          "code": "assignment_contract_invalid",
+          "severity": "error",
+          "path": "$.tasks.verify-price.engineer",
+          "taskIds": [
+            "verify-price"
+          ],
+          "requirementIds": [],
+          "expected": "both exported contract validators pass",
+          "actual": "allowedFiles_size_limit"
+        },
+        {
+          "code": "assignment_contract_invalid",
+          "severity": "error",
+          "path": "$.tasks.verify-price.verifier",
+          "taskIds": [
+            "verify-price"
+          ],
+          "requirementIds": [],
+          "expected": "both exported contract validators pass",
+          "actual": "review_size_limit"
+        },
+        {
+          "code": "graph_skipped_invalid_references",
+          "severity": "error",
+          "path": "$",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "object_required",
+          "severity": "error",
+          "path": "$.tasks[0].writePaths[0]",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "object_required",
+          "severity": "error",
+          "path": "$.tasks[1].writePaths[0]",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "projection_task_missing",
+          "severity": "error",
+          "path": "$.tasks",
+          "taskIds": [
+            "repair-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "projection_task_missing",
+          "severity": "error",
+          "path": "$.tasks",
+          "taskIds": [
+            "verify-price"
+          ],
+          "requirementIds": [],
+          "expected": null,
+          "actual": "Task proposal failed compilation or offline contract validation."
+        },
+        {
+          "code": "risk_rule_missing",
+          "severity": "error",
+          "path": "$.tasks.repair-price.writePaths",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "risk_rule_missing",
+          "severity": "error",
+          "path": "$.tasks.verify-price.writePaths",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "task_id_invalid",
+          "severity": "error",
+          "path": "$.tasks[0].id",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "task_id_invalid",
+          "severity": "error",
+          "path": "$.tasks[1].id",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "task_role_invalid",
+          "severity": "error",
+          "path": "$.tasks[1].role",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": null,
+          "actual": null
+        },
+        {
+          "code": "write_scope_denied",
+          "severity": "error",
+          "path": "$.tasks.repair-price.writePaths",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": "every write path is within accepted allow scope and outside deny scope",
+          "actual": null
+        },
+        {
+          "code": "write_scope_denied",
+          "severity": "error",
+          "path": "$.tasks.verify-price.writePaths",
+          "taskIds": [],
+          "requirementIds": [],
+          "expected": "every write path is within accepted allow scope and outside deny scope",
+          "actual": null
+        }
+      ],
+      "passes": {
+        "snapshot": "passed",
+        "context": "passed",
+        "traceability": "blocked",
+        "graph": "blocked",
+        "projection": "blocked",
+        "assignments": "blocked",
+        "drift": "passed"
+      },
+      "assignmentValidation": [
+        {
+          "taskId": "repair-price",
+          "kind": "engineer",
+          "validation": {
+            "ok": false,
+            "errors": [
+              {
+                "code": "allowedFiles_size_limit"
+              }
+            ]
+          }
+        },
+        {
+          "taskId": "repair-price",
+          "kind": "verifier",
+          "validation": {
+            "ok": false,
+            "errors": [
+              {
+                "code": "review_size_limit"
+              }
+            ]
+          }
+        },
+        {
+          "taskId": "verify-price",
+          "kind": "engineer",
+          "validation": {
+            "ok": false,
+            "errors": [
+              {
+                "code": "allowedFiles_size_limit"
+              }
+            ]
+          }
+        },
+        {
+          "taskId": "verify-price",
+          "kind": "verifier",
+          "validation": {
+            "ok": false,
+            "errors": [
+              {
+                "code": "review_size_limit"
+              }
+            ]
+          }
+        }
+      ],
+      "adapterContractPassed": false,
+      "inputHashesBefore": {
+        "canonical/GOAL.txt": "666a1d5f055274475714f1e6fe8510079dc3bd787bdf079251525a5d39968bf7",
+        "canonical/CHECKS.json": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860",
+        "canonical/FIXTURE.md": "83aaa2fa7bf0b8c899c487c4589195295c8884b091faeb882ca7e83ce64d44f4",
+        "canonical/canonical-input.md": "7e20c26ccaa8ce95c1725707b7b6325c7098730ef9c6d823f7583b05c0c98e4c",
+        "canonical/requirements.md": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0",
+        "product/src/price.js": "775708a5693f857c2493b6e662e1e3ebbb6da9050d05123222f9c817fff5acc0",
+        "product/test/price.test.js": "f0532faca004df9074aed1f3094ee087851e689f3050e0389e26d8d03e0ef0b6",
+        "product/package.json": "54f5009c7b5705040063e83e6d6b20a5110b3e56c668cc6c85369de31195aadf",
+        "product/CHECKS.json": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860"
+      },
+      "inputHashesAfter": {
+        "canonical/GOAL.txt": "666a1d5f055274475714f1e6fe8510079dc3bd787bdf079251525a5d39968bf7",
+        "canonical/CHECKS.json": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860",
+        "canonical/FIXTURE.md": "83aaa2fa7bf0b8c899c487c4589195295c8884b091faeb882ca7e83ce64d44f4",
+        "canonical/canonical-input.md": "7e20c26ccaa8ce95c1725707b7b6325c7098730ef9c6d823f7583b05c0c98e4c",
+        "canonical/requirements.md": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0",
+        "product/src/price.js": "775708a5693f857c2493b6e662e1e3ebbb6da9050d05123222f9c817fff5acc0",
+        "product/test/price.test.js": "f0532faca004df9074aed1f3094ee087851e689f3050e0389e26d8d03e0ef0b6",
+        "product/package.json": "54f5009c7b5705040063e83e6d6b20a5110b3e56c668cc6c85369de31195aadf",
+        "product/CHECKS.json": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860"
+      },
+      "inputsUnchanged": true
+    }
+  ]
+}

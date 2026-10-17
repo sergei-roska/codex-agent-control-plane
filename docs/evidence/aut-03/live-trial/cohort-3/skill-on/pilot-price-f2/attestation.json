@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "aut-03-arm-attestation/v1",
+  "arm": "skill-on",
+  "aut03LeadSkillEnabled": true,
+  "uuidAllowlistSize": 0,
+  "leadProfileSha256": "2cee9ba6dac56455ac5a7da5064415042556c0dbfd3503ac7232243c155ffddc",
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "medium",
+  "leadTools": {
+    "mcpServers": [],
+    "skills": false
+  },
+  "workerRoles": {
+    "removedCount": 8,
+    "remainingCount": 0
+  },
+  "trialEnforcement": {
+    "disabledCodexFeatures": [
+      "shell_tool",
+      "unified_exec_tty",
+      "multi_agent",
+      "multi_agent_v2",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "browser_annotation_api",
+      "computer_use",
+      "image_generation",
+      "code_mode",
+      "code_mode_host",
+      "sleep_tool",
+      "in_app_browser",
+      "in_app_local_automation",
+      "shell_snapshot",
+      "shell_snapshot_v2",
+      "standalone_web_search"
+    ],
+    "webSearch": "disabled",
+    "maxLeadTurnStartsPerTask": 8,
+    "workerRolesRemovedBeforeOrchestratorAndRouteRegistration": true,
+    "sourceInputsEmbeddedInPrompt": true,
+    "workspaceRoot": "/tmp/aut03-final-trial/revised-cohort",
+    "workspaceEmptyAndReadOnlyRequired": true
+  },
+  "skill": {
+    "id": "aut-03-lead-decomposition-v1",
+    "sha256": "e0f10756e0486cdb827519edd8adfef866d84be449d6a10b1320412648e650ba",
+    "audience": "lead"
+  },
+  "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+  "codexPath": "/home/sr/.codex/packages/standalone/releases/0.163.0-x86_64-unknown-linux-musl/bin/codex",
+  "codexHome": "/home/sr/.codex",
+  "account": {
+    "type": "chatgpt",
+    "planType": "team"
+  },
+  "accountSwitchingEnabled": false,
+  "leadTurnStartsAttempted": 1,
+  "leadTurnStartsSent": 1,
+  "leadTurnStartsLimit": 8,
+  "leadTurnStartLimitExceeded": false,
+  "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+  "attestedAt": "2026-10-17T08:53:10.982Z",
+  "pid": 81444,
+  "threadConfig": {
+    "method": "thread/start",
+    "model": "gpt-6.1-sol",
+    "sandbox": "read-only",
+    "approvalPolicy": "on-request",
+    "disabledFeatures": [
+      "shell_tool",
+      "unified_exec_tty",
+      "multi_agent",
+      "multi_agent_v2",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "browser_annotation_api",
+      "computer_use",
+      "image_generation",
+      "code_mode",
+      "code_mode_host",
+      "sleep_tool",
+      "in_app_browser",
+      "in_app_local_automation",
+      "shell_snapshot",
+      "shell_snapshot_v2",
+      "standalone_web_search"
+    ],
+    "webSearch": "disabled",
+    "verifiedAt": "2026-10-17T08:53:19.599Z"
+  }
+}

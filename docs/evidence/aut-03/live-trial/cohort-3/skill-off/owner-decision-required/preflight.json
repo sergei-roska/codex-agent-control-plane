@@ -1,0 +1,122 @@
+{
+  "schemaVersion": "aut-03-preflight/v1",
+  "phase": "before_task_submission",
+  "checkedAt": "2026-10-17T08:39:40.063Z",
+  "caseId": "owner-decision-required",
+  "arm": "skill-off",
+  "preflightGate": {
+    "path": "preflight-gate.json",
+    "sha256": "1b7487295fe425374343adcbe41bc47db5e0fccf854ccbbda73e9e81e429df63",
+    "checkedAt": "2026-10-17T08:37:29.808Z"
+  },
+  "quotaSnapshot": {
+    "checkedAt": "2026-10-17T08:37:29.777Z",
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 67,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 89,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "isolationSnapshot": {
+    "launcherPid": 7855,
+    "launcherPort": 8080,
+    "protectedProjectId": "f69dd0e80b",
+    "protectedProjectPort": 3002,
+    "protectedProjectPid": 11495,
+    "protectedProjectUntouched": true,
+    "trialPort": 3112,
+    "trialPortFree": false,
+    "trialServerPid": 76491,
+    "trialServerReady": true
+  },
+  "pinValidation": {
+    "branch": "main",
+    "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+    "sourcePinsMatched": 141,
+    "binaryPinsMatched": 2,
+    "helperPinsMatched": 2,
+    "promptInputsMatched": 16,
+    "promptsMatched": 4,
+    "acceptedEvidenceMatched": 2,
+    "mismatches": 0,
+    "settingsSha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb",
+    "selectedPromptSha256": "3b461e267dcf3258cc86d0eca5a9ed760b0e0fdcb4991642343376880495c514",
+    "trialServerStartupAssertionsPassed": true
+  },
+  "runtimeAttestation": {
+    "path": "attestation.json",
+    "sha256": "ae02017db23cbd72415e9c94418d99e8bcece3cc3d4c15510316f839662a5598",
+    "arm": "skill-off",
+    "leadSkillEnabled": false,
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "medium",
+    "account": {
+      "type": "chatgpt",
+      "planType": "team"
+    },
+    "accountSwitchingEnabled": false,
+    "workerRolesRemoved": true,
+    "leadTurnStartsLimit": 8
+  },
+  "serverLog": {
+    "path": "server.log",
+    "sha256": "09f389bcd93512664b8c1fb3659c38808da82c63cba77150e04739ce994b60bb"
+  },
+  "workspace": {
+    "path": "/tmp/aut03-final-trial/revised-cohort/cohort-3/skill-off/owner-decision-required/workspace",
+    "empty": true,
+    "readOnly": true,
+    "mode": "555"
+  },
+  "taskDatabase": {
+    "path": "/tmp/aut03-final-trial/revised-cohort/cohort-3/state/skill-off-owner-decision-required.sqlite",
+    "tablesBeforeTask": [
+      "a2a_migrations_lock",
+      "a2a_tasks_migrations",
+      "dispatch_journal",
+      "evidence",
+      "live_activity",
+      "session_threads",
+      "staging_events",
+      "tasks",
+      "usage_ledger",
+      "writer_executions",
+      "writer_fences",
+      "writer_lanes"
+    ],
+    "taskRows": 0,
+    "dispatchRows": 0,
+    "writerRows": 0,
+    "usageRows": 0
+  },
+  "taskSubmission": {
+    "taskCreated": false,
+    "modelTurns": 0
+  },
+  "accountQuotaExhaustionReported": false,
+  "preTaskFailures": [
+    {
+      "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/attempts/client-auth-401-1/attempt.json",
+      "sha256": "ab2d0f4aeff80ca99c67ecd84ebe285d03ff837311396dacc4f66e2073577014",
+      "taskCreated": false,
+      "modelTurns": 0
+    },
+    {
+      "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-launch-detached-1/attempt.json",
+      "sha256": "b517cb306ebbead9d1d1887af75a9c66a722c1b2e62c491784c2aab23707ec98",
+      "taskCreated": false,
+      "modelTurns": 0
+    },
+    {
+      "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-startup-token-format-2/attempt.json",
+      "sha256": "6488f74444ebb19a7c46b168546459b6eed4bc1e16c690ac8541123923523c4d",
+      "taskCreated": false,
+      "modelTurns": 0
+    }
+  ]
+}

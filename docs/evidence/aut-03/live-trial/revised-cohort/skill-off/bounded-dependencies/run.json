@@ -1,0 +1,122 @@
+{
+  "schemaVersion": "aut-03-live-task/v1",
+  "cohortId": "revised-cohort-1",
+  "caseId": "bounded-dependencies",
+  "arm": "skill-off",
+  "taskId": "277d5635-1e0b-4bd2-a42c-c38c5ec618db",
+  "status": "invalid_protocol_deviation",
+  "taskState": 3,
+  "disposition": "Four completed lead turns exceeded the frozen maximum of three. This task and the other task from this cohort are excluded from final scoring.",
+  "elapsedSeconds": 130,
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "medium",
+  "leadTurns": 4,
+  "modelRequests": null,
+  "retries": null,
+  "elapsedMs": 129164,
+  "tokens": {
+    "totalTokens": 107421,
+    "inputTokens": 97120,
+    "cachedInputTokens": 66688,
+    "outputTokens": 10301,
+    "reasoningOutputTokens": 326
+  },
+  "tokenSource": "sum of usage_ledger total_delta rows",
+  "monetaryCost": null,
+  "monetaryCostReason": "Subscription telemetry does not provide task-level cost.",
+  "quotaBefore": {
+    "checkedAt": "2026-10-17T05:39:37Z",
+    "primaryUsedPercent": 31,
+    "weeklyUsedPercent": 83
+  },
+  "quotaAfter": {
+    "checkedAt": "2026-10-17T05:42:43Z",
+    "primaryUsedPercent": 33,
+    "weeklyUsedPercent": 84
+  },
+  "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3",
+  "settingsSha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb",
+  "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+  "leadSkillContext": {
+    "version": 1,
+    "enabled": false,
+    "allowlistSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "pin": null
+  },
+  "workspaceEmptyAndReadOnly": true,
+  "workerRolesRemoved": {
+    "removedCount": 8,
+    "remainingCount": 0
+  },
+  "workerRouteAvailable": false,
+  "dispatchJournalRows": 0,
+  "permissionEventCount": 0,
+  "account": {
+    "type": "chatgpt",
+    "planType": "team",
+    "codexHome": "/home/sr/.codex",
+    "accountSwitchingEnabled": false
+  },
+  "threadConfig": {
+    "method": "thread/start",
+    "model": "gpt-6.1-sol",
+    "sandbox": "read-only",
+    "approvalPolicy": "on-request",
+    "disabledFeatures": [
+      "shell_tool",
+      "unified_exec_tty",
+      "multi_agent",
+      "multi_agent_v2",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "browser_annotation_api",
+      "computer_use",
+      "image_generation",
+      "code_mode",
+      "code_mode_host",
+      "sleep_tool",
+      "in_app_browser",
+      "in_app_local_automation",
+      "shell_snapshot",
+      "shell_snapshot_v2",
+      "standalone_web_search"
+    ],
+    "webSearch": "disabled",
+    "verifiedAt": "2026-10-17T05:39:48.219Z"
+  },
+  "evidence": {
+    "task": {
+      "path": "task.json",
+      "sha256": "c51239255e45167850ca79c8324706f058ecc22521ffd3c6cc2f806fada5de03"
+    },
+    "output": {
+      "path": "output.txt",
+      "sha256": "aa54b5ca1214cba98a826fa7575c95e6268d1397d3481401936c59799c3d001c"
+    },
+    "attestation": {
+      "path": "attestation.json",
+      "sha256": "c10988cffe8ae0579c8c4ef86a75c204e764198fb1415dc5157ad706231f9f70"
+    },
+    "checkpoint": {
+      "path": "checkpoint.json",
+      "sha256": "9870ff95f7b01363777659332c26395ffff39f314ed43c27002fe9821108026b"
+    },
+    "usage": {
+      "path": "usage.json",
+      "sha256": "c80d2e78bf8cd5d7877b7ffefe7ff25f55d1427c44a3e8461f121538d2ebb15f"
+    }
+  },
+  "protocolSnapshot": {
+    "runtimePinFile": "docs/evidence/aut-03/live-trial/revised-cohort-1/protocol/trial-runtime-pins.json",
+    "runtimePinFileSha256": "13b383e4fd405587964086448063709ce55a7175423f5be402be98bf6462f288",
+    "trialServer": "docs/evidence/aut-03/live-trial/revised-cohort-1/protocol/trial-server.js",
+    "trialServerSha256": "3cf65f5272e0702fc4838a373a6069ed913e0acc396cd59c9abafa0e09a48c30",
+    "declaration": "docs/evidence/aut-03/live-trial/revised-cohort-1/protocol/paired-trial-declaration.md",
+    "declarationSha256": "2e43afe8f33c0d43e0a87fbdc5463ae4b416ac71d5f7cd97cacf3f466062fff4"
+  },
+  "runtimePinFileSha256": "13b383e4fd405587964086448063709ce55a7175423f5be402be98bf6462f288",
+  "leadTurnsObserved": 4,
+  "declaredLeadTurnLimit": 3,
+  "cohortDisposition": "Invalid protocol deviation: turn cap was not enforced in this protocol version. This task and all other revised-cohort-1 outputs are excluded from final scoring."
+}

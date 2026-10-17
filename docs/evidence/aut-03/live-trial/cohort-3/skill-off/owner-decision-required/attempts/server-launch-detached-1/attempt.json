@@ -1,0 +1,14 @@
+{
+  "attemptType": "trial-server-startup",
+  "attempt": 1,
+  "processPid": 75756,
+  "taskCreated": false,
+  "modelTurns": 0,
+  "ready": false,
+  "port3112ListeningAfterLaunch": false,
+  "attestationCreated": false,
+  "stateDatabaseCreated": false,
+  "serverLogBytes": 0,
+  "observation": "The detached launch command returned after observing the process briefly alive. A later check found no process, readiness log, listener, attestation, or task state database. The initial empty server log is preserved here.",
+  "nextAction": "Use a managed exec session for the trial process, then verify readiness before submitting any A2A task."
+}

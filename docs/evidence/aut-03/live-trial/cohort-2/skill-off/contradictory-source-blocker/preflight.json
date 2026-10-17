@@ -1,0 +1,44 @@
+{
+  "checkedAt": "2026-10-17T08:05:32Z",
+  "quotaSnapshot": {
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 48,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 86,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "isolationSnapshot": {
+    "launcherPid": 7855,
+    "protectedProjectId": "f69dd0e80b",
+    "protectedProjectPort": 3002,
+    "protectedProjectPid": 11495,
+    "protectedProjectUntouched": true,
+    "trialPort": 3112,
+    "trialPortFree": true,
+    "trialServerPid": 65207,
+    "trialServerReady": true
+  },
+  "caseId": "contradictory-source-blocker",
+  "arm": "skill-off",
+  "settingsSha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb",
+  "workspace": "/tmp/aut03-final-trial/revised-cohort/cohort-2/skill-off/contradictory-source-blocker/workspace",
+  "workspaceEmptyAndReadOnly": true,
+  "accountQuotaExhaustionReported": false,
+  "trialServer": {
+    "arm": "skill-off",
+    "skillEnabled": false,
+    "accountType": "chatgpt",
+    "planType": "team",
+    "accountSwitchingEnabled": false,
+    "workersRemoved": 8,
+    "workersRemaining": 0,
+    "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+    "attestedAt": "2026-10-17T08:05:23.822Z"
+  },
+  "promptSha256": "d01368d9d2f97074842cd5c16b969f40fdd0f4a1f5d3fa319e00ceb9d5fd7940"
+}

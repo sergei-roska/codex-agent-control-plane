@@ -1,0 +1,44 @@
+{
+  "checkedAt": "2026-10-17T07:54:49Z",
+  "quotaSnapshot": {
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 45,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 86,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "isolationSnapshot": {
+    "launcherPid": 7855,
+    "protectedProjectId": "f69dd0e80b",
+    "protectedProjectPort": 3002,
+    "protectedProjectPid": 11495,
+    "protectedProjectUntouched": true,
+    "trialPort": 3112,
+    "trialPortFree": true,
+    "trialServerPid": 61862,
+    "trialServerReady": true
+  },
+  "caseId": "bounded-dependencies",
+  "arm": "skill-off",
+  "settingsSha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb",
+  "workspace": "/tmp/aut03-final-trial/revised-cohort/cohort-2/skill-off/bounded-dependencies/workspace",
+  "workspaceEmptyAndReadOnly": true,
+  "accountQuotaExhaustionReported": false,
+  "trialServer": {
+    "arm": "skill-off",
+    "skillEnabled": false,
+    "accountType": "chatgpt",
+    "planType": "team",
+    "accountSwitchingEnabled": false,
+    "workersRemoved": 8,
+    "workersRemaining": 0,
+    "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+    "attestedAt": "2026-10-17T07:54:39.353Z"
+  },
+  "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3"
+}

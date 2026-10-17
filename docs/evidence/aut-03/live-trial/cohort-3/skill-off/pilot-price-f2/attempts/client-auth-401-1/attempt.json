@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "aut-03-pre-task-attempt/v1",
+  "failureClass": "local_client_auth",
+  "httpStatus": 401,
+  "startedAt": "2026-10-17T08:26:53.925Z",
+  "finishedAt": "2026-10-17T08:26:53.935Z",
+  "a2aTaskCreated": false,
+  "modelTurns": 0,
+  "taskRows": 0,
+  "usageRows": 0,
+  "providerQuotaExhaustionReported": false,
+  "serverPid": 71231,
+  "serverRemainedReady": true,
+  "disposition": "Preserved setup failure; excluded from trial scoring. Correct local token-file configuration before submitting the first cohort-3 task."
+}

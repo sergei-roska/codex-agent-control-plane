@@ -1,0 +1,5 @@
+{
+  "exitCode": 1,
+  "finishedAt": "2026-10-17T08:26:53.935Z",
+  "error": "HTTP error for SendMessage! Status: 401 Unauthorized. Response: {\"error\":\"Unauthorized\"}"
+}

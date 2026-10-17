@@ -1,0 +1,17 @@
+{
+  "checkedAt": "2026-10-17T08:39:10.466Z",
+  "databasePath": "/tmp/aut03-final-trial/revised-cohort/cohort-3/state/skill-off-owner-decision-required.sqlite",
+  "mode": "readonly",
+  "tables": [
+    "a2a_migrations_lock",
+    "a2a_tasks_migrations",
+    "dispatch_journal",
+    "tasks"
+  ],
+  "rows": {
+    "tasks": 0,
+    "dispatchJournal": 0,
+    "writerExecutionsTablePresent": false,
+    "usageLedgerTablePresent": false
+  }
+}

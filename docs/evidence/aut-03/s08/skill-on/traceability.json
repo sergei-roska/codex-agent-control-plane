@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "spec-traceability/v1",
+  "featureId": "pilot-price",
+  "contextSha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf",
+  "artifactBindings": [
+    {
+      "role": "spec",
+      "path": "specs/pilot-price/spec.md",
+      "sha256": "34cc38254d9d2a6643a34b9716dacf918c4fa0368b3480bf87c9d0a46c9c3b54"
+    },
+    {
+      "role": "plan",
+      "path": "specs/pilot-price/plan.md",
+      "sha256": "f37a6291e8b381af505eb7cf699c7a6b9f6796155ec31a5b7a30daea87a45957"
+    },
+    {
+      "role": "tasks",
+      "path": "specs/pilot-price/tasks.md",
+      "sha256": "20e9e4df92bbb41384a13b18f807552a44160a28ae36017829a548d6e4b0a945"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "repair-price",
+      "role": "engineer",
+      "objective": "Repair applyDiscount so pct denotes a whole-number percentage and applyDiscount(200,10) equals 180. Preserve applyDiscount(200,0) === 200 and leave subtotal and withTax unaffected. Change exactly product/src/price.js; preserve tests, package.json, and CHECKS.json. Never copy REFERENCE_FIX.patch.",
+      "requirementIds": [
+        "REQ-1",
+        "REQ-2",
+        "REQ-3",
+        "REQ-4"
+      ],
+      "acceptanceIds": [
+        "AC-1"
+      ],
+      "dependsOn": [],
+      "parallel": false,
+      "writePaths": [
+        "product/src/price.js"
+      ],
+      "checkIds": [
+        "CHECK-1"
+      ],
+      "priorEvidenceIds": [
+        "EVID-GOAL",
+        "EVID-DEFECT",
+        "EVID-FIXTURE-ACCEPTANCE",
+        "EVID-ACCEPTANCE-TESTS",
+        "EVID-MANDATORY-INVENTORY"
+      ],
+      "stopConditions": [
+        "Do not execute under this offline planning proposal; later execution requires dispatch authority.",
+        "Stop and report if repair requires any other write path or weakening a mandatory requirement.",
+        "Do not claim acceptance before independent verification of the integrated candidate."
+      ],
+      "additionalRiskTags": [],
+      "declaredReviewKind": "routine",
+      "checkpointId": "price-repair-review",
+      "reviewReason": "Routine arithmetic repair with an exact product write boundary; independent verifier acceptance follows integration."
+    },
+    {
+      "id": "verify-price",
+      "role": "verifier",
+      "objective": "Independently inspect the integrated candidate and its complete product diff. Confirm exactly product/src/price.js changed, tests and other product files remain unchanged, whole-number percentage behavior is repaired, zero-percent remains a no-op, and subtotal/withTax are unaffected. Plan CHECK-1 against that same candidate: all four existing tests must pass. Record candidate identity, actual changed paths, check result, and any remaining failures only within verification/checks. Recommend disposition accepted only when every mandatory criterion is supported; the lead owns final acceptance.",
+      "requirementIds": [
+        "REQ-1",
+        "REQ-2",
+        "REQ-3",
+        "REQ-4"
+      ],
+      "acceptanceIds": [
+        "AC-1"
+      ],
+      "dependsOn": [
+        "repair-price"
+      ],
+      "parallel": false,
+      "writePaths": [
+        "verification/checks"
+      ],
+      "checkIds": [
+        "CHECK-1"
+      ],
+      "priorEvidenceIds": [
+        "EVID-GOAL",
+        "EVID-FIXTURE-ACCEPTANCE",
+        "EVID-ACCEPTANCE-TESTS",
+        "EVID-MANDATORY-INVENTORY"
+      ],
+      "stopConditions": [
+        "Do not execute checks or write artifacts during this planning-only trial.",
+        "Do not accept a failed or unrun check, an out-of-scope product change, changed tests, or an unidentified candidate.",
+        "Report failures to the lead; do not repair product files or modify acceptance checks.",
+        "If the candidate changes after verification, require verification of the new candidate before acceptance."
+      ],
+      "additionalRiskTags": [],
+      "declaredReviewKind": "routine",
+      "checkpointId": "price-repair-review",
+      "reviewReason": "Routine arithmetic repair with an exact product write boundary; independent verifier acceptance follows integration."
+    }
+  ]
+}

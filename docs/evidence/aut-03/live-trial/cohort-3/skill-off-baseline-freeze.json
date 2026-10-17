@@ -1,0 +1,484 @@
+{
+  "schemaVersion": "aut-03-baseline-freeze/v1",
+  "cohortId": "cohort-3",
+  "arm": "skill-off",
+  "frozenAt": "2026-10-17T08:49:20Z",
+  "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+  "preFreezeTrialEntrySha256": "880bda20a3828bb775db56eb1160567769614517c53a1fb7e6110ba3b3ae9614",
+  "declarationSha256": "bdb98633b7322cf0aba80c1301a1d2f6d3308c65551ad5997e1eb398ed99a75e",
+  "promptManifestSha256": "b8cc970a40f6d8dbacd684ca284325e459d8010839e68ee535354f114052f3be",
+  "runtimePinFileSha256": "5a48a55b4551becbdcabbdf10ed867cfdabfe5e0df58591000a2ced435a249c3",
+  "caseOrder": [
+    "pilot-price-f2",
+    "bounded-dependencies",
+    "owner-decision-required",
+    "contradictory-source-blocker"
+  ],
+  "cases": [
+    {
+      "caseId": "pilot-price-f2",
+      "taskId": "31534413-7377-4faf-9479-147079092c80",
+      "leadTurns": 1,
+      "totalTokens": 24367,
+      "elapsedMs": 29690,
+      "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185",
+      "runSha256": "7b58c05c41ccc53c5727967a4dacd1ec284195f7ef39d2efba9f7e0e6609c508",
+      "hardGates": {
+        "completed": true,
+        "skillContextDisabled": true,
+        "workspaceEmptyAndReadOnly": true,
+        "workerRolesRemaining": 0,
+        "dispatches": 0,
+        "writerExecutions": 0,
+        "permissions": 0,
+        "commands": 0,
+        "fileChanges": 0,
+        "turnStartsSent": 1,
+        "turnStartCap": 8,
+        "passed": true
+      },
+      "artifactFiles": [
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/attempts/client-auth-401-1/attempt.json",
+          "sha256": "ab2d0f4aeff80ca99c67ecd84ebe285d03ff837311396dacc4f66e2073577014",
+          "bytes": 533
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/attempts/client-auth-401-1/client-exit.json",
+          "sha256": "7c76c02e5e6a5058487657b17d1c3aed5289bd66c95266b8565438c4e44b60c4",
+          "bytes": 171
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/attempts/client-auth-401-1/client.log",
+          "sha256": "2b958df443549800fb237dac95ad215a3a6ef6867911c1bb8937c6fd9cc19fed",
+          "bytes": 185
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/attestation.json",
+          "sha256": "087563cb6c6e2947fc3cb5257d9249a83c245a5a40b0fc6b2fd74a44b0474df3",
+          "bytes": 2685
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/checkpoint.json",
+          "sha256": "256a42141254c553edd8ce1f17d8252de44f2564d9d872681ada7894d10d7c2d",
+          "bytes": 282
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/client-exit.json",
+          "sha256": "c64cad093907d5c500d94fc9cac88df23bda81ab042a67df7727ada011a951e2",
+          "bytes": 224
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/client.log",
+          "sha256": "ecf17e656e8b8963fd8cae26fc8eddc3d6a7ef92c357f69059eb7286e331e810",
+          "bytes": 705
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/collection-correction/controls-initial.json",
+          "sha256": "2698e96b2493680345e9a73f513b94ada7d9d744a9ace800573810a22ef7dd6f",
+          "bytes": 581
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/collection-correction/run-before-route-flag-correction.json",
+          "sha256": "af4dc282feef7a4ce166f0cdab48ed1dcbe288fe631d191f74002e7c899bcbed",
+          "bytes": 7498
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/controls.json",
+          "sha256": "46f06944a527d0aaa8929d0e3c0702fc149a646946b175434e20432dbcb9605a",
+          "bytes": 634
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/database-controls-check.json",
+          "sha256": "9f3ce00952ace8ac2f4576a65e71974f59d4a580c4e0a5ed46940c8f1b8488d6",
+          "bytes": 2161
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/output.txt",
+          "sha256": "b65529db4043d2dcfa4f02158fc33eb6e0166b195b8e8b6a191b863374b864f9",
+          "bytes": 5532
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/preflight.json",
+          "sha256": "94f1a5c5258d8bd70d1ec4620ff4adf54668b6efa0bc2e7394bd9d31573e9338",
+          "bytes": 2050
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/run.json",
+          "sha256": "7b58c05c41ccc53c5727967a4dacd1ec284195f7ef39d2efba9f7e0e6609c508",
+          "bytes": 7499
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/server.log",
+          "sha256": "09f389bcd93512664b8c1fb3659c38808da82c63cba77150e04739ce994b60bb",
+          "bytes": 51
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/task.json",
+          "sha256": "f406e9ff499c9d12c186445dca1432f8248c4d2a28fac1537c8f8d08569bca4b",
+          "bytes": 24745
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/usage.json",
+          "sha256": "c0f49e16dde2c5c2208652877b8a50cc13a40e76c939d2a65e9a25d2f391f540",
+          "bytes": 3456
+        }
+      ]
+    },
+    {
+      "caseId": "bounded-dependencies",
+      "taskId": "c529a368-701d-4b33-8c0f-61a8ed426281",
+      "leadTurns": 1,
+      "totalTokens": 21286,
+      "elapsedMs": 42272,
+      "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3",
+      "runSha256": "404e72cb9258eb17ddc0cdf27599246f5beae8073bf034b8fa0db9f0c1150e28",
+      "hardGates": {
+        "completed": true,
+        "skillContextDisabled": true,
+        "workspaceEmptyAndReadOnly": true,
+        "workerRolesRemaining": 0,
+        "dispatches": 0,
+        "writerExecutions": 0,
+        "permissions": 0,
+        "commands": 0,
+        "fileChanges": 0,
+        "turnStartsSent": 1,
+        "turnStartCap": 8,
+        "passed": true
+      },
+      "artifactFiles": [
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/attestation.json",
+          "sha256": "ae7908d4ac482e34b1011f6f970ed65583f8b405798df6643c5db59e35b4b033",
+          "bytes": 2685
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/checkpoint.json",
+          "sha256": "ebf1f2fec615559149e5f03071d43d15b488a6affd2e4f556823c2a5a9e6b164",
+          "bytes": 282
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/client-exit.json",
+          "sha256": "429f4d565880cc267529f5a38204c3256d1d5ef941e538aff6f6e97708643fb8",
+          "bytes": 200
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/client.log",
+          "sha256": "610316fdccf45bbc612b595e52a2666ddc547ecc62748250918d60db9a2b853f",
+          "bytes": 1365
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/controls.json",
+          "sha256": "0bd682b7d5b0e8b81bfee649e5cd3c357a25f9e125c110dcdcb25b0760d02acd",
+          "bytes": 634
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/database-controls-check.json",
+          "sha256": "edb02682052eaf79bbb22984c657578a3890cd8302010bb067323ec7f3f7b9d1",
+          "bytes": 1734
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/output.txt",
+          "sha256": "60badf95d2c8e531c24da415c2ebd91446cdffcf45a079b4b588017664da7470",
+          "bytes": 8045
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/preflight.json",
+          "sha256": "5f329403156481ce0d1f38952a38f6526ae60a4af967a7753b37c9a372d013cd",
+          "bytes": 2035
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/run.json",
+          "sha256": "404e72cb9258eb17ddc0cdf27599246f5beae8073bf034b8fa0db9f0c1150e28",
+          "bytes": 6463
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/server.log",
+          "sha256": "09f389bcd93512664b8c1fb3659c38808da82c63cba77150e04739ce994b60bb",
+          "bytes": 51
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/task.json",
+          "sha256": "4094f812d56bba25dd145d795c24f2c86d9354198d9a3af205611a1989c2a7b7",
+          "bytes": 14269
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/usage.json",
+          "sha256": "1d91d6b873e756dfd89238b7189f3334909e91e9b8f3f221b01f7a7e24210543",
+          "bytes": 3456
+        }
+      ]
+    },
+    {
+      "caseId": "owner-decision-required",
+      "taskId": "800fae56-6158-4735-9baa-9bfc4634e34d",
+      "leadTurns": 1,
+      "totalTokens": 20560,
+      "elapsedMs": 31200,
+      "promptSha256": "3b461e267dcf3258cc86d0eca5a9ed760b0e0fdcb4991642343376880495c514",
+      "runSha256": "457417821dd92df8ab55aa31e7b7f24d6daf95df7475d1dc3f6d9af200f47f45",
+      "hardGates": {
+        "completed": true,
+        "skillContextDisabled": true,
+        "workspaceEmptyAndReadOnly": true,
+        "workerRolesRemaining": 0,
+        "dispatches": 0,
+        "writerExecutions": 0,
+        "permissions": 0,
+        "commands": 0,
+        "fileChanges": 0,
+        "turnStartsSent": 1,
+        "turnStartCap": 8,
+        "passed": true
+      },
+      "artifactFiles": [
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-launch-detached-1/attempt.json",
+          "sha256": "b517cb306ebbead9d1d1887af75a9c66a722c1b2e62c491784c2aab23707ec98",
+          "bytes": 637
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-launch-detached-1/server.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-startup-token-format-2/attempt.json",
+          "sha256": "6488f74444ebb19a7c46b168546459b6eed4bc1e16c690ac8541123923523c4d",
+          "bytes": 757
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-startup-token-format-2/database-check.json",
+          "sha256": "9b50c8db07d8476485c1b51c86dd68c85245aef006c9dc4628667e2ed6c83ad5",
+          "bytes": 432
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-startup-token-format-2/server.log",
+          "sha256": "76caff0f1b7a01fdca66c34d8619593610bd24cad6fbda9c028153ac048fc69a",
+          "bytes": 123
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attestation.json",
+          "sha256": "c1b88e3a68ea006104e5e613078e28f2ac55c8081e31ed5117f56a96a2e0f322",
+          "bytes": 2685
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/checkpoint.json",
+          "sha256": "68b2c9df623db9f01634521aca50317da7b663456d9370d43ac67a631ef5b0d5",
+          "bytes": 282
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/client-exit.json",
+          "sha256": "9175b574700a50bca1f844a555e2a01f23f403dc36de508e43dba53189a693fe",
+          "bytes": 200
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/client.log",
+          "sha256": "41176ca847be6773cf57a39d1e65269502b0bb0040083d1281a1934b2d6b5ff1",
+          "bytes": 1044
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/controls.json",
+          "sha256": "65784ba118194a2c634f5c12bd3feeb51a602a3add8d8a2c3751a75341231777",
+          "bytes": 634
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/output.txt",
+          "sha256": "0ff538719f313fdbd8c0a4e11658a6a0074195191c158255f004aeb0498f1534",
+          "bytes": 6448
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/preflight-gate.json",
+          "sha256": "1b7487295fe425374343adcbe41bc47db5e0fccf854ccbbda73e9e81e429df63",
+          "bytes": 2185
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/preflight.json",
+          "sha256": "a5777640aa2764a3374c11c05d0ec10e8459a71df21d12602813400fa748a099",
+          "bytes": 3924
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/quota-after.json",
+          "sha256": "df5025a34dffa5660857fc9ba744bafab50470c384fc4a6070b767040f99ed5c",
+          "bytes": 356
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/run.json",
+          "sha256": "457417821dd92df8ab55aa31e7b7f24d6daf95df7475d1dc3f6d9af200f47f45",
+          "bytes": 7594
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/server.log",
+          "sha256": "09f389bcd93512664b8c1fb3659c38808da82c63cba77150e04739ce994b60bb",
+          "bytes": 51
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/task.json",
+          "sha256": "8a0c63b104febcd0554b82c2f75d485883ff16fb692b711e58986058acb00481",
+          "bytes": 11297
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/usage.json",
+          "sha256": "1a0e97819db4857534be7f4be97111aee4530708972683c38ba2e07ab0e94fb9",
+          "bytes": 3456
+        }
+      ]
+    },
+    {
+      "caseId": "contradictory-source-blocker",
+      "taskId": "c6610df6-18cc-4d53-afaf-e0f218730612",
+      "leadTurns": 1,
+      "totalTokens": 21191,
+      "elapsedMs": 45714,
+      "promptSha256": "d01368d9d2f97074842cd5c16b969f40fdd0f4a1f5d3fa319e00ceb9d5fd7940",
+      "runSha256": "372b16c6875a874a78dd3e96ba4c542ea172d566bfd53228842d1c68efff8f04",
+      "hardGates": {
+        "completed": true,
+        "skillContextDisabled": true,
+        "workspaceEmptyAndReadOnly": true,
+        "workerRolesRemaining": 0,
+        "dispatches": 0,
+        "writerExecutions": 0,
+        "permissions": 0,
+        "commands": 0,
+        "fileChanges": 0,
+        "turnStartsSent": 1,
+        "turnStartCap": 8,
+        "passed": true
+      },
+      "artifactFiles": [
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/attestation.json",
+          "sha256": "d976927a65c05e65bdbdd57ef036372349babe2279de46ef1b754d15643f74d5",
+          "bytes": 2685
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/checkpoint.json",
+          "sha256": "b85ff79178fe77476aee9619230bc9a8e36053a85fd874817d6c2fa40e0572d3",
+          "bytes": 282
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/client-exit.json",
+          "sha256": "9db5a184e849d605ac93988c39a008f83f5a2146014551aa9b58b7cd41f63217",
+          "bytes": 200
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/client.log",
+          "sha256": "4da27dbdf3f1a9d12824a9af1b271a289ff283f7386649b5d9f89e3118d522c7",
+          "bytes": 1427
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/controls.json",
+          "sha256": "89cf0e243cf0adc0c349147fad1feb77c0453461fc5a6468d384dc1bf84704f1",
+          "bytes": 634
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/output.txt",
+          "sha256": "8f61f7ca5a672735b3e7ae695d02cc3c88820aa75e58c2bb8eedab9b8bcc6f7a",
+          "bytes": 8479
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/preflight-gate.json",
+          "sha256": "9254909de6f46a18dc34bf0bd8f0e005ca4114d7735a35a719107ced71a6b2e3",
+          "bytes": 1998
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/preflight.json",
+          "sha256": "478c414eec638a2e75c89f370e4db3927f71de5359ab92586bcf3044cd2b8290",
+          "bytes": 3065
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/quota-after.json",
+          "sha256": "4f7fa9c4ee66703bb45040a780059ad08cfe7b5c771533b44acdead99af3205f",
+          "bytes": 356
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/run.json",
+          "sha256": "372b16c6875a874a78dd3e96ba4c542ea172d566bfd53228842d1c68efff8f04",
+          "bytes": 6647
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/server.log",
+          "sha256": "09f389bcd93512664b8c1fb3659c38808da82c63cba77150e04739ce994b60bb",
+          "bytes": 51
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/task.json",
+          "sha256": "c333916d2b9776c822506b6f1fb1f5b6d04aedddc7afb601bb58c6a3b82a10a7",
+          "bytes": 13934
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/usage.json",
+          "sha256": "6ad0939578fe2ff6dbb52b41b02e431279037ad9ba20d938e18a10fe314f5050",
+          "bytes": 3456
+        }
+      ]
+    }
+  ],
+  "totalMeasuredTokens": 87404,
+  "collectionCorrections": [
+    {
+      "taskId": "c529a368-701d-4b33-8c0f-61a8ed426281",
+      "status": "APPROVED",
+      "reportPath": "docs/evidence/aut-03/cohort-3-collection-correction.md",
+      "reportSha256": "222fb40940f1dd27b251d2d7edad87f323abbeca37c5e04cc2c4d42d86578325",
+      "correctedRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/run.json",
+      "correctedRunSha256": "404e72cb9258eb17ddc0cdf27599246f5beae8073bf034b8fa0db9f0c1150e28",
+      "independentReview": {
+        "status": "APPROVE",
+        "path": "docs/evidence/aut-03/cohort-3-collection-correction-review.md",
+        "sha256": "0377066a8d9e3aa48ec954ad885ea6ffa4c5db0d4516fa626d160a1f3f93acfc",
+        "reviewedTrialEntrySha256": "64a646f064b2252ebb9db564c125def1f144637d395d492523bd4b742f15bad3"
+      }
+    },
+    {
+      "taskId": "31534413-7377-4faf-9479-147079092c80",
+      "status": "APPROVED",
+      "reportPath": "docs/evidence/aut-03/cohort-3-pilot-collection-correction.md",
+      "reportSha256": "ec04b65f4a2c53239f7c39ea3c7d572a773de21f60a4ad39d7c131a9080e5da8",
+      "correctedRunSha256": "af4dc282feef7a4ce166f0cdab48ed1dcbe288fe631d191f74002e7c899bcbed",
+      "independentReview": {
+        "status": "APPROVE",
+        "path": "docs/evidence/aut-03/cohort-3-pilot-collection-correction-review.md",
+        "sha256": "37aff8c15616f5c7dc4910c16dc28dfc101e59377ee3d505def283d51c9cbf72",
+        "reviewedTrialEntrySha256": "ccfbe3b9ba591b111a410278f59dcb6645b015c07655dafdf480aecb73ee8e99"
+      }
+    },
+    {
+      "taskId": "31534413-7377-4faf-9479-147079092c80",
+      "status": "PENDING_INDEPENDENT_REVIEW",
+      "reportPath": "docs/evidence/aut-03/cohort-3-pilot-route-flag-correction.md",
+      "reportSha256": "ff2fa08f28bd913f98ba94f11585cdf5b6be6b2a4ce21d4fddb7b65a29de0871",
+      "correctedRunSha256": "7b58c05c41ccc53c5727967a4dacd1ec284195f7ef39d2efba9f7e0e6609c508",
+      "independentReview": null
+    }
+  ],
+  "preTaskFailures": [
+    {
+      "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/attempts/client-auth-401-1/attempt.json",
+      "sha256": "ab2d0f4aeff80ca99c67ecd84ebe285d03ff837311396dacc4f66e2073577014",
+      "clientLog": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/attempts/client-auth-401-1/client.log",
+      "clientExit": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/attempts/client-auth-401-1/client-exit.json",
+      "a2aTaskCreated": false,
+      "modelTurns": 0
+    },
+    {
+      "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-launch-detached-1/attempt.json",
+      "sha256": "b517cb306ebbead9d1d1887af75a9c66a722c1b2e62c491784c2aab23707ec98",
+      "taskCreated": false,
+      "modelTurns": 0,
+      "attemptType": "trial-server-startup",
+      "ready": false
+    },
+    {
+      "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-startup-token-format-2/attempt.json",
+      "sha256": "6488f74444ebb19a7c46b168546459b6eed4bc1e16c690ac8541123923523c4d",
+      "taskCreated": false,
+      "modelTurns": 0,
+      "attemptType": "trial-server-startup",
+      "ready": false
+    }
+  ],
+  "disposition": "All four skill-off task outputs and recursively collected evidence are frozen by hash. Independent baseline review is pending; the task gate remains closed."
+}

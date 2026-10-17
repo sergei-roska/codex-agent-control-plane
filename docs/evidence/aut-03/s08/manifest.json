@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "aut-03-s08-manifest/v1",
+  "files": [
+    {
+      "path": "docs/evidence/aut-03/s08/qualification.json",
+      "sha256": "09e3e7b4a4fd0732402610f49326445c18a878064bd01fe7c01415dd27b8c128",
+      "size": 22206
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-off/spec.md",
+      "sha256": "56bf9d826e148140628c1876dd311a007223a93e09d353fdfc3806d01f4debf0",
+      "size": 234
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-off/plan.md",
+      "sha256": "23abd3c943bd01924336ad7530814bb919fcc2e85fdafdcca653e84345c0b3a6",
+      "size": 1009
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-off/tasks.md",
+      "sha256": "adcb7765cba8652de2fbe31a8eea502d56740cebf5a866fd3ad41ca8cf6d3d5f",
+      "size": 991
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-off/traceability.json",
+      "sha256": "a5967c262299633a863df23665b34c7ecb049f12d40e941bce444da272276e9f",
+      "size": 4534
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-off/analyzer-report.json",
+      "sha256": "f0a9d978406d3326cd57a8456a44cbb979bb8968067ff26f1192729f4198fb35",
+      "size": 15817
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-off/analyzer-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-on/spec.md",
+      "sha256": "34cc38254d9d2a6643a34b9716dacf918c4fa0368b3480bf87c9d0a46c9c3b54",
+      "size": 195
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-on/plan.md",
+      "sha256": "f37a6291e8b381af505eb7cf699c7a6b9f6796155ec31a5b7a30daea87a45957",
+      "size": 1058
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-on/tasks.md",
+      "sha256": "20e9e4df92bbb41384a13b18f807552a44160a28ae36017829a548d6e4b0a945",
+      "size": 1040
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-on/traceability.json",
+      "sha256": "6dab16b1ba838d89f20e4bab4040d3b56b28c2af5bbddeb29944cd8753943ce9",
+      "size": 4074
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-on/analyzer-report.json",
+      "sha256": "514e3ac1fa272b23ef17e6ce1e657072eef1385eb6eaff3e39ddc87b85047704",
+      "size": 15818
+    },
+    {
+      "path": "docs/evidence/aut-03/s08/skill-on/analyzer-stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    }
+  ]
+}

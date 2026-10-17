@@ -1,0 +1,11 @@
+{
+  "checkedAt": "2026-10-17T08:54:01.828Z",
+  "source": "launcher GET /api/accounts?force=1",
+  "activeAccount": "system",
+  "planType": "team",
+  "autoSwitch": false,
+  "primaryUsedPercent": 80,
+  "weeklyUsedPercent": 91,
+  "providerError": null,
+  "percentagesAreStopConditions": false
+}

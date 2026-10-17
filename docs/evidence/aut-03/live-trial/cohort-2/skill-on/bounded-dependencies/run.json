@@ -1,0 +1,181 @@
+{
+  "schemaVersion": "aut-03-live-task/v1",
+  "cohortId": "cohort-2",
+  "caseId": "bounded-dependencies",
+  "arm": "skill-on",
+  "taskId": "425da1ec-90c5-4a34-b60c-4d75f48d88ab",
+  "status": "TASK_STATE_INPUT_REQUIRED",
+  "startedAt": "2026-10-17T08:10:05.039Z",
+  "stoppedAt": "2026-10-17T08:11:57.978Z",
+  "clientFinishedAt": "2026-10-17T08:12:02.651Z",
+  "clientExitCode": 1,
+  "elapsedMs": 112594,
+  "elapsedSeconds": 113,
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "medium",
+  "completedLeadTurns": 3,
+  "leadTurnStartAttempts": 4,
+  "leadTurnStartsSent": 3,
+  "leadTurnStartsLimit": 3,
+  "leadTurnStartLimitExceeded": true,
+  "modelRequests": null,
+  "retries": null,
+  "tokens": {
+    "inputTokens": 66925,
+    "cachedInputTokens": 40960,
+    "outputTokens": 7085,
+    "reasoningOutputTokens": 341,
+    "totalTokens": 74010
+  },
+  "tokenSource": "partial: fourth turn was blocked before sending; no tokens were recorded for that attempted start",
+  "monetaryCost": null,
+  "monetaryCostReason": "Subscription telemetry does not provide task-level cost.",
+  "stopReason": "The pinned three-turn cap blocked request four and stopped the isolated trial server. No account quota exhaustion was reported.",
+  "quotaBefore": {
+    "checkedAt": "2026-10-17T08:09:54Z",
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 50,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 87,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "quotaAfter": {
+    "checkedAt": "2026-10-17T08:12:12Z",
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 52,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 87,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null
+  },
+  "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3",
+  "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+  "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+  "runtimePinFileSha256": "1f9baadb939dc4612ffb6af594e79ee51a2c6920cd79a06ed5af5006be3d029f",
+  "declarationSha256": "f16e036c08bce2b799bf81c27a932488176e5b46ffb176ee521410c814d882c6",
+  "trialServerSha256": "ae3d872c7e3c0ac76c4031c088c2b673ec61b3ce8c71faa4f5685b1abbf4d83c",
+  "checkpointInspectorSha256": "8c1ceb090fb9b5249888a4735877846987fd877950364960a4b2ea68b7e1745d",
+  "leadSkillContext": {
+    "version": 1,
+    "enabled": true,
+    "allowlistSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "pin": {
+      "id": "aut-03-lead-decomposition-v1",
+      "sha256": "e0f10756e0486cdb827519edd8adfef866d84be449d6a10b1320412648e650ba"
+    }
+  },
+  "workspaceEmptyAndReadOnly": true,
+  "workerRoles": {
+    "removedCount": 8,
+    "remainingCount": 0
+  },
+  "workerRouteAvailable": false,
+  "dispatchJournalRows": 0,
+  "writerExecutionRows": 0,
+  "permissionEventCount": 0,
+  "commandsObserved": 0,
+  "fileChangesObserved": 0,
+  "account": {
+    "type": "chatgpt",
+    "planType": "team",
+    "codexHome": "/home/sr/.codex",
+    "accountSwitchingEnabled": false
+  },
+  "threadConfig": {
+    "method": "thread/start",
+    "model": "gpt-6.1-sol",
+    "sandbox": "read-only",
+    "approvalPolicy": "on-request",
+    "disabledFeatures": [
+      "shell_tool",
+      "unified_exec_tty",
+      "multi_agent",
+      "multi_agent_v2",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "browser_annotation_api",
+      "computer_use",
+      "image_generation",
+      "code_mode",
+      "code_mode_host",
+      "sleep_tool",
+      "in_app_browser",
+      "in_app_local_automation",
+      "shell_snapshot",
+      "shell_snapshot_v2",
+      "standalone_web_search"
+    ],
+    "webSearch": "disabled",
+    "verifiedAt": "2026-10-17T08:11:57.955Z"
+  },
+  "evidence": {
+    "preflight": {
+      "path": "preflight.json",
+      "sha256": "5a2d04ef4375074bde75eee0a2acd98f601f035822864261bb18d1e2e7095b98"
+    },
+    "task": {
+      "path": "task.json",
+      "sha256": "e16a99306bb280f4847b9d6399095aa99607d05fe888ad68459737c522050d02"
+    },
+    "output": {
+      "path": "output.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "client": {
+      "path": "client.log",
+      "sha256": "53f3e5d1174fc6bddc8dbc3eec66234e3ce041a77fdd9b8828785f3870811cca"
+    },
+    "client_exit": {
+      "path": "client-exit.json",
+      "sha256": "1db89a8ec71a364d5404abd01c36fc52902f1829d84c4ec0271e2534e19c725d"
+    },
+    "attestation": {
+      "path": "attestation.json",
+      "sha256": "91816335a8ba150be0463389afee1e430ce38247c7d9ac0aa1ac7962d79b7c04"
+    },
+    "checkpoint": {
+      "path": "checkpoint.json",
+      "sha256": "d7e5fd13f93f3fd50bdadd16afe64c5e0f58d827c579667534e8969eca0fc4d8"
+    },
+    "usage": {
+      "path": "usage.json",
+      "sha256": "1634708939ef4219571d240b9d072fe27b412e77fbb381ebc542b94e7264903b"
+    },
+    "controls": {
+      "path": "controls.json",
+      "sha256": "c3f6062505e5791720074bb01d1439801da9109c06f5a2d5e36e26bdaf6cc9e3"
+    }
+  },
+  "protocolSnapshot": {
+    "declaration": {
+      "path": "docs/evidence/aut-03/paired-trial-declaration.md",
+      "sha256": "f16e036c08bce2b799bf81c27a932488176e5b46ffb176ee521410c814d882c6"
+    },
+    "runtimePins": {
+      "path": "docs/evidence/aut-03/trial-runtime-pins.json",
+      "sha256": "1f9baadb939dc4612ffb6af594e79ee51a2c6920cd79a06ed5af5006be3d029f"
+    },
+    "promptManifest": {
+      "path": "docs/evidence/aut-03/trial-prompts.json",
+      "sha256": "b8cc970a40f6d8dbacd684ca284325e459d8010839e68ee535354f114052f3be"
+    },
+    "trialServer": {
+      "path": "docs/evidence/aut-03/trial-server.js",
+      "sha256": "ae3d872c7e3c0ac76c4031c088c2b673ec61b3ce8c71faa4f5685b1abbf4d83c"
+    },
+    "quotaPolicyReview": {
+      "path": "docs/evidence/aut-03/revised-controls-review-3.md",
+      "sha256": "bdcd82f367bd39a6bf4720649dfc81385cabe78ef179b689aadb439cdc40e2a2"
+    }
+  },
+  "cohortDisposition": "Excluded from final scoring; the fail-closed three-turn cap stopped cohort-2 before the skill-on bounded-dependencies output completed. Preserve this result and restart a new paired cohort after cap revision and independent review."
+}

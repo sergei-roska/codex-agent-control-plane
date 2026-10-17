@@ -1,0 +1,85 @@
+{
+  "schemaVersion": "aut-03-blind-scoring-key/v1",
+  "createdAt": "2026-10-17T09:06:31.330Z",
+  "packetSha256": "ac60b78dcb31c8738aed804f2b3e8d465de9d6a4a2cf072a0ea987e069b4d028",
+  "scenarioMap": {
+    "pilot-price-f2": "scenario-gkCEiEHg",
+    "bounded-dependencies": "scenario-jhQ0LKdo",
+    "owner-decision-required": "scenario-9cCekeSa",
+    "contradictory-source-blocker": "scenario-8FFzX9sY"
+  },
+  "runMap": [
+    {
+      "opaqueRunId": "run-kuysdSoAYRIc",
+      "scenarioId": "scenario-gkCEiEHg",
+      "caseId": "pilot-price-f2",
+      "arm": "skill-off",
+      "taskId": "31534413-7377-4faf-9479-147079092c80",
+      "rawOutputPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/output.txt",
+      "rawOutputSha256": "b65529db4043d2dcfa4f02158fc33eb6e0166b195b8e8b6a191b863374b864f9"
+    },
+    {
+      "opaqueRunId": "run-E-06DpxKkvkG",
+      "scenarioId": "scenario-9cCekeSa",
+      "caseId": "owner-decision-required",
+      "arm": "skill-on",
+      "taskId": "5a4c8462-64d7-46e9-9f04-e8654edaf46c",
+      "rawOutputPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/output.txt",
+      "rawOutputSha256": "3f60722dd079ba68f947f187d741296677c30b592f48f791347664bbf0dae031"
+    },
+    {
+      "opaqueRunId": "run-qGQKNJ3ueOSt",
+      "scenarioId": "scenario-jhQ0LKdo",
+      "caseId": "bounded-dependencies",
+      "arm": "skill-off",
+      "taskId": "c529a368-701d-4b33-8c0f-61a8ed426281",
+      "rawOutputPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/output.txt",
+      "rawOutputSha256": "60badf95d2c8e531c24da415c2ebd91446cdffcf45a079b4b588017664da7470"
+    },
+    {
+      "opaqueRunId": "run-v2VkWjp-y3gy",
+      "scenarioId": "scenario-8FFzX9sY",
+      "caseId": "contradictory-source-blocker",
+      "arm": "skill-on",
+      "taskId": "2888f97e-cf8c-461a-a5a2-ee1b58477840",
+      "rawOutputPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/output.txt",
+      "rawOutputSha256": "d99d3f76f77ab6f1d5fb9435db0ea42f832f62972f195116582b19593e8ee864"
+    },
+    {
+      "opaqueRunId": "run-oNMU5gdzbFCr",
+      "scenarioId": "scenario-gkCEiEHg",
+      "caseId": "pilot-price-f2",
+      "arm": "skill-on",
+      "taskId": "5320ac49-ae98-45b9-90ee-dcfacb4b3d8d",
+      "rawOutputPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/output.txt",
+      "rawOutputSha256": "8893d680c61aa86314058a5f4115d24e6e32740a8df498354a28358be005b137"
+    },
+    {
+      "opaqueRunId": "run-xVKP0Rgd4lDn",
+      "scenarioId": "scenario-9cCekeSa",
+      "caseId": "owner-decision-required",
+      "arm": "skill-off",
+      "taskId": "800fae56-6158-4735-9baa-9bfc4634e34d",
+      "rawOutputPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/output.txt",
+      "rawOutputSha256": "0ff538719f313fdbd8c0a4e11658a6a0074195191c158255f004aeb0498f1534"
+    },
+    {
+      "opaqueRunId": "run-RFC3Dc9N2MWm",
+      "scenarioId": "scenario-8FFzX9sY",
+      "caseId": "contradictory-source-blocker",
+      "arm": "skill-off",
+      "taskId": "c6610df6-18cc-4d53-afaf-e0f218730612",
+      "rawOutputPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/output.txt",
+      "rawOutputSha256": "8f61f7ca5a672735b3e7ae695d02cc3c88820aa75e58c2bb8eedab9b8bcc6f7a"
+    },
+    {
+      "opaqueRunId": "run-GYdcYZHq6cxA",
+      "scenarioId": "scenario-jhQ0LKdo",
+      "caseId": "bounded-dependencies",
+      "arm": "skill-on",
+      "taskId": "b637d77a-48d6-457c-8c7f-30fb2a4ea794",
+      "rawOutputPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/output.txt",
+      "rawOutputSha256": "ddd7cc53186ff8e40ffee34c1f247e4dc769a79fff6704c4a6eb5c1799be069f"
+    }
+  ]
+}

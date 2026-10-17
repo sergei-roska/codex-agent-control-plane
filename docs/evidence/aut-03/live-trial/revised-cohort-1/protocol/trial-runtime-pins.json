@@ -1,0 +1,709 @@
+{
+  "schemaVersion": "aut-03-runtime-pins/v1",
+  "createdAt": "2026-10-17",
+  "repository": {
+    "branch": "main",
+    "commit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+    "workingTreeSourceState": "All tracked runtime source and profile files are pinned below. The startup helper rejects any tracked working-tree change outside docs/evidence/aut-03/."
+  },
+  "model": {
+    "id": "gpt-6.1-sol",
+    "reasoningEffort": "medium"
+  },
+  "effectiveLeadProfile": {
+    "sha256": "2cee9ba6dac56455ac5a7da5064415042556c0dbfd3503ac7232243c155ffddc",
+    "name": "coordinator",
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "sandbox": "read-only",
+    "tools": {
+      "mcpServers": [],
+      "skills": false
+    },
+    "derivedFrom": [
+      "src/role-catalog.js",
+      "profiles/TEAM.md"
+    ]
+  },
+  "skill": {
+    "id": "aut-03-lead-decomposition-v1",
+    "sha256": "e0f10756e0486cdb827519edd8adfef866d84be449d6a10b1320412648e650ba",
+    "path": "profiles/skills/library/aut-03-lead-decomposition-v1/SKILL.md",
+    "audience": "lead"
+  },
+  "runtime": {
+    "nodeVersion": "v24.21.0",
+    "codexCliVersion": "codex-cli 0.163.0",
+    "appServerRuntime": "codex-a2a-runtime/0.162.1",
+    "codexHome": "/home/sr/.codex",
+    "codexAccountPlanType": "team",
+    "codexAccountSelection": "launcher system account; named profile switching disabled for the trial process",
+    "codexLookupPath": "/home/sr/.local/bin/codex",
+    "codexResolvedPath": "/home/sr/.codex/packages/standalone/releases/0.163.0-x86_64-unknown-linux-musl/bin/codex",
+    "sourceFiles": [
+      {
+        "path": "package-lock.json",
+        "sha256": "5eb972114295361537d7672f000f3f94e95193dc86bc46a7bbcd3380cc6bab60"
+      },
+      {
+        "path": "package.json",
+        "sha256": "91fe8e775ca23ca8ff2e2f69c2250b19a7a278faa4aef22f5d826739d8bc99db"
+      },
+      {
+        "path": "profiles/EVALUATION.md",
+        "sha256": "6129dd0615beff5ed05bf40da874898a7d1c30f3976d65b573ec7568f4c109ef"
+      },
+      {
+        "path": "profiles/REFERENCE.md",
+        "sha256": "0baa786b9db57258b6e460293f8355606535adebd2a7c3c5942d3e6ac9120547"
+      },
+      {
+        "path": "profiles/TEAM.md",
+        "sha256": "5a93eb6935b162cce8164e80047d69bf7b86d4bbfb64a6b08a406746e1017179"
+      },
+      {
+        "path": "profiles/agents/architect.toml",
+        "sha256": "ecc23c8214ecfd0b60c49b0e5249c2779999335312451b435cda7229d6fb28c1"
+      },
+      {
+        "path": "profiles/agents/auditor.toml",
+        "sha256": "7fb6e44641ddb5e50f17cdc62ca08340f7514bdf27d709137877212036631af4"
+      },
+      {
+        "path": "profiles/agents/engineer.toml",
+        "sha256": "df9c54077fda9f9b20baada6ac3f51ad261016bf9536741aade35d97a7d6f97d"
+      },
+      {
+        "path": "profiles/agents/explorer.toml",
+        "sha256": "0b31b2d999785310ed91eb49670118ba643e5c2699a79e2b45ee2c51369259f2"
+      },
+      {
+        "path": "profiles/agents/recovery-engineer.toml",
+        "sha256": "e848acc9b61258b240202db817c167eb754b1a98dc12d55f48e645c5061df2ab"
+      },
+      {
+        "path": "profiles/agents/scout.toml",
+        "sha256": "f1c93ca441486892bf6e81e8a5a5234392b72f4fd36b9ff1f88408c9cfd1e44a"
+      },
+      {
+        "path": "profiles/agents/senior-engineer.toml",
+        "sha256": "8309779fbc39cb8b1301d9724dcf80a6be16debf84fc42974ab1bc833b0eaec5"
+      },
+      {
+        "path": "profiles/agents/verifier.toml",
+        "sha256": "c52d2b6f71707f232861a762bd1d56589a18db58b3eb0b154d603d33b94e0c2c"
+      },
+      {
+        "path": "profiles/mcp/catalog.json",
+        "sha256": "debb308471c32157ff56ee1e45ff3875c8bc4b2db393ea90ff42f2d2a5882a20"
+      },
+      {
+        "path": "profiles/skills/library/a11y-frontend-twig/SKILL.md",
+        "sha256": "517aecd1958a9212941de950edb73e2da53915d9ce43cbd699b0d8ada64cc58c"
+      },
+      {
+        "path": "profiles/skills/library/a11y-frontend-twig/agents/openai.yaml",
+        "sha256": "4493a20d8f9948d00a2984430b5e98d674d728d8a7c5b31bb05bb5263ae313e4"
+      },
+      {
+        "path": "profiles/skills/library/actor-model/SKILL.md",
+        "sha256": "5bb6424d25c652d88841bac0410176a61c41b878e045884a2c4b4098e0b77cea"
+      },
+      {
+        "path": "profiles/skills/library/actor-model/evals.json",
+        "sha256": "6236946afaf55c8416ad274b796cb649bf90dad79d17a8c7c91e044c45987aae"
+      },
+      {
+        "path": "profiles/skills/library/agent-factory/SKILL.md",
+        "sha256": "08e0fcddf154cf13fe064d5a0d4ce4f1900e8319acc4540f5910e6063dc6502b"
+      },
+      {
+        "path": "profiles/skills/library/agent-factory/evals.json",
+        "sha256": "02b8b3565fa09eaed9ddee93c62b7ca87bf62cfca598cb7fba4d9435fb4fa21e"
+      },
+      {
+        "path": "profiles/skills/library/agent-factory/references/archetypes.md",
+        "sha256": "ba2a2c1d26905cf98fed7a662bf5e6f28c623418cd3f6fdc7a9ddb5a521ec3b7"
+      },
+      {
+        "path": "profiles/skills/library/agent-factory/references/blackboard.md",
+        "sha256": "71152dc1f518852ede9f27abf29c6ee87525ad983ea91007cfd7e68c76cdd291"
+      },
+      {
+        "path": "profiles/skills/library/agent-factory/references/model_policy.md",
+        "sha256": "ce1acde05f29afa36b93c5588a65a5052f47ff106b9d68535c04790d856ca080"
+      },
+      {
+        "path": "profiles/skills/library/agent-factory/references/pipelines.md",
+        "sha256": "376eb0a6762980ce85bb22ea42dfc7845070ae939ca64b4bb84e731f7c59b682"
+      },
+      {
+        "path": "profiles/skills/library/agent-factory/references/roles.md",
+        "sha256": "317058a709b9625bd6c842d75436f49cca3b1b0141d2c8b1b1951bcc7fa08458"
+      },
+      {
+        "path": "profiles/skills/library/aut-03-lead-decomposition-v1/SKILL.md",
+        "sha256": "e0f10756e0486cdb827519edd8adfef866d84be449d6a10b1320412648e650ba"
+      },
+      {
+        "path": "profiles/skills/library/blast-radius-analyzer/SKILL.md",
+        "sha256": "cc80bcc70bbcd30a1087be93d8dc6b76dc5023305dd0640a7e817975bce74fa9"
+      },
+      {
+        "path": "profiles/skills/library/circuit-breaker/SKILL.md",
+        "sha256": "3d2a0a49393cb64fe8d52b5cbd439d46ba1bc5da6d0022ac9a2f99f76443409e"
+      },
+      {
+        "path": "profiles/skills/library/circuit-breaker/evals.json",
+        "sha256": "37afb7fd811b8b9518bb621a22e7202a28d561f7321382de0ad4ceef4b1143fc"
+      },
+      {
+        "path": "profiles/skills/library/codebase-indexing/SKILL.md",
+        "sha256": "2dd647491aa052d39ed5d80a1c339cd8c4ea1bf74ff4f36d74b3a50cafd3814c"
+      },
+      {
+        "path": "profiles/skills/library/codebase-indexing/evals.json",
+        "sha256": "6196ab5d9157473a25df67fcba39e10b60671d15fbe6adc55d475867182df5f2"
+      },
+      {
+        "path": "profiles/skills/library/codebase-search/SKILL.md",
+        "sha256": "ef345b76b8e050416c5b131e216c8856590e2ffaa8aede756f0136752b056a9a"
+      },
+      {
+        "path": "profiles/skills/library/codebase-search/evals.json",
+        "sha256": "8f9649b0752c842478d1b98c58294d453e6284fdeb01a91512b5ec9f0f690a31"
+      },
+      {
+        "path": "profiles/skills/library/copy-on-write/SKILL.md",
+        "sha256": "611a9467f3fd3ee98587636a5a1d7c173b37f863e8ba802a6729387abfd99a68"
+      },
+      {
+        "path": "profiles/skills/library/copy-on-write/evals.json",
+        "sha256": "4d10766d6f1e0409293adadd3339aee8ef6a5d27e0d4c830fe0619a30eefe0bd"
+      },
+      {
+        "path": "profiles/skills/library/dead-letter-queue/SKILL.md",
+        "sha256": "e711742d8a351fe54f3aafee901d2d492a8dcc600f00ced153feb6904b709321"
+      },
+      {
+        "path": "profiles/skills/library/dead-letter-queue/evals.json",
+        "sha256": "c80b0cf90985ffcedd2f347a81b363c0e1565d1282752cc0e9e16fbb4e8d14aa"
+      },
+      {
+        "path": "profiles/skills/library/design-by-contract/SKILL.md",
+        "sha256": "1aee73521adca73997e961aef0be45ccf4de47b04e9c0a131c3424fc47a338ea"
+      },
+      {
+        "path": "profiles/skills/library/design-by-contract/evals.json",
+        "sha256": "bff1ee6c1984e3737ece218fb86162ba9c243c6ff9ab4701bcc83cd2e6d13f1a"
+      },
+      {
+        "path": "profiles/skills/library/divide-and-conquer/SKILL.md",
+        "sha256": "8c053c113f06be5bd6c230eaed186cb49752b6b25bc91afcf324e36d1b040d05"
+      },
+      {
+        "path": "profiles/skills/library/divide-and-conquer/evals.json",
+        "sha256": "47009bd362a66aca805405e4b042b20a9685507a49c26ab6acbe82d5f5d9e73a"
+      },
+      {
+        "path": "profiles/skills/library/drupal-views-safe-edit/SKILL.md",
+        "sha256": "280b63b8830f84b6511a22e390a27e619b65050804c867a15657d54f9c07cefe"
+      },
+      {
+        "path": "profiles/skills/library/drupal-views-safe-edit/inheritance.md",
+        "sha256": "604ca7013ccd9c1e9addd84c0d351aad5abe174e7bff100d5cc27ac476cd9f02"
+      },
+      {
+        "path": "profiles/skills/library/entity-query-analyzer/SKILL.md",
+        "sha256": "35b463f7c1d85970fc38c86082598ec64e79c78a93ede713e402efbc38f9b9b9"
+      },
+      {
+        "path": "profiles/skills/library/entity-query-analyzer/agents/openai.yaml",
+        "sha256": "ccd124a68b2083615342cb8db97d34796cfa2d8926e39f104d16a38ab12b2ff4"
+      },
+      {
+        "path": "profiles/skills/library/event-sourcing/SKILL.md",
+        "sha256": "1b9f363e76a0ff531abe59904bd711d5dc3381b816b4783274540a149c99cd70"
+      },
+      {
+        "path": "profiles/skills/library/event-sourcing/evals.json",
+        "sha256": "ec5a88f90f65240aa7275ad7a158e44701fef699893f72786a7062d970e82c33"
+      },
+      {
+        "path": "profiles/skills/library/finite-state-machine/SKILL.md",
+        "sha256": "5e03940a95f8de9df7b78116c88979a89623dbc75b9100759a13978ccbdeef67"
+      },
+      {
+        "path": "profiles/skills/library/finite-state-machine/evals.json",
+        "sha256": "2f80e5f5d2c9ea6ef1e13a7ebd3784bd91937670d768870f63dcd0b87a70f060"
+      },
+      {
+        "path": "profiles/skills/library/fork-join/SKILL.md",
+        "sha256": "afa6a0c3d9c7df66116ec11c812b2f25e4be4d0b578e4cf39c0e9e5692f6bebb"
+      },
+      {
+        "path": "profiles/skills/library/fork-join/evals.json",
+        "sha256": "1f443e3b3f1ca91b3cea72a03b2a0a988c39522518a0038e20bd571d92dade6c"
+      },
+      {
+        "path": "profiles/skills/library/hierarchical-work-decomposition/SKILL.md",
+        "sha256": "dd4668cca45bc9e8f392fceade1666fdb36f7850294c1e45afd7c81a9d9e5525"
+      },
+      {
+        "path": "profiles/skills/library/idempotency-key-filter/SKILL.md",
+        "sha256": "0e921d4a320751521cec50e9814f77d8e6e741d3ed8125adea702f70b827a730"
+      },
+      {
+        "path": "profiles/skills/library/idempotency-key-filter/evals.json",
+        "sha256": "e7659157b7562d3c8bf836f2d1e4cc821147ff92c1e24258a325aa447ac248c1"
+      },
+      {
+        "path": "profiles/skills/library/investigate-before-asking/SKILL.md",
+        "sha256": "48762adb6583b1e0027393999052f341e7d446b8f261196281d687041fea06ca"
+      },
+      {
+        "path": "profiles/skills/library/lru-context-pruner/SKILL.md",
+        "sha256": "a7f275733e4ca91135a4641fa71266560f4f2682c699fa2f7d284fedf979e1e1"
+      },
+      {
+        "path": "profiles/skills/library/lru-context-pruner/evals.json",
+        "sha256": "2c22b81d1a47d54c6fc796dcb78b5f6a71ec7216e00ff0cb0606d04161d073c1"
+      },
+      {
+        "path": "profiles/skills/library/mockup-to-spec/SKILL.md",
+        "sha256": "02bfc36efde25e88a9a07cadd6d07a695731037a12ba1d9a20f7f268fe958a67"
+      },
+      {
+        "path": "profiles/skills/library/mockup-to-spec/scripts/coverage.py",
+        "sha256": "7411e1a65b129b5be9240b977b9cbcc68fd9768138699ef1787f99c57622662b"
+      },
+      {
+        "path": "profiles/skills/library/mockup-to-spec/scripts/inventory.py",
+        "sha256": "9402e0033e13896bc47a3a866366452f03351b001bc527b8ac6e78f07a7422fd"
+      },
+      {
+        "path": "profiles/skills/library/mockup-to-spec/templates/screen-pass.md",
+        "sha256": "619f342f8e34d9b3ed788fa1d7fc9241d82bae7e30506f1fe1282e3415cfed91"
+      },
+      {
+        "path": "profiles/skills/library/performance-maintainability-drupal/SKILL.md",
+        "sha256": "5027e3bdffa05fa4fde902889234806b9a32b78897cd00c3c828e0c15a7f0597"
+      },
+      {
+        "path": "profiles/skills/library/performance-maintainability-drupal/agents/openai.yaml",
+        "sha256": "11bd851d2770e937fd41ac88818805517bea066f0775b4fdfc38803e576387c8"
+      },
+      {
+        "path": "profiles/skills/library/performance-maintainability-drupal/references/dry-run.md",
+        "sha256": "e027bc990c89fa9de89cffd5fd627f5b5c3c0120332545523c1b7ad02d5579c2"
+      },
+      {
+        "path": "profiles/skills/library/performance-maintainability-drupal/references/performance-maintainability-playbook.md",
+        "sha256": "e1c2b01d7862f7965d49c1cf1dfb65853f2f1abef8458c4db4e01c91da4162b5"
+      },
+      {
+        "path": "profiles/skills/library/php84-systems-design/SKILL.md",
+        "sha256": "3eb2f7f15d4a7af5bad62c283243e4cae84dc9a9d4b242e9a290eb5302aa0b4d"
+      },
+      {
+        "path": "profiles/skills/library/php84-systems-design/evaluation.md",
+        "sha256": "7942bb6d6f20ec32c422e585620feb33721df56e3a8aff18425dac98e366a818"
+      },
+      {
+        "path": "profiles/skills/library/php84-systems-design/references/dry-run.md",
+        "sha256": "4b3f1cdb1909897bc05d44851c20244e8723d592fd55543400b73f5094c6eb45"
+      },
+      {
+        "path": "profiles/skills/library/pipes-and-filters/SKILL.md",
+        "sha256": "382506480a9d41beab102f76020cf777321a7aa2d1c28ed66fce6958ba04025a"
+      },
+      {
+        "path": "profiles/skills/library/pipes-and-filters/evals.json",
+        "sha256": "bd7e288d44e15484f3a8dba6afb12ff700c2e72e197ba11afce160c807a53597"
+      },
+      {
+        "path": "profiles/skills/library/provision-ddev/SKILL.md",
+        "sha256": "e536a4077c8d9a395636092768f0c44595bc94e40ddf9c0072b7363145aa258b"
+      },
+      {
+        "path": "profiles/skills/library/provision-ddev/references/ddev-provision-guide.md",
+        "sha256": "fe6acce44defbbe9330224ce8318c2c3b317e055e1ba66fb01bd4fafe0d36965"
+      },
+      {
+        "path": "profiles/skills/library/provision-lando/SKILL.md",
+        "sha256": "317a33931259e42e25f6d361f5947b30a95d1623bf37fd037c44c4f52a5cc179"
+      },
+      {
+        "path": "profiles/skills/library/provision-lando/references/lando-provision-guide.md",
+        "sha256": "096ff0657970950a6fec85a2d35d12ab18578dbea52a5bf4bc835c82563892c4"
+      },
+      {
+        "path": "profiles/skills/library/provision-local-platform/SKILL.md",
+        "sha256": "3fd2146abbd9c9243e0563beba84cebf335cdd2cf21c3617abb2ef28d40a6c95"
+      },
+      {
+        "path": "profiles/skills/library/provision-local-platform/references/local-platform-preflight.md",
+        "sha256": "e55596c816d8b9119633c52e43e2a2a98cdeba30647573238710905e05a04eee"
+      },
+      {
+        "path": "profiles/skills/library/raft-quorum-consensus/SKILL.md",
+        "sha256": "f392c8da2919de62c138806e954747ee0693e89c30864146fa8af0a5e11bb667"
+      },
+      {
+        "path": "profiles/skills/library/raft-quorum-consensus/evals.json",
+        "sha256": "e3e6a58e3874998f367918b77a02c6bfc7cb17b563eb83e63da7dd6161c21642"
+      },
+      {
+        "path": "profiles/skills/library/rate-limiter-throttler/SKILL.md",
+        "sha256": "2e6b158f0539b1c1accd72a88b3f2c368711b35edebc0ee0273bed4ca5b21006"
+      },
+      {
+        "path": "profiles/skills/library/rate-limiter-throttler/evals.json",
+        "sha256": "3ebcaeff8dc49f66b06a32c611258b8a899d72b06b166b6b5e466d200723142a"
+      },
+      {
+        "path": "profiles/skills/library/saga-transaction-manager/SKILL.md",
+        "sha256": "dd047a6296534b6df589d9ae2a4719faa7f7ebb283f0197e05e53ac5ceda65aa"
+      },
+      {
+        "path": "profiles/skills/library/saga-transaction-manager/evals.json",
+        "sha256": "b609a464ecc20405ce343e854e87d44f5d0b133bd3154eced3d13c2db282100b"
+      },
+      {
+        "path": "profiles/skills/library/serial-item-processor/SKILL.md",
+        "sha256": "a6e38d3f28c5e5c5ad4cb93f415b5b97c5a337ee4132baac6682d6d121810a4d"
+      },
+      {
+        "path": "profiles/skills/library/serial-item-processor/evals.json",
+        "sha256": "8c968cf6f70439c56f4cf278fa73deb34d297e6e1a1e1c40af6834108552eee3"
+      },
+      {
+        "path": "profiles/skills/library/supervisor-tree/SKILL.md",
+        "sha256": "2b3251af2d93b8097db0cef33d4c1996b8f7800446d429eeb024bfac03cae34a"
+      },
+      {
+        "path": "profiles/skills/library/supervisor-tree/evals.json",
+        "sha256": "384a03392d99fb5ddbb549091190af66c4576448d2970bb0308ebd9ab8547ac0"
+      },
+      {
+        "path": "profiles/skills/library/two-phase-commit/SKILL.md",
+        "sha256": "0d53704ab27ed4337dcb358c25bbb2c58d723802233b546f70a0c26a4768abf1"
+      },
+      {
+        "path": "profiles/skills/library/two-phase-commit/evals.json",
+        "sha256": "17b20c3bbcc6b0abe21dc586a3bf72409670f78d57a1f8ba3823a8cbd8155dc0"
+      },
+      {
+        "path": "profiles/skills/orch-contracts/SKILL.md",
+        "sha256": "0fc23e14840c1084b12d17764b41f65f4e6d537f258ac760638507a6a9ac4a85"
+      },
+      {
+        "path": "profiles/skills/orch-recovery-review/SKILL.md",
+        "sha256": "b2ce994eaa3b1c3188449065f334c3b7accb57c5627781557239dee66a5b355d"
+      },
+      {
+        "path": "profiles/skills/orch-specify/SKILL.md",
+        "sha256": "42a6213f230f073fe5054761c7359a5222a9bea6af3422d59c28e8549481eb84"
+      },
+      {
+        "path": "profiles/skills/routing-policy.json",
+        "sha256": "3051bb342f8a8c5c8cfc1e9043cf1380a32c62fef22cf163e7c3cfb8cd1ce575"
+      },
+      {
+        "path": "server-bootstrap.js",
+        "sha256": "225753737f3278895c5394bbadcfba1ff7eeccb593d977eaa81d0f7b7a00b863"
+      },
+      {
+        "path": "src/a2a-role-service.js",
+        "sha256": "27a8453a818474b0dfc57dbcadfd42e89e06b7a45ffa7ec9fb76015a1ff86ef7"
+      },
+      {
+        "path": "src/acceptance-scratch.js",
+        "sha256": "176040b2e44b765aa7fc508ef7f63146195909c97e1a252c3a4b03cda1663714"
+      },
+      {
+        "path": "src/acceptance.js",
+        "sha256": "ab93a4ba01075efa8c416752838056c94ff270f5f97cd8c653cad1a63564418a"
+      },
+      {
+        "path": "src/account-profiles.js",
+        "sha256": "ae048330dc548c11ed8d2c73ce55effe49d39a0a73e57dbec705efd2b638d78f"
+      },
+      {
+        "path": "src/activity-store.js",
+        "sha256": "afbeb5ef3e2a77e4b79d9199375e1b715b89b4fbc55daaedf075c7a21528ad5d"
+      },
+      {
+        "path": "src/app-server-switch.js",
+        "sha256": "e66455d0da7663026672966a476d86c64333f77979d25dc4ab6fdd8a277e5131"
+      },
+      {
+        "path": "src/aut03-lead-skill.js",
+        "sha256": "15864e6b113799a5da527e0121e06a5fcaab6299ad24dac08bc73cc6504d4e07"
+      },
+      {
+        "path": "src/autonomy-evaluation.js",
+        "sha256": "829ad5dc365404712a9382964ffd5dc91387a1eb2d1d35785919c62438982f25"
+      },
+      {
+        "path": "src/budget-watcher.js",
+        "sha256": "60314c4bcde214b398dfb24cbfc835d8cfbcd6f8a41fb3c7ad5a334faf28512f"
+      },
+      {
+        "path": "src/cli.js",
+        "sha256": "fbc2717e904c9b1dd2277ff09a6520aecddf5846826185703591b4575f6e2172"
+      },
+      {
+        "path": "src/codex-app-server.js",
+        "sha256": "bc58fa750cd472219df1e9abd90a3e9c8f74a62d69f69693ecef6d2065af1963"
+      },
+      {
+        "path": "src/contracts.js",
+        "sha256": "91466d506cdc6b2cb6ac17b408b0183965831ee737034d2276e3e0bcef8dd180"
+      },
+      {
+        "path": "src/durable-store.js",
+        "sha256": "aa656899122422ca40e3b95eb62a436c5f041a8368f1ae9009a5b4e4114ab326"
+      },
+      {
+        "path": "src/evidence-store.js",
+        "sha256": "5c52c4a23bf0825003c6b624534f362802ba77aa42c738b64ea1771715ffa36f"
+      },
+      {
+        "path": "src/lane-probe.js",
+        "sha256": "2a92b69ca4344730fc95d87e77ae569a3a97a410ae44d85892dbc6dffaac0df7"
+      },
+      {
+        "path": "src/launcher-app.js",
+        "sha256": "acb473763122d1e184c76a3f857824c408e55edcec60beb0f0d115dd8bd3a73d"
+      },
+      {
+        "path": "src/launcher-ask.js",
+        "sha256": "6ed66e4845d5fe84dfa94106a4c8b265f7c4e0c5d16a58f85d69f025fd409a7a"
+      },
+      {
+        "path": "src/launcher-projects.js",
+        "sha256": "b23d090e6a7b8b1b7ba1d7ea2f697f4a23c9369129fd1edd6d3aee480ad03851"
+      },
+      {
+        "path": "src/launcher-sessions.js",
+        "sha256": "eaf3f88ee7bd6525433548ae1e4568f0e85f828b06dfb2bf6a6b1d10d069c2bf"
+      },
+      {
+        "path": "src/lead-graph.js",
+        "sha256": "b8a710ced26abd006c4e2226a6feb976da09e0f0da26bdfae9e8721b386cfe15"
+      },
+      {
+        "path": "src/lead-orchestrator.js",
+        "sha256": "282729deb94a9b930a1f36a1ca789beeb5433e6266da87d36a7280f2fa996bee"
+      },
+      {
+        "path": "src/local-auth.js",
+        "sha256": "2064f33e132c1efc0da90ad46eedefb9e62a77a3f1acd7e3194fa8eaeb430e68"
+      },
+      {
+        "path": "src/loop-guard.js",
+        "sha256": "9b5ffa4bffc96b147839445c5d745caf1800d45bf797342edd90ed7da70d9a73"
+      },
+      {
+        "path": "src/mcp-catalog.js",
+        "sha256": "ebc7406dd81dd0b54c7e14e5172aeb9066dc59b756016299dce30496b4387901"
+      },
+      {
+        "path": "src/performance-store.js",
+        "sha256": "c93683b152cced2107d31647660bc631b3359ed64b6d372e208273dc05b5a24f"
+      },
+      {
+        "path": "src/process-quiescence.js",
+        "sha256": "a1d2f4bb5bb886acf899e51b413b62e0d98e61a581f049cb8fedb7a316a8858a"
+      },
+      {
+        "path": "src/project-settings.js",
+        "sha256": "d2a70d80c968ba62b6c93d7ab09594f3ad7397e96ca3f25a94a0500d772edeb4"
+      },
+      {
+        "path": "src/review-policy.js",
+        "sha256": "84768475e7dad93dd4813efe7f644f03df2875efb1d7e4162f26b5ef8eb74c1f"
+      },
+      {
+        "path": "src/role-catalog.js",
+        "sha256": "43b11be34ce35607631983d4094d2b335120f117e4af87b7edfb6423295d402d"
+      },
+      {
+        "path": "src/role-names.js",
+        "sha256": "f0ff3e378f9c8027da4b44babbf1861e01b97068014da982b85ce0d9abc7db5e"
+      },
+      {
+        "path": "src/role-overrides.js",
+        "sha256": "167bed02c332631a2b2a785438bc97b8cfcbbc1b563c7c839b2bd4ef33213caf"
+      },
+      {
+        "path": "src/runtime-identity.js",
+        "sha256": "426ea616d4a6eb3a0a25f0d82b1d5809cdac9e031208d66fc1c5ad58fe90308f"
+      },
+      {
+        "path": "src/server.js",
+        "sha256": "7589ae25371c26668daf26d1c969b7c0c55954a0621f4331b83d3cdfcf5f6338"
+      },
+      {
+        "path": "src/session-performance.js",
+        "sha256": "6a373e1a6c45388538331c0b667750bc22a45972fc7d17ab2245f57d5adc341b"
+      },
+      {
+        "path": "src/session-situation.js",
+        "sha256": "362cac1fbdb78d9faf313011a6a81ba7441c36b37b69749580e67559ce5c2de5"
+      },
+      {
+        "path": "src/session-threads.js",
+        "sha256": "e5300f8b63251c758abd65028757012c833c631b7da7597eb8fbe5d5ca3c1c10"
+      },
+      {
+        "path": "src/skill-catalog.js",
+        "sha256": "9dc9f76059a1833e82690421e2559e5afe7eb40718d9ae76bb48affab5f028d4"
+      },
+      {
+        "path": "src/spec-analyzer.js",
+        "sha256": "1cd0a87793ac61d891145d9c7b905438ecb6ac89de2210b70bb940f94802912c"
+      },
+      {
+        "path": "src/spec-assignment-adapter.js",
+        "sha256": "723600b0a5b76e03d44a8dbbd26d5f38325d17e36a3f6050808cd8475225c585"
+      },
+      {
+        "path": "src/spec-context.js",
+        "sha256": "054c6a90cf298d8f7b6ffff8cee72ffbd415a98c95abe87adc95fc6398e56228"
+      },
+      {
+        "path": "src/staging-log.js",
+        "sha256": "554595dde7bb1a80ea5ac51f7a9ba8c383a7616a213fa9a7a2b5abd0122a7f56"
+      },
+      {
+        "path": "src/staging-report.js",
+        "sha256": "f4f5fe5608692f794139ead40ae208daee21d311409c6b9341214b66aae401fa"
+      },
+      {
+        "path": "src/usage-ledger.js",
+        "sha256": "fac4bf9b5c2128c0e8b21be803be95c16483da02d66a2a45c5eae4187b5c2113"
+      },
+      {
+        "path": "src/usage-report.js",
+        "sha256": "22410ead045e3ea16eb8f6a3154f16157f6bb3553f4e00aea04c1f2d5d503535"
+      },
+      {
+        "path": "src/workspace-snapshot.js",
+        "sha256": "f00b89492cc86279ef8a5d8aca15cb0e4f8da5607a189af12baca89de6c7cde9"
+      },
+      {
+        "path": "src/writer-admission.js",
+        "sha256": "e73fb98648ff7865d29576e69e083ca4fc9b9226830f2b1a2ca0cad3868db6dc"
+      },
+      {
+        "path": "src/writer-lanes.js",
+        "sha256": "c340c2c083c30bc2c7d7609e3be8420da5b3e05b8a63f930eb4ddad62734e566"
+      },
+      {
+        "path": "src/writer-worktree.js",
+        "sha256": "2725543536e6a6e8e67ce7d57d73eaf8a41da042a500f781c51c996b65ba180c"
+      }
+    ],
+    "binaryFiles": [
+      {
+        "path": "/home/sr/.codex/packages/standalone/releases/0.163.0-x86_64-unknown-linux-musl/bin/codex",
+        "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "size": 296865480
+      },
+      {
+        "path": "/home/sr/.nvm/versions/node/v24.21.0/bin/node",
+        "sha256": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c",
+        "size": 126595440
+      }
+    ]
+  },
+  "settings": {
+    "off": {
+      "exactBytes": "{\"version\":1,\"aut03LeadSkillEnabled\":false}\n",
+      "sha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb"
+    },
+    "on": {
+      "exactBytes": "{\"version\":1,\"aut03LeadSkillEnabled\":true}\n",
+      "sha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3"
+    }
+  },
+  "startupConditions": {
+    "projectSettingsReadOnceAtStartup": true,
+    "restartBetweenArms": true,
+    "restartBeforeEveryTask": true,
+    "roleOverridesFile": "unset",
+    "uuidAllowlist": "empty",
+    "autoResume": false,
+    "accountAutoSwitch": false,
+    "separateDatabaseAndWorkspacePerTask": true,
+    "startupAssertion": "The trial wrapper verifies accepted offline evidence pins, calls the production server bootstrap, and asserts the effective setting, lead profile, tool policy, selected skill catalog pin, and binary hashes before the A2A endpoint becomes ready. It writes a redacted attestation with no credentials.",
+    "checkpointAssertion": "After each task, a read-only SQLite query verifies leadSkillContext.enabled; skill-on also requires the exact skill ID and SHA-256."
+  },
+  "trialHelpers": [
+    {
+      "path": "docs/evidence/aut-03/trial-server.js",
+      "sha256": "3cf65f5272e0702fc4838a373a6069ed913e0acc396cd59c9abafa0e09a48c30"
+    },
+    {
+      "path": "docs/evidence/aut-03/inspect-checkpoint.js",
+      "sha256": "8c1ceb090fb9b5249888a4735877846987fd877950364960a4b2ea68b7e1745d"
+    }
+  ],
+  "acceptedEvidence": {
+    "entry": {
+      "path": "docs/evidence/aut-03/entry.json",
+      "sha256": "c1f6d340d27f81f75425f89d1ffdcb015290d59cedbcc1ec2adacac89c148f44"
+    },
+    "deliveryDecision": {
+      "path": "docs/evidence/aut-03/delivery-decision.json",
+      "sha256": "0f4613b4d368a576d22f03bfd30e183646f9a9dfb1b6b175e2df49c78d220436"
+    }
+  },
+  "verification": {
+    "helperHashesRequiredBeforeEveryTask": true,
+    "sourceInputsCheckedAgainstFrozenManifestAndMinimalWorkspace": true,
+    "checkpointReader": "read-only SQLite connection; task ID is the lead checkpoint thread_id; require checkpointed leadSkillContext and exact arm pin",
+    "codexVersionCheck": "codex-cli 0.163.0",
+    "sourceInputsEmbeddedInPrompt": true,
+    "trialWorkspaceMustRemainEmptyAndReadOnly": true,
+    "disabledCodexFeatureOverridesAssertedAtThreadStart": true,
+    "postTaskCheckpointAlsoChecksWorkspaceEmptyAndReadOnly": true
+  },
+  "trialEnforcement": {
+    "workerRolesRemovedBeforeOrchestratorAndRouteRegistration": true,
+    "disabledCodexFeatures": [
+      "shell_tool",
+      "unified_exec_tty",
+      "multi_agent",
+      "multi_agent_v2",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "browser_annotation_api",
+      "computer_use",
+      "image_generation",
+      "code_mode",
+      "code_mode_host",
+      "sleep_tool",
+      "in_app_browser",
+      "in_app_local_automation",
+      "shell_snapshot",
+      "shell_snapshot_v2",
+      "standalone_web_search"
+    ],
+    "webSearch": "disabled",
+    "unifiedExecSemantics": "unified_exec may remain true as an execution backend; shell_tool=false disables the model-facing shell tool and is the effective command-tool gate.",
+    "threadStartAssertions": [
+      "model",
+      "sandbox=read-only",
+      "approvalPolicy=on-request",
+      "all disabledCodexFeatures=false",
+      "web_search=disabled"
+    ],
+    "sourceInputs": "Embedded verbatim as prompt JSON after source hashes are rechecked.",
+    "workspace": "Must be empty, chmod 0555 at startup, and EACCES for server-user write access; rechecked after every task.",
+    "workspaceRoot": "/tmp/aut03-final-trial/revised-cohort"
+  }
+}

@@ -1,0 +1,548 @@
+{
+  "schemaVersion": "aut-03-arm-freeze/v1",
+  "cohortId": "cohort-3",
+  "arm": "skill-on",
+  "frozenAt": "2026-10-17T09:00:53Z",
+  "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+  "preFreezeTrialEntrySha256": "465b733f776b8b8680117140398972bb5940279f1eb7b228b16506c0c099370f",
+  "declarationSha256": "bdb98633b7322cf0aba80c1301a1d2f6d3308c65551ad5997e1eb398ed99a75e",
+  "promptManifestSha256": "b8cc970a40f6d8dbacd684ca284325e459d8010839e68ee535354f114052f3be",
+  "runtimePinFileSha256": "5a48a55b4551becbdcabbdf10ed867cfdabfe5e0df58591000a2ced435a249c3",
+  "skill": {
+    "id": "aut-03-lead-decomposition-v1",
+    "sha256": "e0f10756e0486cdb827519edd8adfef866d84be449d6a10b1320412648e650ba",
+    "path": "profiles/skills/library/aut-03-lead-decomposition-v1/SKILL.md",
+    "audience": "lead"
+  },
+  "caseOrder": [
+    "pilot-price-f2",
+    "bounded-dependencies",
+    "owner-decision-required",
+    "contradictory-source-blocker"
+  ],
+  "cases": [
+    {
+      "caseId": "pilot-price-f2",
+      "taskId": "5320ac49-ae98-45b9-90ee-dcfacb4b3d8d",
+      "leadTurns": 1,
+      "totalTokens": 24104,
+      "elapsedMs": 25542,
+      "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185",
+      "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+      "runSha256": "8296711e08ba896dcf4c8aafe690a6ae107c35653dd39c8ac8edca2957aeb188",
+      "hardGates": {
+        "completed": true,
+        "skillContextEnabled": true,
+        "skillPinMatches": true,
+        "workspaceEmptyAndReadOnly": true,
+        "workerRolesRemaining": 0,
+        "dispatches": 0,
+        "writerExecutions": 0,
+        "permissions": 0,
+        "commands": 0,
+        "fileChanges": 0,
+        "turnStartsSent": 1,
+        "turnStartCap": 8,
+        "passed": true
+      },
+      "artifactFiles": [
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/attestation.json",
+          "sha256": "6c359fb4552df9470d8be0b1e4792adf0017a26bb58db1cc778c2b3d88139fa5",
+          "bytes": 2683
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/checkpoint.json",
+          "sha256": "49fe53f5d0d3b24ce6f8fce1317611e373ef56216c809f1536e0fbd651632260",
+          "bytes": 390
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/client-exit.json",
+          "sha256": "1da35adde1aa595d726d20b3a7359a44f9126fcdca40e9b3694bdb75c1db0359",
+          "bytes": 200
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/client.log",
+          "sha256": "fa61dfe26e07acec67d43b222b708e4067ca4477e7b38fa3daa6c20e5e17ae49",
+          "bytes": 873
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/collection-correction/run-initial.json",
+          "sha256": "7578975ac742a1c96bbce9199b51a7c3ac8a1555cab941d91d2b6fb7e6d86b72",
+          "bytes": 6540
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/controls.json",
+          "sha256": "fb22cb1eab801aa4668b465f0775fc7a6f4bd5e9e0040dadff7f752f5a66a340",
+          "bytes": 634
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/output.txt",
+          "sha256": "8893d680c61aa86314058a5f4115d24e6e32740a8df498354a28358be005b137",
+          "bytes": 4183
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/preflight-gate.json",
+          "sha256": "17023880a82253ad35495ef83b753492faa9f7a5e3a98f5bb39a46f8637cc64c",
+          "bytes": 1953
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/preflight.json",
+          "sha256": "6cbfc07d697839ee59b37ccfbf85898ae1a7deb01a86a3fd7864c87441ba9e53",
+          "bytes": 3018
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/quota-after.json",
+          "sha256": "f3a71dccccbb49c18e60918d61639597300fad7dfbfa8f1338060f30cdc924ee",
+          "bytes": 291
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/run.json",
+          "sha256": "8296711e08ba896dcf4c8aafe690a6ae107c35653dd39c8ac8edca2957aeb188",
+          "bytes": 6714
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/server.log",
+          "sha256": "09f389bcd93512664b8c1fb3659c38808da82c63cba77150e04739ce994b60bb",
+          "bytes": 51
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/task.json",
+          "sha256": "910f2155cc1c3ac51a5bb0ba38dae810c2f1900c14cd23716b33010a8135d088",
+          "bytes": 23318
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/usage.json",
+          "sha256": "6e198a28652a3bb741105938cc6c4b5ffe5e5c968bbd133e80c4496b5e48f803",
+          "bytes": 3456
+        }
+      ]
+    },
+    {
+      "caseId": "bounded-dependencies",
+      "taskId": "b637d77a-48d6-457c-8c7f-30fb2a4ea794",
+      "leadTurns": 1,
+      "totalTokens": 21082,
+      "elapsedMs": 32158,
+      "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3",
+      "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+      "runSha256": "2cd01bb80fe9620730702f195e3bc4e8127b4ce6004a7629bee0c776e222f45b",
+      "hardGates": {
+        "completed": true,
+        "skillContextEnabled": true,
+        "skillPinMatches": true,
+        "workspaceEmptyAndReadOnly": true,
+        "workerRolesRemaining": 0,
+        "dispatches": 0,
+        "writerExecutions": 0,
+        "permissions": 0,
+        "commands": 0,
+        "fileChanges": 0,
+        "turnStartsSent": 1,
+        "turnStartCap": 8,
+        "passed": true
+      },
+      "artifactFiles": [
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/attestation.json",
+          "sha256": "de92fc59c996bd35b269ad8e8a69dbe8163b127aa23f292dbf1d36341b9b988b",
+          "bytes": 2683
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/checkpoint.json",
+          "sha256": "62b9f7d54b7f17efb426f3af977ecabca48c458d67967b722180d07c73b460b6",
+          "bytes": 390
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/client-exit.json",
+          "sha256": "f3dbde0cf7590f35460d74b05ee91334c986a7afc6e5233336c9dca3ef28eb29",
+          "bytes": 200
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/client.log",
+          "sha256": "3313fb535ac44fdfedc69d1a8bfff35b8dbd5e0ad99edcdbfc01f5833fb80675",
+          "bytes": 1095
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/collection-correction/run-initial.json",
+          "sha256": "d9f176039e313d9c18d6f15ca09251731f90ef43df3dc4be5b8684ee0cd7fc54",
+          "bytes": 6546
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/controls.json",
+          "sha256": "26ae820a40b599423e5cb9cecbaaf3d78c124f7de397d2bc71213f59ca2bcfff",
+          "bytes": 634
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/output.txt",
+          "sha256": "ddd7cc53186ff8e40ffee34c1f247e4dc769a79fff6704c4a6eb5c1799be069f",
+          "bytes": 6927
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/preflight-gate.json",
+          "sha256": "df05a6d717a6ddd3056d33389646e1db3e55130bd0d9bcab2e85803e93079f50",
+          "bytes": 1971
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/preflight.json",
+          "sha256": "3896b682e77052d762cc1c6516c59ffbc45a6224a3ac1fc3a631006019f07c2c",
+          "bytes": 3036
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/quota-after.json",
+          "sha256": "581e05bbe74bf17b46907a6f896257ba9a66b231801096ab0a0ebdc2e634ed1a",
+          "bytes": 291
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/run.json",
+          "sha256": "2cd01bb80fe9620730702f195e3bc4e8127b4ce6004a7629bee0c776e222f45b",
+          "bytes": 6720
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/server.log",
+          "sha256": "09f389bcd93512664b8c1fb3659c38808da82c63cba77150e04739ce994b60bb",
+          "bytes": 51
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/task.json",
+          "sha256": "55e0bcbf3a0dc69b12d0e48842e764f10e3d5be3d37a6db997c3847cb88b6f0d",
+          "bytes": 12985
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/usage.json",
+          "sha256": "ac71a003afec0ac21610e9903f8d0da4c1d3c5709616d7d911d1e05fb7c4eec2",
+          "bytes": 3456
+        }
+      ]
+    },
+    {
+      "caseId": "owner-decision-required",
+      "taskId": "5a4c8462-64d7-46e9-9f04-e8654edaf46c",
+      "leadTurns": 1,
+      "totalTokens": 20624,
+      "elapsedMs": 33664,
+      "promptSha256": "3b461e267dcf3258cc86d0eca5a9ed760b0e0fdcb4991642343376880495c514",
+      "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+      "runSha256": "ed903af6141c10092f63d970ed43136be1ca0140a04a415f95f5fb14f4a488d1",
+      "hardGates": {
+        "completed": true,
+        "skillContextEnabled": true,
+        "skillPinMatches": true,
+        "workspaceEmptyAndReadOnly": true,
+        "workerRolesRemaining": 0,
+        "dispatches": 0,
+        "writerExecutions": 0,
+        "permissions": 0,
+        "commands": 0,
+        "fileChanges": 0,
+        "turnStartsSent": 1,
+        "turnStartCap": 8,
+        "passed": true
+      },
+      "artifactFiles": [
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/attestation.json",
+          "sha256": "6d7380443a974c5e119f8c5ad446a01c2e5ded02002a12f0f491a0919f5f5489",
+          "bytes": 2683
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/checkpoint.json",
+          "sha256": "361cedb86316a771e53905927da7d5ca162a6e36fb315b09f2bed3d92375559e",
+          "bytes": 390
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/client-exit.json",
+          "sha256": "007516605e76fe520325f6bfa181dd28448c3958ede6439389a8da02c1ecdd78",
+          "bytes": 200
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/client.log",
+          "sha256": "0fcd304f2e63b9b2b03fae7fd7b7386a8e44bd5b47cbdebd0b00135b98e40355",
+          "bytes": 1098
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/collection-correction/run-initial.json",
+          "sha256": "2ffbec07c74464aac346e3ad1e9d757f06a13b9512ec03ac3fe5d4f6fb8b54a7",
+          "bytes": 6549
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/controls.json",
+          "sha256": "d27c678448351aa6940e60660bf42faaf8e07c447d39b2fda4939f3f3226a7c6",
+          "bytes": 634
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/output.txt",
+          "sha256": "3f60722dd079ba68f947f187d741296677c30b592f48f791347664bbf0dae031",
+          "bytes": 6338
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/preflight-gate.json",
+          "sha256": "b743bb76b430d8997664f2863bbb814cb2b34b75f3a7796d931020c40885853c",
+          "bytes": 1980
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/preflight.json",
+          "sha256": "79c5cd69e710fa32a72afb0bc06502d81eeb550aba71b490e329e61660ae8266",
+          "bytes": 3045
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/quota-after.json",
+          "sha256": "9e35b586f58e92df6ceb55ff9b653721b966e506115940d6c49f9c804d9f57a9",
+          "bytes": 291
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/run.json",
+          "sha256": "ed903af6141c10092f63d970ed43136be1ca0140a04a415f95f5fb14f4a488d1",
+          "bytes": 6723
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/server.log",
+          "sha256": "09f389bcd93512664b8c1fb3659c38808da82c63cba77150e04739ce994b60bb",
+          "bytes": 51
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/task.json",
+          "sha256": "af01e9acdd2b577ab264e6b9b5e1963c5570936c97a8916d6cee8c6bae051db3",
+          "bytes": 11187
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/usage.json",
+          "sha256": "46ec60f4ed7b3ba06fa9fdef4daf6d51859bbe116a62435dfeb9324f1b53a167",
+          "bytes": 3456
+        }
+      ]
+    },
+    {
+      "caseId": "contradictory-source-blocker",
+      "taskId": "2888f97e-cf8c-461a-a5a2-ee1b58477840",
+      "leadTurns": 1,
+      "totalTokens": 21266,
+      "elapsedMs": 46779,
+      "promptSha256": "d01368d9d2f97074842cd5c16b969f40fdd0f4a1f5d3fa319e00ceb9d5fd7940",
+      "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+      "runSha256": "51da09f67c126ea5d8c8c46a76ef6967656586563716152b3ad4bfbf9d636f4c",
+      "hardGates": {
+        "completed": true,
+        "skillContextEnabled": true,
+        "skillPinMatches": true,
+        "workspaceEmptyAndReadOnly": true,
+        "workerRolesRemaining": 0,
+        "dispatches": 0,
+        "writerExecutions": 0,
+        "permissions": 0,
+        "commands": 0,
+        "fileChanges": 0,
+        "turnStartsSent": 1,
+        "turnStartCap": 8,
+        "passed": true
+      },
+      "artifactFiles": [
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/attestation.json",
+          "sha256": "c9877c236937421700e2538344e9b935ac2fe0f6f8296eeedc85d3529ee38651",
+          "bytes": 2683
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/checkpoint.json",
+          "sha256": "d7ae56d1451ce2a18f092dfb8200525374d098bd52143a7728e7d4d297d91ffa",
+          "bytes": 390
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/client-exit.json",
+          "sha256": "a254ef43781ae28baae41d3b5c91ab4047778afcd4a7717fac3279fc836b07ac",
+          "bytes": 200
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/client.log",
+          "sha256": "126f22611e4a1b612c086434e3b48fd6b956472c8a26216b1990fe4279e3f859",
+          "bytes": 1481
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/collection-correction/run-initial.json",
+          "sha256": "a17a8955a80bb6722226cacab58f49430d8aad945325101a3f3e0d385063ed87",
+          "bytes": 6554
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/controls.json",
+          "sha256": "4ace37a39abcf3c184625a4419c9fb5e091c85e3d25bade9b89d50e39f3d7a43",
+          "bytes": 634
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/output.txt",
+          "sha256": "d99d3f76f77ab6f1d5fb9435db0ea42f832f62972f195116582b19593e8ee864",
+          "bytes": 8366
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/preflight-gate.json",
+          "sha256": "3472212d11e121e6ea281cacdc8e4f0710f4f4605616d67291f21050c3d94b01",
+          "bytes": 1995
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/preflight.json",
+          "sha256": "5bc84ed222731ac0e51126e68093ab4edcb486765e20ab124a97a392241859d5",
+          "bytes": 3060
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/quota-after.json",
+          "sha256": "7fa17336b98ab0c3e49f210a31647d174146068faa0beff95887c9ca564eb49b",
+          "bytes": 291
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/run.json",
+          "sha256": "51da09f67c126ea5d8c8c46a76ef6967656586563716152b3ad4bfbf9d636f4c",
+          "bytes": 6728
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/server.log",
+          "sha256": "09f389bcd93512664b8c1fb3659c38808da82c63cba77150e04739ce994b60bb",
+          "bytes": 51
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/task.json",
+          "sha256": "ace63a51ee916815de84b9546b1897ac9a35e7940b9f2fb6f4a1c2d139746a1c",
+          "bytes": 13863
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/usage.json",
+          "sha256": "502fe55617da2dfa99bb5b8c1c90ea0561abadf052f3df517a064754128c5c4e",
+          "bytes": 3456
+        }
+      ]
+    }
+  ],
+  "totalMeasuredTokens": 87076,
+  "corrections": [
+    {
+      "taskIds": [
+        "c529a368-701d-4b33-8c0f-61a8ed426281"
+      ],
+      "status": "APPROVED",
+      "reportPath": "docs/evidence/aut-03/cohort-3-collection-correction.md",
+      "reportSha256": "222fb40940f1dd27b251d2d7edad87f323abbeca37c5e04cc2c4d42d86578325",
+      "independentReview": {
+        "status": "APPROVE",
+        "path": "docs/evidence/aut-03/cohort-3-collection-correction-review.md",
+        "sha256": "0377066a8d9e3aa48ec954ad885ea6ffa4c5db0d4516fa626d160a1f3f93acfc",
+        "reviewedTrialEntrySha256": "64a646f064b2252ebb9db564c125def1f144637d395d492523bd4b742f15bad3"
+      }
+    },
+    {
+      "taskIds": [
+        "31534413-7377-4faf-9479-147079092c80"
+      ],
+      "arm": null,
+      "status": "APPROVED",
+      "reportPath": "docs/evidence/aut-03/cohort-3-pilot-collection-correction.md",
+      "reportSha256": "ec04b65f4a2c53239f7c39ea3c7d572a773de21f60a4ad39d7c131a9080e5da8",
+      "independentReview": {
+        "status": "APPROVE",
+        "path": "docs/evidence/aut-03/cohort-3-pilot-collection-correction-review.md",
+        "sha256": "37aff8c15616f5c7dc4910c16dc28dfc101e59377ee3d505def283d51c9cbf72",
+        "reviewedTrialEntrySha256": "ccfbe3b9ba591b111a410278f59dcb6645b015c07655dafdf480aecb73ee8e99"
+      },
+      "runs": null
+    },
+    {
+      "taskIds": [
+        "31534413-7377-4faf-9479-147079092c80"
+      ],
+      "arm": null,
+      "status": "APPROVED",
+      "reportPath": "docs/evidence/aut-03/cohort-3-pilot-route-flag-correction.md",
+      "reportSha256": "ff2fa08f28bd913f98ba94f11585cdf5b6be6b2a4ce21d4fddb7b65a29de0871",
+      "independentReview": {
+        "status": "APPROVE",
+        "path": "docs/evidence/aut-03/cohort-3-skill-off-baseline-review.md",
+        "sha256": "4dc9c4df50d0aa7d0c5cc19f58242444473e83201fdeb7e26701712ac25f3a17",
+        "reviewedTrialEntrySha256": "90479084dc35866e9e34078a4bd9e377edff5f2ad728e515898bf8368b69e316"
+      },
+      "runs": null
+    },
+    {
+      "taskIds": [
+        "5320ac49-ae98-45b9-90ee-dcfacb4b3d8d",
+        "b637d77a-48d6-457c-8c7f-30fb2a4ea794",
+        "5a4c8462-64d7-46e9-9f04-e8654edaf46c",
+        "2888f97e-cf8c-461a-a5a2-ee1b58477840"
+      ],
+      "arm": "skill-on",
+      "status": "PENDING_INDEPENDENT_REVIEW",
+      "reportPath": "docs/evidence/aut-03/cohort-3-skill-on-collection-correction.md",
+      "reportSha256": "7df506a6eafe3c736841e59781aabbf417cc2ad91a03af9aa88eefeff4b1889e",
+      "independentReview": null,
+      "runs": [
+        {
+          "caseId": "pilot-price-f2",
+          "taskId": "5320ac49-ae98-45b9-90ee-dcfacb4b3d8d",
+          "initialRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/collection-correction/run-initial.json",
+          "initialRunSha256": "7578975ac742a1c96bbce9199b51a7c3ac8a1555cab941d91d2b6fb7e6d86b72",
+          "correctedRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/run.json",
+          "correctedRunSha256": "8296711e08ba896dcf4c8aafe690a6ae107c35653dd39c8ac8edca2957aeb188",
+          "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+          "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185",
+          "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/preflight.json",
+          "preflightSha256": "6cbfc07d697839ee59b37ccfbf85898ae1a7deb01a86a3fd7864c87441ba9e53",
+          "attestationPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/attestation.json",
+          "attestationSha256": "6c359fb4552df9470d8be0b1e4792adf0017a26bb58db1cc778c2b3d88139fa5"
+        },
+        {
+          "caseId": "bounded-dependencies",
+          "taskId": "b637d77a-48d6-457c-8c7f-30fb2a4ea794",
+          "initialRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/collection-correction/run-initial.json",
+          "initialRunSha256": "d9f176039e313d9c18d6f15ca09251731f90ef43df3dc4be5b8684ee0cd7fc54",
+          "correctedRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/run.json",
+          "correctedRunSha256": "2cd01bb80fe9620730702f195e3bc4e8127b4ce6004a7629bee0c776e222f45b",
+          "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+          "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3",
+          "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/preflight.json",
+          "preflightSha256": "3896b682e77052d762cc1c6516c59ffbc45a6224a3ac1fc3a631006019f07c2c",
+          "attestationPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/attestation.json",
+          "attestationSha256": "de92fc59c996bd35b269ad8e8a69dbe8163b127aa23f292dbf1d36341b9b988b"
+        },
+        {
+          "caseId": "owner-decision-required",
+          "taskId": "5a4c8462-64d7-46e9-9f04-e8654edaf46c",
+          "initialRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/collection-correction/run-initial.json",
+          "initialRunSha256": "2ffbec07c74464aac346e3ad1e9d757f06a13b9512ec03ac3fe5d4f6fb8b54a7",
+          "correctedRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/run.json",
+          "correctedRunSha256": "ed903af6141c10092f63d970ed43136be1ca0140a04a415f95f5fb14f4a488d1",
+          "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+          "promptSha256": "3b461e267dcf3258cc86d0eca5a9ed760b0e0fdcb4991642343376880495c514",
+          "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/preflight.json",
+          "preflightSha256": "79c5cd69e710fa32a72afb0bc06502d81eeb550aba71b490e329e61660ae8266",
+          "attestationPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/attestation.json",
+          "attestationSha256": "6d7380443a974c5e119f8c5ad446a01c2e5ded02002a12f0f491a0919f5f5489"
+        },
+        {
+          "caseId": "contradictory-source-blocker",
+          "taskId": "2888f97e-cf8c-461a-a5a2-ee1b58477840",
+          "initialRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/collection-correction/run-initial.json",
+          "initialRunSha256": "a17a8955a80bb6722226cacab58f49430d8aad945325101a3f3e0d385063ed87",
+          "correctedRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/run.json",
+          "correctedRunSha256": "51da09f67c126ea5d8c8c46a76ef6967656586563716152b3ad4bfbf9d636f4c",
+          "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+          "promptSha256": "d01368d9d2f97074842cd5c16b969f40fdd0f4a1f5d3fa319e00ceb9d5fd7940",
+          "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/preflight.json",
+          "preflightSha256": "5bc84ed222731ac0e51126e68093ab4edcb486765e20ab124a97a392241859d5",
+          "attestationPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/attestation.json",
+          "attestationSha256": "c9877c236937421700e2538344e9b935ac2fe0f6f8296eeedc85d3529ee38651"
+        }
+      ]
+    }
+  ],
+  "skillOffBaselineFreeze": {
+    "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off-baseline-freeze.json",
+    "sha256": "2f73a1212e6c3ff882e1dc36037b0605f575759c25fbbac014c66975fa55a72f",
+    "frozenAt": "2026-10-17T08:49:20Z",
+    "caseCount": 4,
+    "preFreezeTrialEntrySha256": "880bda20a3828bb775db56eb1160567769614517c53a1fb7e6110ba3b3ae9614",
+    "status": "APPROVED",
+    "independentReview": {
+      "status": "APPROVE",
+      "path": "docs/evidence/aut-03/cohort-3-skill-off-baseline-review.md",
+      "sha256": "4dc9c4df50d0aa7d0c5cc19f58242444473e83201fdeb7e26701712ac25f3a17",
+      "reviewedTrialEntrySha256": "90479084dc35866e9e34078a4bd9e377edff5f2ad728e515898bf8368b69e316"
+    }
+  },
+  "disposition": "All four skill-on outputs and recursively collected evidence are frozen by hash. Collection correction and independent freeze review are pending; the task gate remains closed."
+}

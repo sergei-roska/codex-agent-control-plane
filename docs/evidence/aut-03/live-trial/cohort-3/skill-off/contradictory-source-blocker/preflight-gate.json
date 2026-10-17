@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "aut-03-preflight/v1",
+  "phase": "before_gate_open",
+  "checkedAt": "2026-10-17T08:42:06.205Z",
+  "caseId": "contradictory-source-blocker",
+  "arm": "skill-off",
+  "entrySha256": "b48f13ba553cb5a445e6ee75d312bc846654350ed10e6785e2a527dd47bec6a4",
+  "quotaSnapshot": {
+    "checkedAt": "2026-10-17T08:42:06.167Z",
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 68,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 89,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "isolationSnapshot": {
+    "launcherPid": 7855,
+    "launcherPort": 8080,
+    "launcherAlive": true,
+    "protectedProjectId": "f69dd0e80b",
+    "protectedProjectPort": 3002,
+    "protectedProjectPid": 11495,
+    "protectedProjectUntouched": true,
+    "trialPort": 3112,
+    "trialPortFree": true,
+    "trialServerStarted": false
+  },
+  "pinValidation": {
+    "branch": "main",
+    "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+    "sourcePinsMatched": 141,
+    "binaryPinsMatched": 2,
+    "helperPinsMatched": 2,
+    "promptInputsMatched": 16,
+    "promptsMatched": 4,
+    "acceptedEvidenceMatched": 2,
+    "mismatches": 0,
+    "settingsSha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb",
+    "selectedPromptSha256": "d01368d9d2f97074842cd5c16b969f40fdd0f4a1f5d3fa319e00ceb9d5fd7940"
+  },
+  "workspace": {
+    "path": "/tmp/aut03-final-trial/revised-cohort/cohort-3/skill-off/contradictory-source-blocker/workspace",
+    "empty": true,
+    "readOnly": true,
+    "mode": "555"
+  },
+  "taskIsolation": {
+    "stateFileAbsent": true,
+    "tokenFileMode": "600",
+    "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker",
+    "taskEvidenceAbsent": true
+  },
+  "gate": {
+    "baselineCaptureAllowed": false,
+    "trialGateOpened": false
+  }
+}

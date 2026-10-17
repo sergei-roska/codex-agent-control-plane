@@ -1,0 +1,194 @@
+{
+  "schemaVersion": "aut-03-live-task/v1",
+  "cohortId": "cohort-3",
+  "caseId": "bounded-dependencies",
+  "arm": "skill-on",
+  "taskId": "b637d77a-48d6-457c-8c7f-30fb2a4ea794",
+  "status": "TASK_STATE_COMPLETED",
+  "startedAt": "2026-10-17T08:54:56.979Z",
+  "completedAt": "2026-10-17T08:55:29.273Z",
+  "clientFinishedAt": "2026-10-17T08:55:31.201Z",
+  "elapsedMs": 32158,
+  "elapsedSeconds": 32,
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "medium",
+  "leadTurns": 1,
+  "modelRequests": null,
+  "retries": null,
+  "tokens": {
+    "inputTokens": 18974,
+    "cachedInputTokens": 0,
+    "outputTokens": 2108,
+    "reasoningOutputTokens": 210,
+    "totalTokens": 21082
+  },
+  "tokenSource": "total_delta",
+  "monetaryCost": null,
+  "monetaryCostReason": "Subscription telemetry does not provide task-level cost.",
+  "quotaBefore": {
+    "checkedAt": "2026-10-17T08:54:41.834Z",
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 80,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 91,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "quotaAfter": {
+    "checkedAt": "2026-10-17T08:55:42.180Z",
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 82,
+    "weeklyUsedPercent": 91,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+  "runtimePinFileSha256": "5a48a55b4551becbdcabbdf10ed867cfdabfe5e0df58591000a2ced435a249c3",
+  "declarationSha256": "bdb98633b7322cf0aba80c1301a1d2f6d3308c65551ad5997e1eb398ed99a75e",
+  "trialServerSha256": "fafd4ff9c030f5731e84fe1269c7a38dd007e8da3c88d5d6746c2e79da2d8c00",
+  "checkpointInspectorSha256": "8c1ceb090fb9b5249888a4735877846987fd877950364960a4b2ea68b7e1745d",
+  "leadSkillContext": {
+    "version": 1,
+    "enabled": true,
+    "allowlistSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "pin": {
+      "id": "aut-03-lead-decomposition-v1",
+      "sha256": "e0f10756e0486cdb827519edd8adfef866d84be449d6a10b1320412648e650ba"
+    }
+  },
+  "workspaceEmptyAndReadOnly": true,
+  "workerRoles": {
+    "removedCount": 8,
+    "remainingCount": 0
+  },
+  "workerRouteAvailable": false,
+  "dispatchJournalRows": 0,
+  "writerExecutionRows": 0,
+  "permissionEventCount": 0,
+  "commandsObserved": 0,
+  "fileChangesObserved": 0,
+  "leadTurnStartsAttempted": 1,
+  "leadTurnStartsSent": 1,
+  "leadTurnStartsLimit": 8,
+  "leadTurnStartLimitExceeded": false,
+  "account": {
+    "type": "chatgpt",
+    "planType": "team",
+    "codexHome": "/home/sr/.codex",
+    "accountSwitchingEnabled": false
+  },
+  "threadConfig": {
+    "method": "thread/start",
+    "model": "gpt-6.1-sol",
+    "sandbox": "read-only",
+    "approvalPolicy": "on-request",
+    "disabledFeatures": [
+      "shell_tool",
+      "unified_exec_tty",
+      "multi_agent",
+      "multi_agent_v2",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "browser_annotation_api",
+      "computer_use",
+      "image_generation",
+      "code_mode",
+      "code_mode_host",
+      "sleep_tool",
+      "in_app_browser",
+      "in_app_local_automation",
+      "shell_snapshot",
+      "shell_snapshot_v2",
+      "standalone_web_search"
+    ],
+    "webSearch": "disabled",
+    "verifiedAt": "2026-10-17T08:54:57.100Z"
+  },
+  "evidence": {
+    "preflight": {
+      "path": "preflight.json",
+      "sha256": "3896b682e77052d762cc1c6516c59ffbc45a6224a3ac1fc3a631006019f07c2c"
+    },
+    "task": {
+      "path": "task.json",
+      "sha256": "55e0bcbf3a0dc69b12d0e48842e764f10e3d5be3d37a6db997c3847cb88b6f0d"
+    },
+    "output": {
+      "path": "output.txt",
+      "sha256": "ddd7cc53186ff8e40ffee34c1f247e4dc769a79fff6704c4a6eb5c1799be069f"
+    },
+    "client": {
+      "path": "client.log",
+      "sha256": "3313fb535ac44fdfedc69d1a8bfff35b8dbd5e0ad99edcdbfc01f5833fb80675"
+    },
+    "client_exit": {
+      "path": "client-exit.json",
+      "sha256": "f3dbde0cf7590f35460d74b05ee91334c986a7afc6e5233336c9dca3ef28eb29"
+    },
+    "attestation": {
+      "path": "attestation.json",
+      "sha256": "de92fc59c996bd35b269ad8e8a69dbe8163b127aa23f292dbf1d36341b9b988b"
+    },
+    "checkpoint": {
+      "path": "checkpoint.json",
+      "sha256": "62b9f7d54b7f17efb426f3af977ecabca48c458d67967b722180d07c73b460b6"
+    },
+    "usage": {
+      "path": "usage.json",
+      "sha256": "ac71a003afec0ac21610e9903f8d0da4c1d3c5709616d7d911d1e05fb7c4eec2"
+    },
+    "controls": {
+      "path": "controls.json",
+      "sha256": "26ae820a40b599423e5cb9cecbaaf3d78c124f7de397d2bc71213f59ca2bcfff"
+    },
+    "server_log": {
+      "path": "server.log",
+      "sha256": "09f389bcd93512664b8c1fb3659c38808da82c63cba77150e04739ce994b60bb"
+    },
+    "quota_after": {
+      "path": "quota-after.json",
+      "sha256": "581e05bbe74bf17b46907a6f896257ba9a66b231801096ab0a0ebdc2e634ed1a"
+    }
+  },
+  "protocolSnapshot": {
+    "declaration": {
+      "path": "docs/evidence/aut-03/paired-trial-declaration.md",
+      "sha256": "bdb98633b7322cf0aba80c1301a1d2f6d3308c65551ad5997e1eb398ed99a75e"
+    },
+    "runtimePins": {
+      "path": "docs/evidence/aut-03/trial-runtime-pins.json",
+      "sha256": "5a48a55b4551becbdcabbdf10ed867cfdabfe5e0df58591000a2ced435a249c3"
+    },
+    "promptManifest": {
+      "path": "docs/evidence/aut-03/trial-prompts.json",
+      "sha256": "b8cc970a40f6d8dbacd684ca284325e459d8010839e68ee535354f114052f3be"
+    },
+    "trialServer": {
+      "path": "docs/evidence/aut-03/trial-server.js",
+      "sha256": "fafd4ff9c030f5731e84fe1269c7a38dd007e8da3c88d5d6746c2e79da2d8c00"
+    },
+    "checkpointInspector": {
+      "path": "docs/evidence/aut-03/inspect-checkpoint.js",
+      "sha256": "8c1ceb090fb9b5249888a4735877846987fd877950364960a4b2ea68b7e1745d"
+    },
+    "quotaPolicyReview": {
+      "path": "docs/evidence/aut-03/revised-controls-review-3.md",
+      "sha256": "bdcd82f367bd39a6bf4720649dfc81385cabe78ef179b689aadb439cdc40e2a2"
+    },
+    "turnCapReview": {
+      "path": "docs/evidence/aut-03/revised-controls-review-4.md",
+      "sha256": "c2ff482b4665dd7a5360d86c20b542b481a0326bb7593384a685d4adbe5e45ba"
+    }
+  },
+  "nonTaskAttempts": [],
+  "collectionCorrection": null,
+  "cohortDisposition": "Valid skill-on task in cohort-3; continue the paired cohort and score only after all required outputs are frozen."
+}

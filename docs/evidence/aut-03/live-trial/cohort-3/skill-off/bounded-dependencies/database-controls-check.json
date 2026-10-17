@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "aut-03-readonly-db-control-check/v1",
+  "checkedAt": "2026-10-17T08:35:14.735Z",
+  "taskId": "c529a368-701d-4b33-8c0f-61a8ed426281",
+  "database": {
+    "path": "/tmp/aut03-final-trial/revised-cohort/cohort-3/state/skill-off-bounded-dependencies.sqlite",
+    "filesSha256": {
+      "/tmp/aut03-final-trial/revised-cohort/cohort-3/state/skill-off-bounded-dependencies.sqlite": "3db401be51b67bf139132b9c49b298345a817db048d66f3eea1e62c67fbee359",
+      "/tmp/aut03-final-trial/revised-cohort/cohort-3/state/skill-off-bounded-dependencies.sqlite-wal": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/tmp/aut03-final-trial/revised-cohort/cohort-3/state/skill-off-bounded-dependencies.sqlite-shm": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
+    },
+    "mode": "readonly"
+  },
+  "queries": {
+    "task": "SELECT id,status_state,status_last_updated FROM tasks WHERE id=?",
+    "dispatch": "SELECT count(*) FROM dispatch_journal WHERE run_id=?",
+    "writers": "SELECT count(*) FROM writer_executions WHERE task_id=? OR context_id=?",
+    "liveActivity": "SELECT role,phase,commands,file_changes FROM live_activity WHERE run_id=?",
+    "permissionEvents": "Count parsed permission_events_json rows in usage_ledger for run_id=?"
+  },
+  "observed": {
+    "task": {
+      "id": "c529a368-701d-4b33-8c0f-61a8ed426281",
+      "status_state": "TASK_STATE_COMPLETED",
+      "status_last_updated": 1792225878326
+    },
+    "dispatchRows": 0,
+    "writerRows": 0,
+    "liveActivity": [
+      {
+        "role": "coordinator",
+        "phase": "done",
+        "commands": 0,
+        "file_changes": 0
+      }
+    ],
+    "permissionEvents": 0
+  },
+  "collectorIndependent": true
+}

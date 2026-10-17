@@ -1,0 +1,20 @@
+{
+  "attemptType": "trial-server-startup",
+  "attempt": 2,
+  "managedExecSessionId": 78678,
+  "taskCreated": false,
+  "modelTurns": 0,
+  "ready": false,
+  "processExitCode": 1,
+  "reason": "The isolated server rejected the generated token file because local A2A tokens require 43 base64url characters; this attempt used a 64-character hex string.",
+  "stateDatabaseCreatedDuringStartup": true,
+  "readOnlyDatabaseCheck": "database-check.json",
+  "databaseRows": {
+    "tasks": 0,
+    "dispatchJournal": 0,
+    "writerExecutionsTablePresent": false,
+    "usageLedgerTablePresent": false
+  },
+  "serverLog": "server.log",
+  "nextAction": "Replace only the isolated token with 32 random bytes encoded as unpadded base64url and restart the dedicated server."
+}

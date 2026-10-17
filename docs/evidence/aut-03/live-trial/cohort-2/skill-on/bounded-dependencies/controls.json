@@ -1,0 +1,37 @@
+{
+  "taskId": "425da1ec-90c5-4a34-b60c-4d75f48d88ab",
+  "taskStatus": {
+    "state": "TASK_STATE_INPUT_REQUIRED",
+    "message": {
+      "messageId": "425da1ec-90c5-4a34-b60c-4d75f48d88ab-stopped-1792224717978",
+      "contextId": "53f986b5-0d1c-425d-a03a-45f8df64ae4c",
+      "taskId": "425da1ec-90c5-4a34-b60c-4d75f48d88ab",
+      "role": "ROLE_AGENT",
+      "parts": [
+        {
+          "text": "Stopped by the owner. Running worker turns were cancelled; the run can continue.\nSend a message to this task to continue; the lead plans the next round from the checkpoint.\nAnswer with: npm run ask -- --task 425da1ec-90c5-4a34-b60c-4d75f48d88ab \"<answer>\"",
+          "mediaType": "text/plain"
+        }
+      ]
+    },
+    "timestamp": "2026-10-17T08:11:57.978Z"
+  },
+  "dispatchJournalRows": 0,
+  "dispatchRows": [],
+  "writerExecutionRows": 0,
+  "writerRows": [],
+  "permissionEventCount": 0,
+  "liveActivity": [
+    {
+      "role": "coordinator",
+      "phase": "done",
+      "commands": 0,
+      "file_changes": 0
+    }
+  ],
+  "workspaceEmptyAndReadOnly": true,
+  "leadTurnStartsAttempted": 4,
+  "leadTurnStartsSent": 3,
+  "leadTurnStartsLimit": 3,
+  "leadTurnStartLimitExceeded": true
+}

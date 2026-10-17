@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "spec-traceability/v1",
+  "featureId": "pilot-price",
+  "contextSha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf",
+  "artifactBindings": [
+    {
+      "role": "spec",
+      "path": "specs/pilot-price/spec.md",
+      "sha256": "56bf9d826e148140628c1876dd311a007223a93e09d353fdfc3806d01f4debf0"
+    },
+    {
+      "role": "plan",
+      "path": "specs/pilot-price/plan.md",
+      "sha256": "23abd3c943bd01924336ad7530814bb919fcc2e85fdafdcca653e84345c0b3a6"
+    },
+    {
+      "role": "tasks",
+      "path": "specs/pilot-price/tasks.md",
+      "sha256": "adcb7765cba8652de2fbe31a8eea502d56740cebf5a866fd3ad41ca8cf6d3d5f"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "repair-price",
+      "role": "engineer",
+      "objective": "Propose the minimal correction in applyDiscount so pct is divided by 100 when calculating the discount. Preserve zero-percent behavior, subtotal, and withTax. Change only product/src/price.js and never copy REFERENCE_FIX.patch. Hand the integrated candidate to independent verification before any acceptance decision.",
+      "requirementIds": [
+        "REQ-1",
+        "REQ-2",
+        "REQ-3",
+        "REQ-4"
+      ],
+      "acceptanceIds": [
+        "AC-1"
+      ],
+      "dependsOn": [],
+      "parallel": false,
+      "writePaths": [
+        "product/src/price.js"
+      ],
+      "checkIds": [
+        "CHECK-1"
+      ],
+      "priorEvidenceIds": [
+        "EVID-GOAL",
+        "EVID-DEFECT",
+        "EVID-FIXTURE-ACCEPTANCE",
+        "EVID-ACCEPTANCE-TESTS",
+        "EVID-MANDATORY-INVENTORY"
+      ],
+      "stopConditions": [
+        "Do not dispatch or implement during this planning-only trial; later execution requires separate authority.",
+        "Stop if repair requires any write outside product/src/price.js, including tests, package metadata, or check definitions.",
+        "Stop if the candidate changes subtotal, withTax, or zero-percent behavior.",
+        "Do not claim acceptance before independent verification of the integrated candidate."
+      ],
+      "additionalRiskTags": [],
+      "declaredReviewKind": "routine",
+      "checkpointId": "pilot-price-routine",
+      "reviewReason": "The accepted context classifies this bounded arithmetic repair as routine; independent verification must establish requirement preservation and exact product scope."
+    },
+    {
+      "id": "verify-price",
+      "role": "verifier",
+      "objective": "Independently inspect the integrated repair against the embedded baseline, verify that product/src/price.js is the only changed product file and that tests and check definitions remain unchanged, then run CHECK-1 on that exact candidate. Confirm all four existing tests pass and subtotal/withTax remain unaffected. Confine any operational evidence writes to verification/checks. Report exact candidate identity and actual check results for the lead's later acceptance decision; do not fabricate evidence identifiers or digests.",
+      "requirementIds": [
+        "REQ-1",
+        "REQ-2",
+        "REQ-3",
+        "REQ-4"
+      ],
+      "acceptanceIds": [
+        "AC-1"
+      ],
+      "dependsOn": [
+        "repair-price"
+      ],
+      "parallel": false,
+      "writePaths": [
+        "verification/checks"
+      ],
+      "checkIds": [
+        "CHECK-1"
+      ],
+      "priorEvidenceIds": [
+        "EVID-GOAL",
+        "EVID-DEFECT",
+        "EVID-FIXTURE-ACCEPTANCE",
+        "EVID-ACCEPTANCE-TESTS",
+        "EVID-MANDATORY-INVENTORY"
+      ],
+      "stopConditions": [
+        "Do not dispatch or execute checks during this planning-only trial; later execution requires separate authority.",
+        "Do not accept while the repair is incomplete or its candidate identity is unknown.",
+        "Reject acceptance if CHECK-1 fails, is interrupted, times out, or does not run all four existing tests.",
+        "Reject acceptance if any product file other than product/src/price.js changes or any mandatory requirement is unmet.",
+        "If the candidate changes after verification, require verification of the changed candidate before acceptance.",
+        "Report unavailable execution evidence as a limitation; static inspection alone cannot establish AC-1."
+      ],
+      "additionalRiskTags": [],
+      "declaredReviewKind": "routine",
+      "checkpointId": "pilot-price-routine",
+      "reviewReason": "The accepted context classifies this bounded arithmetic repair as routine; independent verification must establish requirement preservation and exact product scope."
+    }
+  ]
+}

@@ -1,0 +1,145 @@
+{
+  "scope": {
+    "runId": "c6610df6-18cc-4d53-afaf-e0f218730612"
+  },
+  "measured": {
+    "basis": "subscription",
+    "cost": null
+  },
+  "totals": {
+    "rows": 1,
+    "turns": 1,
+    "elapsedMs": 45714,
+    "retries": null,
+    "turnsKnownRows": 1,
+    "turnsUnknownRows": 0,
+    "turnsPartial": false,
+    "elapsedMsKnownRows": 1,
+    "elapsedMsUnknownRows": 0,
+    "elapsedMsPartial": false,
+    "retriesKnownRows": 0,
+    "retriesUnknownRows": 1,
+    "retriesPartial": true,
+    "startupMs": null,
+    "startupMsKnownRows": 0,
+    "startupMsUnknownRows": 1,
+    "startupMsPartial": true,
+    "queueWaitMs": null,
+    "queueWaitMsKnownRows": 0,
+    "queueWaitMsUnknownRows": 1,
+    "queueWaitMsPartial": true,
+    "coldStarts": null,
+    "coldStartKnownRows": 0,
+    "coldStartUnknownRows": 1,
+    "coldStartPartial": true,
+    "tokens": {
+      "inputTokens": 18798,
+      "cachedInputTokens": 0,
+      "outputTokens": 2393,
+      "reasoningOutputTokens": 204,
+      "totalTokens": 21191
+    },
+    "tokensKnownRows": 1,
+    "tokensUnknownRows": 0,
+    "tokensPartial": false,
+    "models": [
+      "gpt-6.1-sol"
+    ],
+    "efforts": [
+      "medium"
+    ],
+    "outcomes": {
+      "completed": 1
+    },
+    "permissionDenials": {
+      "total": 0,
+      "byType": {}
+    }
+  },
+  "byRole": {
+    "coordinator": {
+      "rows": 1,
+      "turns": 1,
+      "elapsedMs": 45714,
+      "retries": null,
+      "turnsKnownRows": 1,
+      "turnsUnknownRows": 0,
+      "turnsPartial": false,
+      "elapsedMsKnownRows": 1,
+      "elapsedMsUnknownRows": 0,
+      "elapsedMsPartial": false,
+      "retriesKnownRows": 0,
+      "retriesUnknownRows": 1,
+      "retriesPartial": true,
+      "startupMs": null,
+      "startupMsKnownRows": 0,
+      "startupMsUnknownRows": 1,
+      "startupMsPartial": true,
+      "queueWaitMs": null,
+      "queueWaitMsKnownRows": 0,
+      "queueWaitMsUnknownRows": 1,
+      "queueWaitMsPartial": true,
+      "coldStarts": null,
+      "coldStartKnownRows": 0,
+      "coldStartUnknownRows": 1,
+      "coldStartPartial": true,
+      "tokens": {
+        "inputTokens": 18798,
+        "cachedInputTokens": 0,
+        "outputTokens": 2393,
+        "reasoningOutputTokens": 204,
+        "totalTokens": 21191
+      },
+      "tokensKnownRows": 1,
+      "tokensUnknownRows": 0,
+      "tokensPartial": false,
+      "models": [
+        "gpt-6.1-sol"
+      ],
+      "efforts": [
+        "medium"
+      ],
+      "outcomes": {
+        "completed": 1
+      },
+      "permissionDenials": {
+        "total": 0,
+        "byType": {}
+      }
+    }
+  },
+  "attempts": [
+    {
+      "entryId": "lead:01a14907-0d5c-7460-82ed-a6b1e0e0ea21:01a14907-0d97-7160-9337-f805f2b7c928",
+      "kind": "lead_turn",
+      "role": "coordinator",
+      "taskId": null,
+      "attemptId": null,
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "startedAt": "2026-10-17T08:42:41.338Z",
+      "turns": 1,
+      "modelRequests": null,
+      "elapsedMs": 45714,
+      "retries": null,
+      "startupMs": null,
+      "coldStart": null,
+      "queueWaitMs": null,
+      "tokens": {
+        "inputTokens": 18798,
+        "cachedInputTokens": 0,
+        "outputTokens": 2393,
+        "reasoningOutputTokens": 204,
+        "totalTokens": 21191
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "permissionDenials": 0
+    }
+  ],
+  "repeatedAssignments": 0,
+  "acceptance": {
+    "disposition": "not_required",
+    "checks": []
+  }
+}

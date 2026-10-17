@@ -1,0 +1,41 @@
+{
+  "checkedAt": "2026-10-17T07:51:05Z",
+  "quotaSnapshot": {
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 44,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 86,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "isolationSnapshot": {
+    "launcherPid": 7855,
+    "protectedProjectId": "f69dd0e80b",
+    "protectedProjectPort": 3002,
+    "protectedProjectPid": 11495,
+    "protectedProjectUntouched": true,
+    "trialPort": 3112,
+    "trialServerPid": 60295,
+    "trialServerReady": true
+  },
+  "trialServer": {
+    "arm": "skill-off",
+    "skillEnabled": false,
+    "accountType": "chatgpt",
+    "planType": "team",
+    "accountSwitchingEnabled": false,
+    "workersRemoved": 8,
+    "workersRemaining": 0,
+    "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+    "attestedAt": "2026-10-17T07:49:58.114Z"
+  },
+  "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185",
+  "settingsSha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb",
+  "workspace": "/tmp/aut03-final-trial/revised-cohort/cohort-2/skill-off/pilot-price-f2/workspace",
+  "workspaceEmptyAndReadOnly": true,
+  "accountQuotaExhaustionReported": false
+}

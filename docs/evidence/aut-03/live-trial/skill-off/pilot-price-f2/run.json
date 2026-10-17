@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "aut-03-trial-run/v1",
+  "caseId": "pilot-price-f2",
+  "arm": "skill-off",
+  "taskId": "6624a505-289c-4357-b4e7-8e3e6e89810f",
+  "contextId": "7fa76d75-7431-4558-a820-58e228be50c8",
+  "status": "invalidated-and-stopped-after-forbidden-worker-dispatch",
+  "taskStatus": {
+    "state": "TASK_STATE_INPUT_REQUIRED",
+    "message": {
+      "messageId": "6624a505-289c-4357-b4e7-8e3e6e89810f-stopped-1792214184406",
+      "contextId": "7fa76d75-7431-4558-a820-58e228be50c8",
+      "taskId": "6624a505-289c-4357-b4e7-8e3e6e89810f",
+      "role": "ROLE_AGENT",
+      "parts": [
+        {
+          "text": "Stopped by the owner. Running worker turns were cancelled; the run can continue.\nSend a message to this task to continue; the lead plans the next round from the checkpoint.\nAnswer with: npm run ask -- --task 6624a505-289c-4357-b4e7-8e3e6e89810f \"<answer>\"",
+          "mediaType": "text/plain"
+        }
+      ]
+    },
+    "timestamp": "2026-10-17T05:16:24.406Z"
+  },
+  "startedAt": "2026-10-17T05:15:31.894Z",
+  "stoppedAt": "2026-10-17T05:16:24.406Z",
+  "leadTurnsRecorded": 4,
+  "completedLeadTurns": 3,
+  "workerTurnsRecorded": 1,
+  "workerDispatches": 1,
+  "workerRole": "explorer",
+  "workerTaskId": "393d3971-2589-4879-b497-d5a58c4ab23d",
+  "workerTaskStatus": "TASK_STATE_COMPLETED",
+  "forbiddenCommands": [
+    "pwd && ls -la",
+    "find . -printf '%y %p\\n'"
+  ],
+  "reportedFilesChanged": [],
+  "answerReceived": false,
+  "stateDatabase": {
+    "path": "interrupted-state.sqlite",
+    "sha256": "822fd48baacaedab308c9c9ebd49496336d2933a00be994a52bf5c86cd8de352"
+  },
+  "quotaAfterStop": {
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 15,
+    "weeklyUsedPercent": 81,
+    "observedAt": "2026-10-17T05:17:19Z"
+  },
+  "disposition": "Do not score or use this attempt as the skill-off baseline. The worker call completed read-only and reported no files changed, but both worker dispatch and command execution violated the frozen trial protocol. Stop the cohort pending technical prevention and independent re-review.",
+  "checkpointAssertion": {
+    "status": "passed",
+    "enabled": false,
+    "pin": null
+  },
+  "outputFiles": [
+    "answer.txt",
+    "client.stderr.log",
+    "server.stdout.log",
+    "server.stderr.log",
+    "startup-attestation.json",
+    "usage.json",
+    "worker-dispatch.json",
+    "checkpoint-check.json",
+    "interrupted-state.sqlite"
+  ]
+}

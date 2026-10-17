@@ -1,0 +1,25 @@
+{
+  "taskId": "66ea52fc-8d5a-445c-86d2-db8a3d6699c9",
+  "taskStatus": {
+    "state": "TASK_STATE_COMPLETED",
+    "timestamp": "2026-10-17T08:08:55.039Z"
+  },
+  "dispatchJournalRows": 0,
+  "dispatchRows": [],
+  "writerExecutionRows": 0,
+  "writerRows": [],
+  "permissionEventCount": 0,
+  "liveActivity": [
+    {
+      "role": "coordinator",
+      "phase": "done",
+      "commands": 0,
+      "file_changes": 0
+    }
+  ],
+  "workspaceEmptyAndReadOnly": true,
+  "leadTurnStartsAttempted": 1,
+  "leadTurnStartsSent": 1,
+  "leadTurnStartsLimit": 3,
+  "leadTurnStartLimitExceeded": false
+}

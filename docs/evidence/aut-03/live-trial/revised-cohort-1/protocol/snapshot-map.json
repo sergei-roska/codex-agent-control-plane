@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aut-03-protocol-snapshot-map/v1",
+  "historicalPins": {
+    "docs/evidence/aut-03/trial-server.js": "trial-server.js",
+    "docs/evidence/aut-03/trial-runtime-pins.json": "trial-runtime-pins.json",
+    "docs/evidence/aut-03/paired-trial-declaration.md": "paired-trial-declaration.md"
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "checkedAt": "2026-10-17T08:27:37.178Z",
+  "quotaSnapshot": {
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 58,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 88,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "isolationSnapshot": {
+    "launcherPid": 7855,
+    "launcherPort": 8080,
+    "protectedProjectId": "f69dd0e80b",
+    "protectedProjectPort": 3002,
+    "protectedProjectPid": 11495,
+    "protectedProjectUntouched": true,
+    "trialPort": 3112,
+    "trialPortFree": true,
+    "trialServerReady": true,
+    "trialServerPid": 71231
+  },
+  "pinValidation": {
+    "branch": "main",
+    "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+    "sourcePinsMatched": 141,
+    "binaryPinsMatched": 2,
+    "helperPinsMatched": 2,
+    "promptInputsMatched": 16,
+    "promptsMatched": 4,
+    "acceptedEvidenceMatched": 2,
+    "mismatches": 0
+  },
+  "protocolReview": {
+    "status": "APPROVE",
+    "path": "docs/evidence/aut-03/revised-controls-review-4.md",
+    "sha256": "c2ff482b4665dd7a5360d86c20b542b481a0326bb7593384a685d4adbe5e45ba"
+  },
+  "caseId": "pilot-price-f2",
+  "arm": "skill-off",
+  "settingsSha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb",
+  "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185",
+  "workspace": "/tmp/aut03-final-trial/revised-cohort/cohort-3/skill-off/pilot-price-f2/workspace",
+  "workspaceEmpty": true,
+  "workspaceReadOnlyAfterServerStartup": true,
+  "accountQuotaExhaustionReported": false,
+  "trialServer": {
+    "arm": "skill-off",
+    "skillEnabled": false,
+    "accountType": "chatgpt",
+    "planType": "team",
+    "accountSwitchingEnabled": false,
+    "workersRemoved": 8,
+    "workersRemaining": 0,
+    "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+    "attestedAt": "2026-10-17T08:25:38.672Z"
+  },
+  "workspaceEmptyAndReadOnly": true
+}

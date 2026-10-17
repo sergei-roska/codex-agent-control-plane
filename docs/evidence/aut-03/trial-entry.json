@@ -1,0 +1,1179 @@
+{
+  "decisionVersion": "aut-03-trial-entry/v1",
+  "status": "cohort_3_completed_benefit_not_established",
+  "scope": "The initial invalid attempt and cohorts 1 and 2 remain excluded. Cohort 3 completed all four cases in both conditions; both baseline freezes and collection corrections are independently approved. Blind scoring and the resource/S08/S09 review are complete. Final decision: benefit not established; AUT-03 remains default-off. The independent final decision audit is pending. The skill-off bounded-dependencies post-task provider snapshot is unavailable and remains explicitly unverified.",
+  "verifiedAt": "2026-10-17 09:10:51 UTC",
+  "previousAcceptedEvidence": {
+    "entry": {
+      "path": "docs/evidence/aut-03/entry.json",
+      "sha256": "c1f6d340d27f81f75425f89d1ffdcb015290d59cedbcc1ec2adacac89c148f44"
+    },
+    "deliveryDecision": {
+      "path": "docs/evidence/aut-03/delivery-decision.json",
+      "sha256": "0f4613b4d368a576d22f03bfd30e183646f9a9dfb1b6b175e2df49c78d220436"
+    }
+  },
+  "acceptedInputs": {
+    "aut05": {
+      "decision": "docs/evidence/aut-05/acceptance.json",
+      "status": "baseline_ready",
+      "referencedArtifactsRehashed": 13,
+      "mismatches": 0,
+      "scopeLimit": "historical manual artifact and offline structure only; not a live-model baseline"
+    },
+    "aut01": {
+      "decision": "docs/evidence/aut-01/acceptance.json",
+      "status": "accepted",
+      "referencedArtifactsRehashed": 26,
+      "mismatches": 0,
+      "acceptedContextSha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf",
+      "mapSha256": "212f256587a672c4c6de818a67a52e8a0463663258f39756d9409a6e53be3ec8"
+    },
+    "aut02": {
+      "decision": "docs/evidence/aut-02/acceptance.json",
+      "status": "accepted",
+      "referencedArtifactsRehashed": 26,
+      "sourceAndTestHashesRehashed": 9,
+      "mismatches": 0
+    }
+  },
+  "canonicalAnchor": {
+    "featureId": "pilot-price",
+    "context": {
+      "path": "test/fixtures/spec-kit/pilot-price/context/pilot-context.json",
+      "sha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf"
+    },
+    "map": {
+      "path": "test/fixtures/spec-kit/pilot-price/specs/pilot-price/traceability.json",
+      "sha256": "212f256587a672c4c6de818a67a52e8a0463663258f39756d9409a6e53be3ec8"
+    },
+    "expectedOutcome": "all four mandatory requirements and AC-1 are mapped; two assignment proposals pass the accepted contracts; source fixture remains unchanged",
+    "ownerDecisionOracle": "no owner-only decision is present in the accepted F2 anchor; any missing or contradictory canonical input blocks the affected task"
+  },
+  "trialDeclaration": {
+    "caseManifest": {
+      "path": "test/fixtures/autonomy/aut-03/cases/manifest.json",
+      "sha256": "62965a3048628359227bf762891a1bd2988f3cfa77588c0c579a3e5624b1a756",
+      "status": "frozen specification; independent review APPROVE; see docs/evidence/aut-03/case-review.md"
+    },
+    "caseSet": [
+      {
+        "caseId": "pilot-price-f2",
+        "input": "accepted AUT-01 canonical anchor above; manifest references exact accepted hashes",
+        "oracle": "preserve REQ-1 through REQ-4 and AC-1, preserve the bounded src/price.js write scope and existing test behavior, and produce structurally valid proposals"
+      },
+      {
+        "caseId": "bounded-dependencies",
+        "input": "test/fixtures/autonomy/aut-03/cases/bounded-dependencies/input.md",
+        "inputSha256": "4d269d915263551f82fbe962b01f711cddc99ff6335fa8d838114b1ab9df619c",
+        "oracle": "test/fixtures/autonomy/aut-03/cases/bounded-dependencies/oracle.json",
+        "oracleSha256": "4811593346459aff20d9de29e3ac0a2cce689ebccfc07cf04971bc4fa397f7c7"
+      },
+      {
+        "caseId": "owner-decision-required",
+        "input": "test/fixtures/autonomy/aut-03/cases/owner-decision-required/input.md",
+        "inputSha256": "5c6e4e96e81299ba0c53d2184cddb89c3e1cabb3e6d4179fa4147f4cd4b9234b",
+        "oracle": "test/fixtures/autonomy/aut-03/cases/owner-decision-required/oracle.json",
+        "oracleSha256": "d4589e5fd2acc9363d977f8a7476c046205b019e8d6cce1b615ff8ce2ee588c0"
+      },
+      {
+        "caseId": "contradictory-source-blocker",
+        "input": "test/fixtures/autonomy/aut-03/cases/contradictory-source-blocker/input.md",
+        "inputSha256": "c00f21f35af0f607652cbd5d50dc0114ca67f3064eebbe59aa02cf04140e82db",
+        "oracle": "test/fixtures/autonomy/aut-03/cases/contradictory-source-blocker/oracle.json",
+        "oracleSha256": "6b501e890570d6950eb84dacb8a9ee2a272b097f78fdfa18356b3425699cb0bd"
+      }
+    ],
+    "additionalContradictionInputs": [
+      {
+        "path": "test/fixtures/autonomy/aut-03/cases/contradictory-source-blocker/product-security-policy.md",
+        "sha256": "d493c058f8cceb0b94487a5c2bd3aef8445161b9d5115f32d2e94f81c1d1a3d9"
+      },
+      {
+        "path": "test/fixtures/autonomy/aut-03/cases/contradictory-source-blocker/product-report-requirements.md",
+        "sha256": "8660bc95ef3336162b774aa8453602bade7f5e753901b0b4844157f77b7361e8"
+      }
+    ],
+    "canonicalCaseHashes": "synthetic case and oracle hashes are frozen in the reviewed manifest; cases do not claim accepted AUT-01 contexts or maps",
+    "repetitions": "One repetition per reviewed case per condition; eight tasks total. All four skill-off baseline tasks are captured and frozen first, then the same four cases run skill-on in the declared order. This is descriptive only.",
+    "liveBaseline": "The initial skill-off attempt was invalidated after a forbidden Explorer dispatch and command execution. Revised cohort 1 was stopped after a skill-off task exceeded its three-turn cap. Cohort 2 completed four skill-off cases and one skill-on case, then its skill-on bounded-dependencies task reached the three-turn cap before completion. Cohorts 1 and 2 are excluded; no baseline is accepted.",
+    "model": {
+      "planned": "gpt-6.1-sol",
+      "reasoningEffort": "medium",
+      "source": "src/role-catalog.js createLeadRole",
+      "runtime": "Node v24.21.0; Codex CLI 0.163.0; App Server runtime codex-a2a-runtime/0.162.1; source commit ebe51c8"
+    },
+    "toolPolicy": "read-only lead; direct CodexAppServer pinned to launcher system CODEX_HOME and resolved binary, with profile switching disabled; worker role map cleared before orchestrator construction and A2A route registration; pinned per-thread Codex feature overrides disable the native shell tool, subagent, browser/computer, image, code-mode, and sleep tools, set web_search=disabled, and are asserted with model, sandbox, and approval policy before thread/start or thread/resume; unified_exec may remain true as an implementation detail while shell_tool=false is the command-tool gate; MCP, apps, and plugins disabled; all exact source inputs embedded in the prompt; task workspace empty and mode 0555; no project writes, command execution, or tests",
+    "budgets": "Maximum 8 Codex App Server turn/start submissions per task, enforced before request 9, and 240 seconds from A2A submission; 500000 measured total tokens per task and 4000000 total across eight tasks. Internal modelRequests telemetry remains null when unavailable. Before each task capture active system account usage for evidence, but do not stop based on displayed primary or weekly usage percentages. An explicit provider account-quota exhaustion response stops the cohort; do not retry or switch accounts. Monetary cost is unavailable from subscription telemetry; apply predeclared token, elapsed, and quota proxy thresholds and make no dollar cost or savings claim.",
+    "scoring": "Blind binary case oracle rubric, per-case normalized score, unweighted four-case mean, and separate non-compensable hard gates; exact criteria and formulas are frozen in paired-trial-declaration.md.",
+    "retentionThresholds": "Every skill-on case passes all hard gates; aggregate improves at least 10 percentage points; at least two cases improve; no case regresses by more than 10 points; median non-cached input-token ratio <=1.25 and each pair <=1.50; median total-token ratio <=1.50 and each pair <=2.00; median elapsed ratio <=1.50 and each pair <=2.00. Missing required usage metrics or a zero skill-off denominator makes that resource metric unverified and blocks retention; do not impute undefined ratios. Monetary cost remains null if unavailable; if available, median ratio <=1.25 and every pair <=1.50, with a zero skill-off denominator making cost unverified and blocking retention. Otherwise benefit is not established and feature remains default-off.",
+    "trialPlan": {
+      "path": "docs/evidence/aut-03/paired-trial-declaration.md",
+      "sha256": "bdb98633b7322cf0aba80c1301a1d2f6d3308c65551ad5997e1eb398ed99a75e"
+    },
+    "prompts": {
+      "path": "docs/evidence/aut-03/trial-prompts.json",
+      "sha256": "b8cc970a40f6d8dbacd684ca284325e459d8010839e68ee535354f114052f3be",
+      "caseOrder": [
+        "pilot-price-f2",
+        "bounded-dependencies",
+        "owner-decision-required",
+        "contradictory-source-blocker"
+      ],
+      "inputHashes": {
+        "test/fixtures/spec-kit/pilot-price/canonical/GOAL.txt": "666a1d5f055274475714f1e6fe8510079dc3bd787bdf079251525a5d39968bf7",
+        "test/fixtures/spec-kit/pilot-price/canonical/CHECKS.json": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860",
+        "test/fixtures/spec-kit/pilot-price/canonical/FIXTURE.md": "83aaa2fa7bf0b8c899c487c4589195295c8884b091faeb882ca7e83ce64d44f4",
+        "test/fixtures/spec-kit/pilot-price/canonical/canonical-input.md": "7e20c26ccaa8ce95c1725707b7b6325c7098730ef9c6d823f7583b05c0c98e4c",
+        "test/fixtures/spec-kit/pilot-price/canonical/requirements.md": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0",
+        "test/fixtures/spec-kit/pilot-price/context/accepted-context.json": "026bc8e85e8c5edc4ef232e008eede4995ef16c36cb914cb8d4dab914b72a581",
+        "test/fixtures/spec-kit/pilot-price/context/pilot-context.json": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf",
+        "test/fixtures/spec-kit/pilot-price/product/CHECKS.json": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860",
+        "test/fixtures/spec-kit/pilot-price/product/package.json": "54f5009c7b5705040063e83e6d6b20a5110b3e56c668cc6c85369de31195aadf",
+        "test/fixtures/spec-kit/pilot-price/product/src/price.js": "775708a5693f857c2493b6e662e1e3ebbb6da9050d05123222f9c817fff5acc0",
+        "test/fixtures/spec-kit/pilot-price/product/test/price.test.js": "f0532faca004df9074aed1f3094ee087851e689f3050e0389e26d8d03e0ef0b6",
+        "test/fixtures/autonomy/aut-03/cases/bounded-dependencies/input.md": "4d269d915263551f82fbe962b01f711cddc99ff6335fa8d838114b1ab9df619c",
+        "test/fixtures/autonomy/aut-03/cases/owner-decision-required/input.md": "5c6e4e96e81299ba0c53d2184cddb89c3e1cabb3e6d4179fa4147f4cd4b9234b",
+        "test/fixtures/autonomy/aut-03/cases/contradictory-source-blocker/input.md": "c00f21f35af0f607652cbd5d50dc0114ca67f3064eebbe59aa02cf04140e82db",
+        "test/fixtures/autonomy/aut-03/cases/contradictory-source-blocker/product-security-policy.md": "d493c058f8cceb0b94487a5c2bd3aef8445161b9d5115f32d2e94f81c1d1a3d9",
+        "test/fixtures/autonomy/aut-03/cases/contradictory-source-blocker/product-report-requirements.md": "8660bc95ef3336162b774aa8453602bade7f5e753901b0b4844157f77b7361e8"
+      }
+    },
+    "runtime": {
+      "planned": "gpt-6.1-sol, medium; Node v24.21.0; Codex CLI 0.163.0; App Server runtime codex-a2a-runtime/0.162.1",
+      "pinFile": "docs/evidence/aut-03/trial-runtime-pins.json",
+      "pinFileSha256": "5a48a55b4551becbdcabbdf10ed867cfdabfe5e0df58591000a2ced435a249c3",
+      "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+      "settingRead": "once at process startup; dedicated trial process restarts before every task and each condition arm"
+    },
+    "settingsLifecycle": "The setting is read once at startup. Stop and restart the dedicated process before every task with a task-specific workspace/database; stop it before changing arms. The production-bootstrap wrapper attests the effective option before readiness, and a read-only checkpoint check verifies the flag after every task."
+  },
+  "s0": {
+    "acceptedPredecessorIntegrity": "pass",
+    "pairedTrialEntry": "Independent review approved the eight-turn cap revision. Fresh preflight matched all source, binary, helper, prompt, and accepted-evidence hashes; the pinned system Team account is active with switching disabled; provider error is null; launcher and protected server are intact; trial port is free. The owner percentage override remains in force. Cohort 3 is authorized to start from a fresh skill-off pilot-price-f2 task.",
+    "baselineCaptureAllowed": false
+  },
+  "s1": {
+    "design": "docs/evidence/aut-03/s1-design.md",
+    "independentReview": "APPROVE; see docs/evidence/aut-03/s1-design-review.md",
+    "sourceTrace": "completed; see .agents/teamwork/aut-03-implementation/progress.md"
+  },
+  "caseReview": {
+    "status": "APPROVE",
+    "evidence": "docs/evidence/aut-03/case-review.md",
+    "manifestReferencesRehashed": 11,
+    "mismatches": 0,
+    "liveTrialAuthorized": true
+  },
+  "limitations": [
+    "AUT-05 v3 remains historical and cannot substitute for the live no-skill comparator.",
+    "The paired cohort has one repetition per case and supports only a bounded descriptive decision, not statistical significance or broad superiority.",
+    "Monetary cost cannot be measured from the current subscription telemetry; no monetary savings claim is permitted.",
+    "The initial skill-off attempt was invalidated after a forbidden Explorer dispatch and command execution. Revised cohort 1 and cohort 2 are excluded from scoring.",
+    "The skill-off bounded-dependencies run has no preserved post-task quota snapshot. Its post-task provider error is unverified; its pre-task provider error is null and the task completed."
+  ],
+  "baselineAuthorization": {
+    "authorizedAt": "2026-10-17T05:14:06Z",
+    "independentProtocolReview": "APPROVE",
+    "quotaSnapshot": {
+      "source": "launcher GET /api/accounts?force=1",
+      "activeAccount": "system",
+      "planType": "team",
+      "autoSwitch": false,
+      "primaryUsedPercent": 12,
+      "primaryResetsAt": 1792230658,
+      "weeklyUsedPercent": 81,
+      "weeklyResetsAt": 1792652342
+    },
+    "isolationSnapshot": {
+      "protectedProjectId": "f69dd0e80b",
+      "protectedProjectPort": 3002,
+      "protectedProjectStatus": "running",
+      "protectedProjectPid": 11495,
+      "protectedProjectUntouched": true,
+      "trialPort": 3112,
+      "trialPortFree": true
+    },
+    "preflight": "All 166 runtime/source/profile/helper pins, four prompt hashes, arm settings bytes, and accepted offline evidence hashes matched.",
+    "revokedAt": "2026-10-17T05:17:19Z",
+    "revocationReason": "The first attempted task violated the frozen no-dispatch/no-command protocol; no further trial task is authorized until technical prevention is reviewed.",
+    "reauthorization": {
+      "authorizedAt": "2026-10-17T05:35:28Z",
+      "independentProtocolReview": {
+        "status": "APPROVE",
+        "path": "docs/evidence/aut-03/revised-controls-review.md",
+        "sha256": "7d99676cb3389a208bd708f0b51f589328bd7d408ebfb0b41f29583f6a3e5dff"
+      },
+      "quotaSnapshot": {
+        "source": "launcher GET /api/accounts?force=1",
+        "activeAccount": "system",
+        "planType": "team",
+        "autoSwitch": false,
+        "primaryUsedPercent": 29,
+        "weeklyUsedPercent": 83
+      },
+      "isolationSnapshot": {
+        "launcherPid": 7855,
+        "protectedProjectId": "f69dd0e80b",
+        "protectedProjectPort": 3002,
+        "protectedProjectStatus": "running",
+        "protectedProjectPid": 11495,
+        "protectedProjectUntouched": true,
+        "trialPort": 3112,
+        "trialPortFree": true
+      },
+      "preflight": "Branch main at pinned source commit ebe51c8f3a6139afa4141f116707d9c94e8be952; 141 runtime source/profile pins, 2 binary pins, 2 tracked helper pins, 16 prompt input hashes, 4 prompt hashes, accepted offline evidence hashes, arm settings, and cross-document pointers matched. Trial workspace not yet created and no trial process was started.",
+      "firstTaskPreflight": {
+        "checkedAt": "2026-10-17T05:36:45Z",
+        "quotaSnapshot": {
+          "source": "launcher GET /api/accounts?force=1",
+          "activeAccount": "system",
+          "planType": "team",
+          "autoSwitch": false,
+          "primaryUsedPercent": 29,
+          "weeklyUsedPercent": 83
+        },
+        "trialPort": 3112,
+        "protectedProjectPort": 3002,
+        "protectedProjectPid": 11495,
+        "protectedProjectUntouched": true,
+        "branch": "main",
+        "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952"
+      },
+      "firstTaskResult": {
+        "caseId": "pilot-price-f2",
+        "arm": "skill-off",
+        "taskId": "e2a8109c-8a94-40ba-8030-2616f308e534",
+        "status": "TASK_STATE_COMPLETED",
+        "evidenceDirectory": "docs/evidence/aut-03/live-trial/revised-cohort/skill-off/pilot-price-f2",
+        "elapsedMs": 31525,
+        "leadTurns": 1,
+        "modelRequests": null,
+        "totalTokens": 24574,
+        "permissionEvents": 0,
+        "workerDispatches": 0,
+        "checkpoint": "leadSkillContext.enabled=false; workspace empty and read-only",
+        "quotaAfter": {
+          "checkedAt": "2026-10-17T05:38:20Z",
+          "primaryUsedPercent": 30,
+          "weeklyUsedPercent": 83
+        },
+        "cohortDisposition": "Excluded from final scoring because this cohort was stopped before baseline completion."
+      },
+      "secondTaskPreflight": {
+        "checkedAt": "2026-10-17T05:39:37Z",
+        "caseId": "bounded-dependencies",
+        "quotaSnapshot": {
+          "source": "launcher GET /api/accounts?force=1",
+          "activeAccount": "system",
+          "planType": "team",
+          "autoSwitch": false,
+          "primaryUsedPercent": 31,
+          "weeklyUsedPercent": 83
+        },
+        "trialPort": 3112,
+        "protectedProjectPort": 3002,
+        "protectedProjectPid": 11495,
+        "protectedProjectUntouched": true,
+        "branch": "main",
+        "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952"
+      },
+      "revokedAt": "2026-10-17T05:42:43Z",
+      "revocationReason": "The bounded-dependencies case recorded four completed lead_turn rows, exceeding the declared maximum of three. The trial server was stopped and the baseline gate was closed immediately.",
+      "postDeviationQuotaSnapshot": {
+        "checkedAt": "2026-10-17T05:42:43Z",
+        "source": "launcher GET /api/accounts?force=1",
+        "activeAccount": "system",
+        "planType": "team",
+        "autoSwitch": false,
+        "primaryUsedPercent": 33,
+        "weeklyUsedPercent": 84
+      },
+      "stopReport": {
+        "path": "docs/evidence/aut-03/cohort-stop-report.md",
+        "sha256": "7cd9137a90eb867619bb89d9e672ac659842bad929197d381e4c3904cf51fdd7"
+      },
+      "secondTaskResult": {
+        "caseId": "bounded-dependencies",
+        "arm": "skill-off",
+        "taskId": "277d5635-1e0b-4bd2-a42c-c38c5ec618db",
+        "status": "invalid_protocol_deviation",
+        "evidenceDirectory": "docs/evidence/aut-03/live-trial/revised-cohort/skill-off/bounded-dependencies",
+        "elapsedMs": 129164,
+        "leadTurns": 4,
+        "declaredMaxLeadTurns": 3,
+        "modelRequests": null,
+        "totalTokens": 107421,
+        "permissionEvents": 0,
+        "workerDispatches": 0,
+        "workspaceEmptyAndReadOnly": true,
+        "quotaAfter": {
+          "checkedAt": "2026-10-17T05:42:43Z",
+          "primaryUsedPercent": 33,
+          "weeklyUsedPercent": 84
+        }
+      }
+    },
+    "capReview": {
+      "status": "APPROVE",
+      "path": "docs/evidence/aut-03/revised-controls-review-2.md",
+      "sha256": "ec4da3e4261839e87c31984afcc8ae8e1afc5b658103f5e367fb939d73c74cfa",
+      "recordedAt": "2026-10-17T05:51:12.059Z",
+      "scope": "Static review of the enforced turn-start cap, existing isolation controls, hashes, and excluded deviations. No trial task was started."
+    },
+    "latestTrialPreflight": {
+      "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/preflight.json",
+      "sha256": "5f329403156481ce0d1f38952a38f6526ae60a4af967a7753b37c9a372d013cd",
+      "checkedAt": "2026-10-17T08:30:33.193Z",
+      "trialServerPid": 72668,
+      "trialServerReady": true,
+      "quotaSnapshot": {
+        "checkedAt": "2026-10-17T08:30:33.193Z",
+        "source": "launcher GET /api/accounts?force=1",
+        "activeAccount": "system",
+        "planType": "team",
+        "autoSwitch": false,
+        "primaryUsedPercent": 59,
+        "primaryResetsAt": 1792230658,
+        "weeklyUsedPercent": 88,
+        "weeklyResetsAt": 1792652342,
+        "providerError": null,
+        "percentagesAreStopConditions": false
+      },
+      "isolationSnapshot": {
+        "launcherPid": 7855,
+        "launcherPort": 8080,
+        "protectedProjectId": "f69dd0e80b",
+        "protectedProjectPort": 3002,
+        "protectedProjectPid": 11495,
+        "protectedProjectUntouched": true,
+        "trialPort": 3112,
+        "trialPortFree": false,
+        "trialServerPid": 72668,
+        "trialServerReady": true
+      },
+      "pinValidation": {
+        "branch": "main",
+        "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+        "sourcePinsMatched": 141,
+        "binaryPinsMatched": 2,
+        "helperPinsMatched": 2,
+        "promptInputsMatched": 16,
+        "promptsMatched": 4,
+        "acceptedEvidenceMatched": 2,
+        "mismatches": 0
+      },
+      "protocolReview": {
+        "status": "APPROVE",
+        "path": "docs/evidence/aut-03/revised-controls-review-4.md",
+        "sha256": "c2ff482b4665dd7a5360d86c20b542b481a0326bb7593384a685d4adbe5e45ba"
+      },
+      "caseId": "bounded-dependencies",
+      "arm": "skill-off",
+      "settingsSha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb",
+      "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3",
+      "workspace": "/tmp/aut03-final-trial/revised-cohort/cohort-3/skill-off/bounded-dependencies/workspace",
+      "workspaceEmptyAndReadOnly": true,
+      "accountQuotaExhaustionReported": false
+    },
+    "deferredStart": {
+      "checkedAt": "2026-10-17T05:51:12.059Z",
+      "quotaSnapshot": {
+        "source": "launcher GET /api/accounts?force=1",
+        "activeAccount": "system",
+        "planType": "team",
+        "autoSwitch": false,
+        "primaryUsedPercent": 37,
+        "weeklyUsedPercent": 84,
+        "weeklyResetsAt": 1792652342
+      },
+      "trialGateOpened": false,
+      "trialTaskStarted": false,
+      "reason": "Only one percentage point remained below the declared 85 percent weekly stop threshold; defer the eight-task cohort until fresh quota headroom is available."
+    },
+    "quotaStopObservation": {
+      "checkedAt": "2026-10-17T05:53:13Z",
+      "source": "launcher GET /api/accounts?force=1",
+      "activeAccount": "system",
+      "planType": "team",
+      "autoSwitch": false,
+      "primaryUsedPercent": 38,
+      "weeklyUsedPercent": 85,
+      "weeklyResetsAt": 1792652342,
+      "trialGateOpened": false,
+      "trialTaskStarted": false,
+      "disposition": "Declared weekly stop threshold reached. No task was started; wait for the weekly reset and repeat preflight."
+    },
+    "ownerOverride": {
+      "authorizedAt": "2026-10-17T07:43:54.525Z",
+      "source": "User instruction in the current conversation",
+      "policy": "Ignore displayed primary and weekly usage percentage thresholds for AUT-03 and continue on the pinned launcher system Team account.",
+      "noAccountSwitching": true,
+      "providerQuotaExhaustionStillStops": true,
+      "protocolReviewRequired": false,
+      "protocolReview": {
+        "status": "APPROVE",
+        "path": "docs/evidence/aut-03/revised-controls-review-3.md",
+        "sha256": "bdcd82f367bd39a6bf4720649dfc81385cabe78ef179b689aadb439cdc40e2a2",
+        "reviewedTrialEntrySha256": "41e4deb904dd7eb846494a20aaa043e9349b01f3d5195cfc2ccf73083426bcb7",
+        "recordedAt": "2026-10-17T07:47:02Z"
+      },
+      "trialGateOpened": false,
+      "trialGateOpenedAt": "2026-10-17T08:58:08.293Z",
+      "trialTaskStarted": true,
+      "trialTaskStartedAt": "2026-10-17T07:51:28Z",
+      "trialGateClosedAt": "2026-10-17T08:59:11.574Z",
+      "trialGateClosedReason": "All four skill-on tasks completed; evidence frozen pending independent correction and freeze review.",
+      "gateOpenedForTask": {
+        "caseId": "contradictory-source-blocker",
+        "arm": "skill-on",
+        "openedAt": "2026-10-17T08:58:08.293Z",
+        "preflightGatePath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/preflight-gate.json",
+        "preflightGateSha256": "3472212d11e121e6ea281cacdc8e4f0710f4f4605616d67291f21050c3d94b01",
+        "taskCreated": true,
+        "taskId": "2888f97e-cf8c-461a-a5a2-ee1b58477840",
+        "completedAt": "2026-10-17T08:59:07.716Z"
+      },
+      "currentQuotaSnapshot": {
+        "checkedAt": "2026-10-17T08:59:18.393Z",
+        "source": "launcher GET /api/accounts?force=1",
+        "activeAccount": "system",
+        "planType": "team",
+        "autoSwitch": false,
+        "primaryUsedPercent": 84,
+        "weeklyUsedPercent": 92,
+        "providerError": null,
+        "percentagesAreStopConditions": false
+      }
+    },
+    "latestTaskPreflight": {
+      "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/preflight.json",
+      "sha256": "478c414eec638a2e75c89f370e4db3927f71de5359ab92586bcf3044cd2b8290",
+      "checkedAt": "2026-10-17T08:42:34.612Z",
+      "trialServerPid": 77822,
+      "trialServerReady": true
+    },
+    "currentTaskSubmission": {
+      "caseId": "contradictory-source-blocker",
+      "arm": "skill-on",
+      "taskId": "2888f97e-cf8c-461a-a5a2-ee1b58477840",
+      "status": "TASK_STATE_COMPLETED",
+      "elapsedMs": 46779,
+      "leadTurns": 1,
+      "totalTokens": 21266,
+      "dispatchJournalRows": 0,
+      "permissionEventCount": 0,
+      "writerExecutionRows": 0,
+      "workspaceEmptyAndReadOnly": true,
+      "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker",
+      "runSha256": "a17a8955a80bb6722226cacab58f49430d8aad945325101a3f3e0d385063ed87",
+      "submissionStartedAt": "2026-10-17T08:58:19.465Z",
+      "completedAt": "2026-10-17T08:59:06.404Z",
+      "turnStartAttempts": 1,
+      "turnStartsSent": 1,
+      "quotaAfter": {
+        "checkedAt": "2026-10-17T08:59:18.393Z",
+        "source": "launcher GET /api/accounts?force=1",
+        "activeAccount": "system",
+        "planType": "team",
+        "autoSwitch": false,
+        "primaryUsedPercent": 84,
+        "weeklyUsedPercent": 92,
+        "providerError": null,
+        "percentagesAreStopConditions": false
+      }
+    },
+    "cohort2": {
+      "cohortId": "cohort-2",
+      "startedAt": "2026-10-17T07:51:05Z",
+      "status": "stopped_turn_cap",
+      "tasks": [
+        {
+          "caseId": "pilot-price-f2",
+          "arm": "skill-off",
+          "taskId": "98208901-4e8e-4290-bb31-1c316d8b3a76",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 27997,
+          "leadTurns": 1,
+          "totalTokens": 24203,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/pilot-price-f2",
+          "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185"
+        },
+        {
+          "caseId": "bounded-dependencies",
+          "arm": "skill-off",
+          "taskId": "6edf812f-ee9d-49c9-a651-82e34bcbe347",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 44327,
+          "leadTurns": 1,
+          "totalTokens": 21249,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/bounded-dependencies",
+          "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3"
+        },
+        {
+          "caseId": "owner-decision-required",
+          "arm": "skill-off",
+          "taskId": "0f6a3775-c29c-48e5-b9c9-6a1ebbaf8d68",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 32621,
+          "leadTurns": 1,
+          "totalTokens": 20713,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/owner-decision-required",
+          "promptSha256": "3b461e267dcf3258cc86d0eca5a9ed760b0e0fdcb4991642343376880495c514"
+        },
+        {
+          "caseId": "contradictory-source-blocker",
+          "arm": "skill-off",
+          "taskId": "2837b007-62ed-4d02-92a2-bb42fd4aab04",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 39962,
+          "leadTurns": 1,
+          "totalTokens": 20966,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/contradictory-source-blocker",
+          "promptSha256": "d01368d9d2f97074842cd5c16b969f40fdd0f4a1f5d3fa319e00ceb9d5fd7940"
+        },
+        {
+          "caseId": "pilot-price-f2",
+          "arm": "skill-on",
+          "taskId": "66ea52fc-8d5a-445c-86d2-db8a3d6699c9",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 24124,
+          "leadTurns": 1,
+          "totalTokens": 23964,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-2/skill-on/pilot-price-f2",
+          "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185"
+        },
+        {
+          "caseId": "bounded-dependencies",
+          "arm": "skill-on",
+          "taskId": "425da1ec-90c5-4a34-b60c-4d75f48d88ab",
+          "status": "TASK_STATE_INPUT_REQUIRED",
+          "completedLeadTurns": 3,
+          "turnStartAttempts": 4,
+          "turnStartsSent": 3,
+          "turnStartLimitExceeded": true,
+          "totalTokens": 74010,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-2/skill-on/bounded-dependencies"
+        }
+      ],
+      "nextTask": "start-cohort-3-after-review-and-preflight",
+      "baselineFreeze": {
+        "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off-baseline-freeze.json",
+        "sha256": "8b9de23393b052588db93806a1ae4c05951dfcf0474651907d06d3fd558faccd",
+        "frozenAt": "2026-10-17T08:07:20Z",
+        "caseCount": 4,
+        "disposition": "Historical freeze only; exclude cohort-2 from final scoring because the skill-on arm stopped before all paired cases completed."
+      },
+      "stoppedTaskSubmission": {
+        "caseId": "bounded-dependencies",
+        "arm": "skill-on",
+        "status": "stopped_turn_cap",
+        "taskId": "425da1ec-90c5-4a34-b60c-4d75f48d88ab",
+        "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3",
+        "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-2/skill-on/bounded-dependencies",
+        "submissionStartedAt": "2026-10-17T08:09:54Z",
+        "trialServerPid": 66946,
+        "taskStartedAt": "2026-10-17T08:10:05.039Z",
+        "stoppedAt": "2026-10-17T08:11:57.978Z",
+        "completedLeadTurns": 3,
+        "turnStartAttempts": 4,
+        "turnStartsSent": 3,
+        "totalTokens": 74010,
+        "disposition": "Cohort stopped under the frozen fail-closed three-turn cap; task output incomplete and excluded."
+      }
+    },
+    "turnCapRevision": {
+      "recordedAt": "2026-10-17T08:15:30.611Z",
+      "previousMaximum": 3,
+      "proposedMaximum": 8,
+      "reason": "In cohort 2, the valid skill-on bounded-dependencies task reached a fourth turn-start after three completed turns and was stopped before the request was sent. This confirmed that the prior cap interrupted the task; no provider quota exhaustion or safety violation occurred.",
+      "taskStopReport": {
+        "path": "docs/evidence/aut-03/cohort-2-turn-cap-stop.md",
+        "sha256": "45b589294f282e0ac5444baf83f33169b13736c5b89203e997610718ae4046c6"
+      },
+      "independentReview": {
+        "status": "APPROVE",
+        "required": false,
+        "path": "docs/evidence/aut-03/revised-controls-review-4.md",
+        "sha256": "c2ff482b4665dd7a5360d86c20b542b481a0326bb7593384a685d4adbe5e45ba",
+        "reviewedTrialEntrySha256": "23086780d5d59533d75089f6a6fee32f1633e6e10407104ea02304a800b83e91",
+        "recordedAt": "2026-10-17T08:22:46Z"
+      },
+      "gateRemainsClosed": true,
+      "nextAction": "After independent review and fresh preflight, start a new paired cohort from skill-off pilot-price-f2. Exclude all cohort-2 data from scoring.",
+      "status": "approved_preflight_passed_server_start_pending"
+    },
+    "cohort3": {
+      "cohortId": "cohort-3",
+      "startedAt": "2026-10-17T08:27:45.067Z",
+      "status": "completed_benefit_not_established",
+      "tasks": [
+        {
+          "caseId": "pilot-price-f2",
+          "arm": "skill-off",
+          "status": "TASK_STATE_COMPLETED",
+          "taskId": "31534413-7377-4faf-9479-147079092c80",
+          "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185",
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2",
+          "submissionStartedAt": "2026-10-17T08:27:45.067Z",
+          "completedAt": "2026-10-17T08:28:14.900Z",
+          "elapsedMs": 29690,
+          "leadTurns": 1,
+          "totalTokens": 24367,
+          "turnStartAttempts": 1,
+          "turnStartsSent": 1,
+          "dispatchJournalRows": 0,
+          "writerExecutionRows": 0,
+          "permissionEventCount": 0,
+          "workspaceEmptyAndReadOnly": true,
+          "runSha256": "7b58c05c41ccc53c5727967a4dacd1ec284195f7ef39d2efba9f7e0e6609c508"
+        },
+        {
+          "caseId": "bounded-dependencies",
+          "arm": "skill-off",
+          "taskId": "c529a368-701d-4b33-8c0f-61a8ed426281",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 42272,
+          "leadTurns": 1,
+          "totalTokens": 21286,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "writerExecutionRows": 0,
+          "workspaceEmptyAndReadOnly": true,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies",
+          "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3",
+          "runSha256": "404e72cb9258eb17ddc0cdf27599246f5beae8073bf034b8fa0db9f0c1150e28",
+          "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/preflight.json",
+          "preflightSha256": "5f329403156481ce0d1f38952a38f6526ae60a4af967a7753b37c9a372d013cd"
+        },
+        {
+          "caseId": "owner-decision-required",
+          "arm": "skill-off",
+          "taskId": "800fae56-6158-4735-9baa-9bfc4634e34d",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 31200,
+          "leadTurns": 1,
+          "totalTokens": 20560,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "writerExecutionRows": 0,
+          "workspaceEmptyAndReadOnly": true,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required",
+          "runSha256": "457417821dd92df8ab55aa31e7b7f24d6daf95df7475d1dc3f6d9af200f47f45",
+          "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/preflight.json",
+          "preflightSha256": "a5777640aa2764a3374c11c05d0ec10e8459a71df21d12602813400fa748a099",
+          "quotaAfter": {
+            "checkedAt": "2026-10-17T08:40:42.107Z",
+            "source": "launcher GET /api/accounts?force=1",
+            "activeAccount": "system",
+            "planType": "team",
+            "autoSwitch": false,
+            "primaryUsedPercent": 68,
+            "primaryResetsAt": 1792230658,
+            "weeklyUsedPercent": 89,
+            "weeklyResetsAt": 1792652342,
+            "providerError": null,
+            "percentagesAreStopConditions": false
+          }
+        },
+        {
+          "caseId": "contradictory-source-blocker",
+          "arm": "skill-off",
+          "taskId": "c6610df6-18cc-4d53-afaf-e0f218730612",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 45714,
+          "leadTurns": 1,
+          "totalTokens": 21191,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "writerExecutionRows": 0,
+          "workspaceEmptyAndReadOnly": true,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker",
+          "runSha256": "372b16c6875a874a78dd3e96ba4c542ea172d566bfd53228842d1c68efff8f04",
+          "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/preflight.json",
+          "preflightSha256": "478c414eec638a2e75c89f370e4db3927f71de5359ab92586bcf3044cd2b8290",
+          "quotaAfter": {
+            "checkedAt": "2026-10-17T08:43:36.536Z",
+            "source": "launcher GET /api/accounts?force=1",
+            "activeAccount": "system",
+            "planType": "team",
+            "autoSwitch": false,
+            "primaryUsedPercent": 69,
+            "primaryResetsAt": 1792230658,
+            "weeklyUsedPercent": 90,
+            "weeklyResetsAt": 1792652342,
+            "providerError": null,
+            "percentagesAreStopConditions": false
+          }
+        },
+        {
+          "caseId": "pilot-price-f2",
+          "arm": "skill-on",
+          "taskId": "5320ac49-ae98-45b9-90ee-dcfacb4b3d8d",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 25542,
+          "leadTurns": 1,
+          "totalTokens": 24104,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "writerExecutionRows": 0,
+          "workspaceEmptyAndReadOnly": true,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2",
+          "runSha256": "8296711e08ba896dcf4c8aafe690a6ae107c35653dd39c8ac8edca2957aeb188",
+          "quotaAfter": {
+            "checkedAt": "2026-10-17T08:54:01.828Z",
+            "source": "launcher GET /api/accounts?force=1",
+            "activeAccount": "system",
+            "planType": "team",
+            "autoSwitch": false,
+            "primaryUsedPercent": 80,
+            "weeklyUsedPercent": 91,
+            "providerError": null,
+            "percentagesAreStopConditions": false
+          },
+          "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185"
+        },
+        {
+          "caseId": "bounded-dependencies",
+          "arm": "skill-on",
+          "taskId": "b637d77a-48d6-457c-8c7f-30fb2a4ea794",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 32158,
+          "leadTurns": 1,
+          "totalTokens": 21082,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "writerExecutionRows": 0,
+          "workspaceEmptyAndReadOnly": true,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies",
+          "runSha256": "2cd01bb80fe9620730702f195e3bc4e8127b4ce6004a7629bee0c776e222f45b",
+          "quotaAfter": {
+            "checkedAt": "2026-10-17T08:55:42.180Z",
+            "source": "launcher GET /api/accounts?force=1",
+            "activeAccount": "system",
+            "planType": "team",
+            "autoSwitch": false,
+            "primaryUsedPercent": 82,
+            "weeklyUsedPercent": 91,
+            "providerError": null,
+            "percentagesAreStopConditions": false
+          },
+          "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3"
+        },
+        {
+          "caseId": "owner-decision-required",
+          "arm": "skill-on",
+          "taskId": "5a4c8462-64d7-46e9-9f04-e8654edaf46c",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 33664,
+          "leadTurns": 1,
+          "totalTokens": 20624,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "writerExecutionRows": 0,
+          "workspaceEmptyAndReadOnly": true,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required",
+          "runSha256": "ed903af6141c10092f63d970ed43136be1ca0140a04a415f95f5fb14f4a488d1",
+          "quotaAfter": {
+            "checkedAt": "2026-10-17T08:57:24.686Z",
+            "source": "launcher GET /api/accounts?force=1",
+            "activeAccount": "system",
+            "planType": "team",
+            "autoSwitch": false,
+            "primaryUsedPercent": 83,
+            "weeklyUsedPercent": 92,
+            "providerError": null,
+            "percentagesAreStopConditions": false
+          },
+          "promptSha256": "3b461e267dcf3258cc86d0eca5a9ed760b0e0fdcb4991642343376880495c514"
+        },
+        {
+          "caseId": "contradictory-source-blocker",
+          "arm": "skill-on",
+          "taskId": "2888f97e-cf8c-461a-a5a2-ee1b58477840",
+          "status": "TASK_STATE_COMPLETED",
+          "elapsedMs": 46779,
+          "leadTurns": 1,
+          "totalTokens": 21266,
+          "dispatchJournalRows": 0,
+          "permissionEventCount": 0,
+          "writerExecutionRows": 0,
+          "workspaceEmptyAndReadOnly": true,
+          "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker",
+          "runSha256": "51da09f67c126ea5d8c8c46a76ef6967656586563716152b3ad4bfbf9d636f4c",
+          "quotaAfter": {
+            "checkedAt": "2026-10-17T08:59:18.393Z",
+            "source": "launcher GET /api/accounts?force=1",
+            "activeAccount": "system",
+            "planType": "team",
+            "autoSwitch": false,
+            "primaryUsedPercent": 84,
+            "weeklyUsedPercent": 92,
+            "providerError": null,
+            "percentagesAreStopConditions": false
+          },
+          "promptSha256": "d01368d9d2f97074842cd5c16b969f40fdd0f4a1f5d3fa319e00ceb9d5fd7940"
+        }
+      ],
+      "nextTask": "none",
+      "protocolReview": {
+        "status": "APPROVE",
+        "path": "docs/evidence/aut-03/revised-controls-review-4.md",
+        "sha256": "c2ff482b4665dd7a5360d86c20b542b481a0326bb7593384a685d4adbe5e45ba"
+      },
+      "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/preflight.json",
+      "preflightSha256": "5f329403156481ce0d1f38952a38f6526ae60a4af967a7753b37c9a372d013cd",
+      "preflightedAt": "2026-10-17T08:27:37.178Z",
+      "preflight": {
+        "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/preflight.json",
+        "sha256": "478c414eec638a2e75c89f370e4db3927f71de5359ab92586bcf3044cd2b8290",
+        "checkedAt": "2026-10-17T08:42:34.612Z",
+        "trialServerPid": 77822,
+        "trialServerReady": true
+      },
+      "serverStartedAt": "2026-10-17T08:25:38.672Z",
+      "preTaskFailures": [
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/attempts/client-auth-401-1/attempt.json",
+          "sha256": "ab2d0f4aeff80ca99c67ecd84ebe285d03ff837311396dacc4f66e2073577014",
+          "clientLog": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/attempts/client-auth-401-1/client.log",
+          "clientExit": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/attempts/client-auth-401-1/client-exit.json",
+          "a2aTaskCreated": false,
+          "modelTurns": 0
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-launch-detached-1/attempt.json",
+          "sha256": "b517cb306ebbead9d1d1887af75a9c66a722c1b2e62c491784c2aab23707ec98",
+          "taskCreated": false,
+          "modelTurns": 0,
+          "attemptType": "trial-server-startup",
+          "ready": false
+        },
+        {
+          "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-startup-token-format-2/attempt.json",
+          "sha256": "6488f74444ebb19a7c46b168546459b6eed4bc1e16c690ac8541123923523c4d",
+          "taskCreated": false,
+          "modelTurns": 0,
+          "attemptType": "trial-server-startup",
+          "ready": false
+        }
+      ],
+      "nextTaskAfterCorrectionReview": {
+        "caseId": "owner-decision-required",
+        "arm": "skill-off",
+        "workspace": "/tmp/aut03-final-trial/revised-cohort/cohort-3/skill-off/owner-decision-required/workspace",
+        "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required"
+      },
+      "collectionCorrection": {
+        "status": "APPROVED",
+        "reportPath": "docs/evidence/aut-03/cohort-3-collection-correction.md",
+        "reportSha256": "222fb40940f1dd27b251d2d7edad87f323abbeca37c5e04cc2c4d42d86578325",
+        "initialRunJsonSha256": "dd2558023d3cb8dc049ce65fb981594a6d8db58517b5e496f702cf390c245ee8",
+        "correctedRunJsonPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/bounded-dependencies/run.json",
+        "correctedRunJsonSha256": "404e72cb9258eb17ddc0cdf27599246f5beae8073bf034b8fa0db9f0c1150e28",
+        "taskId": "c529a368-701d-4b33-8c0f-61a8ed426281",
+        "reason": "The corrected evidence matches read-only database observations. The initial run.json bytes and initial controls.json were overwritten, so the precise original field-level cause is unverified.",
+        "independentReview": {
+          "status": "APPROVE",
+          "path": "docs/evidence/aut-03/cohort-3-collection-correction-review.md",
+          "sha256": "0377066a8d9e3aa48ec954ad885ea6ffa4c5db0d4516fa626d160a1f3f93acfc",
+          "reviewedTrialEntrySha256": "64a646f064b2252ebb9db564c125def1f144637d395d492523bd4b742f15bad3"
+        }
+      },
+      "preflightGate": {
+        "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/preflight-gate.json",
+        "sha256": "3472212d11e121e6ea281cacdc8e4f0710f4f4605616d67291f21050c3d94b01",
+        "checkedAt": "2026-10-17T08:58:04.344Z",
+        "caseId": "contradictory-source-blocker",
+        "arm": "skill-on"
+      },
+      "lastStartupAttempt": {
+        "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required/attempts/server-startup-token-format-2/attempt.json",
+        "sha256": "6488f74444ebb19a7c46b168546459b6eed4bc1e16c690ac8541123923523c4d"
+      },
+      "preflightForCurrentTask": {
+        "caseId": "contradictory-source-blocker",
+        "arm": "skill-off",
+        "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/preflight.json",
+        "sha256": "478c414eec638a2e75c89f370e4db3927f71de5359ab92586bcf3044cd2b8290"
+      },
+      "lastClosedTaskGate": {
+        "caseId": "contradictory-source-blocker",
+        "arm": "skill-on",
+        "taskId": "2888f97e-cf8c-461a-a5a2-ee1b58477840",
+        "closedAt": "2026-10-17T08:59:11.574Z",
+        "reason": "Final skill-on task completed; collect and freeze its evidence before scoring."
+      },
+      "collectionCorrections": [
+        {
+          "status": "APPROVED",
+          "taskId": "31534413-7377-4faf-9479-147079092c80",
+          "reportPath": "docs/evidence/aut-03/cohort-3-pilot-collection-correction.md",
+          "reportSha256": "ec04b65f4a2c53239f7c39ea3c7d572a773de21f60a4ad39d7c131a9080e5da8",
+          "initialControlsPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/collection-correction/controls-initial.json",
+          "initialControlsSha256": "2698e96b2493680345e9a73f513b94ada7d9d744a9ace800573810a22ef7dd6f",
+          "correctedControlsSha256": "46f06944a527d0aaa8929d0e3c0702fc149a646946b175434e20432dbcb9605a",
+          "databaseCheckPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/database-controls-check.json",
+          "databaseCheckSha256": "9f3ce00952ace8ac2f4576a65e71974f59d4a580c4e0a5ed46940c8f1b8488d6",
+          "initialRunSha256": "9ac75b6c6ca76189027fa8c01b62f700907c1f225b0ec2a2a394991a73f9bfc7",
+          "correctedRunSha256": "af4dc282feef7a4ce166f0cdab48ed1dcbe288fe631d191f74002e7c899bcbed",
+          "independentReview": {
+            "status": "APPROVE",
+            "path": "docs/evidence/aut-03/cohort-3-pilot-collection-correction-review.md",
+            "sha256": "37aff8c15616f5c7dc4910c16dc28dfc101e59377ee3d505def283d51c9cbf72",
+            "reviewedTrialEntrySha256": "ccfbe3b9ba591b111a410278f59dcb6645b015c07655dafdf480aecb73ee8e99"
+          }
+        },
+        {
+          "status": "APPROVED",
+          "taskId": "31534413-7377-4faf-9479-147079092c80",
+          "reportPath": "docs/evidence/aut-03/cohort-3-pilot-route-flag-correction.md",
+          "reportSha256": "ff2fa08f28bd913f98ba94f11585cdf5b6be6b2a4ce21d4fddb7b65a29de0871",
+          "preCorrectionRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/pilot-price-f2/collection-correction/run-before-route-flag-correction.json",
+          "preCorrectionRunSha256": "af4dc282feef7a4ce166f0cdab48ed1dcbe288fe631d191f74002e7c899bcbed",
+          "correctedRunSha256": "7b58c05c41ccc53c5727967a4dacd1ec284195f7ef39d2efba9f7e0e6609c508",
+          "reason": "The standalone worker route flag contradicted the attested empty worker-role map; corrected from runtime evidence without rerunning the task.",
+          "independentReview": {
+            "status": "APPROVE",
+            "path": "docs/evidence/aut-03/cohort-3-skill-off-baseline-review.md",
+            "sha256": "4dc9c4df50d0aa7d0c5cc19f58242444473e83201fdeb7e26701712ac25f3a17",
+            "reviewedTrialEntrySha256": "90479084dc35866e9e34078a4bd9e377edff5f2ad728e515898bf8368b69e316"
+          }
+        },
+        {
+          "status": "APPROVED",
+          "arm": "skill-on",
+          "reportPath": "docs/evidence/aut-03/cohort-3-skill-on-collection-correction.md",
+          "reportSha256": "7df506a6eafe3c736841e59781aabbf417cc2ad91a03af9aa88eefeff4b1889e",
+          "runs": [
+            {
+              "caseId": "pilot-price-f2",
+              "taskId": "5320ac49-ae98-45b9-90ee-dcfacb4b3d8d",
+              "initialRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/collection-correction/run-initial.json",
+              "initialRunSha256": "7578975ac742a1c96bbce9199b51a7c3ac8a1555cab941d91d2b6fb7e6d86b72",
+              "correctedRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/run.json",
+              "correctedRunSha256": "8296711e08ba896dcf4c8aafe690a6ae107c35653dd39c8ac8edca2957aeb188",
+              "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+              "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185",
+              "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/preflight.json",
+              "preflightSha256": "6cbfc07d697839ee59b37ccfbf85898ae1a7deb01a86a3fd7864c87441ba9e53",
+              "attestationPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/pilot-price-f2/attestation.json",
+              "attestationSha256": "6c359fb4552df9470d8be0b1e4792adf0017a26bb58db1cc778c2b3d88139fa5"
+            },
+            {
+              "caseId": "bounded-dependencies",
+              "taskId": "b637d77a-48d6-457c-8c7f-30fb2a4ea794",
+              "initialRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/collection-correction/run-initial.json",
+              "initialRunSha256": "d9f176039e313d9c18d6f15ca09251731f90ef43df3dc4be5b8684ee0cd7fc54",
+              "correctedRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/run.json",
+              "correctedRunSha256": "2cd01bb80fe9620730702f195e3bc4e8127b4ce6004a7629bee0c776e222f45b",
+              "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+              "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3",
+              "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/preflight.json",
+              "preflightSha256": "3896b682e77052d762cc1c6516c59ffbc45a6224a3ac1fc3a631006019f07c2c",
+              "attestationPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/bounded-dependencies/attestation.json",
+              "attestationSha256": "de92fc59c996bd35b269ad8e8a69dbe8163b127aa23f292dbf1d36341b9b988b"
+            },
+            {
+              "caseId": "owner-decision-required",
+              "taskId": "5a4c8462-64d7-46e9-9f04-e8654edaf46c",
+              "initialRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/collection-correction/run-initial.json",
+              "initialRunSha256": "2ffbec07c74464aac346e3ad1e9d757f06a13b9512ec03ac3fe5d4f6fb8b54a7",
+              "correctedRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/run.json",
+              "correctedRunSha256": "ed903af6141c10092f63d970ed43136be1ca0140a04a415f95f5fb14f4a488d1",
+              "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+              "promptSha256": "3b461e267dcf3258cc86d0eca5a9ed760b0e0fdcb4991642343376880495c514",
+              "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/preflight.json",
+              "preflightSha256": "79c5cd69e710fa32a72afb0bc06502d81eeb550aba71b490e329e61660ae8266",
+              "attestationPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required/attestation.json",
+              "attestationSha256": "6d7380443a974c5e119f8c5ad446a01c2e5ded02002a12f0f491a0919f5f5489"
+            },
+            {
+              "caseId": "contradictory-source-blocker",
+              "taskId": "2888f97e-cf8c-461a-a5a2-ee1b58477840",
+              "initialRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/collection-correction/run-initial.json",
+              "initialRunSha256": "a17a8955a80bb6722226cacab58f49430d8aad945325101a3f3e0d385063ed87",
+              "correctedRunPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/run.json",
+              "correctedRunSha256": "51da09f67c126ea5d8c8c46a76ef6967656586563716152b3ad4bfbf9d636f4c",
+              "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+              "promptSha256": "d01368d9d2f97074842cd5c16b969f40fdd0f4a1f5d3fa319e00ceb9d5fd7940",
+              "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/preflight.json",
+              "preflightSha256": "5bc84ed222731ac0e51126e68093ab4edcb486765e20ab124a97a392241859d5",
+              "attestationPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/contradictory-source-blocker/attestation.json",
+              "attestationSha256": "c9877c236937421700e2538344e9b935ac2fe0f6f8296eeedc85d3529ee38651"
+            }
+          ],
+          "reason": "Prompt and settings pins were present in hashed preflight and attestation evidence but omitted from corrected run summaries; values were restored from those sources without rerunning tasks.",
+          "independentReview": {
+            "status": "APPROVE",
+            "path": "docs/evidence/aut-03/cohort-3-skill-on-baseline-review.md",
+            "sha256": "69d0a9727d51abc76c484fd3995860b11aa7b7716fc892ff4e8192aa48057bd3",
+            "reviewedTrialEntrySha256": "475f009eda30a33061df7394c4d25fad8f868cf0fa46365568f5fa4c03ae3339"
+          }
+        }
+      ],
+      "baselineFreeze": {
+        "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-off-baseline-freeze.json",
+        "sha256": "2f73a1212e6c3ff882e1dc36037b0605f575759c25fbbac014c66975fa55a72f",
+        "frozenAt": "2026-10-17T08:49:20Z",
+        "caseCount": 4,
+        "preFreezeTrialEntrySha256": "880bda20a3828bb775db56eb1160567769614517c53a1fb7e6110ba3b3ae9614",
+        "status": "APPROVED",
+        "independentReview": {
+          "status": "APPROVE",
+          "path": "docs/evidence/aut-03/cohort-3-skill-off-baseline-review.md",
+          "sha256": "4dc9c4df50d0aa7d0c5cc19f58242444473e83201fdeb7e26701712ac25f3a17",
+          "reviewedTrialEntrySha256": "90479084dc35866e9e34078a4bd9e377edff5f2ad728e515898bf8368b69e316"
+        }
+      },
+      "skillOnFreeze": {
+        "path": "docs/evidence/aut-03/live-trial/cohort-3/skill-on-baseline-freeze.json",
+        "sha256": "30a2b74470a4bd2da77a68c874070ce61221927f3fd73adcde48c6f60c365e08",
+        "frozenAt": "2026-10-17T09:00:53Z",
+        "caseCount": 4,
+        "preFreezeTrialEntrySha256": "465b733f776b8b8680117140398972bb5940279f1eb7b228b16506c0c099370f",
+        "status": "APPROVED",
+        "independentReview": {
+          "status": "APPROVE",
+          "path": "docs/evidence/aut-03/cohort-3-skill-on-baseline-review.md",
+          "sha256": "69d0a9727d51abc76c484fd3995860b11aa7b7716fc892ff4e8192aa48057bd3",
+          "reviewedTrialEntrySha256": "475f009eda30a33061df7394c4d25fad8f868cf0fa46365568f5fa4c03ae3339"
+        }
+      },
+      "scoring": {
+        "status": "complete_unblinded_after_independent_blind_scoring",
+        "packet": {
+          "path": "docs/evidence/aut-03/blind-scoring-packet.json",
+          "sha256": "ac60b78dcb31c8738aed804f2b3e8d465de9d6a4a2cf072a0ea987e069b4d028"
+        },
+        "scorerReview": {
+          "path": "docs/evidence/aut-03/cohort-3-blind-score-review.md",
+          "sha256": "1e8287a676c687e95e1d0e40bd823afe4082f90af5fcc8c9a06313ea08e18e76"
+        },
+        "unblindingKey": {
+          "path": "docs/evidence/aut-03/blind-scoring-key.json",
+          "sha256": "f34748748deb75d4e5ac9d4f647c7097a6be6010a6d9a7eb4419609c6d239837"
+        },
+        "summary": {
+          "path": "docs/evidence/aut-03/cohort-3-blind-score-summary.json",
+          "sha256": "a4032f026a2e8de95dd8bbd11ef92c9d9349b180eb86cb28ab6182238171db1b"
+        },
+        "aggregateDifferencePctPoints": 0,
+        "improvedCaseCount": 0,
+        "qualityThresholdsPassed": false,
+        "hardGate": {
+          "status": "failed",
+          "caseId": "bounded-dependencies",
+          "finding": "Skill-on T1 depends on T0; the frozen oracle requires T0 independent."
+        }
+      },
+      "resourceReview": {
+        "status": "resource_thresholds_pass_with_one_historical_quota_snapshot_unverified",
+        "review": {
+          "path": "docs/evidence/aut-03/cohort-3-runtime-resource-review.md",
+          "sha256": "96c99712f1a356ecb67a01519836274cb636a50ae35108b32c3a0fb1e0ce424e"
+        },
+        "frozenArtifactsChecked": 116,
+        "hashOrSizeMismatches": 0,
+        "ratios": {
+          "medianNonCachedInput": 1.0005826,
+          "maxNonCachedInput": 1.0005885,
+          "medianTotalTokens": 0.9967645,
+          "maxTotalTokens": 1.0035392,
+          "medianElapsed": 0.9417933,
+          "maxElapsed": 1.0789744
+        },
+        "monetaryCost": null,
+        "postTaskQuotaSnapshotsObserved": 7,
+        "postTaskQuotaSnapshotsMissing": 1,
+        "missingSnapshotCase": "skill-off/bounded-dependencies"
+      },
+      "s08": {
+        "status": "both_arms_blocked",
+        "manifest": {
+          "path": "docs/evidence/aut-03/s08/manifest.json",
+          "sha256": "d2e491cd726f6aa16cf8a0e33f3cad3c5a78620a844eb4a61bf5c053e618ec7b"
+        },
+        "qualification": {
+          "path": "docs/evidence/aut-03/s08/qualification.json",
+          "sha256": "09e3e7b4a4fd0732402610f49326445c18a878064bd01fe7c01415dd27b8c128"
+        }
+      },
+      "s09": {
+        "status": "accepted_negative_controls_reused",
+        "path": "docs/evidence/aut-01/qualification-probe-results.jsonl",
+        "sha256": "ee76389b8af152b2d68c8536104f85a383005ddef9432ead741b90afcdbfa85a",
+        "lines": 22
+      },
+      "gateRemainsClosed": true,
+      "finalAudit": {
+        "status": "APPROVE",
+        "path": "docs/evidence/aut-03/cohort-3-final-decision-audit.md",
+        "sha256": "2dae4073afe239712eb1d384d7c773053f455566e51bd1a29ea951eec246c8e2",
+        "reviewedAt": "2026-10-17 09:14 UTC",
+        "reviewedTrialEntrySha256": "f137b4e86061cb625cbc3729628ef09d65973f6a099e49f9df3b335d9cfaea3b",
+        "reviewedDecisionSha256": "75ae06b8355e99b1c1bb38a68db983499931ab97ea84601667f3918860b7f590"
+      }
+    },
+    "currentTaskPreSubmission": {
+      "caseId": "contradictory-source-blocker",
+      "arm": "skill-off",
+      "preflightPath": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/contradictory-source-blocker/preflight.json",
+      "preflightSha256": "478c414eec638a2e75c89f370e4db3927f71de5359ab92586bcf3044cd2b8290",
+      "taskCreated": false,
+      "modelTurns": 0
+    }
+  },
+  "cohortDeviation": {
+    "caseId": "pilot-price-f2",
+    "arm": "skill-off",
+    "taskId": "6624a505-289c-4357-b4e7-8e3e6e89810f",
+    "evidence": "docs/evidence/aut-03/live-trial/skill-off/pilot-price-f2/run.json",
+    "trigger": "The lead dispatched an Explorer worker despite the planning-only protocol. The worker completed one read-only task and ran two shell commands.",
+    "reportedFilesChanged": [],
+    "disposition": "Invalid attempt, excluded from the baseline and all scoring. The dedicated trial server and client were stopped. The cohort must restart from a new skill-off pilot-price-f2 task after the revised technical controls are independently approved."
+  },
+  "cohortDeviations": [
+    {
+      "cohortId": "revised-cohort-1",
+      "caseId": "bounded-dependencies",
+      "arm": "skill-off",
+      "taskId": "277d5635-1e0b-4bd2-a42c-c38c5ec618db",
+      "evidence": "docs/evidence/aut-03/live-trial/revised-cohort/skill-off/bounded-dependencies/run.json",
+      "trigger": "Four completed lead_turn usage rows were recorded against the frozen maximum of three lead model requests.",
+      "reportedFilesChanged": [],
+      "workerDispatches": 0,
+      "permissionEvents": 0,
+      "workspaceEmptyAndReadOnly": true,
+      "disposition": "Invalid; excluded from scoring. The earlier pilot-price-f2 result from this cohort is also excluded. Stop the cohort and restart from a fresh skill-off pilot-price-f2 after enforcing and reviewing the turn cap.",
+      "stopReport": "docs/evidence/aut-03/cohort-stop-report.md",
+      "stopReportSha256": "7cd9137a90eb867619bb89d9e672ac659842bad929197d381e4c3904cf51fdd7",
+      "leadTurnsObserved": 4,
+      "declaredMaxLeadTurns": 3,
+      "totalTokens": 107421
+    }
+  ],
+  "finalDecision": {
+    "status": "benefit_not_established_default_off",
+    "path": "docs/evidence/aut-03/cohort-3-final-decision.md",
+    "sha256": "75ae06b8355e99b1c1bb38a68db983499931ab97ea84601667f3918860b7f590",
+    "optInAuthorized": false,
+    "rolloutAuthorized": false,
+    "independentAudit": {
+      "status": "APPROVE",
+      "path": "docs/evidence/aut-03/cohort-3-final-decision-audit.md",
+      "sha256": "2dae4073afe239712eb1d384d7c773053f455566e51bd1a29ea951eec246c8e2",
+      "nonBlockingLimitation": "One skill-off bounded-dependencies post-task quota snapshot is missing and remains unverified."
+    }
+  }
+}

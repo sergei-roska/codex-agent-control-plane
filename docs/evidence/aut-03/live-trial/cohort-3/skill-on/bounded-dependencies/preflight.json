@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "aut-03-preflight/v1",
+  "phase": "before_task_submission",
+  "checkedAt": "2026-10-17T08:54:55.071Z",
+  "caseId": "bounded-dependencies",
+  "arm": "skill-on",
+  "preflightGate": {
+    "path": "preflight-gate.json",
+    "sha256": "df05a6d717a6ddd3056d33389646e1db3e55130bd0d9bcab2e85803e93079f50",
+    "checkedAt": "2026-10-17T08:54:41.867Z"
+  },
+  "quotaSnapshot": {
+    "checkedAt": "2026-10-17T08:54:41.834Z",
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 80,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 91,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "isolationSnapshot": {
+    "launcherPid": 7855,
+    "launcherPort": 8080,
+    "protectedProjectId": "f69dd0e80b",
+    "protectedProjectPort": 3002,
+    "protectedProjectPid": 11495,
+    "protectedProjectUntouched": true,
+    "trialPort": 3112,
+    "trialPortFree": false,
+    "trialServerPid": 82500,
+    "trialServerReady": true
+  },
+  "pinValidation": {
+    "branch": "main",
+    "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+    "sourcePinsMatched": 141,
+    "binaryPinsMatched": 2,
+    "helperPinsMatched": 2,
+    "promptInputsMatched": 16,
+    "promptsMatched": 4,
+    "acceptedEvidenceMatched": 2,
+    "mismatches": 0,
+    "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+    "selectedPromptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3",
+    "trialServerStartupAssertionsPassed": true
+  },
+  "runtimeAttestation": {
+    "path": "attestation.json",
+    "sha256": "a62a15eac03d1bf73580c6cf75ac23fdf8398817967cb918162d5e73ffdd0e3f",
+    "arm": "skill-on",
+    "leadSkillEnabled": true,
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "medium",
+    "account": {
+      "type": "chatgpt",
+      "planType": "team"
+    },
+    "accountSwitchingEnabled": false,
+    "workerRolesRemoved": true,
+    "leadTurnStartsLimit": 8
+  },
+  "serverLog": {
+    "path": "server.log",
+    "sha256": "09f389bcd93512664b8c1fb3659c38808da82c63cba77150e04739ce994b60bb"
+  },
+  "workspace": {
+    "path": "/tmp/aut03-final-trial/revised-cohort/cohort-3/skill-on/bounded-dependencies/workspace",
+    "empty": true,
+    "readOnly": true,
+    "mode": "555"
+  },
+  "taskDatabase": {
+    "path": "/tmp/aut03-final-trial/revised-cohort/cohort-3/state/skill-on-bounded-dependencies.sqlite",
+    "tablesBeforeTask": [
+      "a2a_migrations_lock",
+      "a2a_tasks_migrations",
+      "dispatch_journal",
+      "evidence",
+      "live_activity",
+      "session_threads",
+      "staging_events",
+      "tasks",
+      "usage_ledger",
+      "writer_executions",
+      "writer_fences",
+      "writer_lanes"
+    ],
+    "taskRows": 0,
+    "dispatchRows": 0,
+    "writerRows": 0,
+    "usageRows": 0
+  },
+  "taskSubmission": {
+    "taskCreated": false,
+    "modelTurns": 0
+  },
+  "accountQuotaExhaustionReported": false
+}

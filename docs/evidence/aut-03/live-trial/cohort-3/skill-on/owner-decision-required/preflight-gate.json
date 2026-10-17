@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "aut-03-preflight/v1",
+  "phase": "before_gate_open",
+  "checkedAt": "2026-10-17T08:56:26.762Z",
+  "caseId": "owner-decision-required",
+  "arm": "skill-on",
+  "entrySha256": "eee700fee5674c6f3f64ea2d5f19aefa534bb8d92b15af7dcbf086bc428aec6d",
+  "quotaSnapshot": {
+    "checkedAt": "2026-10-17T08:56:26.725Z",
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 82,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 91,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "isolationSnapshot": {
+    "launcherPid": 7855,
+    "launcherPort": 8080,
+    "launcherAlive": true,
+    "protectedProjectId": "f69dd0e80b",
+    "protectedProjectPort": 3002,
+    "protectedProjectPid": 11495,
+    "protectedProjectUntouched": true,
+    "trialPort": 3112,
+    "trialPortFree": true,
+    "trialServerStarted": false
+  },
+  "pinValidation": {
+    "branch": "main",
+    "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+    "sourcePinsMatched": 141,
+    "binaryPinsMatched": 2,
+    "helperPinsMatched": 2,
+    "promptInputsMatched": 16,
+    "promptsMatched": 4,
+    "acceptedEvidenceMatched": 2,
+    "mismatches": 0,
+    "settingsSha256": "5d315d1f1053e2429f012e5aa587672276823cb6859b90a00d36dd41d5d573f3",
+    "selectedPromptSha256": "3b461e267dcf3258cc86d0eca5a9ed760b0e0fdcb4991642343376880495c514"
+  },
+  "workspace": {
+    "path": "/tmp/aut03-final-trial/revised-cohort/cohort-3/skill-on/owner-decision-required/workspace",
+    "empty": true,
+    "readOnly": true,
+    "mode": "555"
+  },
+  "taskIsolation": {
+    "stateFileAbsent": true,
+    "tokenFileMode": "600",
+    "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-on/owner-decision-required",
+    "taskEvidenceAbsent": true
+  },
+  "gate": {
+    "baselineCaptureAllowed": false,
+    "trialGateOpened": false
+  }
+}

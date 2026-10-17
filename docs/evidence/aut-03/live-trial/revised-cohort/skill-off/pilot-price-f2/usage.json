@@ -1,0 +1,27 @@
+{
+  "rows": [
+    {
+      "kind": "lead_turn",
+      "runId": "e2a8109c-8a94-40ba-8030-2616f308e534",
+      "role": "coordinator",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "startedAt": "2026-10-17T05:37:04.080Z",
+      "elapsedMs": 31525,
+      "turns": 1,
+      "modelRequests": null,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 22733,
+        "cachedInputTokens": 0,
+        "outputTokens": 1841,
+        "reasoningOutputTokens": 463,
+        "totalTokens": 24574
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "permissionEventCount": 0
+    }
+  ],
+  "dispatchJournalRows": 0
+}

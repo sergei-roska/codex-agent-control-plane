@@ -1,0 +1,219 @@
+{
+  "schemaVersion": "aut-03-baseline-freeze/v1",
+  "cohortId": "cohort-2",
+  "arm": "skill-off",
+  "frozenAt": "2026-10-17T08:07:20Z",
+  "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+  "declarationSha256": "f16e036c08bce2b799bf81c27a932488176e5b46ffb176ee521410c814d882c6",
+  "promptManifestSha256": "b8cc970a40f6d8dbacd684ca284325e459d8010839e68ee535354f114052f3be",
+  "runtimePinFileSha256": "1f9baadb939dc4612ffb6af594e79ee51a2c6920cd79a06ed5af5006be3d029f",
+  "caseOrder": [
+    "pilot-price-f2",
+    "bounded-dependencies",
+    "owner-decision-required",
+    "contradictory-source-blocker"
+  ],
+  "cases": [
+    {
+      "caseId": "pilot-price-f2",
+      "taskId": "98208901-4e8e-4290-bb31-1c316d8b3a76",
+      "leadTurns": 1,
+      "totalTokens": 24203,
+      "elapsedMs": 27997,
+      "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185",
+      "artifacts": {
+        "run.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/pilot-price-f2/run.json",
+          "sha256": "bab5767967386c01d513e11d97d40020accc17d60c50efcbbdf82fcb44bd2442"
+        },
+        "output.txt": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/pilot-price-f2/output.txt",
+          "sha256": "e3feee2e17cc9a47e00183e84b18d707fb5f029fd9cd93f7ea5e2b8eedbcf0a0"
+        },
+        "task.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/pilot-price-f2/task.json",
+          "sha256": "8547f3082f8642e698142157b111d7ea18ac81c0936e8c275afce051c5d8cf52"
+        },
+        "attestation.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/pilot-price-f2/attestation.json",
+          "sha256": "207c5e344aef94f51d15c5f86e4612deb27e60ee0f61ecdbe598526d4fe3f76b"
+        },
+        "checkpoint.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/pilot-price-f2/checkpoint.json",
+          "sha256": "002100df172c7e59af18b14e93881227d172d6bc5fa162873e2b1058defc7e68"
+        },
+        "usage.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/pilot-price-f2/usage.json",
+          "sha256": "2518db745c0966b23fd48ffa5e93f29aec9878b72753d6bc79d360e03319d19e"
+        },
+        "controls.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/pilot-price-f2/controls.json",
+          "sha256": "e0480f4553732a79cf06073809c29b3376c8a8300140984f8e4a9dcb4ec263d0"
+        },
+        "preflight.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/pilot-price-f2/preflight.json",
+          "sha256": "2783fafd2e1ba0508b19495f9e98b3122a82696dc40939889f2fc6d949d4de92"
+        },
+        "client.log": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/pilot-price-f2/client.log",
+          "sha256": "d9ddfec282a6eafa455e61d67319d12a555f27a595a15ab0ee7bf5817a47dc6f"
+        },
+        "client-exit.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/pilot-price-f2/client-exit.json",
+          "sha256": "a8fa957a2e713b82b79bd93c9d6dea9d82dbd9cbeb12216ee067299adae0744a"
+        }
+      }
+    },
+    {
+      "caseId": "bounded-dependencies",
+      "taskId": "6edf812f-ee9d-49c9-a651-82e34bcbe347",
+      "leadTurns": 1,
+      "totalTokens": 21249,
+      "elapsedMs": 44327,
+      "promptSha256": "2b63683e83ffb7a17381ff4d432aa6d871e2036df76e4d10965a8d193c09bdc3",
+      "artifacts": {
+        "run.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/bounded-dependencies/run.json",
+          "sha256": "e314806cee75f8eb36ff905a2b25bd08bf512127d20ebe0d7fa1f7496e470b65"
+        },
+        "output.txt": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/bounded-dependencies/output.txt",
+          "sha256": "0922a90f7d62695eedfd40c2f462fa6cbff7414c215cec2c0c957e5944b8db6c"
+        },
+        "task.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/bounded-dependencies/task.json",
+          "sha256": "c6fa6812bb0752db33581384a09f81a802110ea060cf87ae2dfee893bfb41f3b"
+        },
+        "attestation.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/bounded-dependencies/attestation.json",
+          "sha256": "f71ff32522be0157bea28b28653be0ec5b5697654749ed527a03f0c675e82727"
+        },
+        "checkpoint.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/bounded-dependencies/checkpoint.json",
+          "sha256": "ff568edf367b101b46df3b627f46de78bd7cdc7c0f783060e146216185efeea3"
+        },
+        "usage.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/bounded-dependencies/usage.json",
+          "sha256": "c36e3ed127d017c73566b6f15eb7b207b763181760723b62f438e9286d4a1488"
+        },
+        "controls.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/bounded-dependencies/controls.json",
+          "sha256": "21747f88324a9bd4668ed2c35f4c2dbbe1030688a3077e3dcbbe8e4a21a1434e"
+        },
+        "preflight.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/bounded-dependencies/preflight.json",
+          "sha256": "a034e109d3ca4c86594c56a075f9ac3499c2df7df7e01c0727ed4910a8460839"
+        },
+        "client.log": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/bounded-dependencies/client.log",
+          "sha256": "9ec7de052a5ed5adedb24f559f2ebce662424608cd82a3b602abe300b4ad71dc"
+        },
+        "client-exit.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/bounded-dependencies/client-exit.json",
+          "sha256": "bc0f368f8bff952f34d972864c03e2cc56d73e57db1030c6e548ded1f82e1694"
+        }
+      }
+    },
+    {
+      "caseId": "owner-decision-required",
+      "taskId": "0f6a3775-c29c-48e5-b9c9-6a1ebbaf8d68",
+      "leadTurns": 1,
+      "totalTokens": 20713,
+      "elapsedMs": 32621,
+      "promptSha256": "3b461e267dcf3258cc86d0eca5a9ed760b0e0fdcb4991642343376880495c514",
+      "artifacts": {
+        "run.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/owner-decision-required/run.json",
+          "sha256": "4407ee535563ea980e7ffff9b2c9b698e698151e9478421815b6107f5cb8df1a"
+        },
+        "output.txt": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/owner-decision-required/output.txt",
+          "sha256": "94ba7662d400c122331753879247c7068721dbcbd85159297f8e540c53d18898"
+        },
+        "task.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/owner-decision-required/task.json",
+          "sha256": "e09a6f1ae44bb340678fe5ea94cd4368a119ea1f18245959b5ff9e35d224750b"
+        },
+        "attestation.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/owner-decision-required/attestation.json",
+          "sha256": "0ee97d5cc923d52916841aee259806990ea3287659e9a774fc43aabfcba76e43"
+        },
+        "checkpoint.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/owner-decision-required/checkpoint.json",
+          "sha256": "2fdba7bec4b0519f7a998c78c830eda55f253cad7bf510eff3ae86c6916f0ee6"
+        },
+        "usage.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/owner-decision-required/usage.json",
+          "sha256": "3d07f5fbb850801fda300afa142b52ca01eebf2df0ffe0b2d4d1da9d4609ff35"
+        },
+        "controls.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/owner-decision-required/controls.json",
+          "sha256": "efb8df30deab03e840cddd15296414e82f9160ffcf8a1a9b24501fa4bf073644"
+        },
+        "preflight.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/owner-decision-required/preflight.json",
+          "sha256": "bcbf45311ee7957a3f3aabd2f199c5a83d679fbcc3cee4ef068cbacb7b7a63f5"
+        },
+        "client.log": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/owner-decision-required/client.log",
+          "sha256": "f44a739aee5125de6c6e88cf815f53260d7eb13fd2023f4d2517a32e320e4d41"
+        },
+        "client-exit.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/owner-decision-required/client-exit.json",
+          "sha256": "d689bb90650eaffe82194a076968894546c6983f7cf97d1b495e81bbebd3b367"
+        }
+      }
+    },
+    {
+      "caseId": "contradictory-source-blocker",
+      "taskId": "2837b007-62ed-4d02-92a2-bb42fd4aab04",
+      "leadTurns": 1,
+      "totalTokens": 20966,
+      "elapsedMs": 39962,
+      "promptSha256": "d01368d9d2f97074842cd5c16b969f40fdd0f4a1f5d3fa319e00ceb9d5fd7940",
+      "artifacts": {
+        "run.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/contradictory-source-blocker/run.json",
+          "sha256": "17d5aacbe500415c8646de2a917c3ba079df448a4086b2b95a5f420a75fa36d3"
+        },
+        "output.txt": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/contradictory-source-blocker/output.txt",
+          "sha256": "c87a1ef861b8b8602c6cf2be577adcb76c4832b9533c15f8ee01c583db73c887"
+        },
+        "task.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/contradictory-source-blocker/task.json",
+          "sha256": "17f15633ae0e4d42bb0a0d86de98e07bf2b86fac96e5742d7bde0386f834444a"
+        },
+        "attestation.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/contradictory-source-blocker/attestation.json",
+          "sha256": "85d7f73111553a71f8cf8219a3fd2acbff6d4279d5b5b764fba9dccd1150bc20"
+        },
+        "checkpoint.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/contradictory-source-blocker/checkpoint.json",
+          "sha256": "aa03f744cf996722565fd2c1599f9921d48f8dc6f807fccc32f0c548c575c591"
+        },
+        "usage.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/contradictory-source-blocker/usage.json",
+          "sha256": "523f1560b3dea1742621e74f30fbab9f7c81528c5b79aaeff851afde1512b099"
+        },
+        "controls.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/contradictory-source-blocker/controls.json",
+          "sha256": "cdb476d5bb72c0316946ca1ec889c2c5a32c84581ee5d5ce12b6b7cc7faa5053"
+        },
+        "preflight.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/contradictory-source-blocker/preflight.json",
+          "sha256": "4a737e971fd0057a52a668ef73f95c6fa6b935ed89fe0895e7c99f6b29fdd284"
+        },
+        "client.log": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/contradictory-source-blocker/client.log",
+          "sha256": "2ab48ad4172d543ad1e4647efdc54883102d8e167b4290ed3e6d0d1b4ef88ef0"
+        },
+        "client-exit.json": {
+          "path": "docs/evidence/aut-03/live-trial/cohort-2/skill-off/contradictory-source-blocker/client-exit.json",
+          "sha256": "099a39f6874acbd1203447cabedd724f50cf158e87069dbc789a70fb3324d3f5"
+        }
+      }
+    }
+  ],
+  "disposition": "All four valid skill-off outputs and their run, control, quota, prompt, task, checkpoint, and usage evidence are frozen by hash before the skill-on arm."
+}

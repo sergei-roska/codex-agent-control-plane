@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "aut-03-preflight/v1",
+  "phase": "before_gate_open",
+  "checkedAt": "2026-10-17T08:37:29.808Z",
+  "caseId": "owner-decision-required",
+  "arm": "skill-off",
+  "entrySha256": "c37ad2be2ff5fd32705d64f4675f0a7aed4a3f85a39d0b90428461b4a24f4f7f",
+  "review": {
+    "status": "APPROVE",
+    "path": "docs/evidence/aut-03/cohort-3-collection-correction-review.md",
+    "sha256": "0377066a8d9e3aa48ec954ad885ea6ffa4c5db0d4516fa626d160a1f3f93acfc"
+  },
+  "quotaSnapshot": {
+    "checkedAt": "2026-10-17T08:37:29.777Z",
+    "source": "launcher GET /api/accounts?force=1",
+    "activeAccount": "system",
+    "planType": "team",
+    "autoSwitch": false,
+    "primaryUsedPercent": 67,
+    "primaryResetsAt": 1792230658,
+    "weeklyUsedPercent": 89,
+    "weeklyResetsAt": 1792652342,
+    "providerError": null,
+    "percentagesAreStopConditions": false
+  },
+  "isolationSnapshot": {
+    "launcherPid": 7855,
+    "launcherPort": 8080,
+    "launcherAlive": true,
+    "protectedProjectId": "f69dd0e80b",
+    "protectedProjectPort": 3002,
+    "protectedProjectPid": 11495,
+    "protectedProjectUntouched": true,
+    "trialPort": 3112,
+    "trialPortFree": true,
+    "trialServerStarted": false
+  },
+  "pinValidation": {
+    "branch": "main",
+    "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+    "sourcePinsMatched": 141,
+    "binaryPinsMatched": 2,
+    "helperPinsMatched": 2,
+    "promptInputsMatched": 16,
+    "promptsMatched": 4,
+    "acceptedEvidenceMatched": 2,
+    "mismatches": 0,
+    "settingsSha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb",
+    "selectedPromptSha256": "3b461e267dcf3258cc86d0eca5a9ed760b0e0fdcb4991642343376880495c514"
+  },
+  "workspace": {
+    "path": "/tmp/aut03-final-trial/revised-cohort/cohort-3/skill-off/owner-decision-required/workspace",
+    "empty": true,
+    "readOnly": true,
+    "mode": "555"
+  },
+  "taskIsolation": {
+    "stateFileAbsent": true,
+    "tokenFileMode": "600",
+    "evidenceDirectory": "docs/evidence/aut-03/live-trial/cohort-3/skill-off/owner-decision-required",
+    "taskEvidenceAbsent": true
+  },
+  "gate": {
+    "baselineCaptureAllowed": false,
+    "trialGateOpened": false
+  }
+}

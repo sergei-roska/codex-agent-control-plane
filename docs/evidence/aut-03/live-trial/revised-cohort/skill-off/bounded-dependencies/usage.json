@@ -1,0 +1,93 @@
+{
+  "rows": [
+    {
+      "kind": "lead_turn",
+      "runId": "277d5635-1e0b-4bd2-a42c-c38c5ec618db",
+      "role": "coordinator",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "startedAt": "2026-10-17T05:39:48.202Z",
+      "elapsedMs": 40415,
+      "turns": 1,
+      "modelRequests": null,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 18955,
+        "cachedInputTokens": 0,
+        "outputTokens": 2757,
+        "reasoningOutputTokens": 155,
+        "totalTokens": 21712
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "permissionEventCount": 0
+    },
+    {
+      "kind": "lead_turn",
+      "runId": "277d5635-1e0b-4bd2-a42c-c38c5ec618db",
+      "role": "coordinator",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "startedAt": "2026-10-17T05:40:28.628Z",
+      "elapsedMs": 30019,
+      "turns": 1,
+      "modelRequests": null,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 22456,
+        "cachedInputTokens": 18816,
+        "outputTokens": 2516,
+        "reasoningOutputTokens": 60,
+        "totalTokens": 24972
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "permissionEventCount": 0
+    },
+    {
+      "kind": "lead_turn",
+      "runId": "277d5635-1e0b-4bd2-a42c-c38c5ec618db",
+      "role": "coordinator",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "startedAt": "2026-10-17T05:40:58.780Z",
+      "elapsedMs": 29879,
+      "turns": 1,
+      "modelRequests": null,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 25825,
+        "cachedInputTokens": 22272,
+        "outputTokens": 2485,
+        "reasoningOutputTokens": 65,
+        "totalTokens": 28310
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "permissionEventCount": 0
+    },
+    {
+      "kind": "lead_turn",
+      "runId": "277d5635-1e0b-4bd2-a42c-c38c5ec618db",
+      "role": "coordinator",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "startedAt": "2026-10-17T05:41:28.672Z",
+      "elapsedMs": 28851,
+      "turns": 1,
+      "modelRequests": null,
+      "retries": null,
+      "tokens": {
+        "inputTokens": 29884,
+        "cachedInputTokens": 25600,
+        "outputTokens": 2543,
+        "reasoningOutputTokens": 46,
+        "totalTokens": 32427
+      },
+      "tokenSource": "total_delta",
+      "outcome": "completed",
+      "permissionEventCount": 0
+    }
+  ],
+  "dispatchJournalRows": 0
+}

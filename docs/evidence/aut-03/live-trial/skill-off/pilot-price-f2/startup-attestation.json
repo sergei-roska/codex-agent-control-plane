@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "aut-03-arm-attestation/v1",
+  "arm": "skill-off",
+  "aut03LeadSkillEnabled": false,
+  "uuidAllowlistSize": 0,
+  "leadProfileSha256": "2cee9ba6dac56455ac5a7da5064415042556c0dbfd3503ac7232243c155ffddc",
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "medium",
+  "leadTools": {
+    "mcpServers": [],
+    "skills": false
+  },
+  "skill": {
+    "id": "aut-03-lead-decomposition-v1",
+    "sha256": "e0f10756e0486cdb827519edd8adfef866d84be449d6a10b1320412648e650ba",
+    "audience": "lead"
+  },
+  "settingsSha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb",
+  "codexPath": "/home/sr/.codex/packages/standalone/releases/0.163.0-x86_64-unknown-linux-musl/bin/codex",
+  "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+  "attestedAt": "2026-10-17T05:15:21.182Z",
+  "pid": 24163
+}

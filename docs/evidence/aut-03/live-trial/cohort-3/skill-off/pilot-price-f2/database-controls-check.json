@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "aut-03-readonly-db-control-check/v1",
+  "checkedAt": "2026-10-17T08:45:06.882Z",
+  "taskId": "31534413-7377-4faf-9479-147079092c80",
+  "database": {
+    "path": "/tmp/aut03-final-trial/revised-cohort/cohort-3/state/skill-off-pilot-price-f2.sqlite",
+    "filesSha256": {
+      "/tmp/aut03-final-trial/revised-cohort/cohort-3/state/skill-off-pilot-price-f2.sqlite": "ab1cd1427893efd0cbab2a5a9eb2451275a27ff71142964d12c1582ceb315fa2",
+      "/tmp/aut03-final-trial/revised-cohort/cohort-3/state/skill-off-pilot-price-f2.sqlite-wal": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/tmp/aut03-final-trial/revised-cohort/cohort-3/state/skill-off-pilot-price-f2.sqlite-shm": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
+    },
+    "mode": "readonly",
+    "tables": [
+      "a2a_tasks_migrations",
+      "a2a_migrations_lock",
+      "tasks",
+      "dispatch_journal",
+      "writer_executions",
+      "writer_fences",
+      "writer_lanes",
+      "usage_ledger",
+      "staging_events",
+      "evidence",
+      "live_activity",
+      "session_threads",
+      "checkpoints",
+      "writes"
+    ]
+  },
+  "queries": {
+    "task": "SELECT id,status_state,status_last_updated FROM tasks WHERE id=?",
+    "dispatch": "Count dispatch_journal rows by run_id",
+    "writers": "Count writer_executions rows by task_id or context_id",
+    "activity": "Read role/phase/commands/file_changes from live_activity by run_id",
+    "permissionEvents": "Count parsed permission_events_json entries in usage_ledger by run_id"
+  },
+  "observed": {
+    "task": {
+      "id": "31534413-7377-4faf-9479-147079092c80",
+      "status_state": "TASK_STATE_COMPLETED",
+      "status_last_updated": 1792225694900
+    },
+    "dispatchRows": 0,
+    "writerRows": 0,
+    "liveActivity": [
+      {
+        "role": "coordinator",
+        "phase": "done",
+        "commands": 0,
+        "file_changes": 0
+      }
+    ],
+    "usageRows": 1,
+    "usageTurns": 1,
+    "usageElapsedMs": 29690,
+    "permissionEvents": 0
+  },
+  "workspace": {
+    "empty": true,
+    "readOnly": true,
+    "mode": "555"
+  },
+  "collectorIndependent": true
+}

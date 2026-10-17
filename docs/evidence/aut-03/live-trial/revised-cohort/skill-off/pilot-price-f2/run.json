@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "aut-03-live-task/v1",
+  "caseId": "pilot-price-f2",
+  "arm": "skill-off",
+  "taskId": "e2a8109c-8a94-40ba-8030-2616f308e534",
+  "status": "TASK_STATE_COMPLETED",
+  "completedAt": "2026-10-17T05:37:35.626Z",
+  "elapsedSeconds": 32,
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "medium",
+  "leadTurns": 1,
+  "modelRequests": null,
+  "retries": null,
+  "elapsedMs": 31525,
+  "tokens": {
+    "inputTokens": 22733,
+    "cachedInputTokens": 0,
+    "outputTokens": 1841,
+    "reasoningOutputTokens": 463,
+    "totalTokens": 24574
+  },
+  "tokenSource": "total_delta",
+  "monetaryCost": null,
+  "monetaryCostReason": "Subscription telemetry does not provide task-level cost.",
+  "quotaBefore": {
+    "checkedAt": "2026-10-17T05:36:45Z",
+    "primaryUsedPercent": 29,
+    "weeklyUsedPercent": 83
+  },
+  "quotaAfter": {
+    "checkedAt": "2026-10-17T05:38:20Z",
+    "primaryUsedPercent": 30,
+    "weeklyUsedPercent": 83
+  },
+  "promptSha256": "6da3315ce17b1bd7eb9de41adaf85cc32fd9e4f919c9d3f9d837cb0f43773185",
+  "settingsSha256": "e449fe7c709c06fbe92e112f4503f0084749d25959532bcaf48e203c1f8b24cb",
+  "sourceCommit": "ebe51c8f3a6139afa4141f116707d9c94e8be952",
+  "runtimePinFileSha256": "13b383e4fd405587964086448063709ce55a7175423f5be402be98bf6462f288",
+  "leadSkillContext": {
+    "version": 1,
+    "enabled": false,
+    "allowlistSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "pin": null
+  },
+  "workspaceEmptyAndReadOnly": true,
+  "workerRolesRemoved": {
+    "removedCount": 8,
+    "remainingCount": 0
+  },
+  "workerRouteAvailable": false,
+  "dispatchJournalRows": 0,
+  "permissionEventCount": 0,
+  "account": {
+    "type": "chatgpt",
+    "planType": "team",
+    "codexHome": "/home/sr/.codex",
+    "accountSwitchingEnabled": false
+  },
+  "threadConfig": {
+    "method": "thread/start",
+    "model": "gpt-6.1-sol",
+    "sandbox": "read-only",
+    "approvalPolicy": "on-request",
+    "disabledFeatures": [
+      "shell_tool",
+      "unified_exec_tty",
+      "multi_agent",
+      "multi_agent_v2",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "browser_annotation_api",
+      "computer_use",
+      "image_generation",
+      "code_mode",
+      "code_mode_host",
+      "sleep_tool",
+      "in_app_browser",
+      "in_app_local_automation",
+      "shell_snapshot",
+      "shell_snapshot_v2",
+      "standalone_web_search"
+    ],
+    "webSearch": "disabled",
+    "verifiedAt": "2026-10-17T05:37:04.097Z"
+  },
+  "evidence": {
+    "task": "task.json",
+    "taskSha256": "3c79d854edf2746b21920c833aa33b27aa33d0e21f329b09877eb381635a1991",
+    "output": "output.txt",
+    "outputSha256": "41af3294bc4c0dee1b5487119a10ebcf039ef8465da04cf5ac21b93ec5ce560f",
+    "attestation": "attestation.json",
+    "attestationSha256": "2803f2aeec9bd777761446d2560fbd9233f784cf3afc5c0cdb026eb98099b681",
+    "checkpoint": "checkpoint.json",
+    "checkpointSha256": "1d3c1b1966bf785c8ed40d4695683a6ac044b6b64ce3689634bec58ff3c09bb9",
+    "usage": "usage.json",
+    "usageSha256": "d334e98ccaa4506af8db3383fa058059ae08021c812c37b59add77bdef5a1fef"
+  },
+  "protocolSnapshot": {
+    "runtimePinFile": "docs/evidence/aut-03/live-trial/revised-cohort-1/protocol/trial-runtime-pins.json",
+    "runtimePinFileSha256": "13b383e4fd405587964086448063709ce55a7175423f5be402be98bf6462f288",
+    "trialServer": "docs/evidence/aut-03/live-trial/revised-cohort-1/protocol/trial-server.js",
+    "trialServerSha256": "3cf65f5272e0702fc4838a373a6069ed913e0acc396cd59c9abafa0e09a48c30",
+    "declaration": "docs/evidence/aut-03/live-trial/revised-cohort-1/protocol/paired-trial-declaration.md",
+    "declarationSha256": "2e43afe8f33c0d43e0a87fbdc5463ae4b416ac71d5f7cd97cacf3f466062fff4"
+  },
+  "cohortDisposition": "Task passed its local controls, but is excluded from final scoring because revised-cohort-1 was stopped before baseline completion."
+}

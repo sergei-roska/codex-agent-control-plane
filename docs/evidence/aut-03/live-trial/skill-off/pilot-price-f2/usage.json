@@ -1,0 +1,125 @@
+{
+  "taskId": "6624a505-289c-4357-b4e7-8e3e6e89810f",
+  "usage": [
+    {
+      "kind": "lead_turn",
+      "run_id": "6624a505-289c-4357-b4e7-8e3e6e89810f",
+      "role": "coordinator",
+      "task_id": null,
+      "context_id": null,
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "started_at": "2026-10-17T05:15:21.485Z",
+      "elapsed_ms": 10408,
+      "turns": 1,
+      "model_requests": null,
+      "token_source": "total_delta",
+      "app_server_version": "codex-a2a-runtime/0.163.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-a2a-runtime; 0.1.0)",
+      "outcome": "completed",
+      "recorded_at": "2026-10-17T05:15:31.894Z",
+      "tokens": {
+        "inputTokens": 26353,
+        "cachedInputTokens": 0,
+        "outputTokens": 483,
+        "reasoningOutputTokens": 334,
+        "totalTokens": 26836
+      }
+    },
+    {
+      "kind": "lead_turn",
+      "run_id": "6624a505-289c-4357-b4e7-8e3e6e89810f",
+      "role": "coordinator",
+      "task_id": null,
+      "context_id": null,
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "started_at": "2026-10-17T05:15:31.904Z",
+      "elapsed_ms": 13596,
+      "turns": 1,
+      "model_requests": null,
+      "token_source": "total_delta",
+      "app_server_version": "codex-a2a-runtime/0.163.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-a2a-runtime; 0.1.0)",
+      "outcome": "completed",
+      "recorded_at": "2026-10-17T05:15:45.501Z",
+      "tokens": {
+        "inputTokens": 27736,
+        "cachedInputTokens": 26112,
+        "outputTokens": 820,
+        "reasoningOutputTokens": 146,
+        "totalTokens": 28556
+      }
+    },
+    {
+      "kind": "lead_turn",
+      "run_id": "6624a505-289c-4357-b4e7-8e3e6e89810f",
+      "role": "coordinator",
+      "task_id": null,
+      "context_id": null,
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "started_at": "2026-10-17T05:15:45.510Z",
+      "elapsed_ms": 7415,
+      "turns": 1,
+      "model_requests": null,
+      "token_source": "total_delta",
+      "app_server_version": "codex-a2a-runtime/0.163.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-a2a-runtime; 0.1.0)",
+      "outcome": "completed",
+      "recorded_at": "2026-10-17T05:15:52.932Z",
+      "tokens": {
+        "inputTokens": 29553,
+        "cachedInputTokens": 27520,
+        "outputTokens": 598,
+        "reasoningOutputTokens": 0,
+        "totalTokens": 30151
+      }
+    },
+    {
+      "kind": "worker_turn",
+      "run_id": null,
+      "role": "explorer",
+      "task_id": "393d3971-2589-4879-b497-d5a58c4ab23d",
+      "context_id": "0501215d-08aa-59f8-9239-dd6543ec8d9b",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "started_at": "2026-10-17T05:15:52.976Z",
+      "elapsed_ms": 19093,
+      "turns": 1,
+      "model_requests": null,
+      "token_source": "total_delta",
+      "app_server_version": "codex-a2a-runtime/0.163.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-a2a-runtime; 0.1.0)",
+      "outcome": "completed",
+      "recorded_at": "2026-10-17T05:16:12.076Z",
+      "tokens": {
+        "inputTokens": 76987,
+        "cachedInputTokens": 56832,
+        "outputTokens": 2023,
+        "reasoningOutputTokens": 1185,
+        "totalTokens": 79010
+      }
+    },
+    {
+      "kind": "lead_turn",
+      "run_id": "6624a505-289c-4357-b4e7-8e3e6e89810f",
+      "role": "coordinator",
+      "task_id": null,
+      "context_id": null,
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "started_at": "2026-10-17T05:16:12.104Z",
+      "elapsed_ms": 12289,
+      "turns": 1,
+      "model_requests": null,
+      "token_source": "total_delta",
+      "app_server_version": "codex-a2a-runtime/0.163.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-a2a-runtime; 0.1.0)",
+      "outcome": "aborted",
+      "recorded_at": "2026-10-17T05:16:24.393Z",
+      "tokens": {
+        "inputTokens": 0,
+        "cachedInputTokens": 0,
+        "outputTokens": 0,
+        "reasoningOutputTokens": 0,
+        "totalTokens": 0
+      }
+    }
+  ]
+}
