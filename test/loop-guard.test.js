@@ -7,6 +7,7 @@ const {
   MAX_EPISODES,
   makeObservation,
   observeLoopGuard,
+  RECURRENCE_PAUSE_AFTER,
   resetLoopGuard,
   reportEvidenceIdentity,
   warningText,
@@ -333,4 +334,117 @@ test('the prior checkpoint state is not mutated while applying a new observation
   const before = JSON.stringify(frozen);
   observeLoopGuard(frozen, 2, [observation()]);
   assert.equal(JSON.stringify(frozen), before);
+});
+
+// ---------------------------------------------------- checkpoint recurrence guard
+
+const REVIEW = { kind: 'risk_change', checkpointId: 'cp-1', reason: 'r', paths: ['src/a.js'], evidenceIds: [] };
+
+function reviewObservation({ role = 'verifier', round, review = REVIEW, target = 'tree-A', summary, implemented = false } = {}) {
+  const item = {
+    assignmentId: `run:r${round}:a0`,
+    attemptId: `attempt-${round}`,
+    role,
+    sandbox: role === 'verifier' ? 'workspace-write' : 'read-only',
+    assignment: { objective: `Review attempt ${round}`, allowedFiles: [], checks: [], ...(review ? { review } : {}) },
+    ...(target ? { reviewTarget: { known: true, identity: target } } : {}),
+  };
+  return makeObservation({
+    item,
+    outcome: outcome({
+      role,
+      assignmentId: item.assignmentId,
+      attemptId: item.attemptId,
+      objective: item.assignment.objective,
+      report: { outcome: 'completed', summary: summary || `Round ${round} found different detail ${round}`, filesInspected: [`src/n${round}.js`], checks: [], risks: [`risk ${round}`] },
+    }),
+    implemented,
+  });
+}
+
+test('the same checkpoint, role class, and target pauses on the third round even when report text changes', () => {
+  assert.equal(RECURRENCE_PAUSE_AFTER, 3);
+  let state = null;
+  for (let round = 1; round <= 2; round += 1) {
+    state = observeLoopGuard(state, round, [reviewObservation({ round })]);
+    assert.equal(state.pause, undefined);
+  }
+  state = observeLoopGuard(state, 3, [reviewObservation({ round: 3 })]);
+  assert.equal(state.pause.recurrence, true);
+  assert.equal(state.pause.attempts, 3);
+  assert.equal(state.pause.checkpoint, 'cp-1');
+  assert.equal(state.pause.roleClass, 'verify');
+  assert.deepEqual(state.pause.rounds, [1, 2, 3]);
+  assert.deepEqual(state.pause.references.map((entry) => entry.attemptId), ['attempt-1', 'attempt-2', 'attempt-3']);
+});
+
+test('an implementation round in between resets the recurrence count', () => {
+  let state = null;
+  state = observeLoopGuard(state, 1, [reviewObservation({ round: 1 })]);
+  state = observeLoopGuard(state, 2, [reviewObservation({ round: 2 })]);
+  const writer = makeObservation({
+    item: { assignmentId: 'run:r3:a0', attemptId: 'attempt-3', role: 'engineer', sandbox: 'workspace-write', assignment: { objective: 'Fix it', allowedFiles: ['src/a.js'], checks: [] } },
+    outcome: outcome({ role: 'engineer', assignmentId: 'run:r3:a0', attemptId: 'attempt-3', objective: 'Fix it' }),
+    implemented: true,
+  });
+  assert.equal(writer.recurrence, null);
+  state = observeLoopGuard(state, 3, [writer]);
+  assert.equal(state.pause, undefined);
+  state = observeLoopGuard(state, 4, [reviewObservation({ round: 4 })]);
+  state = observeLoopGuard(state, 5, [reviewObservation({ round: 5 })]);
+  assert.equal(state.pause, undefined);
+  state = observeLoopGuard(state, 6, [reviewObservation({ round: 6 })]);
+  assert.equal(state.pause.rounds.join(','), '4,5,6');
+});
+
+test('a writable dispatch that changed nothing does not reset the recurrence count', () => {
+  let state = null;
+  state = observeLoopGuard(state, 1, [reviewObservation({ round: 1 })]);
+  state = observeLoopGuard(state, 2, [reviewObservation({ round: 2 })]);
+  const idle = makeObservation({
+    item: { assignmentId: 'run:r3:a0', attemptId: 'attempt-3', role: 'engineer', sandbox: 'workspace-write', assignment: { objective: 'Try', allowedFiles: ['src/a.js'], checks: [] } },
+    outcome: outcome({ role: 'engineer', assignmentId: 'run:r3:a0', attemptId: 'attempt-3', objective: 'Try' }),
+    implemented: false,
+  });
+  state = observeLoopGuard(state, 3, [idle, reviewObservation({ round: 3 })]);
+  assert.equal(state.pause.attempts, 3);
+});
+
+test('a different target, checkpoint, or role class keeps its own count', () => {
+  let state = null;
+  state = observeLoopGuard(state, 1, [reviewObservation({ round: 1 })]);
+  state = observeLoopGuard(state, 2, [reviewObservation({ round: 2, target: 'tree-B' })]);
+  state = observeLoopGuard(state, 3, [reviewObservation({ round: 3, review: { ...REVIEW, checkpointId: 'cp-2' } })]);
+  state = observeLoopGuard(state, 4, [reviewObservation({ round: 4, role: 'auditor' })]);
+  state = observeLoopGuard(state, 5, [reviewObservation({ round: 5 })]);
+  assert.equal(state.pause, undefined);
+  assert.equal(state.recurrence.find((entry) => entry.checkpoint === 'cp-1' && entry.roleClass === 'verify').count, 2);
+});
+
+test('two reviews of one key in a single round count once, and the key ignores report text and file lists', () => {
+  const first = reviewObservation({ round: 1, summary: 'alpha' });
+  const second = reviewObservation({ round: 1, summary: 'beta' });
+  assert.equal(first.recurrence.key, second.recurrence.key);
+  const state = observeLoopGuard(null, 1, [first, second]);
+  assert.equal(state.recurrence[0].count, 1);
+});
+
+test('without a checkpoint the key falls back to the objective and plain research is left to the evidence guard', () => {
+  const verify = (round, objective) => makeObservation({
+    item: { assignmentId: `run:r${round}:a0`, attemptId: `attempt-${round}`, role: 'verifier', sandbox: 'workspace-write', assignment: { objective, allowedFiles: [], checks: [] } },
+    outcome: outcome({ role: 'verifier', assignmentId: `run:r${round}:a0`, attemptId: `attempt-${round}`, objective, report: { outcome: 'completed', summary: `detail ${round}`, filesInspected: [], checks: [], risks: [`r${round}`] } }),
+  });
+  let state = null;
+  for (let round = 1; round <= 3; round += 1) state = observeLoopGuard(state, round, [verify(round, 'Verify the build output')]);
+  assert.equal(state.pause.recurrence, true);
+  assert.match(state.pause.checkpoint, /^objective:/);
+  assert.equal(observation().recurrence, null);
+});
+
+test('a recurrence pause is cleared by resetLoopGuard and an old guard state without recurrence starts clean', () => {
+  const legacy = { observations: [], episodes: [], warnings: [], warning: null, lastRound: 3 };
+  const state = observeLoopGuard(legacy, 4, [reviewObservation({ round: 4 })]);
+  assert.equal(state.recurrence[0].count, 1);
+  assert.equal(state.pause, undefined);
+  assert.equal(resetLoopGuard().recurrence, undefined);
 });

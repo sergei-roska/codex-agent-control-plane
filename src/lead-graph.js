@@ -3617,7 +3617,7 @@ function buildLeadGraph(deps) {
           });
           if (target.known) contentIdentity = target.identity;
         }
-        return makeObservation({ item, outcome, contentIdentity });
+        return makeObservation({ item, outcome, contentIdentity, implemented: integratedChange(outcome) });
       });
       loopGuard = observeLoopGuard(state.loopGuard, batch.round, observations);
     }
@@ -3641,7 +3641,9 @@ function buildLeadGraph(deps) {
       ...(recoveryPlan.pendingAssignments ? { pendingAssignments: recoveryPlan.pendingAssignments } : {}),
       ...(loopGuard ? { loopGuard } : {}),
       ...(loopPause ? {
-        ...escalate(state, 'loop_detected', `Repeated work paused after ${loopPause.attempts} completed rounds with unchanged evidence: ${loopPause.description}${loopReferences ? ` (attempts: ${loopReferences})` : ''}. Continue with a different approach, change the goal, or accept the current result as is.`, `The same scoped work repeated ${loopPause.attempts} times without relevant new evidence.`),
+        ...(loopPause.recurrence
+          ? escalate(state, 'loop_detected', `Repeated ${loopPause.roleClass} work paused: checkpoint ${loopPause.checkpoint} was reviewed or investigated ${loopPause.attempts} times on the same target in rounds ${loopPause.rounds.join(', ')} with no implementation in between${loopReferences ? ` (attempts: ${loopReferences})` : ''}. Continue with a different approach, change the goal, or accept the current result as is.`, `The same ${loopPause.roleClass} of checkpoint ${loopPause.checkpoint} recurred ${loopPause.attempts} times with no implementation in between.`)
+          : escalate(state, 'loop_detected', `Repeated work paused after ${loopPause.attempts} completed rounds with unchanged evidence: ${loopPause.description}${loopReferences ? ` (attempts: ${loopReferences})` : ''}. Continue with a different approach, change the goal, or accept the current result as is.`, `The same scoped work repeated ${loopPause.attempts} times without relevant new evidence.`)),
       } : {}),
       ...(limited ? { budget: { source: 'worker' } } : {}),
     };

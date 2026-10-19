@@ -1,12 +1,24 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { canonicalRoleId } = require('./role-names');
 
 const MAX_OBSERVATIONS = 24;
 const MAX_EPISODES = 24;
 const MAX_BATCH_KEYS = 12;
 const MAX_TEXT = 300;
 const WARNING_AFTER = 3;
+// Second guard: the same review or investigation of the same checkpoint and target recurring with no
+// implementation in between, whatever the report text says.
+const RECURRENCE_PAUSE_AFTER = 3;
+const MAX_RECURRENCE = 24;
+const RECURRENCE_CLASSES = Object.freeze({
+  verifier: 'verify',
+  auditor: 'audit',
+  explorer: 'investigate',
+  scout: 'investigate',
+  architect: 'investigate',
+});
 
 function sha256(value) {
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -73,7 +85,29 @@ function reportEvidenceIdentity(report, { role = 'unknown' } = {}) {
   };
 }
 
-function makeObservation({ item = {}, outcome = {}, contentIdentity = null } = {}) {
+// Recurrence key: (checkpoint or objective, role class, target identity). Report text and file lists
+// are deliberately not part of it. Writable roles have no class: they are implementation, not recurrence.
+function recurrenceOf({ item, outcome, role, contentIdentity }) {
+  const roleClass = RECURRENCE_CLASSES[canonicalRoleId(role)] || null;
+  if (!roleClass) return null;
+  const assignment = item.assignment || {};
+  const objectiveKey = `objective:${sha256(normalizeIntent(assignment.objective || outcome.objective)).slice(0, 24)}`;
+  const declared = typeof assignment.review?.checkpointId === 'string' && assignment.review.checkpointId
+    ? assignment.review.checkpointId : null;
+  // Plain research has no checkpoint: repeated explorer rounds stay with the evidence-identity guard.
+  if (!declared && roleClass === 'investigate') return null;
+  const checkpoint = declared || objectiveKey;
+  const captured = item.reviewTarget?.known === true && typeof item.reviewTarget.identity === 'string'
+    ? item.reviewTarget.identity : null;
+  const target = captured || (typeof contentIdentity === 'string' ? contentIdentity : null) || objectiveKey;
+  return {
+    key: sha256({ checkpoint, roleClass, target }),
+    roleClass,
+    checkpoint: boundedText(checkpoint),
+  };
+}
+
+function makeObservation({ item = {}, outcome = {}, contentIdentity = null, implemented = false } = {}) {
   const assignment = item.assignment || {};
   const report = outcome.report || {};
   const role = String(outcome.role || item.role || 'unknown').toLowerCase();
@@ -129,12 +163,55 @@ function makeObservation({ item = {}, outcome = {}, contentIdentity = null } = {
     description,
     assignmentId: outcome.assignmentId || item.assignmentId || null,
     attemptId: outcome.attemptId || item.attemptId || null,
+    recurrence: recurrenceOf({ item, outcome, role, contentIdentity }),
+    implemented: implemented === true,
     unknown: !reportIdentity && !evidence.contentKnown && !evidence.contentIdentity,
   };
 }
 
 function emptyLoopGuard() {
   return { observations: [], episodes: [], warnings: [], warning: null, lastRound: null };
+}
+
+// Counts rounds per recurrence key. A batch that integrated a change resets every count (the target
+// moved); the same batch's reviews then count from one.
+function advanceRecurrence(previous, round, observations) {
+  const batch = Array.isArray(observations) ? observations.filter((entry) => entry && typeof entry === 'object') : [];
+  let entries = batch.some((entry) => entry.implemented === true) ? []
+    : (Array.isArray(previous) ? previous.slice(-MAX_RECURRENCE).map((entry) => ({
+      ...entry,
+      rounds: Array.isArray(entry.rounds) ? [...entry.rounds] : [],
+      references: Array.isArray(entry.references) ? [...entry.references] : [],
+    })) : []);
+  const keyed = new Map();
+  for (const entry of batch.slice(0, MAX_BATCH_KEYS)) {
+    const recurrence = entry.recurrence;
+    if (recurrence && typeof recurrence.key === 'string' && !keyed.has(recurrence.key)) keyed.set(recurrence.key, entry);
+  }
+  let pause = null;
+  for (const [key, entry] of keyed) {
+    let record = entries.find((candidate) => candidate.key === key);
+    if (!record) {
+      record = { key, roleClass: entry.recurrence.roleClass, checkpoint: entry.recurrence.checkpoint, count: 0, rounds: [], references: [] };
+      entries.push(record);
+    }
+    record.count = Math.min(record.count + 1, 999999);
+    record.rounds = [...record.rounds, round].slice(-10);
+    if (entry.assignmentId || entry.attemptId) record.references = [...record.references, entry.attemptId || entry.assignmentId].slice(-10);
+    if (record.count >= RECURRENCE_PAUSE_AFTER && !pause) {
+      pause = {
+        recurrence: true,
+        description: `${record.roleClass} of ${record.checkpoint}`,
+        attempts: record.count,
+        rounds: [...record.rounds],
+        checkpoint: record.checkpoint,
+        roleClass: record.roleClass,
+        references: record.references.map((reference) => ({ attemptId: reference })),
+      };
+    }
+  }
+  entries = entries.slice(-MAX_RECURRENCE);
+  return { entries, pause };
 }
 
 function observeLoopGuard(previous, round, observations) {
@@ -207,6 +284,8 @@ function observeLoopGuard(previous, round, observations) {
     }
   }
   const normalizedEpisodes = nextEpisodes.slice(-MAX_EPISODES).map((entry) => ({ ...entry }));
+  const recurrence = advanceRecurrence(state.recurrence, round, observations);
+  if (!pause) pause = recurrence.pause;
   return {
     observations: [...history, {
       round,
@@ -215,6 +294,7 @@ function observeLoopGuard(previous, round, observations) {
     episodes: normalizedEpisodes,
     warnings,
     warning: warnings[0] || null,
+    recurrence: recurrence.entries,
     lastRound: round,
     ...(pause ? { pause } : {}),
   };
@@ -241,6 +321,7 @@ module.exports = {
   MAX_EPISODES,
   MAX_BATCH_KEYS,
   WARNING_AFTER,
+  RECURRENCE_PAUSE_AFTER,
   emptyLoopGuard,
   makeObservation,
   reportEvidenceIdentity,

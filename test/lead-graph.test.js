@@ -5713,14 +5713,61 @@ test('precomputed full-report evidence uses the final rejected review state', as
   });
   await withSession(world, async (session) => {
     const paused = await session.orchestrator.run({ goal: 'Investigate target behavior', runId: RUN_ID });
+    // The checkpoint recurrence guard pauses on the third review of the unchanged target,
+    // before the evidence-identity guard would warn or pause.
     assert.equal(paused.pause.escalation, 'loop_detected');
-    assert.match(world.prompts[3], /Loop warning: the same scoped work repeated 3 times/);
-    assert.equal(world.sends.length, 8);
+    assert.match(paused.pause.question, /checkpoint m4-r20-integrated-authority-persistence was reviewed or investigated 3 times on the same target in rounds 1, 2, 3 with no implementation in between/);
+    assert.equal(world.sends.length, 6);
     const auditorContract = world.dispatchInputs.find((input) => input.role === 'orch-auditor').reportContract;
     assert.match(auditorContract, /summary first line must be exactly VERDICT: pass, VERDICT: fail, or VERDICT: inconclusive/);
     assert.match(auditorContract, /Never describe reused tests as freshly executed/);
     assert.match(auditorContract, /Do not invent runs/);
   }, { workspace });
+});
+
+// Checkpointed audits with a different report every round: the evidence-identity guard sees novelty each time.
+const investigationReview = { kind: 'investigation', checkpointId: 'cp-recurrence', reason: 'Check the target', paths: ['src/example.js'], evidenceIds: [] };
+const changingResearch = () => {
+  let calls = 0;
+  return (roleName) => {
+    if (roleName === 'orch-builder') {
+      return {
+        state: TaskState.TASK_STATE_COMPLETED,
+        artifacts: [{ name: 'report', parts: textParts(report('fixed', { filesChanged: ['src/example.js'] })), metadata: { writerExecution: releasedWriter(['src/example.js']) } }],
+      };
+    }
+    calls += 1;
+    return {
+      state: TaskState.TASK_STATE_COMPLETED,
+      artifacts: [{ name: 'report', parts: textParts(report(`Verification detail ${calls}`, {
+        filesInspected: [`src/n${calls}.js`], risks: [`new risk ${calls}`],
+      })) }],
+    };
+  };
+};
+
+test('three audit rounds of one checkpoint and unchanged target pause as loop_detected even when every report differs', async () => {
+  const verify = dispatch({ ...brief('orch-auditor', []), review: investigationReview });
+  const world = makeWorld({ script: [verify, verify, verify, finish('never reached')], workerFinal: changingResearch() });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Verify the target', runId: RUN_ID });
+    assert.equal(paused.pause.escalation, 'loop_detected');
+    assert.match(paused.pause.question, /Repeated audit work paused: checkpoint cp-recurrence was reviewed or investigated 3 times on the same target in rounds 1, 2, 3 with no implementation in between/);
+    assert.equal(world.sends.length, 3);
+  });
+});
+
+test('an integrated implementation between audit rounds resets the recurrence count', async () => {
+  const verify = dispatch({ ...brief('orch-auditor', []), review: investigationReview });
+  const build = dispatch(brief('orch-builder'));
+  const world = makeWorld({ script: [verify, verify, build, verify, verify, finish('Done')], workerFinal: changingResearch() });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Verify and fix the target', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.sends.length, 5);
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(values.loopGuard.recurrence[0].count, 2);
+  });
 });
 
 test('a later target warning is shown to the lead before that target pauses', async () => {
