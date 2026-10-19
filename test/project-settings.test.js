@@ -143,3 +143,20 @@ describe('settings file', () => {
     assert.throws(() => validateSettingsDocument({ version: 1, x: 1 }), /Unknown settings field/);
   });
 });
+
+describe('module loading', () => {
+  it('loads project-settings first without a circular-dependency warning and acceptance-scratch works', () => {
+    const script = [
+      "const settings = require('./src/project-settings.js');",
+      "settings.normalizeOwnerChecks(['npm test']);",
+      "const scratch = require('./src/acceptance-scratch.js');",
+      "if (typeof scratch.provisionScratch !== 'function') throw new Error('provisionScratch missing');",
+      "require('./src/acceptance.js');",
+    ].join('\n');
+    const { spawnSync } = require('node:child_process');
+    const result = spawnSync(process.execPath, ['--trace-warnings', '-e', script], { cwd: path.join(__dirname, '..'), encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /circular dependency/i);
+    assert.equal(result.stderr, '');
+  });
+});

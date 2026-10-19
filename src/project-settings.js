@@ -15,7 +15,6 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseCheckCommand, validateAcceptanceContract } = require('./acceptance');
 
 const SETTINGS_VERSION = 1;
 const MAX_SCRATCH_ENV = 8;
@@ -85,6 +84,8 @@ function normalizeOwnerChecks(input) {
     if (typeof command !== 'string' || command.trim() === '') throw new ProjectSettingsError(`ownerChecks[${index}] must be a non-empty command string`);
     return command.trim();
   });
+  // Loaded lazily: ./acceptance reaches ./acceptance-scratch, which requires this module at load time.
+  const { parseCheckCommand, validateAcceptanceContract } = require('./acceptance');
   try {
     validateAcceptanceContract({ requiredChecks: commands.map((command, index) => parseCheckCommand(command, index)) });
   } catch (error) {
