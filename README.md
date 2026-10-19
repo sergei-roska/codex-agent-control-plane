@@ -121,7 +121,8 @@ After a batch, the lead graph settles every writable outcome that is not provabl
 A run has a default budget of 80 dispatch rounds (`DEFAULT_MAX_ROUNDS`, a
 per-run cap). Reaching it does not fail the run: it pauses as `round_limit`
 with a summary of where the rounds went (dispatches by role, integrated
-changes). Owner `continue` grants another 80 rounds, `change_goal` starts a
+changes). Owner `continue` grants another 80 rounds counted from the current round (a
+legacy run already past the cap gets a full allowance), `change_goal` starts a
 fresh allowance, and `accept_as_is` finishes with the current result. A caller
 may pass another positive `maxRounds` to the orchestrator, or `null` for no
 cap. Progress does not extend the cap automatically.
@@ -164,15 +165,22 @@ ledger, and the artifact metadata carries `disposition: "partial"` and
 `checkpoints`. Acceptance still runs when checks are pinned and its result is
 reported next to the ledger. A run whose acceptance is `rejected` or
 `unverifiable` never reports a checkpoint as `accepted`; those entries are
-downgraded to `blocked` with the reason. Review gates still apply to accepted
-checkpoints; blocked and not-started ones need no receipts.
+downgraded to `blocked` with the reason (a lone pending review gate from a
+blocked checkpoint does not downgrade the accepted ones). The ledger waives the
+review gate only to admit the finish: blocked and not-started entries need no
+receipts, and `not_started` is refused for a checkpoint with integrated writes.
+Acceptance stays honest: unreviewed integrated writes still leave a
+`review_gate_pending` issue, so the disposition is `unverifiable` and the CLI
+exits 4, never an accepted partial.
 
 When an `infeasible_requirement` or `credentials_or_access` request is answered
 with the option id `defer` or `outside_run`, the review checkpoints it cites
 (by checkpoint id or by an assignmentId in `evidenceChecked`) are recorded as
-blocked: verifier and auditor dispatch for them is refused and they no longer
-hold unrelated writers or the finish gate of a partial finish. The ledger
-reports them as `blocked` with the owner's answer as the reason.
+blocked: verifier, auditor and writer dispatch for them is refused (distinct
+rejection codes) and they no longer hold unrelated writers or the finish
+admission of a partial finish. Their unreviewed integrated writes still show in
+acceptance. The ledger reports them as `blocked` with the owner's answer as the
+reason.
 
 ## Acceptance
 
