@@ -1666,6 +1666,34 @@ test('mcpServerStatus lists status for a thread', async (t) => {
   assert.equal(fake.getChild().sent.find(({ method }) => method === 'mcpServerStatus/list').params.threadId, 't1');
 });
 
+test('mcpServerAuthStatus reads one server without a thread', async (t) => {
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'mcpServerStatus/list') return send({ id: request.id, result: { data: [{ name: 'harness-figma', authStatus: 'notLoggedIn' }], nextCursor: null } });
+    return send({ id: request.id, result: {} });
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  assert.deepEqual(await client.mcpServerAuthStatus('harness-figma'), [{ name: 'harness-figma', authStatus: 'notLoggedIn' }]);
+  const params = fake.getChild().sent.find(({ method }) => method === 'mcpServerStatus/list').params;
+  assert.deepEqual(params, { serverName: 'harness-figma', detail: 'toolsAndAuthOnly' });
+});
+
+test('mcpOauthLoginStart sends mcpServer/oauth/login and returns the authorization url', async (t) => {
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'initialize') return send({ id: request.id, result: {} });
+    if (request.method === 'mcpServer/oauth/login') return send({ id: request.id, result: { authorizationUrl: 'https://auth.example.com/a', loginId: 'l1' } });
+    return send({ id: request.id, result: {} });
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  assert.deepEqual(await client.mcpOauthLoginStart('harness-figma', { timeoutSecs: 600 }), { authorizationUrl: 'https://auth.example.com/a', loginId: 'l1' });
+  await client.mcpOauthLoginStart('harness-gtm');
+  const sent = fake.getChild().sent.filter(({ method }) => method === 'mcpServer/oauth/login');
+  assert.deepEqual(sent[0].params, { name: 'harness-figma', timeoutSecs: 600 });
+  assert.deepEqual(sent[1].params, { name: 'harness-gtm' });
+});
+
 test('selected skills are explicit turn inputs with scoped boundary and hash provenance', async (t) => {
   const selectedSkills = resolveSkillSelection(loadSkillCatalog(), ['actor-model']);
   let turnInput;

@@ -347,7 +347,7 @@
 
     </section>
 
-    <!-- Right Sidebar: Connectors (reserved) -->
+    <!-- Right Sidebar: Connectors (live list of Harness connectors with sign-in state and Connect) -->
     <aside class="sidebar sidebar-right" id="connectorsSidebar" aria-label="Connectors">
 
       <section class="card sidebar-section">
@@ -355,8 +355,9 @@
           <h2 class="card-title"><svg class="icon"><use href="#i-plug"/></svg> Connectors</h2>
         </div>
         <div class="connectors-slot" id="connectorsSlot">
-          <p class="connectors-empty">No connectors yet.</p>
+          <p class="connectors-empty">Loading connectors...</p>
         </div>
+        <div class="limit-reset hidden" id="connectorsError"></div>
       </section>
 
     </aside>

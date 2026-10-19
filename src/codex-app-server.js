@@ -751,6 +751,20 @@ class CodexAppServer {
     return Array.isArray(result?.data) ? result.data : [];
   }
 
+  // Auth state of one configured MCP server. Needs no thread: with serverName only that server is probed.
+  async mcpServerAuthStatus(serverName) {
+    await this.start();
+    const result = await this._request('mcpServerStatus/list', { serverName, detail: 'toolsAndAuthOnly' });
+    return Array.isArray(result?.data) ? result.data : [];
+  }
+
+  // Starts a browser OAuth sign-in for a configured MCP server and returns { authorizationUrl, loginId }.
+  // The sign-in completes (mcpServer/oauthLogin/completed) only while this app-server process stays alive.
+  async mcpOauthLoginStart(name, { timeoutSecs } = {}) {
+    await this.start();
+    return this._request('mcpServer/oauth/login', { name, ...(timeoutSecs ? { timeoutSecs } : {}) });
+  }
+
   async readRateLimits() {
     try {
       await this.start();

@@ -250,13 +250,13 @@ html, body {
 }
 
 /* ==========================================================================
-   Right Sidebar (reserved for connectors)
+   Right Sidebar (connectors)
    ========================================================================== */
 .connectors-slot {
   min-height: 160px;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px;
   background: var(--bg-card);
   border: 1px solid var(--border-hairline);
@@ -264,9 +264,61 @@ html, body {
 }
 
 .connectors-empty {
+  margin: auto;
   font-size: 14px;
   color: var(--text-dim);
   text-align: center;
+}
+
+.connector-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.connector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.connector-title {
+  font-size: 14px;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.connector-purpose,
+.connector-detail,
+.connector-message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.connector-detail {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.connector-message.is-error {
+  color: var(--danger-text);
+}
+
+.connector-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .card {

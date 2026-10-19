@@ -3,6 +3,7 @@
   "connectors": [
     {
       "config_name": "harness-atlassian",
+      "title": "Confluence and Jira",
       "url": "https://mcp.atlassian.com/v2/mcp",
       "purpose": "Read Jira issues and Confluence pages for project context.",
       "data_sensitivity": "company tickets and documentation",
@@ -17,6 +18,7 @@
     },
     {
       "config_name": "harness-figma",
+      "title": "Figma",
       "url": "https://mcp.figma.com/mcp",
       "purpose": "Read Figma designs, variables and screenshots for implementation work.",
       "data_sensitivity": "company design files",
@@ -33,6 +35,7 @@
     },
     {
       "config_name": "harness-context7",
+      "title": "Context7",
       "url": "https://mcp.context7.com/mcp",
       "purpose": "Look up current library documentation.",
       "data_sensitivity": "public documentation; queries leave the machine",
@@ -45,6 +48,7 @@
     },
     {
       "config_name": "harness-gtm",
+      "title": "Google Tag Manager",
       "url": "https://gtm-mcp.stape.ai/mcp",
       "purpose": "Google Tag Manager access; no tool is allowed until the owner classifies them.",
       "data_sensitivity": "company tag manager containers",

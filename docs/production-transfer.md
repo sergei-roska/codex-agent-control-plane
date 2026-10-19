@@ -19,7 +19,7 @@ Implementation, isolated verification, and live qualification are separate.
 
 | Date | Decision | ADR |
 |---|---|---|
-| 2026-10-19 | External connectors (Confluence with Jira, Figma, GTM, Context7) are Harness-owned: one catalog, read-only default allowlists, browser OAuth through the app-server, credentials in the account home; backend implemented and independently reviewed; live sign-in and tool check pending | docs/adr/harness-managed-connectors.md |
+| 2026-10-19 | External connectors (Confluence with Jira, Figma, GTM, Context7) are Harness-owned: one catalog, read-only default allowlists, browser OAuth through the app-server, credentials in the account home; backend and launcher sidebar implemented and independently reviewed; live sign-in and tool check pending | docs/adr/harness-managed-connectors.md |
 | 2026-10-14 | Chuck Norris system repair agent added, then removed the same day after its first live use (superseded) | docs/adr/chuck-norris-system-repair.md |
 | 2026-10-12 | Retain staging problems, attempted resolutions, and architectural decisions with evidence and statuses; durable runtime implementation qualified in isolation | docs/adr/staging-lessons-and-decision-log.md |
 | 2026-10-11 | Session token usage is attributed through lead run ids and the dispatch journal, not context ids | docs/adr/launcher-session-usage-attribution.md |

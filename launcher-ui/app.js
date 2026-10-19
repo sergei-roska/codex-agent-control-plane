@@ -2590,4 +2590,170 @@
 
     setInterval(function () { if (!accountLoginId) fetchAccounts(false); }, 30000);
     fetchAccounts();
+
+    // ---- Connectors card (right sidebar): Harness connectors, their sign-in state and Connect
+    const CONNECTOR_POLL_MS = 5000;
+    const CONNECTOR_POLL_LIMIT_MS = 180000;
+    const CONNECTOR_SIGN_IN_TEXT = 'Finish sign-in in the browser tab, then this list updates.';
+    const CONNECTOR_TIMEOUT_TEXT = 'Sign-in not detected yet. Click Connect to try again.';
+    let connectorList = [];
+    let connectorsLoaded = false;
+    const connectorRowState = Object.create(null);   // name -> { busy, message, isError, signInUrl }
+    const connectorPollTimers = Object.create(null); // name -> interval id
+
+    function connectorRowStateFor(name) {
+      if (!connectorRowState[name]) connectorRowState[name] = { busy: false, message: '', isError: false, signInUrl: '' };
+      return connectorRowState[name];
+    }
+
+    function isHttpsUrl(url) {
+      return typeof url === 'string' && /^https:\/\//i.test(url);
+    }
+
+    function stopConnectorPolling(name) {
+      if (connectorPollTimers[name]) clearInterval(connectorPollTimers[name]);
+      delete connectorPollTimers[name];
+    }
+
+    function connectorRow(c) {
+      const st = connectorRowStateFor(c.name);
+      const row = document.createElement('div');
+      row.className = 'connector-row';
+
+      const head = document.createElement('div');
+      head.className = 'connector-head';
+      head.appendChild(textEl('span', 'connector-title', c.title || c.name));
+      let pillClass = 'pill-canceled';
+      let pillText = 'Status unavailable';
+      if (c.state === 'signed_in') {
+        pillClass = 'pill-completed';
+        pillText = 'Connected';
+      } else if (c.state === 'needs_sign_in') {
+        pillClass = 'pill-paused';
+        pillText = 'Not connected';
+      }
+      head.appendChild(textEl('span', 'pill ' + pillClass, pillText));
+      row.appendChild(head);
+
+      if (c.purpose) row.appendChild(textEl('p', 'connector-purpose', c.purpose));
+      if (c.state === 'unknown' && c.detail) row.appendChild(textEl('p', 'connector-detail', c.detail));
+
+      if (c.state !== 'signed_in') {
+        const actions = document.createElement('div');
+        actions.className = 'connector-actions';
+        const btn = textEl('button', 'btn btn-secondary btn-xs', 'Connect');
+        btn.type = 'button';
+        btn.disabled = st.busy;
+        btn.addEventListener('click', function () { startConnectorSignIn(c.name); });
+        actions.appendChild(btn);
+        row.appendChild(actions);
+      }
+
+      if (st.message) row.appendChild(textEl('p', st.isError ? 'connector-message is-error' : 'connector-message', st.message));
+
+      // Shown only when the browser blocked the new tab; the href is set as a DOM property, never as HTML.
+      if (st.signInUrl && c.state !== 'signed_in') {
+        const link = textEl('a', 'account-link', 'Open sign-in page');
+        link.href = st.signInUrl;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        row.appendChild(link);
+      }
+      return row;
+    }
+
+    function renderConnectors() {
+      const slot = document.getElementById('connectorsSlot');
+      slot.textContent = '';
+      if (!connectorList.length) {
+        slot.appendChild(textEl('p', 'connectors-empty', 'No connectors configured.'));
+        return;
+      }
+      connectorList.forEach(function (c) { slot.appendChild(connectorRow(c)); });
+    }
+
+    async function loadConnectors() {
+      try {
+        const res = await fetch('/api/connectors');
+        let data = {};
+        try { data = await res.json(); } catch (_) {}
+        if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        if (!Array.isArray(data.connectors)) throw new Error('unexpected response');
+        connectorList = data.connectors;
+        connectorsLoaded = true;
+        document.getElementById('connectorsError').classList.add('hidden');
+        connectorList.forEach(function (c) {
+          if (c.state !== 'signed_in') return;
+          stopConnectorPolling(c.name);
+          const st = connectorRowStateFor(c.name);
+          st.message = '';
+          st.signInUrl = '';
+        });
+        renderConnectors();
+      } catch (e) {
+        const err = document.getElementById('connectorsError');
+        err.textContent = 'Failed to load connectors: ' + e.message;
+        err.classList.remove('hidden');
+        if (!connectorsLoaded) {
+          const slot = document.getElementById('connectorsSlot');
+          slot.textContent = '';
+          slot.appendChild(textEl('p', 'connectors-empty', 'Connectors unavailable.'));
+        }
+      }
+    }
+
+    function pollConnectorSignIn(name) {
+      stopConnectorPolling(name);
+      const deadline = Date.now() + CONNECTOR_POLL_LIMIT_MS;
+      connectorPollTimers[name] = setInterval(function () {
+        if (Date.now() > deadline) {
+          stopConnectorPolling(name);
+          const st = connectorRowStateFor(name);
+          st.message = CONNECTOR_TIMEOUT_TEXT;
+          st.isError = false;
+          renderConnectors();
+          return;
+        }
+        loadConnectors();
+      }, CONNECTOR_POLL_MS);
+    }
+
+    async function startConnectorSignIn(name) {
+      const st = connectorRowStateFor(name);
+      if (st.busy) return;
+      // Open the tab before any await, inside the click, so the browser does not block it.
+      // No 'noopener' here: it would make window.open return null. The opener is cleared after the POST.
+      const win = window.open('about:blank', '_blank');
+      st.busy = true;
+      st.message = '';
+      st.isError = false;
+      st.signInUrl = '';
+      renderConnectors();
+      try {
+        const res = await fetch('/api/connectors/' + encodeURIComponent(name) + '/sign-in', { method: 'POST' });
+        let data = {};
+        try { data = await res.json(); } catch (_) {}
+        if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        if (!isHttpsUrl(data.authUrl)) throw new Error('No valid sign-in link was returned.');
+        st.busy = false;
+        st.message = CONNECTOR_SIGN_IN_TEXT;
+        if (win) {
+          win.opener = null;
+          win.location.href = data.authUrl;
+        } else {
+          // Popup blocked: the row offers the link instead.
+          st.signInUrl = data.authUrl;
+        }
+        renderConnectors();
+        pollConnectorSignIn(name);
+      } catch (e) {
+        if (win) win.close();
+        st.busy = false;
+        st.message = e.message;
+        st.isError = true;
+        renderConnectors();
+      }
+    }
+
+    loadConnectors();
   

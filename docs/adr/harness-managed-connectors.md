@@ -1,7 +1,9 @@
 # ADR: Harness-managed external connectors
 
 Status: accepted 2026-10-19 (owner direction; lead decisions 1-8 below).
-Implementation: backend done and independently reviewed (APPROVE, 2026-10-19).
+Implementation: backend and launcher sidebar (UI-02) done and independently reviewed
+(APPROVE, 2026-10-19, after one blocking fix: concurrent sign-ins for one connector
+could leak a process; sign-ins are now serialized per name).
 Live sign-in and tool verification are pending; nothing here is verified live yet.
 Planned code: `profiles/connectors/catalog.json` (new), `src/connector-catalog.js`
 (new), `src/codex-app-server.js` (`_toolPolicy`), launcher UI (UI-02 sidebar).
@@ -129,6 +131,19 @@ Known limits accepted at review 1 (2026-10-19):
 - The connector catalog loads once per process. Catalog edits take effect after a
   project-server restart.
 - A malformed connector catalog also breaks Drupal-only selection (fails closed).
+
+Sidebar and status API limits (review of 2026-10-19):
+- `GET /api/connectors` probes through a short-lived app-server, cached for 5 s
+  and single-flight. A probe that started before a sign-in can show the old state
+  for one poll.
+- `oAuth` is read as "credentials stored" (schema enum). An expired token may still
+  show "Connected" until a live check.
+- Sign-in app-servers stay alive until the completion notice, 10 minutes, a new
+  sign-in for the same name, or launcher shutdown. At most one per connector name.
+- The sign-in POST has no origin or token check, the same as the account POST routes.
+  A cross-site page can start one sign-in process for a connector; it cannot read
+  the result. This is a project-wide gap, not specific to connectors.
+- The launcher must restart to load the new routes and catalog titles.
 
 ## Verification plan
 

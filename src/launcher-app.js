@@ -9,6 +9,7 @@ const { ClientFactory } = require('@a2a-js/sdk/client');
 const { parseCheckCommand } = require('./acceptance');
 const { CodexAppServer } = require('./codex-app-server');
 const { createAccountProfiles } = require('./account-profiles');
+const { createConnectorService } = require('./connector-status');
 const { loadRoles, createLeadRole, LEAD_ROLE_NAME } = require('./role-catalog');
 const { canonicalRoleId } = require('./role-names');
 const {
@@ -855,9 +856,29 @@ function createLauncherApp({
     }
   });
 
+  // API: Harness connectors (state and browser sign-in). Codex stores the credentials in the account home.
+  const connectors = createConnectorService({ createAppServer, getCodexHome: () => activeKeyAndHome().home });
+
+  app.get('/api/connectors', async (req, res) => {
+    try {
+      res.json({ connectors: await connectors.list() });
+    } catch (err) {
+      res.status(500).json({ error: err.message || String(err) });
+    }
+  });
+
+  app.post('/api/connectors/:name/sign-in', async (req, res) => {
+    try {
+      res.json(await connectors.signIn(req.params.name));
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message || String(err) });
+    }
+  });
+
   // Closes every pending login server; called by the launcher on shutdown.
   app.closeAccountLogins = async () => {
     await Promise.all([...logins.values()].filter((l) => l.status === 'pending').map((l) => endLogin(l, 'failed', 'Launcher stopped')));
+    await connectors.close();
   };
 
   return app;

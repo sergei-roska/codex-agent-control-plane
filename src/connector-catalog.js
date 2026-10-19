@@ -48,6 +48,7 @@ function loadConnectorCatalog({ catalogPath = DEFAULT_CONNECTOR_CATALOG } = {}) 
   for (const connector of parsed.connectors) {
     if (!connector || typeof connector !== 'object' || Array.isArray(connector)
       || typeof connector.config_name !== 'string' || !SERVER_ID.test(connector.config_name)
+      || typeof connector.title !== 'string' || !connector.title.trim()
       || typeof connector.url !== 'string' || connector.auth !== 'oauth'
       || typeof connector.purpose !== 'string' || typeof connector.data_sensitivity !== 'string'
       || typeof connector.tools_verified !== 'boolean' || !Array.isArray(connector.read_only_tools)) {
@@ -59,6 +60,7 @@ function loadConnectorCatalog({ catalogPath = DEFAULT_CONNECTOR_CATALOG } = {}) 
     checkUrl(file, name, connector.url);
     servers.set(name, {
       configName: name,
+      title: ascii(connector.title).trim(),
       url: connector.url,
       purpose: ascii(connector.purpose),
       dataSensitivity: ascii(connector.data_sensitivity),
