@@ -10,7 +10,7 @@ Related problem: P-14 in `docs/production-transfer.md`.
 
 ## Outcome
 
-Routine implementation is checked by `verifier` (Quality Engineer), with the
+Routine implementation is checked by `verifier` (QA (Quality Assistance)), with the
 lead deciding whether the evidence satisfies the assignment. `auditor` (Code
 Auditor) reviews explicit risk changes and completed components. Round count
 alone is never a reason to dispatch either role. Deterministic acceptance,

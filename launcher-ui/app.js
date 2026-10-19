@@ -569,7 +569,7 @@
       'orch-lead': 'Team Coordinator', coordinator: 'Team Coordinator',
       'orch-explorer': 'Code Explorer', explorer: 'Code Explorer',
       'orch-builder': 'Software Engineer', engineer: 'Software Engineer',
-      'orch-verifier': 'Quality Engineer', verifier: 'Quality Engineer',
+      'orch-verifier': 'QA (Quality Assistance)', verifier: 'QA (Quality Assistance)',
       'orch-auditor': 'Code Auditor', auditor: 'Code Auditor',
       'orch-repair-xhigh': 'Recovery Engineer', 'recovery-engineer': 'Recovery Engineer',
       'orch-repair-sol': 'Senior Engineer', 'senior-engineer': 'Senior Engineer',

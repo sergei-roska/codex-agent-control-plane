@@ -8,7 +8,7 @@ const EXPECTED = [
   ['orch-lead', 'coordinator', 'Team Coordinator'],
   ['orch-explorer', 'explorer', 'Code Explorer'],
   ['orch-builder', 'engineer', 'Software Engineer'],
-  ['orch-verifier', 'verifier', 'Quality Engineer'],
+  ['orch-verifier', 'verifier', 'QA (Quality Assistance)'],
   ['orch-auditor', 'auditor', 'Code Auditor'],
   ['orch-repair-xhigh', 'recovery-engineer', 'Recovery Engineer'],
   ['orch-repair-sol', 'senior-engineer', 'Senior Engineer'],

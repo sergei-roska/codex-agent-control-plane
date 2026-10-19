@@ -24,6 +24,10 @@ class FakeProcess extends EventEmitter {
             send({ id: message.id, result: { config: { mcp_servers: { alpha: {}, 'gamma': {}, beta: {} } } } });
             continue;
           }
+          if (message.method === 'thread/backgroundTerminals/clean' && !handler.ownsBackgroundTerminalCleanup) {
+            send({ id: message.id, result: {} });
+            continue;
+          }
           handler(message, send);
         }
         callback();
@@ -52,6 +56,17 @@ function fakeSpawn(handler, { pidBase = 0 } = {}) {
     return child;
   };
   return { spawnImpl, getChild: () => children.at(-1), getChildren: () => children };
+}
+
+async function waitForRequest(child, method) {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    const process = typeof child === 'function' ? child() : child;
+    const request = process?.sent.find((item) => item.method === method);
+    if (request) return request;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`Timed out waiting for ${method}`);
 }
 
 function baseHandler() {
@@ -99,6 +114,7 @@ test('performs initialize handshake and completes a turn', async (t) => {
   assert.equal(result.turnId, 'turn-1');
   const sent = fake.getChild().sent;
   assert.deepEqual(sent.slice(0, 2).map(({ method }) => method), ['initialize', 'initialized']);
+  assert.deepEqual(sent[0].params.capabilities, { experimentalApi: true });
   const threadStart = sent.find(({ method }) => method === 'thread/start');
   assert.equal(threadStart.params.developerInstructions, `${role.instructions}\n\n${skillBoundary}\n\n${readingDiscipline}`);
   assert.equal(threadStart.params.approvalPolicy, 'on-request');
@@ -108,6 +124,256 @@ test('performs initialize handshake and completes a turn', async (t) => {
   assert.deepEqual(turnStart.params.outputSchema, outputSchema);
   assert.deepEqual(turnStart.params.sandboxPolicy, { type: 'workspaceWrite' });
   assert.equal(turnStart.params.approvalsReviewer, 'user');
+});
+
+test('waits for thread-scoped background terminal cleanup before resolving', async (t) => {
+  let cleanupRequest;
+  const handler = (request, send) => {
+    if (request.method === 'initialize') send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') send({ id: request.id, result: { thread: { id: 'thread-clean' } } });
+    if (request.method === 'turn/start') {
+      send({ id: request.id, result: { turn: { id: 'turn-clean' } } });
+      send({ method: 'turn/completed', params: { threadId: request.params.threadId, turn: { id: 'turn-clean', status: 'completed' } } });
+    }
+    if (request.method === 'thread/backgroundTerminals/clean') cleanupRequest = request;
+  };
+  handler.ownsBackgroundTerminalCleanup = true;
+  const fake = fakeSpawn(handler);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  let settled = false;
+  const pending = client.run({ role, cwd: '/tmp/project', input: 'hello' }).then((value) => { settled = true; return value; });
+  await waitForRequest(() => fake.getChild(), 'thread/backgroundTerminals/clean');
+  assert.equal(cleanupRequest.params.threadId, 'thread-clean');
+  assert.equal(settled, false);
+  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'overlap', threadId: 'thread-clean' }), /already active/);
+  fake.getChild().stdout.write(`${JSON.stringify({ id: cleanupRequest.id, result: {} })}\n`);
+  assert.equal((await pending).status, 'completed');
+});
+
+test('reports cleanup RPC failure with the confirmed model outcome preserved', async (t) => {
+  const handler = (request, send) => {
+    if (request.method === 'initialize') send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') send({ id: request.id, result: { thread: { id: 'thread-clean-fail' } } });
+    if (request.method === 'turn/start') {
+      send({ id: request.id, result: { turn: { id: 'turn-clean-fail' } } });
+      send({ method: 'turn/completed', params: { threadId: request.params.threadId, turn: { id: 'turn-clean-fail', status: 'failed', error: { message: 'model failed' } } } });
+    }
+    if (request.method === 'thread/backgroundTerminals/clean') send({ id: request.id, error: { code: -32601, message: 'unsupported' } });
+  };
+  handler.ownsBackgroundTerminalCleanup = true;
+  const kills = [];
+  const fake = fakeSpawn(handler);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, killImpl: (pid, signal) => kills.push({ pid, signal }) });
+  t.after(() => client.close());
+
+  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'fail' }), (error) => {
+    assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
+    assert.equal(error.outcomeUnknown, true);
+    assert.deepEqual(error.originalTurnOutcome, { status: 'failed', terminal: true, failureClass: 'domain_failure', message: 'model failed' });
+    assert.equal(error.originalError.message, 'model failed');
+    return true;
+  });
+  assert.equal(kills.length, 0);
+  assert.equal(fake.getChild().sent.filter(({ method }) => method === 'thread/backgroundTerminals/clean').length, 1);
+});
+
+test('quarantines new turns after cleanup failure while existing threads finish, then clears on replacement', async (t) => {
+  let threadNumber = 0;
+  let turnNumber = 0;
+  const startedTurns = new Map();
+  const handler = (request, send) => {
+    if (request.method === 'initialize') send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') send({ id: request.id, result: { thread: { id: `thread-quarantine-${++threadNumber}` } } });
+    if (request.method === 'turn/start') {
+      const turnId = `turn-quarantine-${++turnNumber}`;
+      send({ id: request.id, result: { turn: { id: turnId } } });
+      send({ method: 'turn/started', params: { threadId: request.params.threadId, turn: { id: turnId } } });
+      startedTurns.set(request.params.threadId, turnId);
+      if (threadNumber <= 2 && startedTurns.size === 2) {
+        for (const [threadId, id] of startedTurns) {
+          send({ method: 'turn/completed', params: { threadId, turn: { id, status: 'completed' } } });
+        }
+      } else if (threadNumber > 2) {
+        send({ method: 'turn/completed', params: { threadId: request.params.threadId, turn: { id: turnId, status: 'completed' } } });
+      }
+    }
+    if (request.method === 'thread/backgroundTerminals/clean') {
+      if (request.params.threadId === 'thread-quarantine-1') send({ id: request.id, error: { code: -32601, message: 'unsupported' } });
+      else send({ id: request.id, result: {} });
+    }
+  };
+  handler.ownsBackgroundTerminalCleanup = true;
+  const fake = fakeSpawn(handler);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const concurrent = await Promise.allSettled([
+    client.run({ role, cwd: '/tmp/one', input: 'one' }),
+    client.run({ role, cwd: '/tmp/two', input: 'two' }),
+  ]);
+  assert.equal(concurrent.filter(({ status }) => status === 'fulfilled').length, 1);
+  const cleanupFailure = concurrent.find(({ status }) => status === 'rejected').reason;
+  assert.equal(cleanupFailure.failureClass, 'background_terminal_cleanup_failed');
+  assert.equal(cleanupFailure.outcomeUnknown, true);
+  assert.equal(fake.getChild().sent.filter(({ method }) => method === 'thread/backgroundTerminals/clean').length, 2);
+
+  const threadStarts = fake.getChild().sent.filter(({ method }) => method === 'thread/start').length;
+  const turnStarts = fake.getChild().sent.filter(({ method }) => method === 'turn/start').length;
+  await assert.rejects(client.run({ role: { ...role, name: 'lead' }, cwd: '/tmp/three', input: 'blocked' }), (error) => {
+    assert.equal(error.failureClass, 'background_terminal_cleanup_blocked');
+    assert.equal(error.outcomeUnknown, false);
+    assert.deepEqual(error.relatedCleanupFailure, {
+      failureClass: 'background_terminal_cleanup_failed',
+      generation: cleanupFailure.generation,
+      threadId: cleanupFailure.threadId,
+      turnId: cleanupFailure.turnId,
+    });
+    assert.equal(error.execution.turnStartSent, false);
+    return true;
+  });
+  assert.equal(fake.getChild().sent.filter(({ method }) => method === 'thread/start').length, threadStarts);
+  assert.equal(fake.getChild().sent.filter(({ method }) => method === 'turn/start').length, turnStarts);
+
+  const originalChild = fake.getChild();
+  originalChild.exitCode = 0;
+  originalChild.emit('exit', 9, null);
+  const recovered = await client.run({ role, cwd: '/tmp/recovered', input: 'after replacement' });
+  assert.equal(recovered.status, 'completed');
+  assert.notEqual(fake.getChild(), originalChild);
+  assert.equal(fake.getChild().sent.some(({ method }) => method === 'turn/start'), true);
+});
+
+test('rechecks quarantine after awaited setup before admitting a turn', async (t) => {
+  let threadNumber = 0;
+  let heldConfigRead;
+  const handler = (request, send) => {
+    if (request.method === 'initialize') send({ id: request.id, result: {} });
+    if (request.method === 'config/read') {
+      if (request.params.cwd === '/tmp/second') heldConfigRead = request;
+      else send({ id: request.id, result: { config: { mcp_servers: {} } } });
+    }
+    if (request.method === 'thread/start') send({ id: request.id, result: { thread: { id: `thread-race-${++threadNumber}` } } });
+    if (request.method === 'turn/start') {
+      send({ id: request.id, result: { turn: { id: 'turn-race-first' } } });
+      send({ method: 'turn/completed', params: { threadId: request.params.threadId, turn: { id: 'turn-race-first', status: 'completed' } } });
+    }
+    if (request.method === 'thread/backgroundTerminals/clean') {
+      send({ id: request.id, error: { code: -32601, message: 'unsupported' } });
+    }
+  };
+  handler.ownsConfigRead = true;
+  handler.ownsBackgroundTerminalCleanup = true;
+  const fake = fakeSpawn(handler);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  let secondOnTurnStart = false;
+  const secondRun = client.run({
+    role, cwd: '/tmp/second', input: 'second',
+    onTurnStart: () => { secondOnTurnStart = true; },
+  });
+  await waitForRequest(() => fake.getChild(), 'config/read');
+  assert.equal(heldConfigRead.params.cwd, '/tmp/second');
+
+  await assert.rejects(client.run({ role, cwd: '/tmp/first', input: 'first' }), (error) => {
+    assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
+    assert.equal(error.outcomeUnknown, true);
+    return true;
+  });
+  const turnStartsBeforeRelease = fake.getChild().sent.filter(({ method }) => method === 'turn/start').length;
+  fake.getChild().stdout.write(`${JSON.stringify({ id: heldConfigRead.id, result: { config: { mcp_servers: {} } } })}\n`);
+
+  await assert.rejects(secondRun, (error) => {
+    assert.equal(error.failureClass, 'background_terminal_cleanup_blocked');
+    assert.equal(error.outcomeUnknown, false);
+    assert.equal(error.execution.turnStartSent, false);
+    return true;
+  });
+  assert.equal(secondOnTurnStart, false);
+  assert.equal(fake.getChild().sent.filter(({ method }) => method === 'turn/start').length, turnStartsBeforeRelease);
+});
+
+test('cleanup ignores an abort signal but reports it after acknowledgement', async (t) => {
+  let cleanupRequest;
+  const handler = (request, send) => {
+    if (request.method === 'initialize') send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') send({ id: request.id, result: { thread: { id: 'thread-abort-clean' } } });
+    if (request.method === 'turn/start') {
+      send({ id: request.id, result: { turn: { id: 'turn-abort-clean' } } });
+      send({ method: 'turn/started', params: { threadId: request.params.threadId, turn: { id: 'turn-abort-clean' } } });
+      send({ method: 'turn/completed', params: { threadId: request.params.threadId, turn: { id: 'turn-abort-clean', status: 'completed' } } });
+    }
+    if (request.method === 'turn/interrupt') {
+      send({ id: request.id, result: {} });
+      send({ method: 'turn/completed', params: { threadId: request.params.threadId, turn: { id: request.params.turnId, status: 'interrupted' } } });
+    }
+    if (request.method === 'thread/backgroundTerminals/clean') cleanupRequest = request;
+  };
+  handler.ownsBackgroundTerminalCleanup = true;
+  const fake = fakeSpawn(handler);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const controller = new AbortController();
+  let settled = false;
+  const pending = client.run({ role, cwd: '/tmp/project', input: 'cancel', signal: controller.signal }).then(() => {
+    settled = true;
+  }, (error) => { settled = true; throw error; });
+  await waitForRequest(() => fake.getChild(), 'thread/backgroundTerminals/clean');
+  const turnId = fake.getChild().sent.find(({ method }) => method === 'turn/start').params.threadId;
+  assert.equal(cleanupRequest.params.threadId, turnId);
+  assert.equal(settled, false);
+  controller.abort();
+  assert.equal(settled, false);
+  fake.getChild().stdout.write(`${JSON.stringify({ id: cleanupRequest.id, result: {} })}\n`);
+  await assert.rejects(pending, { name: 'AbortError' });
+  assert.equal(settled, true);
+});
+
+test('bounds cleanup RPC time and preserves the terminal outcome', async (t) => {
+  const handler = (request, send) => {
+    if (request.method === 'initialize') send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') send({ id: request.id, result: { thread: { id: 'thread-clean-timeout' } } });
+    if (request.method === 'turn/start') {
+      send({ id: request.id, result: { turn: { id: 'turn-clean-timeout' } } });
+      send({ method: 'turn/completed', params: { threadId: request.params.threadId, turn: { id: 'turn-clean-timeout', status: 'completed' } } });
+    }
+  };
+  handler.ownsBackgroundTerminalCleanup = true;
+  const fake = fakeSpawn(handler);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, backgroundTerminalCleanupTimeoutMs: 15 });
+  t.after(() => client.close());
+  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'timeout' }), (error) => {
+    assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
+    assert.equal(error.outcomeUnknown, true);
+    assert.equal(error.cleanupCause.failureClass, 'rpc_timeout');
+    assert.equal(error.originalTurnOutcome.status, 'completed');
+    return true;
+  });
+});
+
+test('does not send cleanup after the run generation has changed', async (t) => {
+  let client;
+  const handler = (request, send) => {
+    if (request.method === 'initialize') send({ id: request.id, result: {} });
+    if (request.method === 'thread/start') send({ id: request.id, result: { thread: { id: 'thread-generation' } } });
+    if (request.method === 'turn/start') {
+      send({ id: request.id, result: { turn: { id: 'turn-generation' } } });
+      send({ method: 'turn/completed', params: { threadId: request.params.threadId, turn: { id: 'turn-generation', status: 'completed' } } });
+      client.generation += 1;
+    }
+  };
+  const fake = fakeSpawn(handler);
+  client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'generation' }), (error) => {
+    assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
+    assert.equal(error.outcomeUnknown, true);
+    assert.equal(error.originalTurnOutcome.status, 'completed');
+    return true;
+  });
+  assert.equal(fake.getChild().sent.some(({ method }) => method === 'thread/backgroundTerminals/clean'), false);
 });
 
 test('routes concurrent turns to their owning run', async (t) => {
@@ -123,6 +389,11 @@ test('routes concurrent turns to their owning run', async (t) => {
   assert.equal(second.text, 'reply:two');
   assert.notEqual(first.threadId, second.threadId);
   assert.notEqual(first.turnId, second.turnId);
+  const cleanedThreads = fake.getChild().sent
+    .filter(({ method }) => method === 'thread/backgroundTerminals/clean')
+    .map(({ params }) => params.threadId)
+    .sort();
+  assert.deepEqual(cleanedThreads, [first.threadId, second.threadId].sort());
 });
 
 test('reuses a supplied thread without starting another thread', async (t) => {
@@ -168,6 +439,7 @@ test('does not resume a thread started in this process', async (t) => {
   const first = await client.run({ role, cwd: '/tmp/project', input: 'one' });
   await client.run({ role, cwd: '/tmp/project', input: 'two', threadId: first.threadId });
   assert.equal(fake.getChild().sent.some(({ method }) => method === 'thread/resume'), false);
+  assert.equal(fake.getChild().sent.filter(({ method, params }) => method === 'thread/backgroundTerminals/clean' && params.threadId === first.threadId).length, 2);
 });
 
 test('automatically starts a replacement child after an unexpected exit', async (t) => {

@@ -1,5 +1,5 @@
 name = "verifier"
-display_name = "Quality Engineer"
+display_name = "QA (Quality Assistance)"
 description = "Independently accept routine integrated changes through diff review and focused reproducible checks."
 model = "gpt-6-luna"
 model_reasoning_effort = "high"

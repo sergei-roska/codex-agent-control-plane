@@ -65,7 +65,7 @@ repaired first, and the repaired candidate is audited if a point above applies.
 The owner authorized `docs/auditor-routing-plan.md` after stopping both services.
 The frozen implementation contract is `docs/auditor-routing-contract.md`.
 
-- Routine independent acceptance belongs to Quality Engineer/verifier, with
+- Routine independent acceptance belongs to QA (Quality Assistance)/verifier, with
   the lead retaining final judgment. Material changes are checked after
   integration; unchanged and administrative rounds add no standing review.
 - Auditor triggers are explicit critical changes, performance requirements,

@@ -46,7 +46,7 @@ The lead Agent Card is at `http://127.0.0.1:3000/orchestrator/agent-card.json`. 
 | `coordinator` | Team Coordinator | Read-only |
 | `explorer` | Code Explorer | Read-only |
 | `engineer` | Software Engineer | Workspace write |
-| `verifier` | Quality Engineer | Workspace write |
+| `verifier` | QA (Quality Assistance) | Workspace write |
 | `auditor` | Code Auditor | Read-only |
 | `recovery-engineer` | Recovery Engineer | Workspace write |
 | `senior-engineer` | Senior Engineer | Workspace write |
@@ -155,6 +155,14 @@ npm run ask -- --check 'npm test' --check 'node --check src/server.js' "Implemen
 | `not_required` | No checks and no writer ran. |
 
 The task stays `COMPLETED`; the result text starts with `Acceptance: <disposition>` and the artifact metadata carries `acceptance`. The CLI exits 4 for `rejected` and `unverifiable`. Direct A2A clients may send `metadata.acceptance = { requiredChecks: [{ id, argv, timeoutMs? }] }` on the first message.
+
+## Background process cleanup
+
+Completed role turns clean their managed background tool terminals before
+writer settlement and lane integration. Cleanup is scoped to the thread;
+other roles sharing the App Server continue. See
+[background process lifecycle](docs/background-process-lifecycle.md) for
+timeouts, failure handling and safe runtime application.
 
 ## Usage
 

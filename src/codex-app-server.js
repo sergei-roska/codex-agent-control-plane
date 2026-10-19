@@ -130,6 +130,7 @@ function classifyFailure(error) {
 // A group id still answering right after our leader exited is our own group (the kernel does not
 // reuse a pid while it is a live PGID); a pid wrap inside this window is not realistic.
 const OWN_GROUP_EXIT_WINDOW_MS = 5_000;
+const BACKGROUND_TERMINAL_CLEANUP_TIMEOUT_MS = 5_000;
 const SANDBOX_DENIAL_PATTERN = /Read-only file system|Operation not permitted|Permission denied/i;
 
 class CodexAppServer {
@@ -139,6 +140,7 @@ class CodexAppServer {
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
     turnTimeoutMs = resolveTurnTimeoutMs(),
     interruptTimeoutMs = DEFAULT_INTERRUPT_TIMEOUT_MS,
+    backgroundTerminalCleanupTimeoutMs = BACKGROUND_TERMINAL_CLEANUP_TIMEOUT_MS,
     killImpl = process.kill.bind(process),
     readProcessIdentityImpl = readProcessIdentity,
     listGroupMembersImpl = listGroupMembers,
@@ -151,6 +153,9 @@ class CodexAppServer {
     codexHome = null,
     mcpCatalog = loadMcpCatalog(),
   } = {}) {
+    if (!Number.isSafeInteger(backgroundTerminalCleanupTimeoutMs) || backgroundTerminalCleanupTimeoutMs <= 0) {
+      throw new TypeError('backgroundTerminalCleanupTimeoutMs must be a positive safe integer');
+    }
     this.codexPath = codexPath;
     this.codexHome = codexHome || null;
     this.mcpCatalog = mcpCatalog;
@@ -159,6 +164,7 @@ class CodexAppServer {
     this.requestTimeoutMs = requestTimeoutMs;
     this.turnTimeoutMs = resolveTurnTimeoutMs(turnTimeoutMs);
     this.interruptTimeoutMs = interruptTimeoutMs;
+    this.backgroundTerminalCleanupTimeoutMs = backgroundTerminalCleanupTimeoutMs;
     this.killImpl = killImpl;
     this.readProcessIdentityImpl = readProcessIdentityImpl;
     this.listGroupMembersImpl = listGroupMembersImpl;
@@ -181,6 +187,7 @@ class CodexAppServer {
     this.threadMcpPolicies = new Map();
     this.generation = 0;
     this.failedGeneration = 0;
+    this.backgroundTerminalCleanupFailure = null;
     this.childExited = true;
     this.childExitPromise = null;
     this.resolveChildExit = null;
@@ -388,6 +395,7 @@ class CodexAppServer {
     const spawnedMs = performance.now();
     this.startupInfo = null;
     const generation = ++this.generation;
+    this.backgroundTerminalCleanupFailure = null;
     this.activeTermination = null;
     this._pushEvent('started');
     const child = this.spawnImpl(this.codexPath, ['app-server', '--listen', 'stdio://'], {
@@ -482,6 +490,7 @@ class CodexAppServer {
 
     const initResult = await this._request('initialize', {
       clientInfo: { name: 'codex-a2a-runtime', title: 'Codex A2A Runtime', version: '0.1.0' },
+      capabilities: { experimentalApi: true },
     });
     if (state.failed || state.exited || this.exitError?.generation === generation) {
       throw state.failure || this.exitError || new CodexAppServerError('Codex App Server exited during initialization', { failureClass: 'process_exit', generation });
@@ -785,6 +794,7 @@ class CodexAppServer {
   async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills, selectedMcpTools, sandboxPolicyOverride }) {
     await this.start();
     ctx.generation = this.generation;
+    this._assertTurnAdmission(ctx);
     const startup = this.startupInfo;
     if (startup && !startup.claimed && ctx.startedMs <= startup.readyMs) {
       startup.claimed = true;
@@ -871,8 +881,10 @@ class CodexAppServer {
 
     try {
       if (signal?.aborted) throw abortError();
+      this._assertTurnAdmission(ctx);
       ctx.processIdentity = this.processIdentity();
       if (onTurnStart) onTurnStart({ processIdentity: ctx.processIdentity, threadId });
+      this._assertTurnAdmission(ctx);
       const currentSkills = validateSelectedSkills(selectedSkills);
       const turnStartRequest = this._request('turn/start', {
         threadId,
@@ -917,9 +929,10 @@ class CodexAppServer {
       if (!run.terminal) {
         run.terminal = await this._waitForTerminal(run);
       }
-      if (run.abortRequested) throw abortError({ threadId, turnId: run.turnId, status: run.status });
+      let terminalError = null;
+      if (run.abortRequested) terminalError = abortError({ threadId, turnId: run.turnId, status: run.status });
       if (run.status === 'failed') {
-        throw new CodexAppServerError(run.terminal?.error?.message || 'Codex turn failed', {
+        terminalError ||= new CodexAppServerError(run.terminal?.error?.message || 'Codex turn failed', {
           failureClass: 'domain_failure',
           threadId,
           turnId: run.turnId,
@@ -927,6 +940,9 @@ class CodexAppServer {
           codexError: run.terminal?.error || null,
         });
       }
+      await this._cleanupTerminal(run, terminalError);
+      if (run.abortRequested) terminalError ||= abortError({ threadId, turnId: run.turnId, status: run.status });
+      if (terminalError) throw terminalError;
       return { threadId, turnId: run.turnId, status: run.status, text: run.text, events: run.events };
     } catch (error) {
       let cause = error;
@@ -935,6 +951,7 @@ class CodexAppServer {
       else if (run.failedWith?.failureClass === 'process_exit') cause = run.failedWith;
       const termination = cause.outcomeUnknown && !cause.termination && this.lastTermination?.survivors?.length ? this.lastTermination : null;
       if (termination) cause.termination = termination;
+      if (cause.failureClass === 'background_terminal_cleanup_failed') throw cause;
       if (run.abortRequested && cause.name !== 'AbortError') {
         throw abortError({ threadId, turnId: run.turnId, cause, ...(cause.outcomeUnknown ? { outcomeUnknown: true } : {}), ...(cause.termination ? { termination: cause.termination } : {}) });
       }
@@ -982,6 +999,70 @@ class CodexAppServer {
       startupMs: ctx.startupMs,
       coldStart: ctx.coldStart,
     };
+  }
+
+  _assertTurnAdmission(ctx) {
+    const failure = this.backgroundTerminalCleanupFailure;
+    if (failure?.generation !== ctx.generation) return;
+    throw new CodexAppServerError('New turns are blocked after background terminal cleanup failed in this App Server generation', {
+      failureClass: 'background_terminal_cleanup_blocked',
+      generation: ctx.generation,
+      relatedCleanupFailure: {
+        failureClass: failure.failureClass,
+        generation: failure.generation,
+        threadId: failure.threadId || null,
+        turnId: failure.turnId || null,
+      },
+      outcomeUnknown: false,
+    });
+  }
+
+  async _cleanupTerminal(run, originalError = null) {
+    if (!run.terminal) return;
+    const generation = run.ctx.generation;
+    const state = run.ctx.childState;
+    if (!Number.isSafeInteger(generation) || generation !== this.generation
+      || !state || state !== this.currentChildState || state.generation !== generation
+      || state.failed || state.exited || this.childExited || !this.child) {
+      const error = new CodexAppServerError('Background terminal cleanup could not run on the original Codex App Server generation', {
+        failureClass: 'background_terminal_cleanup_failed',
+        generation,
+        threadId: run.threadId,
+        turnId: run.turnId,
+        outcomeUnknown: false,
+      });
+      throw this._recordCleanupFailure(cleanupError(error, originalError, run));
+    }
+    try {
+      const result = await this._request('thread/backgroundTerminals/clean', { threadId: run.threadId }, {
+        timeoutMs: this.backgroundTerminalCleanupTimeoutMs,
+      });
+      if (!result || typeof result !== 'object' || Array.isArray(result)) {
+        throw new CodexAppServerError('Codex App Server returned an invalid background terminal cleanup response', {
+          failureClass: 'background_terminal_cleanup_failed',
+          generation,
+          threadId: run.threadId,
+          turnId: run.turnId,
+        });
+      }
+    } catch (cause) {
+      if (cause?.failureClass === 'background_terminal_cleanup_failed' && cause.generation === generation) {
+        throw this._recordCleanupFailure(cleanupError(cause, originalError, run));
+      }
+      const error = new CodexAppServerError(`Background terminal cleanup failed: ${cause?.message || String(cause)}`, {
+        failureClass: 'background_terminal_cleanup_failed',
+        generation,
+        threadId: run.threadId,
+        turnId: run.turnId,
+        cleanupCause: cloneError(cause),
+      });
+      throw this._recordCleanupFailure(cleanupError(error, originalError, run));
+    }
+  }
+
+  _recordCleanupFailure(error) {
+    if (error.generation === this.generation) this.backgroundTerminalCleanupFailure = error;
+    return error;
   }
 
   async close() {
@@ -1404,6 +1485,20 @@ function abortError(details = {}) {
   const error = new Error('Codex turn aborted');
   error.name = 'AbortError';
   Object.assign(error, details);
+  return error;
+}
+
+function cleanupError(error, originalError, run) {
+  error.originalTurnOutcome = {
+    status: run.status,
+    terminal: Boolean(run.terminal),
+    failureClass: originalError?.failureClass || (originalError?.name === 'AbortError' ? 'aborted' : null),
+    message: originalError?.message || null,
+  };
+  // The turn terminal can be known while its background processes remain live.
+  // Keep that distinction in metadata while blocking writer settlement.
+  error.outcomeUnknown = originalError?.outcomeUnknown === true || run.ctx.turnStartSent === true;
+  if (originalError) error.originalError = cloneError(originalError);
   return error;
 }
 

@@ -4,7 +4,7 @@ const ROLE_NAMES = Object.freeze({
   'orch-lead': { id: 'coordinator', displayName: 'Team Coordinator' },
   'orch-explorer': { id: 'explorer', displayName: 'Code Explorer' },
   'orch-builder': { id: 'engineer', displayName: 'Software Engineer' },
-  'orch-verifier': { id: 'verifier', displayName: 'Quality Engineer' },
+  'orch-verifier': { id: 'verifier', displayName: 'QA (Quality Assistance)' },
   'orch-auditor': { id: 'auditor', displayName: 'Code Auditor' },
   'orch-repair-xhigh': { id: 'recovery-engineer', displayName: 'Recovery Engineer' },
   'orch-repair-sol': { id: 'senior-engineer', displayName: 'Senior Engineer' },

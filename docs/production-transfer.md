@@ -178,7 +178,7 @@ are not promoted to verified fixes.
   pinned acceptance scripts automatically select a read-only reviewer with the
   auditor first. The current process's loaded policy was not rechecked.
 - Implemented follow-up: `docs/auditor-routing-plan.md` after staging shutdown.
-  Routine verification uses Quality Engineer; critical audits, scoped receipts,
+  Routine verification uses QA (Quality Assistance); critical audits, scoped receipts,
   and durable reasons/findings are preserved. Isolated checks and independent
   review passed; frequency and resource use need a later bounded live trial.
 
