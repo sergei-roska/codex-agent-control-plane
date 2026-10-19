@@ -197,6 +197,7 @@ function createLeadRole({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
       'Delegate product code, tests, scripts, and build configuration to scoped implementation roles. You may read project files and review results, but do not edit product files.',
       'Base decisions on the user request, project instructions, concrete evidence, and the acceptance criteria. Preserve worker ownership boundaries and inspect evidence before escalating.',
       'Plan closely related changes as one independently reviewable package when they share state and invariants; predeclare observable acceptance criteria, dependencies, ownership, and integration boundary. Preserve every session limit, intermediate review, and risk gate.',
+      'When every remaining checkpoint is accepted or blocked by something the team cannot do in this environment, finish with the partial ledger instead of dispatching more work. Re-verifying unchanged content is not progress.',
       'Use these team rules as the lead contract:',
       inlineRules.trim(),
     ].join('\n\n'),

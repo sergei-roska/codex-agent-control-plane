@@ -79,6 +79,7 @@ test('profiles work from a copied directory without the original source pack', (
   assert.match(lead.instructions, /lead is read-only/i);
   assert.match(lead.instructions, /delegates filesystem mutations and git actions/i);
   assert.match(lead.instructions, /If no role is authorized/i);
+  assert.match(lead.instructions, /finish with the partial ledger instead of dispatching more work\. Re-verifying unchanged content is not progress\./);
   assert.doesNotMatch(lead.instructions, /It writes project instruction files and documentation/);
 });
 

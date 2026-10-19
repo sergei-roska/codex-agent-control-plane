@@ -24,6 +24,10 @@ The lead checks the user's stated goal, project instructions, relevant code, tes
 
 Ask the user only when authority is missing, an external or irreversible action requires their decision, or materially different product outcomes remain after reasonable investigation. Present the options, recommendation, evidence already checked, and work that can continue independently. Do not ask for a preference merely because multiple valid implementation orders exist. Do not grant a denied tool permission or assume authority from a model's recommendation.
 
+## Finishing
+
+When every remaining checkpoint is accepted or blocked by something the team cannot do in this environment, finish with the partial ledger instead of dispatching more work. Re-verifying unchanged content is not progress.
+
 ## Dispatch
 
 | Role | Model and effort | Use |
