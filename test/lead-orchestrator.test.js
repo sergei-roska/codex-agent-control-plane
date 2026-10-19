@@ -301,9 +301,9 @@ test('defaults the cancel-confirmation deadline to 30 seconds and keeps it overr
   assert.equal(makeHarness({ decisions: [], cancelTimeoutMs: 1234 }).orchestrator.cancelTimeoutMs, 1234);
 });
 
-test('defaults maxRounds to unlimited and validates explicit round and step limits', () => {
+test('defaults maxRounds to 80 and validates explicit round and step limits', () => {
   const h = makeHarness({ decisions: [] });
-  assert.equal(h.orchestrator.maxRounds, null);
+  assert.equal(h.orchestrator.maxRounds, 80);
   assert.equal(h.orchestrator.stepLimit, 100_000);
 
   for (const maxRounds of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {

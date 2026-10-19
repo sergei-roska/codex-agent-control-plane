@@ -2522,7 +2522,7 @@ test('the second round of a session resumes the same thread with a delta prompt 
     assert.doesNotMatch(world.prompts[1], /Available roles:|Available skill IDs|User goal:/);
     assert.match(world.prompts[1], /Worker outcomes since your last turn/);
     assert.match(world.prompts[1], /orch-explorer done/);
-    assert.match(world.prompts[1], /Dispatch rounds already used: 1\. Dispatch rounds are unlimited/);
+    assert.match(world.prompts[1], /Dispatch rounds already used: 1\/80\. A dispatch decision consumes one round\./);
     assert.match(world.prompts[1], /Open worker decisions/);
     assert.match(world.prompts[1], /still apply\. Return only one JSON object/);
     assert.match(world.prompts[1], /exact paths with line ranges.*dispatch an explorer for broad reading/);
@@ -5202,7 +5202,7 @@ test('the first unmet-goal finish requests investigation without an owner pause'
     assert.equal(result.status, 'completed');
     assert.equal(result.text, 'Fixed the counts');
     assert.equal(world.leadTurns, 3);
-    assert.match(world.prompts[1], /Dispatch rounds already used: 0\. Dispatch rounds are unlimited; the count is for ordering only\./);
+    assert.match(world.prompts[1], /Dispatch rounds already used: 0\/80\. A dispatch decision consumes one round\./);
     assert.match(world.prompts[1], /Goal investigation \(requested in round 0\): your finish with goalAchieved false named these blockers:\nBlocked: the matrix has hard-coded counts\./);
     assert.match(world.prompts[1], /cites the assignmentId of a read-only investigation finished after round 0 and states why each remaining blocker is owner-only/);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
@@ -5239,15 +5239,15 @@ test('continue grants another maxRounds budget and passes the note to the lead',
   await withSession(world, async (session) => {
     const paused = await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
     assert.equal(paused.pause.escalation, 'goal_not_achieved');
-    assert.match(world.prompts[2], /Dispatch rounds already used: 1\. Dispatch rounds are unlimited/);
+    assert.match(world.prompts[2], /Dispatch rounds already used: 1\/80\. A dispatch decision consumes one round\./);
     await session.restart();
     const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Try the other path', choice: 'continue' } });
     assert.equal(result.status, 'completed');
     assert.equal(result.text, 'Done');
-    assert.match(world.prompts[3], /Dispatch rounds already used: 1\. Dispatch rounds are unlimited/);
+    assert.match(world.prompts[3], /Dispatch rounds already used: 1\/160\./);
     assert.match(world.prompts[3], /"answer":"Try the other path","choice":"continue"/);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
-    assert.equal(values.extraRounds, 0);
+    assert.equal(values.extraRounds, 80);
   });
 });
 
@@ -5257,7 +5257,7 @@ test('an answer without a choice on an escalation is the recommended continue', 
     await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
     const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Keep going' } });
     assert.equal(result.status, 'completed');
-    assert.match(world.prompts[3], /Dispatch rounds already used: 1\. Dispatch rounds are unlimited/);
+    assert.match(world.prompts[3], /Dispatch rounds already used: 1\/160\./);
   });
 });
 
@@ -5293,7 +5293,7 @@ test('change_goal replaces the goal for the rest of the run with a fresh budget;
     assert.match(world.prompts[3], /Goal \(changed by the owner during this run; authoritative, it replaces the original goal\):\nOnly do Y/);
     assert.match(world.prompts[3], /Original goal \(background only\):\nDo X/);
     assert.doesNotMatch(world.prompts[3], /User goal:/);
-    assert.match(world.prompts[3], /Dispatch rounds already used: 1\. Dispatch rounds are unlimited/);
+    assert.match(world.prompts[3], /Dispatch rounds already used: 1\/160\./);
     assert.match(world.prompts[3], /"answer":"Only do Y","choice":"change_goal"/);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
     assert.equal(values.goal, 'Do X');
@@ -5321,6 +5321,45 @@ test('the round limit pauses with round_limit and continue grants another budget
   }, { orchestrator: { maxRounds: 1 } });
 });
 
+test('the default budget of 80 rounds pauses for the owner with a summary, and continue grants another 80', async () => {
+  const script = Array.from({ length: 81 }, (_, index) => dispatch({
+    ...brief('orch-explorer', []),
+    objective: `Inspect src/research-${index + 1}.js`,
+  }));
+  script.push(finish('Research complete'));
+  const world = makeWorld({ script });
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Research the project', runId: RUN_ID });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'human_decision');
+    assert.equal(paused.pause.escalation, 'round_limit');
+    assert.match(paused.pause.question, /80 of 80 rounds used and the lead has not finished/);
+    assert.match(paused.pause.question, /Summary: dispatches by role \(explorer 80\); 0 integrated change\(s\), no integrated change is recorded\./);
+    assert.match(paused.pause.question, /Continue with another 80 rounds/);
+    assert.equal(world.sends.length, 80);
+    const resumed = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Keep going', choice: 'continue' } });
+    assert.equal(resumed.status, 'completed');
+    assert.equal(resumed.text, 'Research complete');
+    assert.equal(resumed.rounds, 80);
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(values.extraRounds, 80);
+  });
+});
+
+test('an explicit null maxRounds still means no round cap', async () => {
+  const script = Array.from({ length: 82 }, (_, index) => dispatch({
+    ...brief('orch-explorer', []),
+    objective: `Inspect src/research-${index + 1}.js`,
+  }));
+  script.push(finish('Research complete'));
+  const world = makeWorld({ script });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Research the project', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.rounds, 82);
+  }, { orchestrator: { maxRounds: null } });
+});
+
 test('a finish with goalAchieved null is rejected with a reminder', async () => {
   const world = makeWorld({ script: [decision({ action: 'finish', final: 'Done?', goalAchieved: null }), met('Done')] });
   await withSession(world, async (session) => {
@@ -5341,11 +5380,11 @@ test('the decision prompt carries the investigate-first, owner-only, goalAchieve
     assert.match(prompt, /request_human_input is accepted only for an owner-only decision and only after an investigation of that blocker: An investigation is a finished read-only outcome/);
     assert.match(prompt, /A blocker that persists needs its root cause located \(an explorer first; use an auditor only for a concrete risk-boundary question, or scout\/architect when appropriate\)\. Once an investigation locates it outside what the team may change \(a missing capability of a dependency or the environment, or the requirement itself\), stop investigating that blocker and escalate it\./);
     assert.match(prompt, /Worker decision requests are open decisions: resolve each one yourself .*investigating first.*Never leave one unanswered\./);
-    assert.match(prompt, /The first finish with false does not end the run: investigate the root cause of each blocker or fix it while dispatch rounds remain unlimited/);
-    assert.match(prompt, /Dispatch rounds are unlimited by default\. A round number is for ordering only, not a spending authorization\./);
+    assert.match(prompt, /The first finish with false does not end the run: investigate the root cause of each blocker or fix it within the caller-granted round allowance/);
+    assert.match(prompt, /Dispatch rounds are capped at 80 per caller-granted allowance\. Reaching the cap pauses for the owner/);
     assert.match(prompt, /acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks/);
     assert.match(prompt, /Acceptance checks: none are pinned yet/);
-    assert.match(prompt, /Dispatch rounds already used: 0\. Dispatch rounds are unlimited; the count is for ordering only/);
+    assert.match(prompt, /Dispatch rounds already used: 0\/80\. A dispatch decision consumes one round\./);
     assert.doesNotMatch(prompt, /request more rounds|Round budget:/i);
     // The rejected LL-1 escalation triggers are gone.
     assert.doesNotMatch(prompt, /survived two rounds/);
@@ -5561,7 +5600,7 @@ test('an unknown continueFrom is rejected with the rule reminder', async () => {
 
 const writerRound = () => dispatch(brief('orch-builder'));
 
-test('default runs complete more than 24 distinct research rounds without a round or elapsed-time cap', async () => {
+test('default runs complete more than 24 distinct research rounds within the default round budget and without an elapsed-time cap', async () => {
   const script = Array.from({ length: 26 }, (_, index) => dispatch({
     ...brief('orch-explorer', []),
     objective: `Inspect src/research-${index + 1}.js`,

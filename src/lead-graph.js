@@ -1853,6 +1853,19 @@ function buildLeadGraph(deps) {
     return match ? Number(match[1]) : null;
   };
 
+  // Short account of where the rounds went, for the round-limit pause.
+  function roundSummary(state) {
+    const byRole = new Map();
+    for (const outcome of state.outcomes || []) {
+      if (outcome.kind || !outcome.role) continue;
+      byRole.set(outcome.role, (byRole.get(outcome.role) || 0) + 1);
+    }
+    const roles = [...byRole].sort((a, b) => b[1] - a[1]).map(([name, count]) => `${name} ${count}`).join(', ');
+    const changes = (state.progress || []).filter((entry) => entry.kind === 'integrated_change');
+    const lastChange = changes.length > 0 ? `the last integrated change was in round ${changes.at(-1).round}` : 'no integrated change is recorded';
+    return `Summary: ${byRole.size > 0 ? `dispatches by role (${roles})` : 'no dispatch outcomes'}; ${changes.length} integrated change(s), ${lastChange}.`;
+  }
+
   // LL-6: finished read-only outcomes with a valid report, the evidence an escalation must cite.
   const investigationsOf = (state) => state.outcomes
     .filter((outcome) => !outcome.kind && outcome.sandbox === 'read-only' && outcome.status === 'TASK_STATE_COMPLETED' && outcome.report && roundOf(outcome.assignmentId) !== null)
@@ -2954,7 +2967,7 @@ function buildLeadGraph(deps) {
     }
     const limit = roundLimit(state);
     if (limit !== null && state.round >= limit) {
-      const question = `Dispatch round limit reached: ${state.round} of ${limit} rounds used and the lead has not finished. Continue with another ${maxRounds} rounds, accept the current result as is, or change the goal?`;
+      const question = `Dispatch round limit reached: ${state.round} of ${limit} rounds used and the lead has not finished. ${roundSummary(state)} Continue with another ${maxRounds} rounds, accept the current result as is, or change the goal?`;
       return { ...update, ...escalate(state, 'round_limit', question, `Stopped after reaching the caller-configured limit of ${limit} dispatch rounds.`) };
     }
     const dispatchRound = state.round + 1;

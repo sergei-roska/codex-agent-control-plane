@@ -13,7 +13,8 @@ const { buildLeadGraph, isTerminalTask, pauseMessage } = require('./lead-graph')
 const { loadSkillCatalog } = require('./skill-catalog');
 const { loadMcpCatalog } = require('./mcp-catalog');
 
-const DEFAULT_MAX_ROUNDS = null;
+// A run pauses for the owner after this many dispatch rounds; null (explicit only) means no cap.
+const DEFAULT_MAX_ROUNDS = 80;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_CANCEL_TIMEOUT_MS = 30_000;
 const DEFAULT_CANCEL_RETRY_INTERVAL_MS = 250;
