@@ -2,7 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
+const fs = require('node:fs');
+const path = require('node:path');
 const { CodexAppServer, laneSandboxPolicy } = require('../src/codex-app-server');
+const { loadMcpCatalog } = require('../src/mcp-catalog');
+const { withConnectors } = require('../src/connector-catalog');
 const { loadSkillCatalog, resolveSkillSelection } = require('../src/skill-catalog');
 const { AUT03_SKILL_ID, AUT03_SKILL_SHA256 } = require('../src/aut03-lead-skill');
 
@@ -1489,13 +1493,15 @@ test('thread/start carries the fixed per-role tool config', async (t) => {
     'skills.include_instructions': false,
     'skills.bundled.enabled': false,
     'mcp_servers.alpha.enabled': false,
+    'mcp_servers.gamma.enabled': false,
     'mcp_servers.beta.enabled': false,
   });
   assert.deepEqual(fake.getChild().sent.find(({ method }) => method === 'config/read').params.cwd, '/tmp/work');
   assert.deepEqual(result.permissionConfig.toolPolicy, {
     mcpAllowed: ['gamma'],
-    mcpDisabled: ['alpha', 'beta'],
+    mcpDisabled: ['alpha', 'gamma', 'beta'],
     mcpMissing: ['ghost'],
+    mcpSelectedTools: [],
     skills: false,
     apps: false,
     plugins: false,
@@ -1526,7 +1532,8 @@ test('thread/resume carries the tool config after a child replacement', async (t
   const tools = { mcpServers: ['alpha'], skills: false };
   await client.run({ role: toolRole(tools), cwd: '/tmp/work', input: 'one', threadId: 'old-thread' });
   const resume = fake.getChild().sent.find(({ method }) => method === 'thread/resume');
-  assert.equal(resume.params.config['mcp_servers.alpha.enabled'], undefined);
+  // P-39: an allowed server that is in no catalog is disabled, not left with every tool on.
+  assert.equal(resume.params.config['mcp_servers.alpha.enabled'], false);
   assert.equal(resume.params.config['mcp_servers.beta.enabled'], false);
   assert.equal(resume.params.config['features.plugins'], false);
 });
@@ -1546,6 +1553,105 @@ test('enumeration failure still sends apps/plugins/skills overrides and marks en
   });
   assert.equal(result.permissionConfig.toolPolicy.enforced, false);
   assert.match(result.permissionConfig.toolPolicy.reason, /enumeration failed/);
+});
+
+function inventoryHandler(names) {
+  return toolHandler(baseHandler(), (request, send) => send({
+    id: request.id, result: { config: { mcp_servers: Object.fromEntries(names.map((name) => [name, {}])) } },
+  }));
+}
+
+const connectorPick = (...ids) => ids.map((id) => ({ id, sha256: withConnectors(loadMcpCatalog()).get(id).sha256 }));
+
+async function startConfig(t, { tools, inventory, selectedMcpTools = [] }) {
+  const fake = fakeSpawn(inventoryHandler(inventory));
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const result = await client.run({ role: toolRole({ mcpServers: tools, skills: false }), cwd: '/tmp/work', input: 'hi', selectedMcpTools });
+  const start = fake.getChild().sent.find(({ method }) => method === 'thread/start');
+  return { config: start.params.config, policy: result.permissionConfig.toolPolicy };
+}
+
+test('a selected connector gets its url, exact enabled_tools and required false', async (t) => {
+  const selectedMcpTools = connectorPick('harness-figma:get_metadata', 'harness-figma:whoami');
+  const { config, policy } = await startConfig(t, { tools: ['harness-figma', 'harness-context7'], inventory: ['alpha'], selectedMcpTools });
+  assert.equal(config['mcp_servers.harness-figma.url'], 'https://mcp.figma.com/mcp');
+  assert.equal(config['mcp_servers.harness-figma.enabled'], true);
+  assert.equal(config['mcp_servers.harness-figma.required'], false);
+  assert.deepEqual(config['mcp_servers.harness-figma.enabled_tools'], ['get_metadata', 'whoami']);
+  assert.deepEqual(config['mcp_servers.harness-figma.disabled_tools'], []);
+  // No command or env is sent for a remote connector, and nothing is declared for the unselected one.
+  assert.equal('mcp_servers.harness-figma.command' in config, false);
+  assert.equal(Object.keys(config).some((key) => key.startsWith('mcp_servers.harness-context7.')), false);
+  assert.equal(config['mcp_servers.alpha.enabled'], false);
+  assert.deepEqual(policy.mcpSelectedTools, selectedMcpTools.slice().sort((a, b) => a.id.localeCompare(b.id, 'en')));
+  assert.deepEqual(policy.mcpAllowed, ['harness-figma']);
+  assert.deepEqual(policy.mcpMissing, ['harness-context7']);
+});
+
+test('a configured connector with no selected tool is disabled, as is one the role does not allow', async (t) => {
+  const selectedMcpTools = connectorPick('harness-context7:query-docs');
+  const { config, policy } = await startConfig(t, {
+    tools: ['harness-figma', 'harness-context7'],
+    inventory: ['harness-figma', 'harness-context7', 'harness-gtm'],
+    selectedMcpTools,
+  });
+  assert.equal(config['mcp_servers.harness-figma.enabled'], false);
+  assert.equal(config['mcp_servers.harness-gtm.enabled'], false);
+  assert.equal('mcp_servers.harness-figma.url' in config, false);
+  assert.equal('mcp_servers.harness-figma.required' in config, false);
+  assert.equal(config['mcp_servers.harness-context7.enabled'], true);
+  assert.deepEqual(config['mcp_servers.harness-context7.enabled_tools'], ['query-docs']);
+  assert.deepEqual(policy.mcpDisabled.sort(), ['harness-figma', 'harness-gtm']);
+});
+
+test('P-39: an allowed server that is in no catalog is disabled instead of keeping every tool', async (t) => {
+  const { config, policy } = await startConfig(t, { tools: ['alpha'], inventory: ['alpha', 'beta'] });
+  assert.equal(config['mcp_servers.alpha.enabled'], false);
+  assert.equal(config['mcp_servers.beta.enabled'], false);
+  assert.deepEqual(policy.mcpDisabled, ['alpha', 'beta']);
+  assert.deepEqual(policy.mcpAllowed, ['alpha']);
+});
+
+test('connector selections are rejected before launch when outside the role ceiling or the allowlist', async (t) => {
+  const fake = fakeSpawn(inventoryHandler([]));
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const run = (tools, selectedMcpTools) => client.run({ role: toolRole({ mcpServers: tools, skills: false }), cwd: '/tmp/work', input: 'hi', selectedMcpTools });
+  await assert.rejects(run(['harness-context7'], connectorPick('harness-figma:whoami')), /not available to this role/);
+  await assert.rejects(run(['harness-gtm'], [{ id: 'harness-gtm:list_accounts', sha256: 'a'.repeat(64) }]), /Unknown MCP tool id/);
+  await assert.rejects(run(['harness-figma'], [{ id: 'harness-figma:whoami', sha256: 'a'.repeat(64) }]), /pin does not match/);
+  await assert.rejects(run(['harness-figma'], [{ id: 'harness-figma:delete_file', sha256: 'a'.repeat(64) }]), /Unknown MCP tool id/);
+  assert.equal(fake.getChildren().length, 0);
+});
+
+test('Drupal tool selection keeps its stdio config and required true, next to a connector', async (t) => {
+  const drupalId = 'harness-drupal-static:list_custom_modules';
+  const drupal = loadMcpCatalog();
+  const server = drupal.servers.get('harness-drupal-static');
+  if (!fs.existsSync(path.join(server.absolutePackagePath, 'vendor', 'autoload.php'))) {
+    t.skip('Drupal MCP package dependencies are not installed');
+    return;
+  }
+  const selectedMcpTools = [{ id: drupalId, sha256: drupal.get(drupalId).sha256 }, ...connectorPick('harness-context7:query-docs')];
+  const { config, policy } = await startConfig(t, {
+    tools: ['harness-drupal-static', 'harness-drupal-ops', 'harness-context7'],
+    inventory: ['harness-drupal-ops', 'harness-drupal-static'],
+    selectedMcpTools,
+  });
+  const name = 'harness-drupal-static';
+  assert.equal(config[`mcp_servers.${name}.command`], 'php');
+  assert.deepEqual(config[`mcp_servers.${name}.args`], [path.join(server.absolutePackagePath, 'bin', 'server.php')]);
+  assert.equal(config[`mcp_servers.${name}.cwd`], server.absolutePackagePath);
+  assert.deepEqual(config[`mcp_servers.${name}.env`], { PROJECT_ROOT: '/tmp/work' });
+  assert.equal(config[`mcp_servers.${name}.enabled`], true);
+  assert.equal(config[`mcp_servers.${name}.required`], true);
+  assert.deepEqual(config[`mcp_servers.${name}.enabled_tools`], ['list_custom_modules']);
+  assert.equal('mcp_servers.harness-drupal-static.url' in config, false);
+  assert.equal(config['mcp_servers.harness-drupal-ops.enabled'], false);
+  assert.equal(config['mcp_servers.harness-context7.required'], false);
+  assert.equal(config['mcp_servers.harness-context7.url'], 'https://mcp.context7.com/mcp');
+  assert.deepEqual(policy.mcpSelectedTools.map(({ id }) => id), ['harness-context7:query-docs', drupalId]);
 });
 
 test('mcpServerStatus lists status for a thread', async (t) => {

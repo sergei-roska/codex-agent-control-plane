@@ -19,6 +19,7 @@ Implementation, isolated verification, and live qualification are separate.
 
 | Date | Decision | ADR |
 |---|---|---|
+| 2026-10-19 | External connectors (Confluence with Jira, Figma, GTM, Context7) are Harness-owned: one catalog, read-only default allowlists, browser OAuth through the app-server, credentials in the account home; backend implemented and independently reviewed; live sign-in and tool check pending | docs/adr/harness-managed-connectors.md |
 | 2026-10-14 | Chuck Norris system repair agent added, then removed the same day after its first live use (superseded) | docs/adr/chuck-norris-system-repair.md |
 | 2026-10-12 | Retain staging problems, attempted resolutions, and architectural decisions with evidence and statuses; durable runtime implementation qualified in isolation | docs/adr/staging-lessons-and-decision-log.md |
 | 2026-10-11 | Session token usage is attributed through lead run ids and the dispatch journal, not context ids | docs/adr/launcher-session-usage-attribution.md |
@@ -585,3 +586,23 @@ measured audit savings.
   subsequent review gates are pending.
 - Production: never rewrite old evidence pins to match changed files. Bind a new
   candidate revision and renew every affected gate before acceptance.
+
+### P-39 Allowed MCP servers outside the catalog expose all their tools
+
+- Found: 2026-10-19 by static reading of `_toolPolicy` in
+  `src/codex-app-server.js` while planning external connectors.
+- Symptom (expected, not observed live): a role that lists a server in
+  `mcp_servers` but that is not a catalog-managed Drupal server keeps the server
+  enabled with every tool, including write tools, because `enabled_tools` is set
+  only for catalog servers.
+- Cause: the policy manages `enabled` and `enabled_tools` only for servers in the
+  Drupal catalog; `mcpDisabled` excludes allowed unmanaged servers.
+- Fix: `_toolPolicy` in `src/codex-app-server.js` disables every configured server
+  that has no selected tool in this assignment, per
+  `docs/adr/harness-managed-connectors.md` (decision 7). The P-39 test in
+  `test/codex-app-server.test.js` fails on the previous code.
+- Status: fixed in code; independent review APPROVE on 2026-10-19. Live
+  verification pending. No live impact recorded, because no unmanaged server was
+  allowed by any profile before this change.
+- Production: check the production orchestrator's `_toolPolicy` for the same gap
+  before any external MCP server is allowed to a role.

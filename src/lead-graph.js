@@ -16,7 +16,8 @@ const {
 } = require('./acceptance');
 const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicContextId } = require('./durable-store');
 const { loadSkillCatalog, findSkillCandidates, resolveSkillSelection } = require('./skill-catalog');
-const { loadMcpCatalog, findMcpToolCandidates, resolveMcpToolSelection, mcpToolPins } = require('./mcp-catalog');
+const { loadMcpCatalog, findMcpToolCandidates, mcpToolPins } = require('./mcp-catalog');
+const { withConnectors, resolveManagedToolSelection: resolveMcpToolSelection } = require('./connector-catalog');
 const {
   AUT03_SKILL_ID, AUT03_SKILL_SHA256, expectedLeadSkillContext,
   resolveLeadSelectedSkills, sameLeadSkillContext,
@@ -734,7 +735,7 @@ function buildLeadGraph(deps) {
     appServer, roles, leadRole, workspace, maxRounds, journal, pollIntervalMs,
   } = deps;
   const skillCatalog = deps.skillCatalog || loadSkillCatalog();
-  const mcpCatalog = deps.mcpCatalog || loadMcpCatalog();
+  const mcpCatalog = withConnectors(deps.mcpCatalog || loadMcpCatalog());
   const trialRunIds = deps.aut03TrialRunIds instanceof Set ? deps.aut03TrialRunIds : new Set();
   const aut03LeadSkillEnabled = deps.aut03LeadSkillEnabled === true;
   const skillPin = deps.aut03SkillPin || { id: AUT03_SKILL_ID, sha256: AUT03_SKILL_SHA256 };

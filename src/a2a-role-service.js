@@ -12,7 +12,8 @@ const {
 } = require('./contracts');
 const { WriterAdmission } = require('./writer-admission');
 const { loadSkillCatalog, resolveSkillSelection } = require('./skill-catalog');
-const { loadMcpCatalog, resolveMcpToolSelection, mcpToolPins } = require('./mcp-catalog');
+const { loadMcpCatalog, mcpToolPins } = require('./mcp-catalog');
+const { resolveManagedToolSelection: resolveMcpToolSelection } = require('./connector-catalog');
 const { canonicalRoleId, legacyRoleId, roleDisplayName } = require('./role-names');
 const { deterministicContextId } = require('./durable-store');
 const { POLICY_ID, computeReviewTarget, reviewResult } = require('./review-policy');

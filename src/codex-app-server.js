@@ -7,6 +7,7 @@ const { readProcessIdentity, listGroupMembers } = require('./process-quiescence'
 const { classifyCodexError } = require('./contracts');
 const { DEFAULT_SKILLS_ROOT } = require('./skill-catalog');
 const { loadMcpCatalog, resolveMcpToolSelection, mcpToolPins } = require('./mcp-catalog');
+const { withConnectors, resolveConnectorToolSelection, resolveManagedToolSelection } = require('./connector-catalog');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_TURN_TIMEOUT_MS = 3_600_000;
@@ -654,14 +655,26 @@ class CodexAppServer {
   // Fixed per-role tool surface: everything not declared in the role profile is off.
   async _toolPolicy(role, cwd, selectedMcpTools = []) {
     const allowed = [...new Set(role.tools?.mcpServers || [])];
+    // Drupal tools keep their own resolver; harness connector tools go to the connector resolver.
+    const connectors = withConnectors(this.mcpCatalog).connectorCatalog;
+    const isConnector = ({ id }) => connectors.has(id);
     const selected = resolveMcpToolSelection(this.mcpCatalog,
-      selectedMcpTools.map(({ id }) => id),
-      { allowedServers: allowed, pins: mcpToolPins(selectedMcpTools) });
+      selectedMcpTools.filter((item) => !isConnector(item)).map(({ id }) => id),
+      { allowedServers: allowed, pins: mcpToolPins(selectedMcpTools.filter((item) => !isConnector(item))) });
+    const selectedConnector = resolveConnectorToolSelection(connectors,
+      selectedMcpTools.filter(isConnector).map(({ id }) => id),
+      { allowedServers: allowed, pins: mcpToolPins(selectedMcpTools.filter(isConnector)) });
     const selectedByServer = new Map();
     for (const item of selected) {
       if (!selectedByServer.has(item.configName)) selectedByServer.set(item.configName, []);
       selectedByServer.get(item.configName).push(item.name);
     }
+    const connectorByServer = new Map();
+    for (const item of selectedConnector) {
+      if (!connectorByServer.has(item.configName)) connectorByServer.set(item.configName, []);
+      connectorByServer.get(item.configName).push(item.name);
+    }
+    const selectedNames = new Set([...selectedByServer.keys(), ...connectorByServer.keys()]);
     const skills = role.tools?.skills === true;
     const config = { 'features.apps': false, 'features.plugins': false, tool_output_token_limit: toolOutputLimit() };
     if (!skills) {
@@ -672,7 +685,7 @@ class CodexAppServer {
       mcpAllowed: [],
       mcpDisabled: [],
       mcpMissing: [],
-      mcpSelectedTools: mcpToolPins(selected),
+      mcpSelectedTools: mcpToolPins([...selected, ...selectedConnector]),
       skills,
       apps: false,
       plugins: false,
@@ -683,11 +696,12 @@ class CodexAppServer {
     const configuredNames = new Set(inventory.names || []);
     if (inventory.names) {
       const known = new Set(inventory.names);
-      policy.mcpAllowed = allowed.filter((name) => known.has(name) || selectedByServer.has(name));
-      policy.mcpMissing = allowed.filter((name) => !known.has(name) && !selectedByServer.has(name));
-      const managedNames = new Set(this.mcpCatalog.servers.keys());
-      policy.mcpDisabled = inventory.names.filter((name) => !allowed.includes(name)
-        || (managedNames.has(name) && !selectedByServer.has(name)));
+      policy.mcpAllowed = allowed.filter((name) => known.has(name) || selectedNames.has(name));
+      policy.mcpMissing = allowed.filter((name) => !known.has(name) && !selectedNames.has(name));
+      // P-39: a configured server stays on only when this assignment selected tools of it. That covers
+      // servers outside the role's list, unselected Drupal and connector servers, and allowed servers
+      // that are in no catalog (they must not keep every tool enabled).
+      policy.mcpDisabled = inventory.names.filter((name) => !selectedNames.has(name));
       for (const name of policy.mcpDisabled) config[`mcp_servers.${name}.enabled`] = false;
       policy.enforced = true;
     } else {
@@ -697,8 +711,8 @@ class CodexAppServer {
         failureClass: 'request_rejected',
       });
     }
-    policy.mcpAllowed = [...new Set([...policy.mcpAllowed, ...selectedByServer.keys()])];
-    policy.mcpMissing = policy.mcpMissing.filter((name) => !selectedByServer.has(name));
+    policy.mcpAllowed = [...new Set([...policy.mcpAllowed, ...selectedNames])];
+    policy.mcpMissing = policy.mcpMissing.filter((name) => !selectedNames.has(name));
     for (const name of this.mcpCatalog.servers.keys()) {
       if (!selectedByServer.has(name) && configuredNames.has(name)) config[`mcp_servers.${name}.enabled`] = false;
     }
@@ -715,6 +729,16 @@ class CodexAppServer {
       config[`mcp_servers.${name}.env`] = { PROJECT_ROOT: cwd };
       config[`mcp_servers.${name}.enabled`] = true;
       config[`mcp_servers.${name}.required`] = true;
+      config[`mcp_servers.${name}.enabled_tools`] = toolNames;
+      config[`mcp_servers.${name}.disabled_tools`] = [];
+    }
+    // Connectors are remote and OAuth-backed: never required, so a missing sign-in cannot stop every turn.
+    for (const [name, toolNames] of connectorByServer) {
+      const server = connectors.servers.get(name);
+      if (!server || !allowed.includes(name)) throw new CodexAppServerError(`MCP server ${name} is not allowed for role ${role.name}`, { failureClass: 'request_rejected' });
+      config[`mcp_servers.${name}.url`] = server.url;
+      config[`mcp_servers.${name}.enabled`] = true;
+      config[`mcp_servers.${name}.required`] = false;
       config[`mcp_servers.${name}.enabled_tools`] = toolNames;
       config[`mcp_servers.${name}.disabled_tools`] = [];
     }
@@ -742,7 +766,7 @@ class CodexAppServer {
     if (typeof input !== 'string' || !input.trim()) throw new TypeError('input must be a non-empty string');
     if (signal?.aborted) throw abortError();
     const validatedSkills = validateSelectedSkills(selectedSkills);
-    const validatedMcpTools = resolveMcpToolSelection(this.mcpCatalog,
+    const validatedMcpTools = resolveManagedToolSelection(this.mcpCatalog,
       selectedMcpTools.map((item) => item?.id),
       { allowedServers: role.tools?.mcpServers || [], pins: mcpToolPins(selectedMcpTools) });
 

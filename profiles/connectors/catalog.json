@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "connectors": [
+    {
+      "config_name": "harness-atlassian",
+      "url": "https://mcp.atlassian.com/v2/mcp",
+      "purpose": "Read Jira issues and Confluence pages for project context.",
+      "data_sensitivity": "company tickets and documentation",
+      "auth": "oauth",
+      "tools_verified": false,
+      "read_only_tools": [
+        { "name": "unverified_jira_search", "description": "UNVERIFIED placeholder for the Jira issue search tool. Replace with the live tool name after sign-in." },
+        { "name": "unverified_jira_get", "description": "UNVERIFIED placeholder for the Jira issue read tool. Replace with the live tool name after sign-in." },
+        { "name": "unverified_confluence_search", "description": "UNVERIFIED placeholder for the Confluence search tool. Replace with the live tool name after sign-in." },
+        { "name": "unverified_confluence_get", "description": "UNVERIFIED placeholder for the Confluence page read tool. Replace with the live tool name after sign-in." }
+      ]
+    },
+    {
+      "config_name": "harness-figma",
+      "url": "https://mcp.figma.com/mcp",
+      "purpose": "Read Figma designs, variables and screenshots for implementation work.",
+      "data_sensitivity": "company design files",
+      "auth": "oauth",
+      "tools_verified": false,
+      "read_only_tools": [
+        { "name": "get_design_context", "description": "Read the design context of a Figma node for implementation." },
+        { "name": "get_metadata", "description": "Read the structure and metadata of a Figma node." },
+        { "name": "get_screenshot", "description": "Render a screenshot of a Figma node." },
+        { "name": "get_variable_defs", "description": "Read the variable definitions used by a Figma node." },
+        { "name": "search_design_system", "description": "Search the Figma design system for components and styles." },
+        { "name": "whoami", "description": "Read the signed-in Figma account identity." }
+      ]
+    },
+    {
+      "config_name": "harness-context7",
+      "url": "https://mcp.context7.com/mcp",
+      "purpose": "Look up current library documentation.",
+      "data_sensitivity": "public documentation; queries leave the machine",
+      "auth": "oauth",
+      "tools_verified": false,
+      "read_only_tools": [
+        { "name": "resolve-library-id", "description": "Resolve a library name to a Context7 library id." },
+        { "name": "query-docs", "description": "Query the documentation of a resolved library." }
+      ]
+    },
+    {
+      "config_name": "harness-gtm",
+      "url": "https://gtm-mcp.stape.ai/mcp",
+      "purpose": "Google Tag Manager access; no tool is allowed until the owner classifies them.",
+      "data_sensitivity": "company tag manager containers",
+      "auth": "oauth",
+      "tools_verified": false,
+      "read_only_tools": []
+    }
+  ]
+}

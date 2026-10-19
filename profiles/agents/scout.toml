@@ -14,5 +14,5 @@ Return the JSON worker report required by the output schema. List each needed pa
 """
 
 [a2a_tools]
-mcp_servers = ["harness-drupal-static", "harness-drupal-config", "harness-drupal-content", "harness-drupal-ops", "harness-drupal-render", "harness-drupal-db-ops"]
+mcp_servers = ["harness-drupal-static", "harness-drupal-config", "harness-drupal-content", "harness-drupal-ops", "harness-drupal-render", "harness-drupal-db-ops", "harness-atlassian", "harness-context7"]
 skills = false
