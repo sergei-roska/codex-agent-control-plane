@@ -195,3 +195,47 @@ and LL-6.
 
 The running staging server remains under the owner's control. Implementation
 and isolated tests do not activate code in that process or resume its paused run.
+
+## LL-9 stopping and concluding with a partial result (2026-10-20)
+
+Evidence: run 9e2c8b53 dispatched 265 times in 251 rounds and never finished;
+151 dispatches were verifier or auditor, in streaks of 8-13 rounds with no
+implementation. The LL-8 evidence-identity guard fired once, because reviewer
+reports differ in wording every round. There was no round cap, environment
+blockers became owner pauses that re-entered dispatch, and the only terminal
+states were an accepted goal or a `goal_not_achieved` pause.
+
+Mechanical stops:
+
+- Recurrence guard (`src/loop-guard.js`). Second key: (checkpoint id or
+  objective, role class verify|audit|investigate, target identity). Target
+  identity is the tracked review target, else the scoped content identity,
+  else the objective; report text and file lists are excluded. Three rounds of
+  one key with no integrated writable change in between pause `loop_detected`
+  (same owner choices as before; `continue` resets). Plain research without a
+  checkpoint id is left to the evidence guard, which existing behavior relies
+  on (the same research objective with new evidence is progress).
+- `DEFAULT_MAX_ROUNDS` is 80. The existing `round_limit` pause carries a
+  summary by role and integrated changes; `continue` grants another 80.
+  `maxRounds: null` remains an explicit opt-out.
+
+Concluding:
+
+- `partial` disposition: finish with `goalAchieved` false and a ledger
+  `checkpoints: [{ id, status: accepted|blocked|not_started, reason, evidence }]`.
+  The task is `COMPLETED`; artifact metadata has `disposition: "partial"` and
+  the ledger; the CLI exits 5 (4 wins when acceptance failed). Review gates are
+  waived only for blocked and not-started ledger entries. Failed acceptance
+  downgrades accepted entries to blocked, so the ledger is never more
+  optimistic than the checks.
+- Blocked checkpoints: an owner answer `defer` or `outside_run` to an
+  `infeasible_requirement` or `credentials_or_access` request blocks the
+  checkpoints it cites; no more verifier or auditor dispatch, no automatic
+  review recovery, and no hold on unrelated writers. Free-text answers are not
+  interpreted; the option id is the signal.
+- Lead contract: finish with the partial ledger when every remaining
+  checkpoint is accepted or blocked by something the team cannot do here;
+  re-verifying unchanged content is not progress.
+
+Not changed: acceptance semantics for owner and agent checks, writer admission,
+and review-policy receipts.

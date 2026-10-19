@@ -118,23 +118,61 @@ After a batch, the lead graph settles every writable outcome that is not provabl
 
 ### Long runs and repeated work
 
-Dispatch rounds have no default limit. Healthy implementation and research can
-continue across short or long rounds; the counter is retained for reporting.
-Callers may explicitly set a positive `maxRounds` when constructing the
-orchestrator to impose their own cap. Progress does not extend an explicit cap;
-owner `continue` or `change_goal` grants another configured allowance.
+A run has a default budget of 80 dispatch rounds (`DEFAULT_MAX_ROUNDS`, a
+per-run cap). Reaching it does not fail the run: it pauses as `round_limit`
+with a summary of where the rounds went (dispatches by role, integrated
+changes). Owner `continue` grants another 80 rounds, `change_goal` starts a
+fresh allowance, and `accept_as_is` finishes with the current result. A caller
+may pass another positive `maxRounds` to the orchestrator, or `null` for no
+cap. Progress does not extend the cap automatically.
 
-A bounded, checkpointed loop detector warns the lead after three equivalent
-outcomes with unchanged relevant evidence. Another unchanged recurrence pauses
-the run with `loop_detected` and evidence of the repeated work. The lead gets
-the warning in its ordinary turn, without an extra model call. Owner `continue`
-or `change_goal` starts a new detection episode; restart and usage-limit resume
-retain the history. `accept_as_is` still runs all acceptance and review gates.
+Two checkpointed detectors stop repeated work. Both pause the run with
+`loop_detected`; owner `continue` or `change_goal` resets both, restart and
+usage-limit resume retain their history, and `accept_as_is` still runs all
+acceptance and review gates.
 
-The detector is a heuristic over available evidence, not a guarantee that every
-semantic loop is recognized. Per-invocation graph step limits resume from an
-advanced checkpoint instead of exhausting the run's dispatch allowance. See
-[LL-8](docs/lead-loop-fixes-design.md#ll-8-healthy-long-runs-and-repeated-work-recovery-2026-10-12).
+- Evidence guard: the lead is warned after three equivalent outcomes with
+  unchanged relevant evidence (the identity of the report's inspected files,
+  checks and findings); another unchanged recurrence pauses the run. The lead
+  gets the warning in its ordinary turn, without an extra model call.
+- Recurrence guard: the key is (checkpoint id, role class, target content
+  identity). The role class is `verify` (verifier), `audit` (auditor) or
+  `investigate` (explorer, scout, architect); the target is the review target
+  identity the run tracks, else the scoped content identity, else the
+  objective. Without a checkpoint id the objective stands in for it, except
+  for plain research (no checkpoint), which stays with the evidence guard.
+  Report text and file lists are not part of the key, so a reviewer that words
+  its findings differently each round still counts. When the same key recurs
+  in three rounds with no implementation in between (a writable dispatch whose
+  change reached the workspace resets every count), the run pauses with the
+  rounds and the checkpoint listed. There is no warning step.
+
+The detectors are heuristics over available evidence, not a guarantee that
+every semantic loop is recognized. Per-invocation graph step limits resume from
+an advanced checkpoint instead of exhausting the run's dispatch allowance. See
+[LL-8](docs/lead-loop-fixes-design.md#ll-8-healthy-long-runs-and-repeated-work-recovery-2026-10-12)
+and [LL-9](docs/lead-loop-fixes-design.md#ll-9-stopping-and-concluding-with-a-partial-result-2026-10-20).
+
+### Partial result
+
+The lead may finish with `goalAchieved: false` and a `checkpoints` ledger of
+`{ id, status, reason, evidence }` entries, `status` being `accepted` (evidence
+required), `blocked` or `not_started` (reason required), at least one of them
+not accepted. That ends the run without an owner pause or an extra
+investigation round: the task is `COMPLETED`, the result text starts with the
+ledger, and the artifact metadata carries `disposition: "partial"` and
+`checkpoints`. Acceptance still runs when checks are pinned and its result is
+reported next to the ledger. A run whose acceptance is `rejected` or
+`unverifiable` never reports a checkpoint as `accepted`; those entries are
+downgraded to `blocked` with the reason. Review gates still apply to accepted
+checkpoints; blocked and not-started ones need no receipts.
+
+When an `infeasible_requirement` or `credentials_or_access` request is answered
+with the option id `defer` or `outside_run`, the review checkpoints it cites
+(by checkpoint id or by an assignmentId in `evidenceChecked`) are recorded as
+blocked: verifier and auditor dispatch for them is refused and they no longer
+hold unrelated writers or the finish gate of a partial finish. The ledger
+reports them as `blocked` with the owner's answer as the reason.
 
 ## Acceptance
 
@@ -156,7 +194,7 @@ npm run ask -- --check 'npm test' --check 'node --check src/server.js' "Implemen
 
 The launcher composer has an optional "Acceptance checks" box (one command per line) that sends the same checks for a new run. Owner checks run on the host, unsandboxed. To set default owner checks once per project, add `ownerChecks` to the project settings file (`CODEX_A2A_PROJECT_SETTINGS`, read at server start, so restart the project to apply): `{ "version": 1, "ownerChecks": ["npm test"] }`. They apply to a new run that carries no explicit checks; explicit checks replace them. See [docs/execution-boundary-contract.md](docs/execution-boundary-contract.md).
 
-The task stays `COMPLETED`; the result text starts with `Acceptance: <disposition>` and the artifact metadata carries `acceptance`. The CLI exits 4 for `rejected` and `unverifiable`. Direct A2A clients may send `metadata.acceptance = { requiredChecks: [{ id, argv, timeoutMs? }] }` on the first message.
+The task stays `COMPLETED`; the result text starts with `Acceptance: <disposition>` and the artifact metadata carries `acceptance`. The CLI exits 4 for `rejected` and `unverifiable` and 5 for a partial result (see Partial result; exit 4 takes precedence when both apply). Direct A2A clients may send `metadata.acceptance = { requiredChecks: [{ id, argv, timeoutMs? }] }` on the first message.
 
 ## Background process cleanup
 
@@ -215,7 +253,7 @@ The design is in [hardening-spec.md](docs/hardening-spec.md); [efficiency-compar
 - The client pins `approvalsReviewer: "user"` on thread/start, thread/resume, and turn/start, overriding any `auto_review` in the user's Codex config, so every approval request reaches the local App Server client, which declines it. A task that needs an additional permission must report that need; this service does not grant it silently.
 - Runs are durable. LangGraph checkpoints, A2A tasks, and the dispatch journal live in `.runtime/state.sqlite` (override with `CODEX_A2A_STATE_DB`), and only one server may use a state file at a time. After a crash, the lead task shows `INPUT_REQUIRED` (pause `restart`). Worker tasks that were running show `FAILED` (`interrupted`). On startup the server reconciles the interrupted writer mechanically (see Writer admission), so the lead sees attested effects instead of inspecting the workspace itself.
 - If the Codex App Server child exits or times out, the next request starts a replacement process. An interrupted writer may have changed files, so its outcome is unknown until the server proves the writer stopped (reconciliation); no new writer runs before that.
-- Pauses: a usage limit (`waiting_for_budget`), a rare human decision (`human_decision`), a restart, or a resumable error leaves the lead task `INPUT_REQUIRED` with `metadata.pause`. Continue with `npm run ask -- --task <taskId> [--decision <id>] [--choice <optionId>] "<answer>"`. The CLI exits with code 3 while a task is paused and 4 when acceptance is `rejected` or `unverifiable`.
+- Pauses: a usage limit (`waiting_for_budget`), a rare human decision (`human_decision`), a restart, or a resumable error leaves the lead task `INPUT_REQUIRED` with `metadata.pause`. Continue with `npm run ask -- --task <taskId> [--decision <id>] [--choice <optionId>] "<answer>"`. The CLI exits with code 3 while a task is paused, 4 when acceptance is `rejected` or `unverifiable`, and 5 when the run finished with a partial result.
 - The lead validates assigned file paths and passes allowed files to workers. The Codex workspace sandbox restricts writes to the workspace, but the per-file assignment is enforced by worker instructions, not by a separate filesystem boundary. Use a trusted local workspace.
 - A local bearer token protects the A2A JSON-RPC endpoints, and the server binds only to loopback. Agent Cards remain public for A2A discovery. Codex App Server is currently documented as experimental and unsupported for production workloads.
 
