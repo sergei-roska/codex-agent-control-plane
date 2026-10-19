@@ -91,7 +91,7 @@ describe('GET /api/connectors', () => {
     for (const c of body.connectors) {
       assert.equal(typeof c.purpose, 'string');
       assert.equal(typeof c.dataSensitivity, 'string');
-      assert.equal(c.toolsVerified, false);
+      assert.equal(typeof c.toolsVerified, 'boolean');
     }
     assert.equal(servers.length, 1);
     assert.equal(servers[0].closed, true);
@@ -102,6 +102,7 @@ describe('GET /api/connectors', () => {
       'harness-atlassian': { authStatus: 'oAuth', runtimeStatus: 'connected' },
       'harness-figma': { authStatus: 'notLoggedIn', runtimeStatus: null },
       'harness-context7': { authStatus: 'unsupported', runtimeStatus: null },
+      'harness-gtm': { authStatus: 'notLoggedIn', runtimeStatus: null, tools: {}, toolsError: 'Auth required' },
     };
     const { body } = await api('GET', '/api/connectors');
     const byName = Object.fromEntries(body.connectors.map((c) => [c.name, c]));
@@ -109,8 +110,7 @@ describe('GET /api/connectors', () => {
     assert.equal(byName['harness-figma'].state, 'needs_sign_in');
     assert.equal(byName['harness-context7'].state, 'unknown');
     assert.match(byName['harness-context7'].detail, /unsupported/);
-    assert.equal(byName['harness-gtm'].state, 'unknown');
-    assert.match(byName['harness-gtm'].detail, /did not report/);
+    assert.equal(byName['harness-gtm'].state, 'needs_sign_in');
   });
 
   it('reports every state unknown, with a reason, when the app-server fails', async () => {
@@ -348,10 +348,64 @@ describe('connector service internals', () => {
     });
   });
 
-  it('mapState needs explicit evidence for signed_in', () => {
-    assert.equal(mapState(undefined).state, 'unknown');
-    assert.equal(mapState({ authStatus: 'unknown' }).state, 'unknown');
-    assert.equal(mapState({ authStatus: 'oAuth', runtimeStatus: 'authenticationRequired' }).state, 'needs_sign_in');
-    assert.equal(mapState({ authStatus: 'bearerToken' }).state, 'signed_in');
+  describe('mapState with live-shaped entries', () => {
+    const tool = (name) => ({ name, inputSchema: {}, annotations: { readOnlyHint: true } });
+
+    it('no entry is unknown with the existing detail', () => {
+      assert.deepEqual(mapState(undefined), { state: 'unknown', detail: 'App-server did not report this server' });
+    });
+
+    it('authenticationRequired is needs_sign_in even with oAuth on record', () => {
+      assert.equal(mapState({ authStatus: 'oAuth', runtimeStatus: 'authenticationRequired', tools: {}, toolsError: null }).state, 'needs_sign_in');
+    });
+
+    it('notLoggedIn without tools (Figma, GTM) is needs_sign_in', () => {
+      const entry = { name: 'harness-figma', authStatus: 'notLoggedIn', runtimeStatus: null, tools: {}, toolsError: 'Auth required' };
+      assert.equal(mapState(entry).state, 'needs_sign_in');
+      assert.equal(mapState({ ...entry, tools: undefined }).state, 'needs_sign_in');
+    });
+
+    it('oAuth or bearerToken is signed_in (Atlassian)', () => {
+      const tools = { getJiraIssue: tool('getJiraIssue'), searchConfluence: tool('searchConfluence') };
+      assert.equal(mapState({ name: 'harness-atlassian', authStatus: 'oAuth', runtimeStatus: null, tools, toolsError: null }).state, 'signed_in');
+      assert.equal(mapState({ authStatus: 'bearerToken', runtimeStatus: null, tools: {}, toolsError: null }).state, 'signed_in');
+    });
+
+    it('oAuth with an Auth required toolsError is needs_sign_in, not signed_in', () => {
+      const tools = { getJiraIssue: tool('getJiraIssue') };
+      const entry = { authStatus: 'oAuth', runtimeStatus: null, tools: {}, toolsError: 'MCP startup failed: Auth required' };
+      assert.equal(mapState(entry).state, 'needs_sign_in');
+      assert.equal(mapState({ ...entry, authStatus: 'bearerToken', toolsError: 'auth REQUIRED' }).state, 'needs_sign_in');
+      assert.equal(mapState({ ...entry, tools, toolsError: 'Auth required' }).state, 'needs_sign_in');
+      assert.equal(mapState({ ...entry, runtimeStatus: 'authenticationRequired', toolsError: 'other' }).state, 'needs_sign_in');
+    });
+
+    it('oAuth with another toolsError is unknown with the error in the detail', () => {
+      const result = mapState({ authStatus: 'oAuth', runtimeStatus: null, tools: {}, toolsError: 'MCP startup failed: timeout' });
+      assert.equal(result.state, 'unknown');
+      assert.match(result.detail, /timeout/);
+    });
+
+    it('tools without error and no sign-in on record is available (Context7)', () => {
+      const entry = {
+        name: 'harness-context7',
+        authStatus: 'notLoggedIn',
+        runtimeStatus: null,
+        tools: { 'resolve-library-id': tool('resolve-library-id'), 'query-docs': tool('query-docs') },
+        toolsError: null,
+      };
+      assert.equal(mapState(entry).state, 'available');
+      assert.equal(mapState({ ...entry, authStatus: 'unsupported' }).state, 'available');
+      assert.equal(mapState({ ...entry, authStatus: 'unknown' }).state, 'available');
+    });
+
+    it('anything else is unknown with a detail', () => {
+      const unsupported = mapState({ authStatus: 'unsupported', runtimeStatus: null, tools: {}, toolsError: null });
+      assert.equal(unsupported.state, 'unknown');
+      assert.match(unsupported.detail, /unsupported/);
+      const broken = mapState({ authStatus: 'unknown', runtimeStatus: null, tools: { x: tool('x') }, toolsError: 'handshake failed' });
+      assert.equal(broken.state, 'unknown');
+      assert.match(broken.detail, /handshake failed/);
+    });
   });
 });

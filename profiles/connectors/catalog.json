@@ -8,12 +8,14 @@
       "purpose": "Read Jira issues and Confluence pages for project context.",
       "data_sensitivity": "company tickets and documentation",
       "auth": "oauth",
-      "tools_verified": false,
+      "tools_verified": true,
       "read_only_tools": [
-        { "name": "unverified_jira_search", "description": "UNVERIFIED placeholder for the Jira issue search tool. Replace with the live tool name after sign-in." },
-        { "name": "unverified_jira_get", "description": "UNVERIFIED placeholder for the Jira issue read tool. Replace with the live tool name after sign-in." },
-        { "name": "unverified_confluence_search", "description": "UNVERIFIED placeholder for the Confluence search tool. Replace with the live tool name after sign-in." },
-        { "name": "unverified_confluence_get", "description": "UNVERIFIED placeholder for the Confluence page read tool. Replace with the live tool name after sign-in." }
+        { "name": "getJiraIssue", "description": "Get a Jira or JSM issue by key or ID. Use for one known issue; use searchJiraIssuesUsingJql to find or list many issues. Reports how many comments an issue has, not the comments themselves. View \"evidence\" also returns the issue's links to other issues." },
+        { "name": "searchJiraIssuesUsingJql", "description": "Search for Jira issues using JQL, with an optional approximate count. Use view: \"evidence\" to fetch and map custom fields. Page with nextPageToken until isLast is true. For one known issue, use getJiraIssue. JQL only returns issues; inferring anything else from issue rows is silently incomplete." },
+        { "name": "getConfluenceContent", "description": "Read any Confluence content (page, blog, live doc, comment, whiteboard, embed, database, folder). Requires at least one content locator: content_id or content_url." },
+        { "name": "searchConfluence", "description": "Search Confluence content with CQL." },
+        { "name": "getAccessibleAtlassianResources", "description": "Returns the cloudId(s) available to the current user." },
+        { "name": "atlassianUserInfo", "description": "Returns the accountId of the current user." }
       ]
     },
     {
@@ -40,7 +42,7 @@
       "purpose": "Look up current library documentation.",
       "data_sensitivity": "public documentation; queries leave the machine",
       "auth": "oauth",
-      "tools_verified": false,
+      "tools_verified": true,
       "read_only_tools": [
         { "name": "resolve-library-id", "description": "Resolve a library name to a Context7 library id." },
         { "name": "query-docs", "description": "Query the documentation of a resolved library." }

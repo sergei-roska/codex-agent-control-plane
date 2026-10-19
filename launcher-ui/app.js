@@ -2610,6 +2610,11 @@
       return typeof url === 'string' && /^https:\/\//i.test(url);
     }
 
+    // States that need no sign-in action: signed in, or reachable without sign-in.
+    function connectorIsReady(c) {
+      return c.state === 'signed_in' || c.state === 'available';
+    }
+
     function stopConnectorPolling(name) {
       if (connectorPollTimers[name]) clearInterval(connectorPollTimers[name]);
       delete connectorPollTimers[name];
@@ -2628,6 +2633,9 @@
       if (c.state === 'signed_in') {
         pillClass = 'pill-completed';
         pillText = 'Connected';
+      } else if (c.state === 'available') {
+        pillClass = 'pill-completed';
+        pillText = 'Available';
       } else if (c.state === 'needs_sign_in') {
         pillClass = 'pill-paused';
         pillText = 'Not connected';
@@ -2638,7 +2646,7 @@
       if (c.purpose) row.appendChild(textEl('p', 'connector-purpose', c.purpose));
       if (c.state === 'unknown' && c.detail) row.appendChild(textEl('p', 'connector-detail', c.detail));
 
-      if (c.state !== 'signed_in') {
+      if (!connectorIsReady(c)) {
         const actions = document.createElement('div');
         actions.className = 'connector-actions';
         const btn = textEl('button', 'btn btn-secondary btn-xs', 'Connect');
@@ -2652,7 +2660,7 @@
       if (st.message) row.appendChild(textEl('p', st.isError ? 'connector-message is-error' : 'connector-message', st.message));
 
       // Shown only when the browser blocked the new tab; the href is set as a DOM property, never as HTML.
-      if (st.signInUrl && c.state !== 'signed_in') {
+      if (st.signInUrl && !connectorIsReady(c)) {
         const link = textEl('a', 'account-link', 'Open sign-in page');
         link.href = st.signInUrl;
         link.target = '_blank';
@@ -2683,7 +2691,7 @@
         connectorsLoaded = true;
         document.getElementById('connectorsError').classList.add('hidden');
         connectorList.forEach(function (c) {
-          if (c.state !== 'signed_in') return;
+          if (!connectorIsReady(c)) return;
           stopConnectorPolling(c.name);
           const st = connectorRowStateFor(c.name);
           st.message = '';

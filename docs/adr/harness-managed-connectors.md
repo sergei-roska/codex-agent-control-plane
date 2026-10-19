@@ -65,8 +65,11 @@ Facts checked on 2026-10-19:
    later. Write, publish, delete and admin tools are excluded. Enabling any write
    tool needs a separate owner decision. Initial allowlists, all to be verified
    live:
-   - `harness-atlassian`: read tools only (Jira search and get, Confluence search
-     and get). Exact names come from the vendor's supported-tools list.
+   - `harness-atlassian`: `getJiraIssue`, `searchJiraIssuesUsingJql`,
+     `getConfluenceContent`, `searchConfluence`, `getAccessibleAtlassianResources`,
+     `atlassianUserInfo`. Verified live on 2026-10-19 (readOnlyHint true). Generic
+     gateways `executeRead`, `discover`, and the write tools stay out; `executeRead`
+     reaches hundreds of operations and is an owner decision.
    - `harness-figma`: `get_design_context`, `get_metadata`, `get_screenshot`,
      `get_variable_defs`, `search_design_system`, `whoami`.
    - `harness-context7`: `resolve-library-id`, `query-docs`.
@@ -100,7 +103,8 @@ Facts checked on 2026-10-19:
   unknown for 0.163.0.
 - GTM is verified only through secondary sources; Context7's Bearer-key header
   is described differently in two sources (the official page wins).
-- The Atlassian v2 endpoint's support in the Codex client is not verified live.
+- Resolved 2026-10-19: the Atlassian v2 endpoint works in the Codex client (oAuth
+  status, 23 tools listed on the active account).
 
 ## Open
 
@@ -116,17 +120,19 @@ Unknown, with the evidence that would settle each:
 - Whether a thread-level `url` override reuses stored OAuth credentials for the
   same server name: live test after the owner's sign-in.
 - GTM tool list: after sign-in, from `mcpServerStatus/list`.
-- Atlassian v2 tool names and whether the Codex client supports the endpoint:
-  live check after sign-in.
+- Owner decision: whether `executeRead` (generic Atlassian read gateway) is
+  allowlisted. Excluded until the owner says so.
 - Credential sharing across account homes: deferred to a follow-up ADR.
 - Inventory cache after sign-in: the MCP inventory is cached per app-server
   generation. If sign-in writes the Codex config, the cache may be stale until the
   generation restarts (hypothesis from review 1; check in the UI phase).
 
 Known limits accepted at review 1 (2026-10-19):
-- The Atlassian names in `profiles/connectors/catalog.json` are `unverified_*`
-  placeholders. The lead can still select them, but the worker then gets no
-  Atlassian tool (fails closed). Filter unverified tools from candidates or
+- (Resolved 2026-10-19 by the live check.) At review 1 the Atlassian names were
+  `unverified_*` placeholders, so a selection gave the worker no tool.
+- Status mapping (review 4): `oAuth` with `runtimeStatus` "failed" and no
+  `toolsError` still maps to signed_in. Not seen live: the probe without a thread
+  reports runtimeStatus null. Optional guard, not implemented. Filter unverified tools from candidates or
   replace them after the live check.
 - The connector catalog loads once per process. Catalog edits take effect after a
   project-server restart.

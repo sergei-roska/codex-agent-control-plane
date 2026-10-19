@@ -34,12 +34,14 @@ test('the shipped catalog loads with the four connectors and the documented allo
   assert.deepEqual(names('harness-figma'),
     ['get_design_context', 'get_metadata', 'get_screenshot', 'get_variable_defs', 'search_design_system', 'whoami']);
   assert.deepEqual(names('harness-context7'), ['resolve-library-id', 'query-docs']);
-  assert.equal(names('harness-atlassian').length, 4);
+  assert.deepEqual(names('harness-atlassian'), ['getJiraIssue', 'searchJiraIssuesUsingJql', 'getConfluenceContent',
+    'searchConfluence', 'getAccessibleAtlassianResources', 'atlassianUserInfo']);
+  assert.equal([...catalog.values()].some((item) => item.name.startsWith('unverified_')), false);
   assert.deepEqual(names('harness-gtm'), []);
   for (const server of catalog.servers.values()) {
     assert.match(server.url, /^https:\/\//);
     assert.equal(server.auth, 'oauth');
-    assert.equal(server.toolsVerified, false);
+    assert.equal(server.toolsVerified, ['harness-atlassian', 'harness-context7'].includes(server.configName));
   }
   for (const item of catalog.values()) assert.match(item.sha256, /^[a-f0-9]{64}$/);
 });

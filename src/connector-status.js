@@ -27,11 +27,22 @@ function connectorConfigArgs(servers) {
 }
 
 // Maps one app-server McpServerStatus to the state the sidebar shows. signed_in needs explicit evidence.
+// Contract of list(): state is one of signed_in | needs_sign_in | available | unknown.
+// available = tools were listed without an error although no sign-in is on record (for example Context7).
+// The live probe reports runtimeStatus null, so a failed sign-in shows only in toolsError ("Auth required").
+// Rules are checked in this order.
 function mapState(entry) {
   if (!entry) return { state: 'unknown', detail: 'App-server did not report this server' };
-  const { authStatus, runtimeStatus } = entry;
-  if (runtimeStatus === 'authenticationRequired' || authStatus === 'notLoggedIn') return { state: 'needs_sign_in' };
+  const { authStatus, runtimeStatus, tools, toolsError } = entry;
+  const hasTools = Boolean(tools) && typeof tools === 'object' && Object.keys(tools).length > 0;
+  if (toolsError) {
+    if (runtimeStatus === 'authenticationRequired' || /auth required/i.test(String(toolsError))) return { state: 'needs_sign_in' };
+    return { state: 'unknown', detail: `App-server tools error: ${shortText(toolsError)}` };
+  }
+  if (runtimeStatus === 'authenticationRequired') return { state: 'needs_sign_in' };
+  if (authStatus === 'notLoggedIn' && !hasTools) return { state: 'needs_sign_in' };
   if (authStatus === 'oAuth' || authStatus === 'bearerToken') return { state: 'signed_in' };
+  if (hasTools) return { state: 'available', detail: 'Reachable without sign-in' };
   return { state: 'unknown', detail: `App-server reports auth status ${shortText(authStatus)}` };
 }
 
