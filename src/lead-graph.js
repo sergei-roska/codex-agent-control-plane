@@ -644,7 +644,7 @@ const RULE_REMINDERS = {
   'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, records, and checkpoints, with unused fields empty or null. A dispatch needs 1 to 4 assignments. If there is nothing to dispatch, use finish or request_human_input instead of an empty dispatch.',
   'decision.goal': 'finish requires goalAchieved true or false: true only when the goal is met, false with the blockers named in final. Use null for dispatch and request_human_input.',
   'decision.partial': 'checkpoints is null or a ledger of {id, status, reason, evidence} entries with status accepted (evidence required), blocked, or not_started (reason required); at least one entry is not accepted, ids are unique, and a ledger needs finish with goalAchieved false.',
-  'decision.checkpoint_blocked': 'The owner deferred this checkpoint or took its remaining work outside the run. Dispatch no more verifier or auditor work for it; when every remaining checkpoint is accepted or blocked, finish with goalAchieved false and the checkpoints ledger.',
+  'decision.checkpoint_blocked': 'The owner deferred this checkpoint or took its remaining work outside the run. Dispatch no more verifier, auditor or writer work for it; when every remaining checkpoint is accepted or blocked, finish with goalAchieved false and the checkpoints ledger.',
   'decision.investigate_first': `Investigate first: dispatch a read-only explorer first; use auditor only for a concrete risk-boundary question. ${INVESTIGATION_RULE} ${OWNER_ONLY_RULE}`,
   'decision.acceptance_checks': `${CHECK_RULE} Use null to propose nothing.`,
   'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds when it is owner-only; a dispatch of only read-only roles may leave them open while you investigate them.',
@@ -1638,8 +1638,8 @@ function buildLeadGraph(deps) {
   }
 
   function enforceReviewAcceptance(state, acceptance) {
-    const ledger = state.status === 'completed' ? state.partial?.checkpoints : null;
-    const failure = gateFailure(state, { forFinish: true, exempt: ledger ? ledgerExemption(state, ledger) : null });
+    // The ledger waives the gate only for admitting a finish; acceptance stays honest about unreviewed checkpoints.
+    const failure = gateFailure(state, { forFinish: true });
     if (!failure) return acceptance;
     const issue = {
       code: 'review_gate_pending',
@@ -1650,11 +1650,13 @@ function buildLeadGraph(deps) {
       advisory: false,
       evidence: [],
     };
+    // The accept node already enforced the gate on a stored acceptance; do not repeat the issue at finish.
+    const known = (acceptance.issues || []).some((entry) => entry.predicate === issue.predicate && entry.detail === issue.detail);
     return {
       ...acceptance,
       disposition: 'unverifiable',
-      reasons: [...(acceptance.reasons || []), issue],
-      issues: [...(acceptance.issues || []), issue],
+      reasons: known ? acceptance.reasons : [...(acceptance.reasons || []), issue],
+      issues: known ? acceptance.issues : [...(acceptance.issues || []), issue],
     };
   }
 
@@ -2858,6 +2860,19 @@ function buildLeadGraph(deps) {
           }
         }
       }
+      // Owner-deferred checkpoints get no more work; checked first so the lead sees a specific code.
+      if (decision.action === 'dispatch' && Array.isArray(decision.assignments)) {
+        const deferred = ownerBlockedIds(state);
+        const targets = (assignment) => [assignment?.review?.checkpointId, ...(Array.isArray(assignment?.repair?.checkpointIds) ? assignment.repair.checkpointIds : [])]
+          .filter((id) => typeof id === 'string' && deferred.has(id));
+        const deferredAssignment = decision.assignments.find((assignment) => targets(assignment).length > 0);
+        if (deferredAssignment) {
+          const reviewer = ['verifier', 'auditor'].includes(canonicalRoleId(deferredAssignment.role));
+          const entry = state.blockedCheckpoints.find((value) => value.checkpointId === targets(deferredAssignment)[0]);
+          throw new BoundaryViolation('decision.checkpoint_blocked', reviewer ? 'checkpoint_blocked' : 'checkpoint_blocked_writer',
+            `Checkpoint ${entry.checkpointId} is blocked (${entry.reason}); do not dispatch ${reviewer ? 'reviewers' : 'work'} for it. When every remaining checkpoint is accepted or blocked, finish with the partial ledger.`);
+        }
+      }
       validateDecision(decision, {
         roles,
         attemptedRoles: new Set(state.attemptedRoles),
@@ -2878,6 +2893,12 @@ function buildLeadGraph(deps) {
       });
       if (decision.action === 'finish') {
         const ledger = decision.goalAchieved === false ? decision.checkpoints : null;
+        const written = (ledger || []).find((entry) => entry.status === 'not_started'
+          && state.outcomes.some((outcome) => !outcome.kind && outcome.checkpointId === entry.id && integratedChange(outcome)));
+        if (written) {
+          throw new BoundaryViolation('decision.partial', 'partial_ledger_invalid',
+            `Checkpoint ${written.id} has integrated writes, so it cannot be not_started; report it as blocked with a reason (its unreviewed writes keep the acceptance disposition from being accepted)`);
+        }
         const blocked = gateFailure(state, { forFinish: true, exempt: ledger ? ledgerExemption(state, ledger) : null });
         if (blocked) throw new BoundaryViolation('decision.review_gate', 'review_receipt_missing', blocked);
       } else if (decision.action === 'dispatch') {
@@ -2890,13 +2911,6 @@ function buildLeadGraph(deps) {
             'A prerequisite verifier must name the exact incomplete critical checkpoints, use a new gated checkpoint, and have a known target');
         }
         const deferred = ownerBlockedIds(state);
-        const deferredReview = decision.assignments.find((assignment) => ['verifier', 'auditor'].includes(canonicalRoleId(assignment.role))
-          && assignment.review && deferred.has(assignment.review.checkpointId));
-        if (deferredReview) {
-          const entry = state.blockedCheckpoints.find((value) => value.checkpointId === deferredReview.review.checkpointId);
-          throw new BoundaryViolation('decision.checkpoint_blocked', 'checkpoint_blocked',
-            `Checkpoint ${entry.checkpointId} is blocked (${entry.reason}); do not dispatch reviewers for it. When every remaining checkpoint is accepted or blocked, finish with the partial ledger.`);
-        }
         const blocked = gateFailure(state, { assignments: decision.assignments });
         if (blocked) throw new BoundaryViolation('decision.review_gate', 'review_checkpoint_pending', blocked);
         for (const assignment of decision.assignments) {
@@ -3480,6 +3494,11 @@ function buildLeadGraph(deps) {
           || unfinishedCheckpointWriter(batch, review.checkpointId);
         if (unfinishedWriter) blocked = { code: 'skipped_review_pending_writer', reason: 'A same-checkpoint writer has not finished and integrated.' };
       }
+      if (!blocked) {
+        const deferred = ownerBlockedIds(gateState);
+        const deferredId = [review?.checkpointId, ...(item.repairCapture || []).map((capture) => capture.checkpointId)].find((id) => id && deferred.has(id));
+        if (deferredId) blocked = { code: 'skipped_checkpoint_blocked', reason: `Checkpoint ${deferredId} was deferred by the owner; no further work is dispatched for it.` };
+      }
       if (!blocked && item.sandbox !== 'read-only') {
         for (const obligation of obligations.filter((entry) => isGatedReview(entry.review) && !ownerBlockedIds(gateState).has(entry.checkpointId))) {
           const gate = currentGateState(gateState, obligation);
@@ -3948,7 +3967,8 @@ function buildLeadGraph(deps) {
     };
     if (choice === 'accept_as_is') return { ...update, status: 'completed', text: request.final };
     const budget = Number.isInteger(maxRounds) ? {
-      extraRounds: (state.extraRounds || 0) + maxRounds,
+      // Another allowance counted from the current round, so a run already past its cap gets a full one.
+      extraRounds: Math.max(maxRounds + (state.extraRounds || 0), state.round),
       roundExtensions: [...(state.roundExtensions || []), { round: state.round, by: 'owner', rounds: maxRounds }],
     } : {};
     const loopReset = request.escalation === 'loop_detected' ? { loopGuard: resetLoopGuard() } : {};

@@ -33,7 +33,7 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'decision.resolutions': Object.freeze(['decision_unresolved']),
   'decision.goal': Object.freeze(['goal_unstated']),
   'decision.partial': Object.freeze(['partial_ledger_invalid']),
-  'decision.checkpoint_blocked': Object.freeze(['checkpoint_blocked']),
+  'decision.checkpoint_blocked': Object.freeze(['checkpoint_blocked', 'checkpoint_blocked_writer']),
   'decision.investigate_first': Object.freeze(['investigation_missing']),
   'decision.acceptance_checks': Object.freeze(['acceptance_checks_invalid']),
   'decision.records': Object.freeze(['records_invalid']),

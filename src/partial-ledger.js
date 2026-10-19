@@ -75,7 +75,11 @@ function finalizeLedger(ledger, { blocked = [], acceptance = null } = {}) {
       evidence: prior?.evidence?.length ? prior.evidence : [block.decisionId].filter(Boolean),
     });
   }
-  const failed = FAILED_DISPOSITIONS.includes(acceptance?.disposition);
+  // A pending review gate comes from checkpoints the ledger reports as not accepted, so it does not
+  // take back the accepted ones (they passed the gate when the finish was admitted).
+  const blocking = (Array.isArray(acceptance?.issues) ? acceptance.issues : []).filter((issue) => issue && issue.advisory !== true && issue.result !== 'PASS');
+  const onlyReviewGate = blocking.length > 0 && blocking.every((issue) => issue.code === 'review_gate_pending');
+  const failed = FAILED_DISPOSITIONS.includes(acceptance?.disposition) && !onlyReviewGate;
   return [...byId.values()].map((entry) => {
     if (!failed || entry.status !== 'accepted') return entry;
     const detail = `acceptance ${acceptance.disposition}: this checkpoint cannot be reported as accepted`;

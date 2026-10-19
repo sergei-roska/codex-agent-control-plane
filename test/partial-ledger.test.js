@@ -53,3 +53,11 @@ test('formatLedger renders counts and one line per checkpoint', () => {
   assert.match(text, /- cp-2: blocked - No loopback sockets\n/);
   assert.equal(formatLedger([]), '');
 });
+
+test('finalizeLedger keeps accepted entries when the only acceptance issue is a pending review gate', () => {
+  const gate = { code: 'review_gate_pending', predicate: 'accept.review_gate', result: 'UNKNOWN', advisory: false };
+  assert.deepEqual(finalizeLedger(ledger(), { acceptance: { disposition: 'unverifiable', issues: [gate] } }), ledger());
+  const other = { code: 'check_failed', result: 'FAIL', advisory: false };
+  const result = finalizeLedger(ledger(), { acceptance: { disposition: 'rejected', issues: [gate, other] } });
+  assert.equal(result.filter((entry) => entry.status === 'accepted').length, 0);
+});

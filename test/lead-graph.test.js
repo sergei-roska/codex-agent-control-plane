@@ -5489,7 +5489,7 @@ for (const choice of ['defer', 'outside_run']) {
         dispatch(brief('orch-explorer', [])),
         infeasibleRequest([`${assignmentId(RUN_ID, 2, 0)} confirmed the sandbox denies sockets`, 'checkpoint critical-5 needs them']),
         dispatch({ ...brief('orch-verifier', ['test']), review: CRITICAL_5 }),
-        partialFinish('critical-5 is blocked outside this run', [{ id: 'critical-5', status: 'not_started', reason: 'Owner decided', evidence: [] }]),
+        partialFinish('critical-5 is blocked outside this run', [{ id: 'critical-5', status: 'blocked', reason: 'Owner decided', evidence: [] }]),
       ],
       workerFinal: reviewWorkerFinal,
     });
@@ -5500,9 +5500,12 @@ for (const choice of ['defer', 'outside_run']) {
       assert.equal(result.status, 'completed');
       assert.equal(result.disposition, 'partial');
       assert.match(world.prompts[4], /decision\.checkpoint_blocked checkpoint_blocked: Checkpoint critical-5 is blocked/);
-      assert.match(world.prompts[4], /Dispatch no more verifier or auditor work for it/);
+      assert.match(world.prompts[4], /Dispatch no more verifier, auditor or writer work for it/);
       assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-explorer']);
       assert.deepEqual(result.checkpoints.map((entry) => `${entry.id}:${entry.status}`), ['critical-5:blocked']);
+      // The builder's integrated write under critical-5 was never reviewed: acceptance says so.
+      assert.equal(result.acceptance.disposition, 'unverifiable');
+      assert.ok(result.acceptance.issues.some((issue) => issue.code === 'review_gate_pending'));
       assert.match(result.checkpoints[0].reason, new RegExp(`Owner answered "${choice}" to infeasible_requirement`));
       assert.match(result.checkpoints[0].reason, /I will run it elsewhere/);
       const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
@@ -5535,6 +5538,99 @@ test('a deferred critical checkpoint no longer holds unrelated writers, while an
   const open = await run('substitute');
   assert.match(open.prompts[4], /Critical review checkpoint critical-5 remains pending; writable assignments must stay under that checkpoint/);
   assert.deepEqual(open.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-explorer']);
+});
+
+test('a partial finish over an unreviewed integrated write is not accepted, and not_started is refused for such a checkpoint', async () => {
+  const workspace = reviewWorkspace();
+  const runCheckImpl = async (check) => ({ id: check.id, argv: check.argv, exitCode: 0, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'passed' });
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review: CRITICAL_5 }),
+      partialFinish('Never reviewed', [{ id: 'critical-5', status: 'not_started', reason: 'No reviewer', evidence: [] }]),
+      partialFinish('Never reviewed', [{ id: 'critical-5', status: 'blocked', reason: 'Reviewers cannot run in this sandbox', evidence: [] }]),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Change a trust boundary', runId: RUN_ID, contract: contractOf(nodeCheck('unit', 'process.exit(0)')) });
+    assert.equal(result.status, 'completed');
+    assert.match(world.prompts[2], /decision\.partial partial_ledger_invalid: Checkpoint critical-5 has integrated writes, so it cannot be not_started/);
+    assert.equal(result.disposition, 'partial');
+    assert.equal(result.checkpoints[0].status, 'blocked');
+    // Passing checks do not make unreviewed critical writes accepted.
+    assert.equal(result.acceptance.disposition, 'unverifiable');
+    assert.deepEqual(issueCodes(result), ['review_gate_pending']);
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder']);
+  }, { workspace, orchestrator: { runCheckImpl } });
+});
+
+test('a not_started ledger entry is allowed for a checkpoint without integrated writes', async () => {
+  const world = makeWorld({ script: [partialFinish('Nothing was built', LEDGER_BLOCKED)] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Close M3', runId: RUN_ID });
+    assert.equal(result.disposition, 'partial');
+    assert.equal(result.acceptance.disposition, 'not_required');
+  });
+});
+
+test('accepted ledger entries stay accepted when only a blocked checkpoint leaves its review gate pending', async () => {
+  const workspace = reviewWorkspace();
+  const ledger = [
+    { id: 'plain-1', status: 'accepted', reason: 'Landed', evidence: ['run-1:r1:a0'] },
+    { id: 'critical-5', status: 'blocked', reason: 'No reviewer', evidence: [] },
+  ];
+  const world = makeWorld({
+    script: [dispatch({ ...brief('orch-builder', ['src/file.js']), review: CRITICAL_5 }), partialFinish('Mixed', ledger)],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Change a trust boundary', runId: RUN_ID });
+    assert.equal(result.acceptance.disposition, 'unverifiable');
+    assert.deepEqual(result.checkpoints.map((entry) => `${entry.id}:${entry.status}`), ['plain-1:accepted', 'critical-5:blocked']);
+  }, { workspace });
+});
+
+test('writer and repair dispatch for an owner-blocked checkpoint is refused with its own code', async () => {
+  const workspace = reviewWorkspace();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review: CRITICAL_5 }),
+      dispatch(brief('orch-explorer', [])),
+      infeasibleRequest([`${assignmentId(RUN_ID, 2, 0)} confirmed it`, 'checkpoint critical-5 needs them']),
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review: CRITICAL_5 }),
+      dispatch({ ...brief('orch-builder', ['src/file.js']), repair: { checkpointIds: ['critical-5'] } }),
+      partialFinish('Stopping', LEDGER_BLOCKED),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'Change a trust boundary', runId: RUN_ID });
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'later', choice: 'defer' } });
+    assert.equal(result.disposition, 'partial');
+    assert.match(world.prompts[4], /decision\.checkpoint_blocked checkpoint_blocked_writer: Checkpoint critical-5 is blocked/);
+    assert.match(world.prompts[5], /decision\.checkpoint_blocked checkpoint_blocked_writer: Checkpoint critical-5 is blocked/);
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-explorer']);
+  }, { workspace });
+});
+
+test('continue after the round cap counts a fresh allowance from the current round (legacy run past the cap)', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), dispatch(brief('orch-explorer', [])), dispatch(brief('orch-explorer', [])), finish('Done')] });
+  await withSession(world, async (session) => {
+    const config = { configurable: { thread_id: RUN_ID } };
+    const stopped = await session.orchestrator.run({ goal: 'Look', runId: RUN_ID, interruptAfter: ['verify'] });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    // A checkpoint written before the 80-round default: the run is already far past its cap of 1.
+    await session.orchestrator.graph.updateState(config, { round: 251 });
+    const paused = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(paused.pause.escalation, 'round_limit');
+    assert.match(paused.pause.question, /251 of 1 rounds used/);
+    const resumed = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Go on', choice: 'continue' } });
+    assert.equal(resumed.status, 'completed');
+    assert.equal(resumed.rounds, 252);
+    const { values } = await session.orchestrator.graph.getState(config);
+    assert.equal(values.extraRounds, 251);
+    assert.match(world.prompts.at(-1), /Dispatch rounds already used: 252\/252\./);
+  }, { orchestrator: { maxRounds: 1 } });
 });
 
 test('another owner answer, or a defer on an unrelated reason, blocks nothing', async () => {
