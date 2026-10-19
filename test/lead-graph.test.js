@@ -6432,3 +6432,226 @@ test('a session parked at the legacy system_pause node resumes as an ordinary le
     assert.equal(await session.orchestrator.getPause(RUN_ID), null);
   });
 });
+
+// ---- owner grant for recovery_generation_limit
+const GRANT_CHOICE = 'supported_controller_replan';
+const grantHumanRequest = (reason = 'infeasible_requirement') => ({
+  decisionId: `${RUN_ID}:h1`,
+  reason,
+  question: 'The recovery generation limit was reached. How should the controller go on?',
+  options: [
+    { id: GRANT_CHOICE, description: 'Grant one more supported recovery generation' },
+    { id: 'defer', description: 'Defer the requirement' },
+  ],
+  recommendation: GRANT_CHOICE,
+  evidenceChecked: [],
+  independentWork: 'none',
+  relatedDecisionIds: [],
+});
+
+// Parks a run on a human decision while its checkpoint recovery is replaced by `recoveryFor(entry)`.
+async function parkOwnerGrantDecision(session, fixture, recoveryFor, reason) {
+  const stopped = await session.orchestrator.run({ goal: fixture.goal, runId: RUN_ID, interruptAfter: ['dispatch'] });
+  assert.equal(stopped.status, 'interrupted_for_test');
+  const config = { configurable: { thread_id: RUN_ID } };
+  const recovery = (await session.orchestrator.graph.getState(config)).values.reviewRecovery;
+  await session.orchestrator.graph.updateState(config, {
+    reviewRecovery: { ...recovery, checkpoints: recovery.checkpoints.map((entry) => ({ ...entry, ...recoveryFor(entry) })) },
+  });
+  const atVerify = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['verify'] });
+  assert.equal(atVerify.status, 'interrupted_for_test');
+  await session.orchestrator.graph.updateState(config, { humanRequest: grantHumanRequest(reason), humanCount: 1 }, 'verify');
+  const paused = await session.orchestrator.resume({ runId: RUN_ID });
+  assert.equal(paused.status, 'input_required');
+  assert.equal(paused.pause.kind, 'human_decision');
+  return config;
+}
+
+function ownerGrantScenario() {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/autonomy/aut-02/changed-candidate.json'), 'utf8'));
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, fixture.path), fixture.candidateA);
+  const stagingLog = new InMemoryStagingLog();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-verifier', ['test']), review: fixture.review }),
+      finish('The candidate has been reviewed.'),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  return { fixture, workspace, stagingLog, world };
+}
+
+const atLimit = () => ({ generation: 2, phase: 'replan_required', blockedReason: 'recovery_generation_limit' });
+const grantEvents = (stagingLog) => stagingLog.list({ runId: RUN_ID, type: 'review_recovery' })
+  .map((event) => [event.status, event.payload.reason ?? event.payload.trigger ?? null]);
+
+test('an owner grant at the recovery generation limit starts one fresh recovery plan that survives restart', async () => {
+  const { fixture, workspace, stagingLog, world } = ownerGrantScenario();
+  await withSession(world, async (session) => {
+    const config = await parkOwnerGrantDecision(session, fixture, atLimit);
+    const stopped = await session.orchestrator.resume({
+      runId: RUN_ID, input: { answer: 'Go on with the supported controller replan', choice: GRANT_CHOICE, decisionId: `${RUN_ID}:h1` },
+      interruptAfter: ['human_input'],
+    });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    await session.restart();
+    const snapshot = await session.orchestrator.graph.getState(config);
+    const entry = snapshot.values.reviewRecovery.checkpoints[0];
+    assert.equal(entry.generation, 3);
+    assert.equal(entry.phase, 'verifier_pending');
+    assert.equal(entry.blockedReason, null);
+    assert.equal(entry.ownerGrant.decisionId, `${RUN_ID}:h1`);
+    assert.equal(entry.ownerGrant.choice, GRANT_CHOICE);
+    assert.equal(entry.ownerGrant.answer, 'Go on with the supported controller replan');
+    assert.equal(entry.ownerGrant.generationBefore, 2);
+    assert.ok(Number.isFinite(Date.parse(entry.ownerGrant.grantedAt)));
+    assert.deepEqual(snapshot.values.pendingAssignments.map((assignment) => assignment.role), ['orch-verifier']);
+    assert.equal(snapshot.values.pendingAssignments[0]._reviewRecovery.generation, 3);
+    assert.equal(world.dispatchInputs.length, 1, 'the grant itself submits nothing');
+    // The earlier accepted verifier receipt covers the same target but is not reused by the fresh plan.
+    assert.equal(snapshot.values.reviewObligations[0].receipts.filter((receipt) => receipt.role === 'verifier').length, 1);
+
+    const result = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-verifier', 'orch-verifier', 'orch-auditor']);
+    const completed = await session.orchestrator.graph.getState(config);
+    const done = completed.values.reviewRecovery.checkpoints[0];
+    assert.equal(done.generation, 3);
+    assert.equal(done.phase, 'complete');
+    assert.equal(done.ownerGrant.generationBefore, 2);
+    assert.deepEqual(grantEvents(stagingLog), [
+      ['owner_grant_applied', null], ['verifier_queued', 'owner_recovery_grant'], ['auditor_queued', null],
+    ]);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('a second owner grant on the same checkpoint is rejected and changes no state', async () => {
+  const { fixture, workspace, stagingLog, world } = ownerGrantScenario();
+  const granted = {
+    generation: 3,
+    phase: 'replan_required',
+    blockedReason: 'recovery_generation_limit',
+    ownerGrant: {
+      decisionId: `${RUN_ID}:h0`, choice: GRANT_CHOICE, answer: 'first grant', grantedAt: '2026-01-01T00:00:00.000Z', generationBefore: 2,
+    },
+  };
+  await withSession(world, async (session) => {
+    const config = await parkOwnerGrantDecision(session, fixture, () => granted);
+    const before = (await session.orchestrator.graph.getState(config)).values.reviewRecovery;
+    const stopped = await session.orchestrator.resume({
+      runId: RUN_ID, input: { answer: 'Grant again', choice: GRANT_CHOICE }, interruptAfter: ['human_input'],
+    });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    const snapshot = await session.orchestrator.graph.getState(config);
+    assert.deepEqual(snapshot.values.reviewRecovery, before);
+    assert.equal(snapshot.values.pendingAssignments, null);
+    assert.deepEqual(snapshot.next, ['decide']);
+    assert.deepEqual(snapshot.values.humanAnswers.map((answer) => answer.choice), [GRANT_CHOICE]);
+    assert.deepEqual(grantEvents(stagingLog), [['owner_grant_rejected', 'owner_grant_already_used']]);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('an owner grant on a checkpoint that is not at the limit is rejected', async () => {
+  const { fixture, workspace, stagingLog, world } = ownerGrantScenario();
+  await withSession(world, async (session) => {
+    const config = await parkOwnerGrantDecision(session, fixture, () => ({
+      generation: 1, phase: 'idle', blockedReason: null,
+    }));
+    const before = (await session.orchestrator.graph.getState(config)).values.reviewRecovery;
+    const stopped = await session.orchestrator.resume({
+      runId: RUN_ID, input: { answer: 'Grant it anyway', choice: GRANT_CHOICE }, interruptAfter: ['human_input'],
+    });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    const snapshot = await session.orchestrator.graph.getState(config);
+    assert.deepEqual(snapshot.values.reviewRecovery, before);
+    assert.equal(snapshot.values.pendingAssignments, null);
+    assert.deepEqual(grantEvents(stagingLog), [['owner_grant_rejected', 'no_checkpoint_at_limit']]);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('another owner choice at the limit is only recorded as text', async () => {
+  const { fixture, workspace, stagingLog, world } = ownerGrantScenario();
+  await withSession(world, async (session) => {
+    const config = await parkOwnerGrantDecision(session, fixture, atLimit);
+    const before = (await session.orchestrator.graph.getState(config)).values.reviewRecovery;
+    const stopped = await session.orchestrator.resume({
+      runId: RUN_ID, input: { answer: 'Defer the requirement', choice: 'defer' }, interruptAfter: ['human_input'],
+    });
+    assert.equal(stopped.status, 'interrupted_for_test');
+    const snapshot = await session.orchestrator.graph.getState(config);
+    assert.deepEqual(snapshot.values.reviewRecovery, before);
+    assert.equal(snapshot.values.reviewRecovery.checkpoints[0].generation, 2);
+    assert.equal(snapshot.values.pendingAssignments, null);
+    assert.deepEqual(snapshot.values.humanAnswers.map((answer) => [answer.choice, answer.answer]), [['defer', 'Defer the requirement']]);
+    assert.deepEqual(grantEvents(stagingLog), []);
+  }, { workspace, orchestrator: { stagingLog } });
+});
+
+test('recovery state beyond the cap is valid only with a matching owner grant', async () => {
+  const grant = (overrides = {}) => ({
+    decisionId: `${RUN_ID}:h1`, choice: GRANT_CHOICE, answer: 'ok', grantedAt: '2026-01-01T00:00:00.000Z', generationBefore: 2, ...overrides,
+  });
+  const cases = [
+    ['generation 3 without a grant', { generation: 3 }, true],
+    ['generation 4 with a grant', { generation: 4, ownerGrant: grant() }, true],
+    ['a grant on a checkpoint below the limit', { generation: 1, ownerGrant: grant({ generationBefore: 1 }) }, true],
+    ['a grant that does not sit one generation past the cap', { generation: 2, ownerGrant: grant() }, true],
+    ['a grant with another choice id', { generation: 3, ownerGrant: grant({ choice: 'other' }) }, true],
+    ['generation 3 with a grant', { generation: 3, ownerGrant: grant() }, false],
+  ];
+  for (const [label, entryFields, invalid] of cases) {
+    const { fixture, workspace, stagingLog, world } = ownerGrantScenario();
+    await withSession(world, async (session) => {
+      const stopped = await session.orchestrator.run({ goal: fixture.goal, runId: RUN_ID, interruptAfter: ['dispatch'] });
+      assert.equal(stopped.status, 'interrupted_for_test');
+      const config = { configurable: { thread_id: RUN_ID } };
+      const recovery = (await session.orchestrator.graph.getState(config)).values.reviewRecovery;
+      await session.orchestrator.graph.updateState(config, {
+        reviewRecovery: { ...recovery, checkpoints: recovery.checkpoints.map((entry) => ({ ...entry, phase: 'replan_required', blockedReason: 'recovery_generation_limit', ...entryFields })) },
+      });
+      const result = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['decide'] });
+      assert.equal(result.status, 'interrupted_for_test', label);
+      assert.equal(world.prompts.at(-1).includes('"blockedReason":"recovery_state_invalid"'), invalid, label);
+    }, { workspace, orchestrator: { stagingLog } });
+  }
+});
+
+test('a granted checkpoint stops again at generation 3 with recovery_generation_limit', async () => {
+  const { workspace, stagingLog, world, serviceInputs, getWorkerCalls } = directServiceStaleReviewScenario();
+  await withSession(world, async (session) => {
+    const initial = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID, interruptAfter: ['verify'] });
+    assert.equal(initial.status, 'interrupted_for_test');
+    const stale = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['collect'] });
+    assert.equal(stale.status, 'interrupted_for_test');
+    const config = { configurable: { thread_id: RUN_ID } };
+    let snapshot = await session.orchestrator.graph.getState(config);
+    const before = snapshot.values.reviewRecovery;
+    await session.orchestrator.graph.updateState(config, {
+      reviewRecovery: {
+        ...before,
+        checkpoints: before.checkpoints.map((entry) => ({
+          ...entry,
+          generation: 3,
+          ownerGrant: {
+            decisionId: `${RUN_ID}:h1`, choice: GRANT_CHOICE, answer: 'granted', grantedAt: '2026-01-01T00:00:00.000Z', generationBefore: 2,
+          },
+        })),
+      },
+    });
+    const stopped = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(stopped.status, 'input_required');
+    snapshot = await session.orchestrator.graph.getState(config);
+    const recovery = snapshot.values.reviewRecovery.checkpoints[0];
+    assert.equal(recovery.generation, 3);
+    assert.equal(recovery.phase, 'replan_required');
+    assert.equal(recovery.blockedReason, 'recovery_generation_limit');
+    assert.equal(snapshot.values.pendingAssignments, null);
+    assert.equal(serviceInputs.length, 2, 'no fresh verifier request was sent');
+    assert.equal(getWorkerCalls(), 1, 'no fresh verifier model call was made');
+    assert.deepEqual(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' })
+      .map((event) => [event.status, event.payload.reason]), [['blocked', 'recovery_generation_limit']]);
+  }, { workspace, orchestrator: { stagingLog } });
+});

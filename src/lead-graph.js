@@ -52,6 +52,10 @@ const REPORT_ITEM_CHARS = 500;
 const REVIEW_RECOVERY_VERSION = 1;
 const MAX_REVIEW_RECOVERY_CHECKPOINTS = 40;
 const MAX_REVIEW_RECOVERY_GENERATIONS = 2;
+// An explicit owner choice may add exactly one recovery generation to a checkpoint stopped at the cap.
+const OWNER_RECOVERY_GRANT_CHOICE = 'supported_controller_replan';
+const OWNER_RECOVERY_GRANT_GENERATIONS = 1;
+const MAX_OWNER_GRANT_ANSWER_CHARS = 2000;
 const MAX_REVIEW_HANDOFF_INPUTS = 20;
 const MAX_REVIEW_HANDOFF_INPUT_CHARS = 3000;
 const MAX_REVIEW_HANDOFF_CHARS = 55_000;
@@ -750,6 +754,22 @@ function buildLeadGraph(deps) {
     return stagingLog.record({ eventId, ...base });
   }
 
+  // A grant exists only on a checkpoint that was at the cap and moved exactly one generation past it.
+  function validOwnerGrant(entry) {
+    const grant = entry.ownerGrant;
+    if (grant === undefined || grant === null) return entry.generation <= MAX_REVIEW_RECOVERY_GENERATIONS;
+    return typeof grant === 'object' && !Array.isArray(grant)
+      && typeof grant.decisionId === 'string' && grant.decisionId.length > 0 && grant.decisionId.length <= 256
+      && grant.choice === OWNER_RECOVERY_GRANT_CHOICE
+      && typeof grant.answer === 'string' && grant.answer.length <= MAX_OWNER_GRANT_ANSWER_CHARS
+      && typeof grant.grantedAt === 'string' && Number.isFinite(Date.parse(grant.grantedAt))
+      && grant.generationBefore === MAX_REVIEW_RECOVERY_GENERATIONS
+      && entry.generation === grant.generationBefore + OWNER_RECOVERY_GRANT_GENERATIONS;
+  }
+
+  const recoveryGenerationCap = (entry) => MAX_REVIEW_RECOVERY_GENERATIONS
+    + (entry.ownerGrant ? OWNER_RECOVERY_GRANT_GENERATIONS : 0);
+
   function validReviewRecovery(value) {
     const validTemplate = (role, template) => template && typeof template === 'object' && !Array.isArray(template)
       && canonicalRoleId(template.role) === role
@@ -773,7 +793,7 @@ function buildLeadGraph(deps) {
         && typeof entry.checkpointId === 'string' && entry.checkpointId.length > 0 && entry.checkpointId.length <= 160
         && typeof entry.contextHash === 'string' && /^[a-f0-9]{64}$/.test(entry.contextHash)
         && Number.isInteger(entry.generation) && entry.generation >= 0
-        && entry.generation <= MAX_REVIEW_RECOVERY_GENERATIONS
+        && validOwnerGrant(entry)
         && (entry.blockedReason === undefined || entry.blockedReason === null
           || (typeof entry.blockedReason === 'string' && entry.blockedReason.length > 0 && entry.blockedReason.length <= 128))
         && (entry.lastRecoveryTarget === null || (typeof entry.lastRecoveryTarget === 'string' && entry.lastRecoveryTarget.length <= 256))
@@ -1232,8 +1252,8 @@ function buildLeadGraph(deps) {
         blocked(entry, !captured?.known || !current.known ? 'origin_or_current_target_unknown' : 'stale_signal_without_target_change');
         continue;
       }
-      if (entry.generation >= MAX_REVIEW_RECOVERY_GENERATIONS || entry.lastRecoveryTarget === current.identity) {
-        blocked(entry, entry.generation >= MAX_REVIEW_RECOVERY_GENERATIONS ? 'recovery_generation_limit' : 'repeated_stale_target');
+      if (entry.generation >= recoveryGenerationCap(entry) || entry.lastRecoveryTarget === current.identity) {
+        blocked(entry, entry.generation >= recoveryGenerationCap(entry) ? 'recovery_generation_limit' : 'repeated_stale_target');
         continue;
       }
       if ((obligation.pendingAssignmentIds || []).length > 0) {
@@ -1277,6 +1297,100 @@ function buildLeadGraph(deps) {
       return { recovery: nextRecovery, pendingAssignments };
     }
     return { recovery, pendingAssignments: null };
+  }
+
+  // Owner grant: one extra recovery generation for a checkpoint stopped at recovery_generation_limit.
+  // It starts a fresh recovery plan (verifier first, then the auditor); no earlier receipt is reused.
+  function applyOwnerRecoveryGrant(state, request, answer) {
+    const decisionId = request.decisionId;
+    const limited = validReviewRecovery(state.reviewRecovery)
+      ? state.reviewRecovery.checkpoints.filter((entry) => entry.blockedReason === 'recovery_generation_limit') : [];
+    if (request.reason !== 'infeasible_requirement' && limited.length === 0) return null;
+    const reject = (reason, checkpointId = null) => {
+      recordStage('review_recovery', {
+        runId: state.runId,
+        assignmentId: null,
+        attemptId: null,
+        role: null,
+        status: 'owner_grant_rejected',
+        payload: { policyId: POLICY_ID, decisionId, checkpointId, reason },
+      });
+      return null;
+    };
+    if (!validReviewRecovery(state.reviewRecovery)) return reject('recovery_state_invalid');
+    const eligible = limited.filter((entry) => entry.phase === 'replan_required'
+      && entry.generation === MAX_REVIEW_RECOVERY_GENERATIONS && !entry.ownerGrant);
+    if (eligible.length === 0) {
+      return reject(limited.some((entry) => entry.ownerGrant) ? 'owner_grant_already_used' : 'no_checkpoint_at_limit');
+    }
+    if (eligible.length > 1) return reject('ambiguous_checkpoint');
+    const entry = eligible[0];
+    const obligation = (state.reviewObligations || []).find((value) => value.checkpointId === entry.checkpointId);
+    if (!obligation || !obligationMatches(obligation, obligation.review)
+      || entry.contextHash !== reviewContextHash(obligation.review)) return reject('checkpoint_context_unavailable', entry.checkpointId);
+    const limit = roundLimit(state);
+    if (state.status || state.budget || (state.unresolvedWriters || []).length > 0
+      || (obligation.pendingAssignmentIds || []).length > 0 || unfinishedCheckpointWriter(state.batch, entry.checkpointId)) {
+      return reject('checkpoint_writer_pending', entry.checkpointId);
+    }
+    if (limit !== null && state.round >= limit) return reject('dispatch_round_limit', entry.checkpointId);
+    const current = targetForReview({ ...state, reviewObligations: state.reviewObligations }, obligation.review);
+    if (!current.known) return reject('current_target_unknown', entry.checkpointId);
+    const candidate = {
+      ...entry,
+      generation: entry.generation + OWNER_RECOVERY_GRANT_GENERATIONS,
+      lastRecoveryTarget: current.identity,
+      phase: 'verifier_pending',
+      blockedReason: null,
+      ownerGrant: {
+        decisionId,
+        choice: OWNER_RECOVERY_GRANT_CHOICE,
+        answer: String(answer.answer ?? '').slice(0, MAX_OWNER_GRANT_ANSWER_CHARS),
+        grantedAt: new Date().toISOString(),
+        generationBefore: entry.generation,
+      },
+    };
+    const nextRecovery = {
+      version: REVIEW_RECOVERY_VERSION,
+      checkpoints: state.reviewRecovery.checkpoints.map((value) => value.checkpointId === entry.checkpointId ? candidate : value),
+    };
+    if (!validReviewRecovery(nextRecovery)) return reject('recovery_state_invalid', entry.checkpointId);
+    const verifier = recoveryAssignment({ ...state, reviewRecovery: nextRecovery }, candidate, obligation, 'verifier');
+    if (!verifier) return reject('validated_verifier_template_unavailable', entry.checkpointId);
+    recordStage('review_recovery', {
+      runId: state.runId,
+      assignmentId: entry.sourceAssignmentId,
+      attemptId: entry.sourceAttemptId,
+      role: null,
+      status: 'owner_grant_applied',
+      payload: {
+        policyId: POLICY_ID,
+        decisionId,
+        checkpointId: entry.checkpointId,
+        generationBefore: entry.generation,
+        generation: candidate.generation,
+      },
+    });
+    recordStage('review_recovery', {
+      runId: state.runId,
+      assignmentId: entry.sourceAssignmentId,
+      attemptId: entry.sourceAttemptId,
+      role: 'verifier',
+      target: current.identity,
+      status: 'verifier_queued',
+      payload: { policyId: POLICY_ID, checkpointId: entry.checkpointId, generation: candidate.generation, trigger: 'owner_recovery_grant' },
+    });
+    return { reviewRecovery: nextRecovery, pendingAssignments: [verifier] };
+  }
+
+  // True when the last owner answer started a granted recovery plan that is waiting to be dispatched.
+  function ownerGrantDispatchPending(state) {
+    const answer = (state.humanAnswers || []).at(-1);
+    const marker = state.pendingAssignments?.[0]?._reviewRecovery;
+    if (!answer || !marker || !validReviewRecovery(state.reviewRecovery)) return false;
+    const entry = state.reviewRecovery.checkpoints.find((value) => value.checkpointId === marker.checkpointId);
+    return entry?.ownerGrant?.decisionId === answer.decisionId && entry.phase === 'verifier_pending'
+      && marker.generation === entry.generation;
   }
 
   function targetForReview(state, review) {
@@ -3720,7 +3834,9 @@ function buildLeadGraph(deps) {
       status: 'resolved',
       payload: { choice: answer.choice || 'continue', relatedDecisionIds: [...related] },
     });
+    const grant = answer.choice === OWNER_RECOVERY_GRANT_CHOICE ? applyOwnerRecoveryGrant(state, request, answer) : null;
     return {
+      ...(grant || {}),
       humanAnswers: [...state.humanAnswers, {
         decisionId: request.decisionId,
         answer: answer.answer,
@@ -3996,7 +4112,10 @@ function buildLeadGraph(deps) {
     return state.batch ? 'dispatch' : 'decide';
   };
   const afterReviewCheck = (state) => (state.humanRequest ? 'human_input' : 'accept');
-  const afterHumanInput = (state) => (state.status === 'completed' ? 'accept' : 'decide');
+  const afterHumanInput = (state) => {
+    if (state.status === 'completed') return 'accept';
+    return ownerGrantDispatchPending(state) ? 'dispatch' : 'decide';
+  };
   // A legacy checkpoint parked at an owner pause with a system request continues through the legacy node.
   const afterLegacyPause = (state) => (state.systemRequest ? 'system_pause' : 'dispatch');
   const afterOwnerPause = (state) => (state.systemRequest ? 'system_pause'
@@ -4061,7 +4180,7 @@ function buildLeadGraph(deps) {
     .addConditionalEdges('owner_pause', afterOwnerPause, ['system_pause', 'dispatch', 'verify'])
     .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'human_input', 'review_check', 'pause_before_dispatch', 'dispatch', 'decide'])
     .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'dispatch', 'decide'])
-    .addConditionalEdges('human_input', afterHumanInput, ['accept', 'decide'])
+    .addConditionalEdges('human_input', afterHumanInput, ['accept', 'decide', 'dispatch'])
     .addEdge('system_pause', 'decide')
     .addEdge('budget_pause', 'continue_limited')
     .addConditionalEdges('continue_limited', afterContinueLimited, ['finish', 'dispatch', 'review_check', 'decide'])
