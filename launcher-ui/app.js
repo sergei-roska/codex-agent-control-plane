@@ -491,6 +491,8 @@
         if (scoutChoice === 'lead') scoutChoice = null;
       }
       const scoutMode = askMode() === 'scout';
+      const checksBox = document.getElementById('taskChecksBox');
+      if (checksBox) checksBox.classList.toggle('hidden', scoutMode);
 
       const ownerPaused = ownerPhase() === 'paused';
       if (scoutMode) goalEl.placeholder = 'Ask the scout about the project...';
@@ -1337,10 +1339,18 @@
         setSession(newContextId());
         payload.contextId = currentSessionId;
       }
+      // Acceptance checks apply to a new run only (a resume never changes the pinned contract).
+      // An empty box omits the field so the project defaults apply.
+      const checksEl = document.getElementById('taskChecks');
+      if (checksEl && payload.taskId === undefined) {
+        const checks = checksEl.value.split('\n').map(function (line) { return line.trim(); }).filter(Boolean);
+        if (checks.length > 0) payload.checks = checks;
+      }
       if (payload.taskId === undefined) {
         pendingTurn = { goal, baseTurns: sessionData ? sessionData.turns.length : 0 };
       }
       document.getElementById('taskGoal').value = '';
+      if (payload.checks && checksEl) checksEl.value = '';
       await executeA2A(payload);
     }
 
@@ -1393,6 +1403,8 @@
           errorEl.classList.remove('hidden');
           if (payload.taskId === undefined) {
             document.getElementById('taskGoal').value = payload.goal;
+            const checksEl = document.getElementById('taskChecks');
+            if (checksEl && payload.checks) checksEl.value = payload.checks.join('\n');
           }
         }
       } finally {

@@ -26,7 +26,7 @@ const { SessionThreads } = require('./session-threads');
 const { createActivityStore } = require('./activity-store');
 const { createEvidenceStore } = require('./evidence-store');
 const { StagingLog } = require('./staging-log');
-const { validateAcceptanceContract, formatAcceptance, invalidAcceptanceContract } = require('./acceptance');
+const { validateAcceptanceContract, formatAcceptance, invalidAcceptanceContract, parseCheckCommand } = require('./acceptance');
 const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
 const { loadSkillCatalog } = require('./skill-catalog');
 const { loadMcpCatalog } = require('./mcp-catalog');
@@ -258,7 +258,9 @@ function ownerStopReason() {
   return Object.assign(new Error('Stopped by the owner'), { name: 'AbortError', ownerStop: true });
 }
 
-function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, budgetWatcher = null }) {
+// `ownerChecks` (project setting, see src/project-settings.js): command strings pinned as an owner contract for a
+// new run whose message carries no acceptance contract. Explicit checks replace them; a resume never repins.
+function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, budgetWatcher = null, ownerChecks = null }) {
   const controllers = new Map();
   const reservations = new Set();
   const inflight = new Set();
@@ -343,7 +345,11 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       // The acceptance contract is read from a new run only; a resume can never change it.
       let contract;
       if (!resuming) {
-        const raw = requestContext.userMessage?.metadata?.acceptance ?? requestContext.request?.metadata?.acceptance;
+        let raw = requestContext.userMessage?.metadata?.acceptance ?? requestContext.request?.metadata?.acceptance;
+        // Project default owner checks: no source, so they are an owner contract like a CLI --check.
+        if (raw === undefined && Array.isArray(ownerChecks) && ownerChecks.length > 0) {
+          raw = { requiredChecks: ownerChecks.map((command, index) => parseCheckCommand(command, index)) };
+        }
         try {
           if (raw && typeof raw === 'object' && 'invalid' in raw) throw new TypeError('acceptance has unknown field "invalid"');
           contract = validateAcceptanceContract(raw);
@@ -620,10 +626,10 @@ function rejectOverlappingLeadTask(executor) {
   };
 }
 
-function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), budgetWatcher = null }) {
+function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), budgetWatcher = null, ownerChecks = null }) {
   const endpoint = new URL('/orchestrator', `${baseUrl}/`).toString();
   const card = makeLeadCard({ leadRole, endpoint });
-  const executor = makeLeadExecutor({ orchestrator, loadTask: (id) => taskStore.load(id, {}), budgetWatcher });
+  const executor = makeLeadExecutor({ orchestrator, loadTask: (id) => taskStore.load(id, {}), budgetWatcher, ownerChecks });
   const requestHandler = new DefaultRequestHandler(card, taskStore, executor);
   app.use('/orchestrator/agent-card.json', agentCardHandler({ agentCardProvider: async () => AgentCard.toJSON(card) }));
   app.use('/orchestrator', authMiddleware, express.json(), rejectOverlappingLeadTask(executor), jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));
@@ -765,10 +771,12 @@ async function startServer({
     // Owner project settings (opt-ins such as the acceptance scratch directory) are read once here as well.
     let acceptanceScratch = null;
     let aut03LeadSkillEnabled = false;
+    let ownerChecks = null;
     if (projectSettingsFile) {
       const settings = readSettingsFile(projectSettingsFile);
       if (settings.warning) console.warn(`[settings] ${settings.warning}`);
       acceptanceScratch = resolveAcceptanceScratch(settings, projectSettingsFile);
+      ownerChecks = settings.ownerChecks;
       aut03LeadSkillEnabled = settings.aut03LeadSkillEnabled === true;
     }
     const usageLedger = new UsageLedger({ db: state.db });
@@ -817,7 +825,7 @@ async function startServer({
       });
     }
     const leadAgent = registerLead(app, {
-      leadRole, orchestrator, baseUrl, authMiddleware, taskStore: leadTaskStore, budgetWatcher,
+      leadRole, orchestrator, baseUrl, authMiddleware, taskStore: leadTaskStore, budgetWatcher, ownerChecks,
     });
     registerControl(app, { authMiddleware, orchestrator, runtimeIdentity });
     ready = true;

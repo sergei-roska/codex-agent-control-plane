@@ -207,6 +207,36 @@ launcher passes the path as `CODEX_A2A_PROJECT_SETTINGS`):
   enables it; contracts and check proposals reject unknown fields. Owner
   (`runCheck`) checks are unaffected.
 
+#### Default owner checks per project (owner-side)
+
+The same settings file can declare default owner checks, so the owner sets them
+once instead of per task. Like `acceptanceScratch`, the file is read once at
+server start: restart the project to apply a change.
+
+```json
+{ "version": 1, "ownerChecks": ["uv run pytest -q", "node --check src/server.js"] }
+```
+
+- `ownerChecks`: 1 to 8 command strings, each split on whitespace into argv (no
+  shell) exactly like a CLI `--check`. Absent, `null`, or `[]` disables the
+  default. A non-array, a non-string or blank entry, more than 8 entries, or a
+  command the owner contract refuses makes the whole file invalid (ignored with a
+  warning, so nothing is enabled).
+- Owner checks run on the host outside the Codex sandbox, so they can use
+  loopback sockets and the network; agent-proposed checks stay sandboxed.
+- When a new run starts and its message carries no acceptance contract
+  (`metadata.acceptance` absent or null), the server pins an owner contract
+  (no `source`) built from `ownerChecks` through the same validation and durable
+  pinning path as a CLI `--check` contract (`src/server.js`, `makeLeadExecutor`).
+  The launcher UI, the CLI, and the launcher API all get it. Follow-up runs
+  (`referenceTaskIds` / `continueFrom`) are new runs and get the defaults too.
+- Explicit checks (`--check`, the `checks` field of `/task/send`, or
+  `metadata.acceptance`) replace the defaults and are never merged with them. An
+  explicit empty `requiredChecks` is kept as a choice of no checks.
+- A resume never repins: the contract pinned when the run started stays.
+  Agent-proposed checks are ignored while an owner contract is pinned, and an
+  agent check is never upgraded to an owner check.
+
 `contract_invalid` replaces the silent drop at `src/server.js:341`: a stored
 contract that fails validation on restart yields `unverifiable` with that code;
 the run never continues as if no checks were required.

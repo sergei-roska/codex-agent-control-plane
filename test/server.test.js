@@ -1091,6 +1091,116 @@ test('checks the lead pins are recorded in the task with source agent and surviv
   assert.deepEqual(contract, agentContract);
 });
 
+// ------------------------------------------------- project default owner checks (ownerChecks setting)
+
+const OWNER_DEFAULTS = ['npm test', 'node scripts/lint.js --strict'];
+const ownerDefaultContract = {
+  id: 'acceptance-contract/v1',
+  requiredChecks: [
+    { id: 'check-1', argv: ['npm', 'test'], timeoutMs: 600000 },
+    { id: 'check-2', argv: ['node', 'scripts/lint.js', '--strict'], timeoutMs: 600000 },
+  ],
+};
+
+async function runWithOwnerChecks(userMessageFields, options = {}) {
+  const ownerChecks = 'ownerChecks' in options ? options.ownerChecks : OWNER_DEFAULTS;
+  const taskId = 't-own';
+  const runs = [];
+  const seen = [];
+  const executor = makeLeadExecutor({ ownerChecks, orchestrator: { async run(args) { runs.push(args); return { status: 'completed', text: 'Done' }; } } });
+  await executor.execute({ taskId, contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }], ...userMessageFields } }, { publish: (event) => seen.push(event) });
+  return { runs, seen };
+}
+
+test('project owner checks become the owner contract of a new run without explicit checks', async () => {
+  const { runs, seen } = await runWithOwnerChecks({});
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0].contract, ownerDefaultContract);
+  assert.equal('source' in runs[0].contract, false, 'the default contract is an owner contract');
+  assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
+  // null metadata counts as absent
+  const nulled = await runWithOwnerChecks({ metadata: { acceptance: null } });
+  assert.deepEqual(nulled.runs[0].contract, ownerDefaultContract);
+});
+
+test('a follow-up run (reference task) gets the project owner checks too', async () => {
+  const runs = [];
+  const refTask = { id: 'ref-1', status: { state: TaskState.TASK_STATE_COMPLETED }, artifacts: [], history: [] };
+  const executor = makeLeadExecutor({
+    ownerChecks: OWNER_DEFAULTS,
+    orchestrator: { async getRunGoal() { return 'old goal'; }, async run(args) { runs.push(args); return { status: 'completed', text: 'Done' }; } },
+  });
+  await executor.execute({
+    taskId: 't-follow', contextId: 'ctx', referenceTasks: [refTask],
+    userMessage: { parts: [{ text: 'next' }], referenceTaskIds: ['ref-1'] },
+  }, { publish() {} });
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0].contract, ownerDefaultContract);
+});
+
+test('explicit checks replace the project owner checks instead of merging', async () => {
+  const { runs } = await runWithOwnerChecks({ metadata: { acceptance: validAcceptance } });
+  assert.deepEqual(runs[0].contract, { id: 'acceptance-contract/v1', requiredChecks: [{ id: 'unit', argv: ['npm', 'test'], timeoutMs: 600000 }] });
+  // request-level metadata is explicit as well
+  const runs2 = [];
+  const executor = makeLeadExecutor({ ownerChecks: OWNER_DEFAULTS, orchestrator: { async run(args) { runs2.push(args); return { status: 'completed', text: 'Done' }; } } });
+  await executor.execute({ taskId: 't-req', contextId: 'ctx', request: { metadata: { acceptance: validAcceptance } }, userMessage: { parts: [{ text: 'goal' }] } }, { publish() {} });
+  assert.deepEqual(runs2[0].contract.requiredChecks.map((check) => check.id), ['unit']);
+  // an explicit empty contract is the owner's choice of no checks
+  const empty = await runWithOwnerChecks({ metadata: { acceptance: { requiredChecks: [] } } });
+  assert.deepEqual(empty.runs[0].contract.requiredChecks, []);
+});
+
+test('an invalid explicit contract still fails the task and never falls back to the defaults', async () => {
+  const { runs, seen } = await runWithOwnerChecks({ metadata: { acceptance: { requiredChecks: [{ id: 'a', argv: [] }] } } });
+  assert.equal(runs.length, 0);
+  assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_FAILED);
+});
+
+test('without project owner checks a new run keeps the previous behavior', async () => {
+  for (const ownerChecks of [null, undefined, []]) {
+    const { runs } = await runWithOwnerChecks({}, { ownerChecks });
+    assert.deepEqual(runs[0].contract, { requiredChecks: [] });
+  }
+});
+
+test('a resume does not repin the project owner checks', async () => {
+  const resumes = [];
+  const executor = makeLeadExecutor({
+    ownerChecks: OWNER_DEFAULTS,
+    orchestrator: { async getPause() { return { kind: 'writer_unresolved', attempts: [] }; }, async resume(args) { resumes.push(args); return { status: 'completed', text: 'back' }; } },
+  });
+  const seen = [];
+  await executor.execute(pausedContext('t-res-own', { kind: 'writer_unresolved' }, { parts: [{ text: 'retry' }] }), { publish: (event) => seen.push(event) });
+  assert.equal(resumes.length, 1);
+  assert.equal('contract' in resumes[0], false);
+  const working = seen.filter((event) => event.kind === 'statusUpdate').find((event) => event.data.status.state === TaskState.TASK_STATE_WORKING);
+  assert.equal('acceptanceContract' in (working.data.metadata || {}), false);
+});
+
+test('the server pins the project owner checks durably and the restart run recovers them', async () => {
+  const dir = tmpDir();
+  const settingsFile = path.join(dir, 'project-settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ version: 1, ownerChecks: OWNER_DEFAULTS }));
+  const runs = [];
+  const server = await startLeadServer({
+    async run(args) { runs.push(args); return { status: 'completed', text: 'Done' }; },
+    async getPause() { return null; },
+  }, dir, { projectSettingsFile: settingsFile });
+  try {
+    const handler = server.leadAgent.requestHandler;
+    const task = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    assert.equal(runs.length, 1);
+    assert.deepEqual(runs[0].contract, ownerDefaultContract);
+    const stored = JSON.parse(JSON.stringify(await handler.getTask({ id: task.id }, CALL())));
+    assert.deepEqual(stored.metadata.acceptanceContract, ownerDefaultContract);
+    assert.equal('source' in stored.metadata.acceptanceContract, false);
+  } finally {
+    await server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a run without any contract restarts with no required checks', async () => {
   const { contract, stored } = await restartBeforeFirstCheckpoint({});
   assert.equal('acceptanceContract' in stored.metadata, false);

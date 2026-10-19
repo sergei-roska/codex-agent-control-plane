@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { afterEach, beforeEach, describe, it } = require('node:test');
 const {
-  ProjectSettingsError, normalizeAcceptanceScratch, validateSettingsDocument, readSettingsFile, resolveAcceptanceScratch,
+  ProjectSettingsError, normalizeAcceptanceScratch, normalizeOwnerChecks, validateSettingsDocument, readSettingsFile, resolveAcceptanceScratch,
 } = require('../src/project-settings');
 
 let tmp;
@@ -56,9 +56,40 @@ describe('normalizeAcceptanceScratch', () => {
   });
 });
 
+describe('normalizeOwnerChecks', () => {
+  const refuse = (value, pattern) => assert.throws(() => normalizeOwnerChecks(value), (error) => error instanceof ProjectSettingsError && pattern.test(error.message));
+
+  it('is disabled for undefined, null, and an empty array', () => {
+    assert.equal(normalizeOwnerChecks(undefined), null);
+    assert.equal(normalizeOwnerChecks(null), null);
+    assert.equal(normalizeOwnerChecks([]), null);
+  });
+
+  it('accepts 1..8 command strings and trims them', () => {
+    assert.deepEqual(normalizeOwnerChecks(['npm test']), ['npm test']);
+    assert.deepEqual(normalizeOwnerChecks(['  uv run pytest -q  ', 'node scripts/lint.js']), ['uv run pytest -q', 'node scripts/lint.js']);
+    const eight = Array.from({ length: 8 }, (_, i) => `cmd${i}`);
+    assert.deepEqual(normalizeOwnerChecks(eight), eight);
+  });
+
+  it('rejects bad shapes, entries, counts, and unparsable commands', () => {
+    refuse('npm test', /must be an array/);
+    refuse({ 0: 'npm test' }, /must be an array/);
+    refuse(5, /must be an array/);
+    refuse(Array.from({ length: 9 }, (_, i) => `cmd${i}`), /more than 8/);
+    refuse([''], /non-empty command string/);
+    refuse(['   '], /non-empty command string/);
+    refuse(['npm test', 7], /ownerChecks\[1\] must be a non-empty command string/);
+    refuse([null], /non-empty command string/);
+    refuse([['npm', 'test']], /non-empty command string/);
+    // parses to an argv that the owner contract refuses (argument over the length limit)
+    refuse([`node ${'x'.repeat(5000)}`], /not a valid check list/);
+  });
+});
+
 describe('settings file', () => {
   it('missing file means everything disabled', () => {
-    assert.deepEqual(readSettingsFile(file), { acceptanceScratch: null, aut03LeadSkillEnabled: false, warning: null });
+    assert.deepEqual(readSettingsFile(file), { acceptanceScratch: null, ownerChecks: null, aut03LeadSkillEnabled: false, warning: null });
   });
 
   it('reads a valid file and resolves the default base dir next to it', () => {
@@ -72,6 +103,30 @@ describe('settings file', () => {
     assert.equal(resolveAcceptanceScratch({ acceptanceScratch: null }, file), null);
     writeRaw({ version: 1, aut03LeadSkillEnabled: true });
     assert.equal(readSettingsFile(file).aut03LeadSkillEnabled, true);
+  });
+
+  it('reads ownerChecks; absent, null, and [] are disabled', () => {
+    writeRaw({ version: 1, ownerChecks: ['npm test', 'node scripts/lint.js'] });
+    const settings = readSettingsFile(file);
+    assert.equal(settings.warning, null);
+    assert.deepEqual(settings.ownerChecks, ['npm test', 'node scripts/lint.js']);
+    for (const doc of [{ version: 1 }, { version: 1, ownerChecks: null }, { version: 1, ownerChecks: [] }]) {
+      writeRaw(doc);
+      const disabled = readSettingsFile(file);
+      assert.equal(disabled.warning, null);
+      assert.equal(disabled.ownerChecks, null);
+    }
+  });
+
+  it('an invalid ownerChecks setting ignores the whole file and warns', () => {
+    for (const ownerChecks of ['npm test', [1], [''], Array.from({ length: 9 }, (_, i) => `c${i}`), { a: 1 }]) {
+      writeRaw({ version: 1, acceptanceScratch: { env: ['X'] }, ownerChecks });
+      const settings = readSettingsFile(file);
+      assert.equal(settings.ownerChecks, null);
+      assert.equal(settings.acceptanceScratch, null);
+      assert.match(settings.warning, /Project settings ignored.*ownerChecks/);
+    }
+    assert.throws(() => validateSettingsDocument({ version: 1, ownerChecks: [7] }), /ownerChecks\[0\]/);
   });
 
   it('an invalid or unreadable file enables nothing and warns', () => {

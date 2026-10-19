@@ -45,7 +45,7 @@ function loadControls(overrides = {}) {
   const ids = [
     'taskGoal', 'sendBtn', 'newSessionBtn', 'composerHint', 'sendLabel', 'composerBox',
     'modeLeadBtn', 'modeScoutBtn', 'activeTaskIdDisplay', 'decisionCard', 'sendError',
-    'decisionOptionsList', 'decisionId', 'decisionIdText', 'decisionAnswer',
+    'decisionOptionsList', 'decisionId', 'decisionIdText', 'decisionAnswer', 'taskChecks', 'taskChecksBox',
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, element()]));
   const context = Object.assign({
@@ -197,5 +197,61 @@ describe('new session controls', () => {
     });
     context.updateComposer();
     assert.equal(elements.newSessionBtn.disabled, false);
+  });
+});
+
+describe('acceptance checks in the composer', () => {
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  const terminalSession = { sessionData: { turns: [{ leadTask: { id: 'task-old', state: 'TASK_STATE_COMPLETED' } }] }, situationKey: '', situation: null };
+
+  it('sends one command per line as checks and clears the box', async () => {
+    const { context, elements } = loadControls({ window: { crypto: { randomUUID: () => 'ctx-new' } } });
+    assert.equal(context.newSession(), true);
+    elements.taskGoal.value = 'Build it';
+    elements.taskChecks.value = '  npm test  \n\n   \nuv run pytest -q\r\n';
+    await context.sendMessage();
+    assert.deepEqual(plain(context.lastPayload), { goal: 'Build it', contextId: 'ctx-new', checks: ['npm test', 'uv run pytest -q'] });
+    assert.equal(elements.taskChecks.value, '');
+  });
+
+  it('omits the field for an empty or blank box so the project defaults apply', async () => {
+    for (const value of ['', '  \n \n']) {
+      const { context, elements } = loadControls({ window: { crypto: { randomUUID: () => 'ctx-new' } } });
+      assert.equal(context.newSession(), true);
+      elements.taskGoal.value = 'Build it';
+      elements.taskChecks.value = value;
+      await context.sendMessage();
+      assert.equal('checks' in context.lastPayload, false);
+    }
+  });
+
+  it('sends checks with a follow-up run but never with a resume of a paused task', async () => {
+    const followUp = loadControls(terminalSession);
+    followUp.elements.taskGoal.value = 'Next step';
+    followUp.elements.taskChecks.value = 'make check';
+    await followUp.context.sendMessage();
+    assert.deepEqual(plain(followUp.context.lastPayload), { goal: 'Next step', continueFrom: 'task-old', checks: ['make check'] });
+
+    const resume = loadControls();
+    resume.elements.taskGoal.value = 'Carry on';
+    resume.elements.taskChecks.value = 'make check';
+    await resume.context.sendMessage();
+    assert.deepEqual(plain(resume.context.lastPayload), { goal: 'Carry on', taskId: 'task-old' });
+    assert.equal(resume.elements.taskChecks.value, 'make check');
+  });
+
+  it('hides the checks box in scout mode', () => {
+    const lead = loadControls();
+    lead.context.updateComposer();
+    assert.equal(lead.elements.taskChecksBox.classList.contains('hidden'), false);
+    const scout = loadControls({ askMode() { return 'scout'; } });
+    scout.context.updateComposer();
+    assert.equal(scout.elements.taskChecksBox.classList.contains('hidden'), true);
+  });
+
+  it('the page declares the textarea with the host-execution hint', () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'launcher-ui', 'index.html'), 'utf8');
+    assert.match(html, /<textarea id="taskChecks"/);
+    assert.match(html, /Owner checks run on the host, unsandboxed/);
   });
 });

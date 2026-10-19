@@ -154,6 +154,8 @@ npm run ask -- --check 'npm test' --check 'node --check src/server.js' "Implemen
 | `unverified` | No checks, at least one writer ran. |
 | `not_required` | No checks and no writer ran. |
 
+The launcher composer has an optional "Acceptance checks" box (one command per line) that sends the same checks for a new run. Owner checks run on the host, unsandboxed. To set default owner checks once per project, add `ownerChecks` to the project settings file (`CODEX_A2A_PROJECT_SETTINGS`, read at server start, so restart the project to apply): `{ "version": 1, "ownerChecks": ["npm test"] }`. They apply to a new run that carries no explicit checks; explicit checks replace them. See [docs/execution-boundary-contract.md](docs/execution-boundary-contract.md).
+
 The task stays `COMPLETED`; the result text starts with `Acceptance: <disposition>` and the artifact metadata carries `acceptance`. The CLI exits 4 for `rejected` and `unverifiable`. Direct A2A clients may send `metadata.acceptance = { requiredChecks: [{ id, argv, timeoutMs? }] }` on the first message.
 
 ## Background process cleanup

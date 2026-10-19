@@ -8,12 +8,18 @@
 //   acceptanceScratch: { env: ["NAME", ...], baseDir?: "/absolute/dir" }
 //     Opt-in. Sandboxed acceptance checks of the project get a fresh per-run scratch directory (see
 //     src/acceptance-scratch.js) and each listed variable names its scratch subdirectory.
+//   ownerChecks: ["command arg ...", ...]
+//     Opt-in, 1-8 commands. Default owner acceptance checks of a new run that carries no explicit checks
+//     (see makeLeadExecutor in src/server.js). Each command is parsed like a CLI `--check`; owner checks run
+//     on the host outside the Codex sandbox. Absent, null, or [] disables the default.
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { parseCheckCommand, validateAcceptanceContract } = require('./acceptance');
 
 const SETTINGS_VERSION = 1;
 const MAX_SCRATCH_ENV = 8;
+const MAX_OWNER_CHECKS = 8;
 const MAX_ENV_NAME = 64;
 const MAX_BASE_DIR = 1024;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
@@ -65,18 +71,41 @@ function normalizeAcceptanceScratch(input) {
   return out;
 }
 
+/**
+ * Validates the ownerChecks setting. Returns null (disabled) for undefined, null, or [], else the array of
+ * trimmed command strings. Each one must parse with parseCheckCommand and pass owner contract validation.
+ * Throws ProjectSettingsError on any problem.
+ */
+function normalizeOwnerChecks(input) {
+  if (input === undefined || input === null) return null;
+  if (!Array.isArray(input)) throw new ProjectSettingsError('ownerChecks must be an array of command strings');
+  if (input.length === 0) return null;
+  if (input.length > MAX_OWNER_CHECKS) throw new ProjectSettingsError(`ownerChecks has more than ${MAX_OWNER_CHECKS} entries`);
+  const commands = input.map((command, index) => {
+    if (typeof command !== 'string' || command.trim() === '') throw new ProjectSettingsError(`ownerChecks[${index}] must be a non-empty command string`);
+    return command.trim();
+  });
+  try {
+    validateAcceptanceContract({ requiredChecks: commands.map((command, index) => parseCheckCommand(command, index)) });
+  } catch (error) {
+    throw new ProjectSettingsError(`ownerChecks is not a valid check list: ${error && error.message}`);
+  }
+  return commands;
+}
+
 /** Validates a whole settings document. Owner opt-ins are strict and default off. */
 function validateSettingsDocument(doc) {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new ProjectSettingsError('Settings file must be an object');
   if (doc.version !== SETTINGS_VERSION) throw new ProjectSettingsError(`Unsupported settings version ${JSON.stringify(doc.version)}`);
   for (const key of Object.keys(doc)) {
-    if (!['version', 'acceptanceScratch', 'aut03LeadSkillEnabled', 'updatedAt'].includes(key)) throw new ProjectSettingsError(`Unknown settings field: ${key}`);
+    if (!['version', 'acceptanceScratch', 'ownerChecks', 'aut03LeadSkillEnabled', 'updatedAt'].includes(key)) throw new ProjectSettingsError(`Unknown settings field: ${key}`);
   }
   if (doc.aut03LeadSkillEnabled !== undefined && typeof doc.aut03LeadSkillEnabled !== 'boolean') {
     throw new ProjectSettingsError('aut03LeadSkillEnabled must be a boolean');
   }
   return {
     acceptanceScratch: normalizeAcceptanceScratch(doc.acceptanceScratch),
+    ownerChecks: normalizeOwnerChecks(doc.ownerChecks),
     aut03LeadSkillEnabled: doc.aut03LeadSkillEnabled === true,
   };
 }
@@ -86,7 +115,7 @@ function validateSettingsDocument(doc) {
  * `warning`; a broken file never enables anything. This never throws.
  */
 function readSettingsFile(file) {
-  const defaults = { acceptanceScratch: null, aut03LeadSkillEnabled: false };
+  const defaults = { acceptanceScratch: null, ownerChecks: null, aut03LeadSkillEnabled: false };
   let raw;
   try {
     raw = fs.readFileSync(file, 'utf8');
@@ -114,8 +143,10 @@ function resolveAcceptanceScratch(settings, file) {
 module.exports = {
   SETTINGS_VERSION,
   MAX_SCRATCH_ENV,
+  MAX_OWNER_CHECKS,
   ProjectSettingsError,
   normalizeAcceptanceScratch,
+  normalizeOwnerChecks,
   validateSettingsDocument,
   readSettingsFile,
   resolveAcceptanceScratch,
