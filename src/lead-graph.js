@@ -30,6 +30,7 @@ const {
 const {
   makeObservation, observeLoopGuard, resetLoopGuard, reportEvidenceIdentity, warningText,
 } = require('./loop-guard');
+const { unreviewedIds, finalizeLedger } = require('./partial-ledger');
 
 const DEFAULT_RECONCILE_WAIT_MS = 30_000;
 const MAX_OUTCOME_TEXT_CHARS = 12_000;
@@ -622,8 +623,12 @@ const ESCALATION_OPTIONS = [
   { id: 'change_goal', description: 'Change goal: your answer replaces the goal, with a fresh round budget' },
 ];
 const ESCALATION_CHOICES = ESCALATION_OPTIONS.map((option) => option.id);
+// B2: an owner answer with one of these option ids to an infeasible_requirement or credentials_or_access request
+// takes the cited checkpoints out of the run.
+const CHECKPOINT_BLOCK_REASONS = ['infeasible_requirement', 'credentials_or_access'];
+const CHECKPOINT_BLOCK_CHOICES = ['defer', 'outside_run'];
 const MAX_PROGRESS_ENTRIES = 50;
-const OWNER_ONLY_RULE = 'Owner-only decisions are a closed list (humanInput.reason): paid_resources (spending money or paid resources beyond the run), credentials_or_access (credentials and access grants), external_write (publishing or writing to external systems), irreversible_operation, prd_requirement_change (removing or weakening a requirement the PRD states), and infeasible_requirement (an investigation proved that a requirement cannot be met because a dependency or the environment lacks a capability; cite the exact version or setting and the evidence; options must include substitute evidence, changing the dependency or environment, and deferring the requirement). Interpreting the PRD, choosing an implementation, and expanding file scope are your decisions after investigation. Fixing evidence tooling means collecting or presenting evidence the platform already provides; building a substitute for a capability the platform lacks is scope expansion that needs the owner.';
+const OWNER_ONLY_RULE = 'Owner-only decisions are a closed list (humanInput.reason): paid_resources (spending money or paid resources beyond the run), credentials_or_access (credentials and access grants), external_write (publishing or writing to external systems), irreversible_operation, prd_requirement_change (removing or weakening a requirement the PRD states), and infeasible_requirement (an investigation proved that a requirement cannot be met because a dependency or the environment lacks a capability; cite the exact version or setting and the evidence; options must include substitute evidence, changing the dependency or environment, and deferring the requirement). Interpreting the PRD, choosing an implementation, and expanding file scope are your decisions after investigation. Fixing evidence tooling means collecting or presenting evidence the platform already provides; building a substitute for a capability the platform lacks is scope expansion that needs the owner. For infeasible_requirement and credentials_or_access name the option that defers the work "defer" and the option that says the owner will do it outside this run "outside_run"; either answer blocks the review checkpoints you cite by checkpointId or by assignmentId in evidenceChecked and ends reviewer dispatch for them.';
 const INVESTIGATION_RULE = 'An investigation is a finished read-only outcome (explorer first; use auditor only for a concrete risk-boundary question, or scout/architect when appropriate) with a valid report from a round after the blocker first appeared (after the latest related open worker decision; for a repeated unmet-goal finish, after the first one); cite its assignmentId in humanInput.evidenceChecked or relatedDecisionIds (in final for a finish).';
 // LL-6 check_changed review: a read-only reviewer judges a changed pinned check against the PRD.
 const REVIEW_ROLES = ['auditor', 'architect', 'explorer', 'scout'];
@@ -636,8 +641,10 @@ const RULE_REMINDERS = {
   'assignment.paths': PATH_RULE,
   'assignment.writer_scope': `${ASSIGNMENT_SCOPE_RULE} ${PATH_RULE}`,
   'decision.parse': 'Return only one JSON object matching the supplied schema.',
-  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, and records, with unused fields empty or null. A dispatch needs 1 to 4 assignments. If there is nothing to dispatch, use finish or request_human_input instead of an empty dispatch.',
+  'decision.envelope': 'The JSON must contain exactly action, assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, records, and checkpoints, with unused fields empty or null. A dispatch needs 1 to 4 assignments. If there is nothing to dispatch, use finish or request_human_input instead of an empty dispatch.',
   'decision.goal': 'finish requires goalAchieved true or false: true only when the goal is met, false with the blockers named in final. Use null for dispatch and request_human_input.',
+  'decision.partial': 'checkpoints is null or a ledger of {id, status, reason, evidence} entries with status accepted (evidence required), blocked, or not_started (reason required); at least one entry is not accepted, ids are unique, and a ledger needs finish with goalAchieved false.',
+  'decision.checkpoint_blocked': 'The owner deferred this checkpoint or took its remaining work outside the run. Dispatch no more verifier or auditor work for it; when every remaining checkpoint is accepted or blocked, finish with goalAchieved false and the checkpoints ledger.',
   'decision.investigate_first': `Investigate first: dispatch a read-only explorer first; use auditor only for a concrete risk-boundary question. ${INVESTIGATION_RULE} ${OWNER_ONLY_RULE}`,
   'decision.acceptance_checks': `${CHECK_RULE} Use null to propose nothing.`,
   'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds when it is owner-only; a dispatch of only read-only roles may leave them open while you investigate them.',
@@ -691,6 +698,10 @@ const LeadState = Annotation.Root({
   unresolvedWriters: last(() => []),
   contract: last(() => ({ requiredChecks: [] })),
   acceptanceAttempts: last(() => 0),
+  // The partial-result ledger of a finish with goalAchieved false ({ checkpoints }), and the checkpoints
+  // the owner deferred or took outside the run ([{ checkpointId, reason, decisionId, round }]).
+  partial: last(() => null),
+  blockedCheckpoints: last(() => []),
   acceptanceRuns: last(() => 0),
   acceptance: last(() => null),
   status: last(() => null),
@@ -1104,6 +1115,10 @@ function buildLeadGraph(deps) {
       const obligation = findObligation(marker.checkpointId);
       if (!entry || !obligation || !obligationMatches(obligation, obligation.review)
         || marker.generation !== entry.generation || marker.role !== canonicalRoleId(item.role)) continue;
+      if (ownerBlockedIds(state).has(marker.checkpointId)) {
+        blocked(entry, 'checkpoint_blocked_by_owner');
+        continue;
+      }
       const target = targetForReview({ ...state, reviewObligations: obligations }, obligation.review);
       if (marker.role === 'verifier' && entry.phase === 'verifier_pending') {
         if (item.result?.failureKind === 'usage_limit' && item.result.continuation) continue;
@@ -1545,9 +1560,13 @@ function buildLeadGraph(deps) {
     });
   }
 
+  // Checkpoints the owner deferred or took outside the run: no reviewer is dispatched for them.
+  const ownerBlockedIds = (state) => new Set((state.blockedCheckpoints || []).map((entry) => entry.checkpointId));
+
   function incompleteCriticalCheckpointIds(state) {
+    const deferred = ownerBlockedIds(state);
     return (state.reviewObligations || []).filter((obligation) => {
-      if (!isGatedReview(obligation.review)) return false;
+      if (!isGatedReview(obligation.review) || deferred.has(obligation.checkpointId)) return false;
       const gate = currentGateState(state, obligation);
       return (obligation.pendingAssignmentIds || []).length > 0 || !gate.verifier || !gate.auditor;
     }).map((obligation) => obligation.checkpointId).sort();
@@ -1573,8 +1592,16 @@ function buildLeadGraph(deps) {
     return targetForReview(state, review).known;
   }
 
-  function gateFailure(state, { forFinish = false, assignments = [] } = {}) {
-    const obligations = (state.reviewObligations || []).filter((entry) => isGatedReview(entry.review));
+  // A partial finish does not need review receipts for the checkpoints its ledger reports as blocked or not
+  // started (including the ones the owner deferred); an accepted checkpoint keeps its gate.
+  function ledgerExemption(state, ledger) {
+    return new Set([...unreviewedIds(ledger), ...(ledger ? ownerBlockedIds(state) : [])]);
+  }
+
+  function gateFailure(state, { forFinish = false, assignments = [], exempt = null } = {}) {
+    const deferred = ownerBlockedIds(state);
+    const skipped = (checkpointId) => (forFinish ? Boolean(exempt?.has(checkpointId)) : deferred.has(checkpointId));
+    const obligations = (state.reviewObligations || []).filter((entry) => isGatedReview(entry.review) && !skipped(entry.checkpointId));
     for (const obligation of obligations) {
       const gate = currentGateState(state, obligation);
       const pending = (obligation.pendingAssignmentIds || []).length > 0;
@@ -1597,7 +1624,7 @@ function buildLeadGraph(deps) {
       if (!gate.verifier) return `Review checkpoint ${obligation.checkpointId} needs a passing verifier receipt for the current target`;
       if (!gate.auditor) return `Critical review checkpoint ${obligation.checkpointId} needs a passing auditor receipt for the current target`;
     }
-    const ordinary = (state.reviewObligations || []).filter((entry) => entry.review?.kind === 'routine');
+    const ordinary = (state.reviewObligations || []).filter((entry) => entry.review?.kind === 'routine' && !skipped(entry.checkpointId));
     if (forFinish) {
       for (const obligation of ordinary) {
         if ((obligation.pendingAssignmentIds || []).length > 0) {
@@ -1611,7 +1638,8 @@ function buildLeadGraph(deps) {
   }
 
   function enforceReviewAcceptance(state, acceptance) {
-    const failure = gateFailure(state, { forFinish: true });
+    const ledger = state.status === 'completed' ? state.partial?.checkpoints : null;
+    const failure = gateFailure(state, { forFinish: true, exempt: ledger ? ledgerExemption(state, ledger) : null });
     if (!failure) return acceptance;
     const issue = {
       code: 'review_gate_pending',
@@ -2106,6 +2134,7 @@ function buildLeadGraph(deps) {
       role: canonicalRoleId(item.role),
       roleName: roleDisplayName(item.role),
       objective: String(item.assignment?.objective ?? '').slice(0, DIGEST_SUMMARY_CHARS),
+      ...(typeof item.assignment?.review?.checkpointId === 'string' && item.assignment.review.checkpointId ? { checkpointId: item.assignment.review.checkpointId } : {}),
       skills: (item.assignment?.skillPins || []).map(({ id, sha256: hash }) => ({ id, sha256: hash })),
       sandbox: item.sandbox,
       taskId: result.taskId || item.taskId || null,
@@ -2586,13 +2615,13 @@ function buildLeadGraph(deps) {
       deps.parallelWriters
         ? 'Waves: assignment.wave is an integer >= 1 or null. Consecutive assignments sharing the same wave run concurrently. Writers in one wave each work in an isolated copy of the workspace made from the same starting state and do not see each other\'s changes; their changes are integrated into the shared workspace as each finishes. A later wave (or a null-wave assignment after them), for example a verifier, sees the integrated result. Writers in one wave must own disjoint allowedFiles. Use null for strictly sequential steps.'
         : 'Waves: assignment.wave may be used to group read-only work that runs concurrently. Writers always run one at a time in array order regardless of wave. Use null otherwise.',
-      'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, and records. Use empty arrays, an empty string, or null for unused fields.',
+      'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, records, and checkpoints. Use empty arrays, an empty string, or null for unused fields.',
       'Repair and debugging assignments should use directory prefixes that cover the module and its tests, not single files. When a worker reports scopeExpansion or asks for a scope decision, prefer re-dispatching with continueFrom set to that outcome\'s assignmentId (same role) and the expanded allowedFiles over a fresh assignment: the worker continues its own thread instead of re-discovering its context.',
       'Worker decision requests are open decisions: resolve each one yourself (resolutions: decisionId, choice, rationale), investigating first when the evidence does not settle it; list one in humanInput.relatedDecisionIds only when it is an owner-only decision. Never leave one unanswered. Worker reports are self-reported; check scopeViolations and reportError.',
       `Investigate first: never ask the owner what investigation can answer; the owner has no one to ask either. ${OWNER_ONLY_RULE}`,
       `request_human_input is accepted only for an owner-only decision and only after an investigation of that blocker: ${INVESTIGATION_RULE} Give options, a recommendation, the evidence checked, and the independent work that can proceed.`,
       'A blocker that persists needs its root cause located (an explorer first; use an auditor only for a concrete risk-boundary question, or scout/architect when appropriate). Once an investigation locates it outside what the team may change (a missing capability of a dependency or the environment, or the requirement itself), stop investigating that blocker and escalate it.',
-      `goalAchieved: on finish set it honestly, true only when the goal is met; false names the blockers in final. The first finish with false does not end the run: investigate the root cause of each blocker or fix it${Number.isInteger(maxRounds) ? ' within the caller-granted round allowance' : ' while dispatch rounds remain unlimited'}. A later finish with false pauses for the owner only when final cites a read-only investigation finished since then and states why each remaining blocker is owner-only, with evidence. Use null for dispatch and request_human_input.`,
+      `goalAchieved: on finish set it honestly, true only when the goal is met; false names the blockers in final. The first finish with false does not end the run: investigate the root cause of each blocker or fix it${Number.isInteger(maxRounds) ? ' within the caller-granted round allowance' : ' while dispatch rounds remain unlimited'}. A later finish with false pauses for the owner only when final cites a read-only investigation finished since then and states why each remaining blocker is owner-only, with evidence. Use null for dispatch and request_human_input. A finish with false may instead carry checkpoints, a ledger of {id, status, reason, evidence} (status accepted with evidence, blocked, or not_started, with a reason); it ends the run as a partial result without an owner pause. Use checkpoints null otherwise.`,
       ...(Number.isInteger(maxRounds) ? [`Dispatch rounds are capped at ${maxRounds} per caller-granted allowance. Reaching the cap pauses for the owner; only owner continue or change_goal grants another allowance.`] : ['Dispatch rounds are unlimited by default. A round number is for ordering only, not a spending authorization.']),
       `acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks derived from the project's PRD, release or gate documents and its test commands; the first valid proposal is pinned for the run and runs at finish in a sandbox with a read-only workspace and no network. ${CHECK_RULE} Otherwise use null. A check that cannot pass is a blocker to investigate; only an owner-only cause is escalated. A changed pinned check script is reviewed by a read-only auditor against the PRD: preserved requirements are re-pinned, weakened ones keep failing.`,
       ...(deps.parallelWriters ? ['A writer outcome can be not_integrated (the lane field gives the reason and the lane path, which is kept): its changes never reached the shared workspace. You may re-dispatch with corrected allowedFiles, or resolve a conflict with a follow-up assignment.'] : []),
@@ -2848,7 +2877,8 @@ function buildLeadGraph(deps) {
         incompleteCriticalCheckpointIds: incompleteCriticalCheckpointIds(state),
       });
       if (decision.action === 'finish') {
-        const blocked = gateFailure(state, { forFinish: true });
+        const ledger = decision.goalAchieved === false ? decision.checkpoints : null;
+        const blocked = gateFailure(state, { forFinish: true, exempt: ledger ? ledgerExemption(state, ledger) : null });
         if (blocked) throw new BoundaryViolation('decision.review_gate', 'review_receipt_missing', blocked);
       } else if (decision.action === 'dispatch') {
         const prerequisiteAssignments = decision.assignments.filter((assignment) => (assignment.review?.prerequisiteFor || []).length > 0
@@ -2858,6 +2888,14 @@ function buildLeadGraph(deps) {
           || !isPrerequisiteVerifier(state, prerequisiteVerifiers[0], decision.assignments))) {
           throw new BoundaryViolation('decision.review_gate', 'review_checkpoint_pending',
             'A prerequisite verifier must name the exact incomplete critical checkpoints, use a new gated checkpoint, and have a known target');
+        }
+        const deferred = ownerBlockedIds(state);
+        const deferredReview = decision.assignments.find((assignment) => ['verifier', 'auditor'].includes(canonicalRoleId(assignment.role))
+          && assignment.review && deferred.has(assignment.review.checkpointId));
+        if (deferredReview) {
+          const entry = state.blockedCheckpoints.find((value) => value.checkpointId === deferredReview.review.checkpointId);
+          throw new BoundaryViolation('decision.checkpoint_blocked', 'checkpoint_blocked',
+            `Checkpoint ${entry.checkpointId} is blocked (${entry.reason}); do not dispatch reviewers for it. When every remaining checkpoint is accepted or blocked, finish with the partial ledger.`);
         }
         const blocked = gateFailure(state, { assignments: decision.assignments });
         if (blocked) throw new BoundaryViolation('decision.review_gate', 'review_checkpoint_pending', blocked);
@@ -2936,6 +2974,10 @@ function buildLeadGraph(deps) {
       });
       logGateReuse(state, completeObligations);
       const final = decision.final.trim();
+      if (decision.goalAchieved === false && decision.checkpoints) {
+        // A partial result: the lead's own ledger ends the run as completed with disposition partial.
+        return { ...update, status: 'completed', text: final, partial: { checkpoints: decision.checkpoints, round: state.round } };
+      }
       if (decision.goalAchieved === false) {
         // The first unmet-goal finish is not a pause: the lead investigates within the configured allowance.
         if (!state.goalInvestigation) {
@@ -3439,7 +3481,7 @@ function buildLeadGraph(deps) {
         if (unfinishedWriter) blocked = { code: 'skipped_review_pending_writer', reason: 'A same-checkpoint writer has not finished and integrated.' };
       }
       if (!blocked && item.sandbox !== 'read-only') {
-        for (const obligation of obligations.filter((entry) => isGatedReview(entry.review))) {
+        for (const obligation of obligations.filter((entry) => isGatedReview(entry.review) && !ownerBlockedIds(gateState).has(entry.checkpointId))) {
           const gate = currentGateState(gateState, obligation);
           const complete = (obligation.pendingAssignmentIds || []).length === 0 && gate.verifier && gate.auditor;
           const scopedRepair = item.repairCapture?.some((capture) => capture.checkpointId === obligation.checkpointId) === true;
@@ -3851,8 +3893,10 @@ function buildLeadGraph(deps) {
       payload: { choice: answer.choice || 'continue', relatedDecisionIds: [...related] },
     });
     const grant = answer.choice === OWNER_RECOVERY_GRANT_CHOICE ? applyOwnerRecoveryGrant(state, request, answer) : null;
+    const deferred = deferredCheckpoints(state, request, answer);
     return {
       ...(grant || {}),
+      ...(deferred.length > 0 ? { blockedCheckpoints: [...(state.blockedCheckpoints || []), ...deferred].slice(-MAX_PROGRESS_ENTRIES) } : {}),
       humanAnswers: [...state.humanAnswers, {
         decisionId: request.decisionId,
         answer: answer.answer,
@@ -3863,6 +3907,36 @@ function buildLeadGraph(deps) {
       ...(related.size > 0 ? { progress: addProgress(state, [{ round: state.round, kind: 'decision_resolved', detail: [...related].join(', ') }]) } : {}),
       humanRequest: null,
     };
+  }
+
+  // B2: checkpoints cited by an owner-only request that the owner answered with defer or outside_run. A
+  // checkpoint is cited by its id (a known review checkpoint named in the request), through an outcome whose
+  // assignmentId appears in relatedDecisionIds or evidenceChecked, or through the open worker decision it lists.
+  function deferredCheckpoints(state, request, answer) {
+    if (!CHECKPOINT_BLOCK_REASONS.includes(request.reason) || !CHECKPOINT_BLOCK_CHOICES.includes(answer.choice)) return [];
+    const cited = [...(request.relatedDecisionIds || []), ...(request.evidenceChecked || []), request.question].filter((text) => typeof text === 'string').join('\n');
+    const mentions = (id) => id && new RegExp(`(?<![\\w-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(cited);
+    const checkpointIds = new Set();
+    for (const outcome of state.outcomes) {
+      if (!outcome.kind && outcome.checkpointId && mentions(logicalAssignmentId(outcome.assignmentId))) checkpointIds.add(outcome.checkpointId);
+    }
+    for (const obligation of state.reviewObligations || []) {
+      if (mentions(obligation.checkpointId)) checkpointIds.add(obligation.checkpointId);
+    }
+    for (const decision of state.openDecisions) {
+      if (!(request.relatedDecisionIds || []).includes(decision.id)) continue;
+      for (const outcome of state.outcomes) {
+        if (!outcome.kind && outcome.checkpointId && logicalAssignmentId(outcome.assignmentId) === logicalAssignmentId(decision.assignmentId)) checkpointIds.add(outcome.checkpointId);
+      }
+    }
+    const known = ownerBlockedIds(state);
+    const note = String(answer.answer || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    return [...checkpointIds].filter((id) => !known.has(id)).map((checkpointId) => ({
+      checkpointId,
+      reason: `Owner answered "${answer.choice}" to ${request.reason} (${request.decisionId})${note ? `: ${note}` : ''}`,
+      decisionId: request.decisionId,
+      round: state.round,
+    }));
   }
 
   // LL-1 resume: an answer without a known choice is the recommended continue, with the answer as a note.
@@ -4072,7 +4146,7 @@ function buildLeadGraph(deps) {
     const review = startReview(state, acceptance);
     if (review) return { ...runs, ...review, status: null };
     if (acceptance.disposition === 'rejected' && state.acceptanceAttempts < 1) {
-      return { ...runs, acceptanceAttempts: state.acceptanceAttempts + 1, status: null, text: '' };
+      return { ...runs, acceptanceAttempts: state.acceptanceAttempts + 1, status: null, text: '', partial: null };
     }
     return runs;
   }
@@ -4102,6 +4176,8 @@ function buildLeadGraph(deps) {
       }
     }
     acceptance = enforceReviewAcceptance(state, acceptance);
+    const partial = state.status === 'completed' && state.partial?.checkpoints
+      ? finalizeLedger(state.partial.checkpoints, { blocked: state.blockedCheckpoints || [], acceptance }) : null;
     return {
       result: {
         runId: state.runId,
@@ -4110,6 +4186,7 @@ function buildLeadGraph(deps) {
         rounds: state.round,
         assignments: state.outcomes,
         acceptance,
+        ...(partial ? { disposition: 'partial', checkpoints: partial } : {}),
       },
     };
   }

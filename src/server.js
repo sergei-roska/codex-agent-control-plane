@@ -27,6 +27,7 @@ const { createActivityStore } = require('./activity-store');
 const { createEvidenceStore } = require('./evidence-store');
 const { StagingLog } = require('./staging-log');
 const { validateAcceptanceContract, formatAcceptance, invalidAcceptanceContract, parseCheckCommand } = require('./acceptance');
+const { formatLedger } = require('./partial-ledger');
 const { loadOrCreateAuthToken, createAuthMiddleware } = require('./local-auth');
 const { loadSkillCatalog } = require('./skill-catalog');
 const { loadMcpCatalog } = require('./mcp-catalog');
@@ -495,7 +496,8 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
         ? 'Cancellation was requested, but downstream A2A cancellation could not be confirmed.'
         : typeof result?.text === 'string' ? result.text : '';
       if (completed) {
-        const acceptanceText = formatAcceptance(result?.acceptance);
+        const partial = result?.disposition === 'partial' && Array.isArray(result.checkpoints) ? result.checkpoints : null;
+        const acceptanceText = [formatAcceptance(result?.acceptance), partial ? formatLedger(partial) : ''].filter(Boolean).join('\n\n');
         eventBus.publish(AgentEvent.artifactUpdate({
           taskId,
           contextId,
@@ -508,6 +510,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
               rounds: result?.rounds ?? 0,
               assignments: result?.assignments ?? [],
               ...(result?.acceptance ? { acceptance: result.acceptance } : {}),
+              ...(partial ? { disposition: 'partial', checkpoints: partial } : {}),
             },
             extensions: [],
           },

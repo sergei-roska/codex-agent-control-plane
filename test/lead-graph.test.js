@@ -5360,6 +5360,202 @@ test('an explicit null maxRounds still means no round cap', async () => {
   }, { orchestrator: { maxRounds: null } });
 });
 
+// ------------------------------------------------- partial result ledger and blocked checkpoints
+
+const partialFinish = (final, checkpoints) => decision({ action: 'finish', final, goalAchieved: false, checkpoints });
+const LEDGER_BLOCKED = [
+  { id: 'critical-5', status: 'blocked', reason: 'Reviewers cannot open loopback sockets in this sandbox', evidence: [] },
+  { id: 'docs-1', status: 'not_started', reason: 'Depends on critical-5', evidence: [] },
+];
+const CRITICAL_5 = { kind: 'risk_change', checkpointId: 'critical-5', reason: 'Change a trust boundary', paths: ['src/file.js'], evidenceIds: ['issue-5'] };
+const reviewWorkspace = () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'candidate');
+  return workspace;
+};
+
+test('a partial finish completes with disposition partial and the ledger without an owner pause', async () => {
+  const ledger = [{ id: 'cp-1', status: 'accepted', reason: 'Landed', evidence: ['run-1:r1:a0'] }, ...LEDGER_BLOCKED.map((entry) => ({ ...entry }))];
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), partialFinish('Two checkpoints cannot be completed here', ledger)] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Close M3', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Two checkpoints cannot be completed here');
+    assert.equal(result.disposition, 'partial');
+    assert.deepEqual(result.checkpoints, ledger);
+    assert.equal(result.acceptance.disposition, 'not_required');
+    assert.equal(world.leadTurns, 2);
+  });
+});
+
+test('a finish without a ledger has no disposition, and an invalid ledger is rejected with a reminder', async () => {
+  const bad = partialFinish('Almost', [{ id: 'cp-1', status: 'accepted', reason: '', evidence: [] }]);
+  const world = makeWorld({ script: [bad, met('Done')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal('disposition' in result, false);
+    assert.match(world.prompts[1], /decision\.partial partial_ledger_invalid: accepted checkpoint cp-1 needs evidence/);
+    assert.match(world.prompts[1], /checkpoints is null or a ledger of \{id, status, reason, evidence\} entries/);
+  });
+});
+
+test('a partial finish needs no review receipts for blocked checkpoints, but an accepted one keeps its gate', async () => {
+  const workspace = reviewWorkspace();
+  const acceptedLedger = [{ id: 'critical-5', status: 'accepted', reason: 'Done', evidence: ['run-1:r1:a0'] }, { id: 'docs-1', status: 'blocked', reason: 'No access', evidence: [] }];
+  const omittedLedger = [{ id: 'docs-1', status: 'blocked', reason: 'No access', evidence: [] }];
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review: CRITICAL_5 }),
+      partialFinish('Accepted without receipts', acceptedLedger),
+      partialFinish('Checkpoint left out', omittedLedger),
+      partialFinish('Reviewers cannot run here', LEDGER_BLOCKED),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Change a trust boundary', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.disposition, 'partial');
+    assert.match(world.prompts[2], /review_receipt_missing/);
+    assert.match(world.prompts[2], /Review checkpoint critical-5 needs a passing verifier receipt/);
+    assert.match(world.prompts[3], /review_receipt_missing/);
+    assert.deepEqual(result.checkpoints.map((entry) => `${entry.id}:${entry.status}`), ['critical-5:blocked', 'docs-1:not_started']);
+    assert.notEqual(result.acceptance.disposition, 'rejected');
+    assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder']);
+  }, { workspace });
+});
+
+test('a failed acceptance check never leaves a checkpoint accepted in the partial ledger', async () => {
+  const workspace = gitRepo();
+  let runs = 0;
+  const runCheckImpl = async (check) => {
+    runs += 1;
+    return { id: check.id, argv: check.argv, exitCode: 3, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'failed' };
+  };
+  const ledger = [{ id: 'cp-1', status: 'accepted', reason: 'Landed', evidence: ['run-1:r1:a0'] }, { id: 'cp-2', status: 'blocked', reason: 'No access', evidence: [] }];
+  const world = makeWorld({ script: [partialFinish('Partial one', ledger), partialFinish('Partial two', ledger), finish('never used')] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Check', runId: RUN_ID, contract: contractOf(nodeCheck('unit', 'process.exit(3)')) });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.disposition, 'partial');
+    assert.equal(result.acceptance.disposition, 'rejected');
+    assert.equal(runs, 2);
+    assert.equal(result.checkpoints.filter((entry) => entry.status === 'accepted').length, 0);
+    const cp1 = result.checkpoints.find((entry) => entry.id === 'cp-1');
+    assert.equal(cp1.status, 'blocked');
+    assert.match(cp1.reason, /acceptance rejected/);
+    assert.equal(result.checkpoints.find((entry) => entry.id === 'cp-2').status, 'blocked');
+  }, { workspace, orchestrator: { runCheckImpl } });
+});
+
+test('a passing acceptance check keeps accepted checkpoints accepted in the partial ledger', async () => {
+  const workspace = gitRepo();
+  const runCheckImpl = async (check) => ({ id: check.id, argv: check.argv, exitCode: 0, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'passed' });
+  const ledger = [{ id: 'cp-1', status: 'accepted', reason: 'Landed', evidence: ['unit'] }, { id: 'cp-2', status: 'not_started', reason: 'No time', evidence: [] }];
+  const world = makeWorld({ script: [partialFinish('Partial', ledger)] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Check', runId: RUN_ID, contract: contractOf(nodeCheck('unit', 'process.exit(0)')) });
+    assert.equal(result.disposition, 'partial');
+    assert.equal(result.acceptance.disposition, 'accepted');
+    assert.deepEqual(result.checkpoints, ledger);
+  }, { workspace, orchestrator: { runCheckImpl } });
+});
+
+const infeasibleRequest = (evidenceChecked) => decision({
+  action: 'request_human_input',
+  humanInput: {
+    reason: 'infeasible_requirement',
+    question: 'Reviewers cannot open loopback sockets; how should checkpoint critical-5 proceed?',
+    options: [
+      { id: 'substitute', description: 'Substitute evidence' },
+      { id: 'defer', description: 'Defer the requirement' },
+      { id: 'outside_run', description: 'The owner runs it outside this run' },
+    ],
+    recommendation: 'defer',
+    evidenceChecked,
+    independentWork: 'none',
+    relatedDecisionIds: [],
+  },
+});
+
+for (const choice of ['defer', 'outside_run']) {
+  test(`an owner ${choice} answer blocks the checkpoint, refuses more reviewers for it, and lets the lead finish partial`, async () => {
+    const workspace = reviewWorkspace();
+    const world = makeWorld({
+      script: [
+        dispatch({ ...brief('orch-builder', ['src/file.js']), review: CRITICAL_5 }),
+        dispatch(brief('orch-explorer', [])),
+        infeasibleRequest([`${assignmentId(RUN_ID, 2, 0)} confirmed the sandbox denies sockets`, 'checkpoint critical-5 needs them']),
+        dispatch({ ...brief('orch-verifier', ['test']), review: CRITICAL_5 }),
+        partialFinish('critical-5 is blocked outside this run', [{ id: 'critical-5', status: 'not_started', reason: 'Owner decided', evidence: [] }]),
+      ],
+      workerFinal: reviewWorkerFinal,
+    });
+    await withSession(world, async (session) => {
+      const paused = await session.orchestrator.run({ goal: 'Change a trust boundary', runId: RUN_ID });
+      assert.equal(paused.status, 'input_required');
+      const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'I will run it elsewhere', choice } });
+      assert.equal(result.status, 'completed');
+      assert.equal(result.disposition, 'partial');
+      assert.match(world.prompts[4], /decision\.checkpoint_blocked checkpoint_blocked: Checkpoint critical-5 is blocked/);
+      assert.match(world.prompts[4], /Dispatch no more verifier or auditor work for it/);
+      assert.deepEqual(world.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-explorer']);
+      assert.deepEqual(result.checkpoints.map((entry) => `${entry.id}:${entry.status}`), ['critical-5:blocked']);
+      assert.match(result.checkpoints[0].reason, new RegExp(`Owner answered "${choice}" to infeasible_requirement`));
+      assert.match(result.checkpoints[0].reason, /I will run it elsewhere/);
+      const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+      assert.deepEqual(values.blockedCheckpoints.map((entry) => entry.checkpointId), ['critical-5']);
+    }, { workspace });
+  });
+}
+
+test('a deferred critical checkpoint no longer holds unrelated writers, while an open one still does', async () => {
+  const run = async (choice) => {
+    const workspace = reviewWorkspace();
+    const world = makeWorld({
+      script: [
+        dispatch({ ...brief('orch-builder', ['src/file.js']), review: CRITICAL_5 }),
+        dispatch(brief('orch-explorer', [])),
+        infeasibleRequest([`${assignmentId(RUN_ID, 2, 0)} confirmed it`, 'checkpoint critical-5 needs them']),
+        dispatch(brief('orch-builder', ['src/other.js'])),
+        partialFinish('Stopping', LEDGER_BLOCKED),
+      ],
+      workerFinal: reviewWorkerFinal,
+    });
+    await withSession(world, async (session) => {
+      await session.orchestrator.run({ goal: 'Change a trust boundary', runId: RUN_ID });
+      await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'ok', choice } });
+    }, { workspace });
+    return world;
+  };
+  const deferred = await run('defer');
+  assert.deepEqual(deferred.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-explorer', 'orch-builder']);
+  const open = await run('substitute');
+  assert.match(open.prompts[4], /Critical review checkpoint critical-5 remains pending; writable assignments must stay under that checkpoint/);
+  assert.deepEqual(open.dispatchInputs.map((input) => input.role), ['orch-builder', 'orch-explorer']);
+});
+
+test('another owner answer, or a defer on an unrelated reason, blocks nothing', async () => {
+  const workspace = reviewWorkspace();
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review: CRITICAL_5 }),
+      dispatch(brief('orch-explorer', [])),
+      infeasibleRequest([`${assignmentId(RUN_ID, 2, 0)} confirmed it`, 'checkpoint critical-5 needs them']),
+      partialFinish('Stopping with what exists', LEDGER_BLOCKED),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  await withSession(world, async (session) => {
+    await session.orchestrator.run({ goal: 'Change a trust boundary', runId: RUN_ID });
+    await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Use a substitute', choice: 'substitute' } });
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.deepEqual(values.blockedCheckpoints, []);
+  }, { workspace });
+});
+
 test('a finish with goalAchieved null is rejected with a reminder', async () => {
   const world = makeWorld({ script: [decision({ action: 'finish', final: 'Done?', goalAchieved: null }), met('Done')] });
   await withSession(world, async (session) => {

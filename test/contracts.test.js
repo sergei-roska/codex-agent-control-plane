@@ -44,7 +44,11 @@ test('schemas satisfy strict structured output rules', () => {
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom', 'review', 'repair']);
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.continueFrom, { type: ['string', 'null'] });
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.wave, { type: ['integer', 'null'], minimum: 1 });
-  assert.deepEqual(DECISION_SCHEMA.required, ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks', 'records']);
+  assert.deepEqual(DECISION_SCHEMA.required, ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks', 'records', 'checkpoints']);
+  const [ledger, noLedger] = DECISION_SCHEMA.properties.checkpoints.anyOf;
+  assert.equal(noLedger.type, 'null');
+  assert.deepEqual(ledger.items.required, ['id', 'status', 'reason', 'evidence']);
+  assert.deepEqual(ledger.items.properties.status.enum, ['accepted', 'blocked', 'not_started']);
   assert.deepEqual(DECISION_SCHEMA.properties.goalAchieved, { type: ['boolean', 'null'] });
   const [checks, none] = DECISION_SCHEMA.properties.acceptanceChecks.anyOf;
   assert.equal(none.type, 'null');
@@ -78,6 +82,48 @@ test('goalAchieved: finish needs a boolean, legacy decisions get null injected, 
   throws(finish({ goalAchieved: true, acceptanceChecks: {} }), ctx(), /acceptanceChecks must be an array or null/);
   throws(finish({ goalAchieved: true, other: 1 }), ctx(), /unsupported field/);
   assert.ok(BOUNDARY_PREDICATES['decision.acceptance_checks'].includes('acceptance_checks_invalid'));
+});
+
+const LEDGER = [
+  { id: 'cp-1', status: 'accepted', reason: '', evidence: ['run:r2:a0'] },
+  { id: 'cp-2', status: 'blocked', reason: 'Loopback sockets are denied in this sandbox', evidence: [] },
+];
+
+test('a partial finish needs goalAchieved false and a valid ledger; other actions drop it', () => {
+  const partial = finish({ goalAchieved: false, checkpoints: LEDGER.map((entry) => ({ ...entry })) });
+  // A partial finish does not need a cited investigation even after a first unmet-goal finish.
+  validateDecision(partial, ctx({ goalInvestigationRound: 5 }));
+  assert.deepEqual(partial.checkpoints, LEDGER);
+  const legacy = finish({ goalAchieved: false });
+  validateDecision(legacy, ctx());
+  assert.equal(legacy.checkpoints, null);
+  const empty = finish({ goalAchieved: false, checkpoints: [] });
+  validateDecision(empty, ctx());
+  assert.equal(empty.checkpoints, null);
+  // Without a ledger the repeated unmet-goal finish still needs its investigation.
+  throws(finish({ goalAchieved: false, checkpoints: null }), ctx({ goalInvestigationRound: 5, investigations: [] }), /needs a finished read-only investigation/);
+  const dispatched = dispatch([assignment()], { checkpoints: LEDGER });
+  validateDecision(dispatched, ctx());
+  assert.equal(dispatched.checkpoints, null);
+  assert.ok(BOUNDARY_PREDICATES['decision.partial'].includes('partial_ledger_invalid'));
+});
+
+test('a ledger is rejected unless it is honest and well formed', () => {
+  const bad = (checkpoints, pattern, overrides = {}) => throws(finish({ goalAchieved: false, checkpoints, ...overrides }), ctx(), pattern);
+  bad(LEDGER, /needs goalAchieved false/, { goalAchieved: true });
+  bad('x', /checkpoints must be an array or null/);
+  bad([LEDGER[0], LEDGER[0]], /checkpoint cp-1 is listed twice/);
+  bad([{ ...LEDGER[0], status: 'done' }], /status must be one of accepted, blocked, not_started/);
+  bad([{ ...LEDGER[0], evidence: [] }, LEDGER[1]], /accepted checkpoint cp-1 needs evidence/);
+  bad([LEDGER[0], { ...LEDGER[1], reason: ' ' }], /blocked checkpoint cp-2 needs a reason/);
+  bad([LEDGER[0]], /at least one blocked or not_started checkpoint/);
+  bad([{ id: 'cp-1', status: 'blocked', reason: 'r' }], /exactly id, status, reason, and evidence/);
+  bad(Array.from({ length: 41 }, (_, index) => ({ id: `cp-${index}`, status: 'blocked', reason: 'r', evidence: [] })), /at most 40 entries/);
+  try { validateDecision(finish({ goalAchieved: false, checkpoints: [LEDGER[0]] }), ctx()); } catch (error) {
+    assert.ok(error instanceof BoundaryViolation);
+    assert.equal(error.violations[0].predicate, 'decision.partial');
+    assert.equal(error.violations[0].code, 'partial_ledger_invalid');
+  }
 });
 
 function report(overrides = {}) {

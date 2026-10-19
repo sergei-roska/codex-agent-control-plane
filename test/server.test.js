@@ -957,6 +957,38 @@ test('the result artifact carries the acceptance record and starts with its disp
   assert.equal(accepted.find((event) => event.kind === 'artifactUpdate').data.artifact.parts[0].content.value, 'Acceptance: accepted\n\nFine');
 });
 
+test('a partial result completes the task with disposition partial, the ledger in metadata, and the ledger text', async () => {
+  const checkpoints = [
+    { id: 'cp-1', status: 'accepted', reason: 'Landed', evidence: ['run:r1:a0'] },
+    { id: 'cp-2', status: 'blocked', reason: 'No loopback sockets', evidence: [] },
+  ];
+  const seen = [];
+  const executor = makeLeadExecutor({
+    orchestrator: {
+      async run() {
+        return {
+          status: 'completed', text: 'Two of three checkpoints are done', rounds: 3, assignments: [],
+          acceptance: { disposition: 'unverified', reasons: [] }, disposition: 'partial', checkpoints,
+        };
+      },
+    },
+  });
+  await executor.execute({ taskId: 't-part', contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }] } }, { publish: (event) => seen.push(event) });
+  const artifact = seen.find((event) => event.kind === 'artifactUpdate').data.artifact;
+  assert.equal(artifact.metadata.disposition, 'partial');
+  assert.deepEqual(artifact.metadata.checkpoints, checkpoints);
+  assert.equal(artifact.parts[0].content.value.split('\n\n')[0].startsWith('Acceptance: unverified'), true);
+  assert.match(artifact.parts[0].content.value, /Partial result: 1 accepted, 1 blocked, 0 not started \(goal not achieved\)\n- cp-1: accepted - Landed \[evidence: run:r1:a0\]\n- cp-2: blocked - No loopback sockets\n\nTwo of three checkpoints are done$/);
+  assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
+
+  const plain = [];
+  const ok = makeLeadExecutor({ orchestrator: { async run() { return { status: 'completed', text: 'Fine', acceptance: { disposition: 'accepted', reasons: [] } }; } } });
+  await ok.execute({ taskId: 't-full', contextId: 'ctx', userMessage: { parts: [{ text: 'goal' }] } }, { publish: (event) => plain.push(event) });
+  const complete = plain.find((event) => event.kind === 'artifactUpdate').data.artifact;
+  assert.equal('disposition' in complete.metadata, false);
+  assert.equal('checkpoints' in complete.metadata, false);
+});
+
 test('a resume ignores acceptance metadata and says so', async () => {
   const seen = [];
   const resumes = [];

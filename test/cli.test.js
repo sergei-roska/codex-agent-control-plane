@@ -185,6 +185,33 @@ test('the acceptance disposition is printed and rejected or unverifiable exit 4'
   assert.deepEqual(codes, { accepted: 0, rejected: 4, unverifiable: 4, unverified: 0, not_required: 0 });
 });
 
+test('a partial result prints its text and exits 5, but failed acceptance still exits 4', async () => {
+  const { dir, env } = setup();
+  const checkpoints = [{ id: 'cp-1', status: 'accepted', reason: '', evidence: ['run:r1:a0'] }, { id: 'cp-2', status: 'blocked', reason: 'No sockets', evidence: [] }];
+  const task = (acceptance, extra = {}) => ({
+    id: 't', status: { state: TaskState.TASK_STATE_COMPLETED },
+    artifacts: [{
+      parts: [{ content: { $case: 'text', value: 'Partial result: 1 accepted, 1 blocked, 0 not started (goal not achieved)\n- cp-2: blocked - No sockets' } }],
+      metadata: { acceptance, ...extra },
+    }],
+  });
+  const codes = {};
+  for (const [name, acceptance, extra] of [
+    ['partial_accepted', { disposition: 'accepted' }, { disposition: 'partial', checkpoints }],
+    ['partial_unverified', { disposition: 'unverified' }, { disposition: 'partial', checkpoints }],
+    ['partial_rejected', { disposition: 'rejected' }, { disposition: 'partial', checkpoints }],
+    ['complete_accepted', { disposition: 'accepted' }, {}],
+  ]) {
+    const client = { async sendMessage() { return task(acceptance, extra); } };
+    const result = await run(['goal'], client, env);
+    codes[name] = result.code;
+    assert.match(result.out, /Partial result: 1 accepted, 1 blocked/);
+    assert.match(result.out, /Task completed\./);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.deepEqual(codes, { partial_accepted: 5, partial_unverified: 5, partial_rejected: 4, complete_accepted: 0 });
+});
+
 const fast = { pollIntervalMs: 0, sleep: async () => {} };
 
 test('polls a working task until completed, printing the task id once', async () => {

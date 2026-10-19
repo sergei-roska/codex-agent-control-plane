@@ -8,6 +8,7 @@ const { parseCheckCommand } = require('./acceptance');
 const USAGE = "Usage: node src/cli.js [--check '<command>']... '<goal>'\n       node src/cli.js --task <id> [--decision <id>] [--choice <optionId>] '<answer>'\n";
 const EXIT_INPUT_REQUIRED = 3;
 const EXIT_NOT_ACCEPTED = 4;
+const EXIT_PARTIAL = 5;
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const MAX_POLL_FAILURES = 5;
 const ACTIVE_STATES = new Set([TaskState.TASK_STATE_UNSPECIFIED, TaskState.TASK_STATE_SUBMITTED, TaskState.TASK_STATE_WORKING]);
@@ -135,7 +136,9 @@ async function main(argv = process.argv.slice(2), env = process.env, { clientFac
     const disposition = artifact?.metadata?.acceptance?.disposition;
     if (typeof disposition === 'string' && !text.startsWith('Acceptance:')) process.stdout.write(`Acceptance: ${disposition}\n`);
     process.stdout.write('Task completed.\n');
-    return disposition === 'rejected' || disposition === 'unverifiable' ? EXIT_NOT_ACCEPTED : 0;
+    // Failed acceptance outranks a partial result.
+    if (disposition === 'rejected' || disposition === 'unverifiable') return EXIT_NOT_ACCEPTED;
+    return artifact?.metadata?.disposition === 'partial' ? EXIT_PARTIAL : 0;
   } catch (error) {
     process.stderr.write(`${error?.message || String(error)}\n`);
     return 1;

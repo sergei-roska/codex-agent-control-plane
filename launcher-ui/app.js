@@ -804,7 +804,8 @@
         body = 'Paused: waiting for a human decision.\n\n' + extractParts(t.status?.message?.parts);
       } else if (kind === 'completed') {
         const artifact = t.artifacts?.at(-1);
-        head.appendChild(statePill('completed', acceptanceLabel(artifact?.metadata?.acceptance?.disposition)));
+        // A partial result carries its checkpoint ledger as the first lines of the result text.
+        head.appendChild(statePill('completed', artifact?.metadata?.disposition === 'partial' ? 'Partial result' : acceptanceLabel(artifact?.metadata?.acceptance?.disposition)));
         body = extractParts(artifact?.parts) || extractParts(t.status?.message?.parts) || 'Completed without additional text.';
       } else if (kind === 'failed') {
         head.appendChild(statePill('failed', 'failed'));
@@ -856,7 +857,8 @@
       if (state === 'TASK_STATE_WORKING' || state === 2) label.textContent = 'Status: task in progress...';
       else if (isPausedState(state)) label.textContent = 'Status: human decision required (paused)';
       else if (state === 'TASK_STATE_COMPLETED' || state === 3) {
-        label.textContent = 'Status: COMPLETED SUCCESSFULLY';
+        const partialResult = last.artifacts?.at(-1)?.metadata?.disposition === 'partial';
+        label.textContent = partialResult ? 'Status: COMPLETED PARTIALLY (goal not achieved)' : 'Status: COMPLETED SUCCESSFULLY';
         const disposition = last.artifacts?.at(-1)?.metadata?.acceptance?.disposition;
         badge.className = 'acceptance-pill ' + (disposition === 'accepted' ? 'acceptance-accepted'
           : disposition === 'rejected' ? 'acceptance-rejected' : 'acceptance-none');

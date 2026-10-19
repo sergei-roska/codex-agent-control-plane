@@ -3,6 +3,7 @@
 const path = require('node:path');
 const { canonicalRoleId, getRole } = require('./role-names');
 const { isSafeIdentity } = require('./staging-log');
+const { LEDGER_STATUSES, MAX_LEDGER_ENTRIES, MAX_LEDGER_ID, MAX_LEDGER_REASON, MAX_LEDGER_EVIDENCE, normalizeLedger } = require('./partial-ledger');
 
 const MAX_ASSIGNMENTS = 4;
 const MAX_ITEMS = 20;
@@ -12,7 +13,7 @@ const WORKER_REPORT_CONTRACT = 'worker-report/v1';
 const ASSIGNMENT_FIELDS = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
 const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'mcpTools', 'wave', 'continueFrom', 'review', 'repair'];
 const DECISION_BASE_KEYS = ['action', 'assignments', 'final', 'resolutions', 'humanInput'];
-const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks', 'records'];
+const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks', 'records', 'checkpoints'];
 const ASSIGNMENT_ARRAY_FIELDS = ASSIGNMENT_FIELDS.filter((field) => field !== 'role' && field !== 'objective');
 const REPORT_OUTCOMES = ['completed', 'blocked', 'needs_decision', 'failed'];
 const CHECK_RESULTS = ['passed', 'failed', 'not_run'];
@@ -31,6 +32,8 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'decision.envelope': Object.freeze(['decision_envelope_invalid', 'assignment_count_invalid']),
   'decision.resolutions': Object.freeze(['decision_unresolved']),
   'decision.goal': Object.freeze(['goal_unstated']),
+  'decision.partial': Object.freeze(['partial_ledger_invalid']),
+  'decision.checkpoint_blocked': Object.freeze(['checkpoint_blocked']),
   'decision.investigate_first': Object.freeze(['investigation_missing']),
   'decision.acceptance_checks': Object.freeze(['acceptance_checks_invalid']),
   'decision.records': Object.freeze(['records_invalid']),
@@ -142,7 +145,7 @@ const WORKER_REPORT_SCHEMA = {
 const DECISION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks', 'records'],
+  required: ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks', 'records', 'checkpoints'],
   properties: {
     action: { type: 'string', enum: ['dispatch', 'finish', 'request_human_input'] },
     assignments: {
@@ -233,6 +236,26 @@ const DECISION_SCHEMA = {
             additionalProperties: false,
             required: ['id', 'argv', 'timeoutMs'],
             properties: { id: { type: 'string' }, argv: stringArray, timeoutMs: { type: ['integer', 'null'] } },
+          },
+        },
+        { type: 'null' },
+      ],
+    },
+    checkpoints: {
+      anyOf: [
+        {
+          type: 'array',
+          maxItems: MAX_LEDGER_ENTRIES,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'status', 'reason', 'evidence'],
+            properties: {
+              id: { type: 'string', minLength: 1, maxLength: MAX_LEDGER_ID },
+              status: { type: 'string', enum: LEDGER_STATUSES },
+              reason: { type: 'string', maxLength: MAX_LEDGER_REASON },
+              evidence: { type: 'array', items: { type: 'string' }, maxItems: MAX_LEDGER_EVIDENCE },
+            },
           },
         },
         { type: 'null' },
@@ -958,6 +981,11 @@ function validateDecision(decision, ctx) {
   if (!Array.isArray(decision.resolutions)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead resolutions must be an array');
   if (decision.humanInput !== null && !isPlainObject(decision.humanInput)) throw violation('decision.envelope', 'decision_envelope_invalid', 'Lead humanInput must be null or an object');
   if (!keys.includes('records')) decision.records = [];
+  // The partial-result ledger is optional for older callers and means something only on a finish.
+  if (!keys.includes('checkpoints')) decision.checkpoints = null;
+  const ledgerCheck = normalizeLedger(decision.checkpoints);
+  if (ledgerCheck.error) throw violation('decision.partial', 'partial_ledger_invalid', ledgerCheck.error);
+  decision.checkpoints = ledgerCheck.ledger;
   decision.records = checkDecisionRecords(decision.records, ctx.knownProblemIds || []);
 
   const resolved = new Set();
@@ -977,8 +1005,12 @@ function validateDecision(decision, ctx) {
     if (decision.humanInput !== null) throw violation('decision.envelope', 'decision_envelope_invalid', 'Finish decisions must leave humanInput null');
     if (decision.goalAchieved === null && !legacyGoal) throw violation('decision.goal', 'goal_unstated', 'finish requires goalAchieved true or false');
     // LL-6: after the first unmet-goal finish, another one needs an investigation finished since then, cited in final.
+    if (decision.checkpoints && decision.goalAchieved !== false) {
+      throw violation('decision.partial', 'partial_ledger_invalid', 'A checkpoints ledger finishes the run as a partial result and needs goalAchieved false; use checkpoints null otherwise');
+    }
     const since = ctx.goalInvestigationRound;
-    if (decision.goalAchieved === false && Number.isInteger(since) && !citedInvestigation(ctx, since, { texts: [decision.final] })) {
+    // A partial ledger is the lead's own conclusion with per-checkpoint evidence; it needs no further investigation.
+    if (decision.goalAchieved === false && !decision.checkpoints && Number.isInteger(since) && !citedInvestigation(ctx, since, { texts: [decision.final] })) {
       throw violation('decision.investigate_first', 'investigation_missing',
         `A repeated finish with goalAchieved false needs a finished read-only investigation from a round after ${since}, cited by its assignmentId in final, and final must state why each remaining blocker is owner-only`);
     }
@@ -1008,8 +1040,11 @@ function validateDecision(decision, ctx) {
   for (const id of investigating ? [] : openIds) {
     if (!resolved.has(id) && !related.has(id)) throw violation('decision.resolutions', 'decision_unresolved', `Open decision ${id} must be resolved or listed in humanInput.relatedDecisionIds`);
   }
-  // goalAchieved only means something on finish.
-  if (decision.action !== 'finish') decision.goalAchieved = null;
+  // goalAchieved and the ledger only mean something on finish.
+  if (decision.action !== 'finish') {
+    decision.goalAchieved = null;
+    decision.checkpoints = null;
+  }
 }
 
 /** Locate a codexErrorInfo value on an error, its rpcData, or along its cause chain. */
