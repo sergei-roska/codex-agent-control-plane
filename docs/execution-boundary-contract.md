@@ -247,6 +247,35 @@ server start: restart the project to apply a change.
 contract that fails validation on restart yields `unverifiable` with that code;
 the run never continues as if no checks were required.
 
+#### Verification capability preflight
+
+Before each lead planning turn, a bounded local preflight reports whether each
+pinned check's local execution interface or `argv[0]` executable is observable.
+It performs filesystem and PATH lookups only: it does not run project commands,
+install packages, probe sockets, contact external CI, or check test dependencies.
+Agent checks require the App Server `execCommand` interface and the already
+configured resolved policy; they never fall back to host execution. Policy or
+executable availability is reported as capability only, not a test result,
+review receipt, or complete evidence. Candidate changes keep the route identity
+when project, policy setting/resolution, source, and command arguments are the
+same, while acceptance and review evidence remain fresh for each candidate.
+Executable checks refresh before planning. Native policy reads are bounded and
+briefly cached for the App Server generation, account, project, and setting;
+strict sandbox policy is a supported restricted route. An unavailable
+executable is an internal environment repair task; it does not create an owner
+pause.
+
+External CI is unsupported by this route. It is neither selected nor queried,
+and CI access, external writes, credentials, or new spending still need the
+owner's decision where applicable.
+
+Owner answers are retained as bounded, versioned context containing the question,
+reason, explicit selected option and description, related evidence, round, and
+answer. Legacy answer records remain readable. Digests preserve recent context
+across thread rollover and follow-up runs as historical guidance only; changed
+goals and new spending, access, credentials, or external writes are never
+automatically authorized by an earlier answer.
+
 Disposition mapping is unchanged except for the FAIL-over-UNKNOWN rule above:
 `not_required` and `unverified` keep their meaning when no checks are required
 (`src/acceptance.js:247-266`).
@@ -350,3 +379,8 @@ Unavailable snapshot: required checks fail in a non-git workspace.
 Rejected decision: the lead dispatches `explorer` with `allowedFiles: ["src/*"]`.
 `assignment.paths` fails with `path_glob_unsupported`; nothing is submitted;
 the next lead prompt shows the violation; the lead re-issues `["src"]`.
+
+The local A2 implementation passed independent review and focused adversarial
+probes, including saturated decision digests. Full suite: 1,412 tests, 1,403
+passed, 8 unchanged baseline failures, 1 skipped; no new failures. This does not
+qualify a live provider, target project, external CI route, or deployed service.

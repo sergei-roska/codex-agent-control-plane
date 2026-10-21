@@ -796,6 +796,21 @@ continuation. Track first-pass accepted checkpoints, repair/review cycles,
 owner escalations, elapsed time, and measured cost per accepted result. Never
 trade acceptance or safety for fewer rounds; unknown measurements stay unknown.
 
+### A2 - Local verification preflight and owner-decision context [local portion implemented]
+
+`src/verification-preflight.js` reports bounded local command/interface and
+resolved-policy capability before lead planning. The lead can reuse configured
+owner checks and the existing sandboxed agent-check route across candidate
+changes; each acceptance and review still needs fresh candidate-bound evidence.
+Owner answers retain bounded question, reason, exact-choice provenance, answer,
+evidence, related IDs, and round through run, thread, and session digests.
+See `docs/execution-boundary-contract.md` for supported behavior and limits.
+
+External CI selection, query, execution, and runner qualification remain absent.
+The local change does not establish CI access or satisfy an external verification
+requirement; that part remains unqualified and any credentials, spending, or
+external writes still require the owner's decision.
+
 ## Verification and rollout policy
 
 1. Run focused tests in implementation tasks, then the existing project checks at

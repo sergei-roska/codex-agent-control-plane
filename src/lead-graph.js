@@ -32,6 +32,7 @@ const {
   makeObservation, observeLoopGuard, resetLoopGuard, reportEvidenceIdentity, warningText,
 } = require('./loop-guard');
 const { MAX_LEDGER_ENTRIES, MAX_LEDGER_EVIDENCE, unreviewedIds, finalizeLedger } = require('./partial-ledger');
+const { preflightVerification } = require('./verification-preflight');
 
 const DEFAULT_RECONCILE_WAIT_MS = 30_000;
 const MAX_OUTCOME_TEXT_CHARS = 12_000;
@@ -59,6 +60,8 @@ const MAX_REVIEW_RECOVERY_GENERATIONS = 2;
 const OWNER_RECOVERY_GRANT_CHOICE = 'supported_controller_replan';
 const OWNER_RECOVERY_GRANT_GENERATIONS = 1;
 const MAX_OWNER_GRANT_ANSWER_CHARS = 2000;
+const MAX_OWNER_ANSWER_RECORDS = 20;
+const MAX_OWNER_ANSWER_FIELD_CHARS = 1200;
 const MAX_REVIEW_HANDOFF_INPUTS = 20;
 const MAX_REVIEW_HANDOFF_INPUT_CHARS = 3000;
 const MAX_REVIEW_HANDOFF_CHARS = 55_000;
@@ -85,6 +88,49 @@ const INTERRUPTED_STATES = new Set([
   TaskState.TASK_STATE_AUTH_REQUIRED,
 ]);
 const STATE_NAMES = new Map(Object.entries(TaskState).map(([name, value]) => [value, name]));
+
+function boundedOwnerAnswers(values) {
+  const bounded = (Array.isArray(values) ? values : []).slice(-MAX_OWNER_ANSWER_RECORDS).map((entry) => {
+    const out = { decisionId: String(entry?.decisionId || '').slice(0, 160), answer: String(entry?.answer || '').slice(0, MAX_OWNER_ANSWER_FIELD_CHARS) };
+    if (entry?.choice) out.choice = String(entry.choice).slice(0, 128);
+    if (entry?.choiceSource === 'explicit' || entry?.choiceSource === 'defaulted') out.choiceSource = entry.choiceSource;
+    if (entry?.contextVersion === 1) {
+      out.contextVersion = 1;
+      for (const key of ['reason', 'question', 'round']) {
+        if (entry[key] !== undefined) out[key] = key === 'round' ? Math.max(0, Number(entry.round) || 0) : String(entry[key] || '').slice(0, MAX_OWNER_ANSWER_FIELD_CHARS);
+      }
+      if (entry.chosenOption && typeof entry.chosenOption === 'object') {
+        out.chosenOption = {
+          id: String(entry.chosenOption.id || '').slice(0, 128),
+          description: String(entry.chosenOption.description || '').slice(0, MAX_OWNER_ANSWER_FIELD_CHARS),
+        };
+      }
+      out.evidenceChecked = (Array.isArray(entry.evidenceChecked) ? entry.evidenceChecked : []).slice(0, 20).map((id) => String(id).slice(0, 160));
+      out.relatedDecisionIds = (Array.isArray(entry.relatedDecisionIds) ? entry.relatedDecisionIds : []).slice(0, 20).map((id) => String(id).slice(0, 160));
+    }
+    return out;
+  });
+  while (bounded.length > 1 && JSON.stringify(bounded).length > 10000) bounded.shift();
+  return bounded;
+}
+
+function ownerAnswerRecord(state, request, answer, choice) {
+  const explicitChoice = typeof answer.choice === 'string' && answer.choice === choice;
+  const option = explicitChoice ? (request.options || []).find((entry) => entry.id === choice) : null;
+  return {
+    contextVersion: 1,
+    decisionId: String(request.decisionId || '').slice(0, 160),
+    reason: String(request.reason || request.escalation || '').slice(0, MAX_OWNER_ANSWER_FIELD_CHARS),
+    question: String(request.question || '').slice(0, MAX_OWNER_ANSWER_FIELD_CHARS),
+    ...(choice ? { choice } : {}),
+    choiceSource: explicitChoice && option ? 'explicit' : 'defaulted',
+    ...(option ? { chosenOption: { id: option.id, description: String(option.description || '').slice(0, MAX_OWNER_ANSWER_FIELD_CHARS) } } : {}),
+    evidenceChecked: (request.evidenceChecked || []).slice(0, 20).map((id) => String(id).slice(0, 160)),
+    relatedDecisionIds: (request.relatedDecisionIds || []).slice(0, 20).map((id) => String(id).slice(0, 160)),
+    round: Math.max(0, Number(state.round) || 0),
+    answer: String(answer.answer || '').slice(0, MAX_OWNER_ANSWER_FIELD_CHARS),
+  };
+}
 
 // ------------------------------------------------------------- helpers
 
@@ -683,6 +729,7 @@ const LeadState = Annotation.Root({
   // Legacy-resume only: checkpoints written before the system repair route was removed carry this key.
   systemRequest: last(() => null),
   humanAnswers: last(() => []),
+  verificationPreflight: last(() => null),
   humanCount: last(() => 0),
   // LL-1: rounds granted by the owner on top of maxRounds, and a goal that replaces state.goal.
   extraRounds: last(() => 0),
@@ -2552,6 +2599,9 @@ function buildLeadGraph(deps) {
   // Optional notes shared by the full and the delta prompt (acceptance, goal investigation, human answers, rejection).
   function stateNotes(state) {
     const sections = [];
+    if (state.verificationPreflight) {
+      sections.push(`Local verification capability preflight (scope ${state.verificationPreflight.scope}; status ${state.verificationPreflight.status}; route ${state.verificationPreflight.route}):\n${JSON.stringify(state.verificationPreflight)}\nThis reports interface/executable availability only, never passing tests or complete evidence. Qualify or repair an unavailable local route before substantial implementation using the existing configured checks and execution policy; do not ask the owner to authorize their reuse again within this scope. A strict policy is a supported restricted sandbox route; do not request owner promotion or fall back from agent checks to host execution. Dependencies and test outcomes remain unverified; fresh candidate-bound acceptance and review evidence are still required. New spending, credentials/access, and external writes still require owner decisions.`);
+    }
     if (state.acceptance?.disposition === 'rejected' && state.acceptanceAttempts > 0 && !state.status) {
       const issues = (state.acceptance.issues || []).map((issue) => `${issue.code}: ${issue.detail}`);
       sections.push(`Acceptance note: the deterministic acceptance run for your finish decision was rejected (disposition ${state.acceptance.disposition}). You may dispatch fixes within the round limits, then finish again; a second rejection ends the run as rejected. Your final text never changes the disposition.\nIssues:\n${issues.map((line) => `- ${line}`).join('\n')}`);
@@ -2559,7 +2609,7 @@ function buildLeadGraph(deps) {
     if (state.goalInvestigation) {
       sections.push(`Goal investigation (requested in round ${state.goalInvestigation.round}): your finish with goalAchieved false named these blockers:\n${state.goalInvestigation.final}\nInvestigate the root cause of each one (explorer or auditor with the concrete question) or fix it. Dispatch rounds remain ${Number.isInteger(maxRounds) ? 'bounded by the configured caller limit' : 'unlimited'}; do not request extra rounds. A later finish with goalAchieved false pauses for the owner only when final cites the assignmentId of a read-only investigation finished after round ${state.goalInvestigation.round} and states why each remaining blocker is owner-only, with evidence.`);
     }
-    if (state.humanAnswers.length > 0) sections.push('Human answers (authoritative):\n' + JSON.stringify(state.humanAnswers));
+    if (state.humanAnswers.length > 0) sections.push('Owner answers in this run (authoritative only within their recorded question, goal, and scope; do not generalize to changed goals or new spending, access, credentials, or external writes):\n' + JSON.stringify(boundedOwnerAnswers(state.humanAnswers)));
     if (state.retryDecide && state.rejections?.length > 0) {
       const violations = state.rejections.at(-1).violations || [];
       const reminders = [...new Set(violations.map((entry) => RULE_REMINDERS[entry.predicate]).filter(Boolean))];
@@ -2727,6 +2777,20 @@ function buildLeadGraph(deps) {
     // Before notes are consumed or a dispatch is planned: everything before interrupt() re-runs on resume.
     if (ownerPauseRequested(config)) interrupt({ kind: 'owner_pause', message: OWNER_PAUSE_MESSAGE });
 
+    let currentPreflight;
+    try {
+      currentPreflight = await preflightVerification({
+        appServer, workspace, contract: state.contract, executionPermissions: deps.executionPermissions || 'inherit', signal,
+      });
+    } catch (_) {
+      currentPreflight = {
+        schema: 'verification-preflight/v1', scope: 'local_route_capability_only', status: 'unknown',
+        route: 'local-verification/v1:unknown', policy: { mode: 'unknown', reason: 'inspection_failed' }, checks: [],
+        evidence: 'Capability inspection failed; dependencies, runtime behavior, and test results are unverified.',
+      };
+    }
+    if (signal?.aborted) return canceledUpdate(signal);
+
     const expectedSkillContext = expectedLeadSkillContext(state.runId, trialRunIds, aut03LeadSkillEnabled, skillPin);
     let leadSkillContext = state.leadSkillContext;
     if (!leadSkillContext) {
@@ -2741,7 +2805,7 @@ function buildLeadGraph(deps) {
 
     const notes = [...(runtime.pendingNotes || [])];
     runtime.pendingNotes = [];
-    const update = { redecide: false };
+    const update = { redecide: false, verificationPreflight: currentPreflight };
     if (runtime.resumed) {
       runtime.resumed = false;
       notes.push('This run was resumed after an interruption (restart, pause, or usage limit). A previous lead turn may have been repeated. Outcomes marked interrupted or outcome_unknown have unknown workspace effects.');
@@ -2753,6 +2817,7 @@ function buildLeadGraph(deps) {
       update.retryDecide = false;
     }
     const priorRejections = update.consecutiveRejections ?? (state.consecutiveRejections || 0);
+    const stateForPrompt = { ...state, verificationPreflight: currentPreflight };
 
     const priorSkillContext = state.outcomes.map((outcome) => ({
       role: outcome.role,
@@ -2794,9 +2859,9 @@ function buildLeadGraph(deps) {
       // What the lead thread already saw: nothing unless it is this run's own thread.
       const sameThread = Boolean(resumeThreadId) && resumeThreadId === state.threadId;
       const delta = Boolean(sessions) && Boolean(resumeThreadId);
-      const sessionDigest = delta || !session?.threadId || !deps.sessionDigest ? '' : await deps.sessionDigest({ contextId, runId: state.runId, runIds: session.runIds, state });
+      const sessionDigest = delta || !session?.threadId || !deps.sessionDigest ? '' : await deps.sessionDigest({ contextId, runId: state.runId, runIds: session.runIds, state: stateForPrompt });
       const seenGoal = sameThread ? state.leadSeenGoal : null;
-      return decisionPrompt(state, {
+      return decisionPrompt(stateForPrompt, {
         notes, skillCandidates, skillNames, mcpToolCandidates, mcpToolNames, delta, sessionDigest,
         seenOutcomes: sameThread ? (state.leadSeenOutcomes || 0) : 0,
         goalChanged: seenGoal !== goalKey,
@@ -3998,11 +4063,7 @@ function buildLeadGraph(deps) {
     return {
       ...(grant || {}),
       ...(deferred.length > 0 ? { blockedCheckpoints: [...(state.blockedCheckpoints || []), ...deferred].slice(-MAX_PROGRESS_ENTRIES) } : {}),
-      humanAnswers: [...state.humanAnswers, {
-        decisionId: request.decisionId,
-        answer: answer.answer,
-        ...(answer.choice ? { choice: answer.choice } : {}),
-      }],
+      humanAnswers: boundedOwnerAnswers([...state.humanAnswers, ownerAnswerRecord(state, request, answer, answer.choice)]),
       openDecisions: state.openDecisions.filter((entry) => !related.has(entry.id)),
       closedDecisions: [...state.closedDecisions, ...[...related].map((id) => ({ id, by: 'human', choice: answer.choice || '' }))],
       ...(related.size > 0 ? { progress: addProgress(state, [{ round: state.round, kind: 'decision_resolved', detail: [...related].join(', ') }]) } : {}),
@@ -4044,7 +4105,7 @@ function buildLeadGraph(deps) {
   function resolveEscalation(state, request, answer) {
     const choice = ESCALATION_CHOICES.includes(answer.choice) ? answer.choice : 'continue';
     const update = {
-      humanAnswers: [...state.humanAnswers, { decisionId: request.decisionId, answer: answer.answer, choice }],
+      humanAnswers: boundedOwnerAnswers([...state.humanAnswers, ownerAnswerRecord(state, request, answer, choice)]),
       humanRequest: null,
     };
     if (choice === 'accept_as_is') return { ...update, status: 'completed', text: request.final };
@@ -4080,7 +4141,7 @@ function buildLeadGraph(deps) {
     const by = `owner (decision ${request.decisionId})`;
     return {
       ...applyCheckVerdict(state, request.review, choice === 'approve_change' ? 'preserve' : 'weaken', by, runtime),
-      humanAnswers: [...state.humanAnswers, { decisionId: request.decisionId, answer: answer.answer, choice }],
+      humanAnswers: boundedOwnerAnswers([...state.humanAnswers, ownerAnswerRecord(state, request, answer, choice)]),
       humanRequest: null,
     };
   }

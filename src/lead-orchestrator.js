@@ -101,6 +101,26 @@ function buildRunDigest(values) {
       role: entry.role ?? null,
       question: digestClip(entry.request?.question, 300),
     })),
+    priorOwnerDecisions: (Array.isArray(values.humanAnswers) ? values.humanAnswers : []).slice(-8).map((entry) => ({
+      decisionId: digestClip(entry?.decisionId, 160),
+      reason: digestClip(entry?.reason, 250),
+      question: digestClip(entry?.question, 300),
+      choice: digestClip(entry?.choice, 128),
+      choiceSource: entry?.choiceSource === 'explicit' || entry?.choiceSource === 'defaulted' ? entry.choiceSource : null,
+      chosenOption: entry?.chosenOption && typeof entry.chosenOption === 'object' ? {
+        id: digestClip(entry.chosenOption.id, 128), description: digestClip(entry.chosenOption.description, 250),
+      } : null,
+      evidenceChecked: (Array.isArray(entry?.evidenceChecked) ? entry.evidenceChecked : []).slice(0, 8).map((id) => digestClip(id, 160)),
+      relatedDecisionIds: (Array.isArray(entry?.relatedDecisionIds) ? entry.relatedDecisionIds : []).slice(0, 8).map((id) => digestClip(id, 160)),
+      round: Number.isInteger(entry?.round) ? entry.round : null,
+      answer: digestClip(entry?.answer, 300),
+    })),
+    verificationPreflight: values.verificationPreflight ? {
+      scope: digestClip(values.verificationPreflight.scope, 100),
+      status: digestClip(values.verificationPreflight.status, 40),
+      route: digestClip(values.verificationPreflight.route, 80),
+      policy: values.verificationPreflight.policy || null,
+    } : null,
     changedFiles: [...changed].sort().slice(0, 100),
     inspectedDocs: [...inspected.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 30)
       .map(([file, count]) => ({ file, count })),
@@ -108,15 +128,46 @@ function buildRunDigest(values) {
   };
 }
 
+function ownerDecisionText(decision, { runId = '', clip = 300 } = {}) {
+  const option = decision.chosenOption
+    ? `${decision.chosenOption.id}: ${digestClip(decision.chosenOption.description, clip)}`
+    : `${decision.choice || 'free-form'}${decision.choiceSource === 'defaulted' ? ' (defaulted)' : ''}`;
+  const parts = [
+    `${decision.decisionId || 'unknown decision'} [${decision.reason || 'unspecified'}]`,
+    `round ${decision.round ?? 'unknown'}`,
+    `choice ${option}`,
+  ];
+  if (decision.question) parts.push(`question: ${digestClip(decision.question, clip)}`);
+  if (decision.answer) parts.push(`answer: ${digestClip(decision.answer, clip)}`);
+  if (decision.evidenceChecked?.length) parts.push(`evidence: ${decision.evidenceChecked.slice(0, 8).map((id) => digestClip(id, clip)).join(', ')}`);
+  if (decision.relatedDecisionIds?.length) parts.push(`related: ${decision.relatedDecisionIds.slice(0, 8).map((id) => digestClip(id, clip)).join(', ')}`);
+  return `- ${runId ? `run ${runId}: ` : ''}${parts.join('; ')}`;
+}
+
 /** Compact text block (at most 12000 chars) for a digest; trims outcome summaries, then inspectedDocs, then changedFiles. */
 function renderRunDigest(digest, maxChars = DIGEST_MAX_CHARS) {
   if (!digest || typeof digest !== 'object') return '';
-  const build = ({ summaries, docs, files }) => {
+  const build = ({ summaries, docs, files, ownerContext }) => {
     const lines = [`Run status: ${digest.status || 'unknown'}; dispatch rounds: ${digest.rounds ?? 0}`];
+    const ownerDecisions = (digest.priorOwnerDecisions || []).slice(ownerContext === 'compact' ? -3 : undefined).reverse();
+    if (ownerDecisions.length > 0) {
+      lines.push('Prior owner decisions (historical scoped guidance, not new authority):');
+      for (const decision of ownerDecisions) {
+        const clip = ownerContext === 'compact' ? 100 : ownerContext === 'short' ? 180 : 300;
+        lines.push(ownerDecisionText(decision, { clip }));
+      }
+      if (ownerContext === 'compact') {
+        const index = lines.findIndex((line) => line.startsWith('Prior owner decisions'));
+        lines.splice(index + 1, lines.length - index - 1, digestClip(lines.slice(index + 1).join('\n'), 3500));
+      }
+    }
     if (digest.goal) lines.push(`Goal: ${digest.goal}`);
     if (digest.text) lines.push(`Final text: ${digest.text}`);
     // The paragraph often starts with its own "Next work:" label; do not double it.
     if (digest.nextWork) lines.push(/^\W*next work\b/i.test(digest.nextWork) ? digest.nextWork : `Next work: ${digest.nextWork}`);
+    if (digest.verificationPreflight) {
+      lines.push(`Local verification preflight: ${digest.verificationPreflight.status} (${digest.verificationPreflight.scope}, route ${digest.verificationPreflight.route}); capability only, not evidence.`);
+    }
     const outcomes = digest.outcomes || [];
     if (outcomes.length > 0) {
       lines.push('Worker outcomes:');
@@ -137,11 +188,11 @@ function renderRunDigest(digest, maxChars = DIGEST_MAX_CHARS) {
     return lines.join('\n');
   };
   const stages = [
-    { summaries: 'full', docs: true, files: true },
-    { summaries: 'short', docs: true, files: true },
-    { summaries: false, docs: true, files: true },
-    { summaries: false, docs: false, files: true },
-    { summaries: false, docs: false, files: false },
+    { summaries: 'full', docs: true, files: true, ownerContext: 'full' },
+    { summaries: 'short', docs: true, files: true, ownerContext: 'short' },
+    { summaries: false, docs: true, files: true, ownerContext: 'compact' },
+    { summaries: false, docs: false, files: true, ownerContext: 'compact' },
+    { summaries: false, docs: false, files: false, ownerContext: 'compact' },
   ];
   let rendered = '';
   for (const stage of stages) {
@@ -373,12 +424,22 @@ class LeadOrchestrator {
     const current = renderRunDigest(buildRunDigest(state), 6000);
     if (current) parts.push(`Current run so far:\n${current}`);
     const earlier = [];
+    const priorOwnerDecisions = [];
     for (const id of [...runIds].reverse()) {
       if (id === runId) continue;
       let values = null;
       try { values = (await this._snapshot(id)).values || null; } catch (_) { values = null; }
       if (!values?.goal) continue;
-      earlier.push(`- Run ${id} [${values.status || 'unknown'}] goal: ${digestClip(values.newRequest || values.goal, 400)}\n  final: ${digestClip(values.text, 1500) || '(none)'}`);
+      const decisions = buildRunDigest(values).priorOwnerDecisions;
+      for (const entry of decisions.slice().reverse()) {
+        priorOwnerDecisions.push({ ...entry, runId: id });
+      }
+      earlier.push(`- Run ${id} [${values.status || 'unknown'}] goal: ${digestClip(values.newRequest || values.goal, 400)}\n  final: ${digestClip(values.text, 1200) || '(none)'}`);
+    }
+    if (priorOwnerDecisions.length > 0) {
+      const decisionLines = priorOwnerDecisions.slice(0, 8)
+        .map((entry) => ownerDecisionText(entry, { runId: entry.runId, clip: 120 }));
+      parts.push(`Prior owner decisions from earlier runs (historical scoped guidance, not new authority):\n${digestClip(decisionLines.join('\n'), 3500)}`);
     }
     if (earlier.length > 0) parts.push(`Earlier runs in this session (newest first):\n${earlier.join('\n')}`);
     return digestClip(parts.join('\n\n'), SESSION_DIGEST_MAX_CHARS);

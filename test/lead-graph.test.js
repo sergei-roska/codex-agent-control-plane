@@ -11,7 +11,7 @@ const { TaskState } = require('@a2a-js/sdk');
 const { ServerCallContext, UnauthenticatedUser } = require('@a2a-js/sdk/server');
 const { uuid6 } = require('@langchain/langgraph-checkpoint');
 const { INTERRUPT } = require('@langchain/langgraph');
-const { LeadOrchestrator, RunNotFoundError } = require('../src/lead-orchestrator');
+const { LeadOrchestrator, RunNotFoundError, renderRunDigest } = require('../src/lead-orchestrator');
 const { execFileSync } = require('node:child_process');
 const { UsageLedger } = require('../src/usage-ledger');
 const { loadSkillCatalog } = require('../src/skill-catalog');
@@ -1440,6 +1440,44 @@ test('after a rejection the lead may dispatch a fix and finish again', async () 
     assert.equal(result.rounds, 1);
     assert.equal(calls.length, 2);
     assert.equal(world.sends.length, 1);
+  }, { workspace, orchestrator: { runCheckImpl } });
+});
+
+test('the configured local route survives candidate changes while acceptance reruns on each candidate', async () => {
+  const workspace = gitRepo();
+  const candidate = path.join(workspace, 'a.txt');
+  const workerCandidates = [];
+  const checkCandidates = [];
+  const runCheckImpl = async (check) => {
+    checkCandidates.push(fs.readFileSync(candidate, 'utf8'));
+    const passed = checkCandidates.length > 1;
+    return { id: check.id, argv: check.argv, exitCode: passed ? 0 : 1, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: passed ? 'passed' : 'failed' };
+  };
+  const world = makeWorld({
+    script: [dispatch(brief('orch-builder')), finish('candidate one'), dispatch(brief('orch-builder')), finish('candidate two')],
+    workerFinal: () => {
+      const content = `candidate-${workerCandidates.length + 1}\n`;
+      fs.writeFileSync(candidate, content);
+      workerCandidates.push(content);
+      return { state: TaskState.TASK_STATE_COMPLETED, artifacts: [{ name: 'report', parts: textParts(report('writer done')), metadata: { writerExecution: releasedWriter() } }] };
+    },
+  });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({
+      goal: 'Update and verify the candidate', runId: RUN_ID, contract: contractOf(nodeCheck('owner-unit', 'process.exit(0)')),
+    });
+    assert.equal(result.acceptance.disposition, 'accepted');
+    assert.equal(result.acceptance.checks[0].result, 'passed');
+    assert.deepEqual(workerCandidates, ['candidate-1\n', 'candidate-2\n']);
+    assert.deepEqual(checkCandidates, ['candidate-1\n', 'candidate-2\n']);
+    assert.equal(checkCandidates.length, 2);
+    const routes = world.prompts.map((prompt) => /local-verification\/v1:[a-f0-9]{32}/.exec(prompt)?.[0]).filter(Boolean);
+    assert.ok(routes.length >= 2);
+    assert.ok(routes.every((route) => route === routes[0]));
+    const state = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(state.values.verificationPreflight.route, routes[0]);
+    assert.equal(state.values.acceptanceRuns, 2);
+    assert.notEqual(result.acceptance.candidate.fingerprint, null);
   }, { workspace, orchestrator: { runCheckImpl } });
 });
 
@@ -5889,6 +5927,8 @@ test('owner checks keep running through runCheck and agent proposals are ignored
     assert.equal(calls.length, 0);
     assert.equal(events.some((event) => event.type === 'acceptance_contract'), false);
     assert.match(world.prompts[0], /Pinned acceptance checks \(source owner;/);
+    assert.match(world.prompts[0], /Local verification capability preflight \(scope local_route_capability_only; status available;/);
+    assert.match(world.prompts[0], /do not ask the owner to authorize their reuse again/);
     assert.match(world.prompts[1], /acceptanceChecks proposal was ignored/);
   }, { workspace, orchestrator: { runCheckImpl } });
 });
@@ -6985,15 +7025,15 @@ const grantHumanRequest = (reason = 'infeasible_requirement') => ({
 });
 
 // Parks a run on a human decision while its checkpoint recovery is replaced by `recoveryFor(entry)`.
-async function parkOwnerGrantDecision(session, fixture, recoveryFor, reason) {
-  const stopped = await session.orchestrator.run({ goal: fixture.goal, runId: RUN_ID, interruptAfter: ['dispatch'] });
+async function parkOwnerGrantDecision(session, fixture, recoveryFor, reason, contextId = undefined) {
+  const stopped = await session.orchestrator.run({ goal: fixture.goal, runId: RUN_ID, ...(contextId ? { contextId } : {}), interruptAfter: ['dispatch'] });
   assert.equal(stopped.status, 'interrupted_for_test');
   const config = { configurable: { thread_id: RUN_ID } };
   const recovery = (await session.orchestrator.graph.getState(config)).values.reviewRecovery;
   await session.orchestrator.graph.updateState(config, {
     reviewRecovery: { ...recovery, checkpoints: recovery.checkpoints.map((entry) => ({ ...entry, ...recoveryFor(entry) })) },
   });
-  const atVerify = await session.orchestrator.resume({ runId: RUN_ID, interruptAfter: ['verify'] });
+  const atVerify = await session.orchestrator.resume({ runId: RUN_ID, ...(contextId ? { contextId } : {}), interruptAfter: ['verify'] });
   assert.equal(atVerify.status, 'interrupted_for_test');
   await session.orchestrator.graph.updateState(config, { humanRequest: grantHumanRequest(reason), humanCount: 1 }, 'verify');
   const paused = await session.orchestrator.resume({ runId: RUN_ID });
@@ -7026,7 +7066,7 @@ const grantEvents = (stagingLog) => stagingLog.list({ runId: RUN_ID, type: 'revi
 test('an owner grant at the recovery generation limit starts one fresh recovery plan that survives restart', async () => {
   const { fixture, workspace, stagingLog, world } = ownerGrantScenario();
   await withSession(world, async (session) => {
-    const config = await parkOwnerGrantDecision(session, fixture, atLimit);
+    const config = await parkOwnerGrantDecision(session, fixture, atLimit, undefined, 'owner-grant-session');
     const stopped = await session.orchestrator.resume({
       runId: RUN_ID, input: { answer: 'Go on with the supported controller replan', choice: GRANT_CHOICE, decisionId: `${RUN_ID}:h1` },
       interruptAfter: ['human_input'],
@@ -7045,6 +7085,22 @@ test('an owner grant at the recovery generation limit starts one fresh recovery 
     assert.ok(Number.isFinite(Date.parse(entry.ownerGrant.grantedAt)));
     assert.deepEqual(snapshot.values.pendingAssignments.map((assignment) => assignment.role), ['orch-verifier']);
     assert.equal(snapshot.values.pendingAssignments[0]._reviewRecovery.generation, 3);
+    const ownerDecision = snapshot.values.humanAnswers[0];
+    assert.equal(ownerDecision.contextVersion, 1);
+    assert.equal(ownerDecision.reason, 'infeasible_requirement');
+    assert.match(ownerDecision.question, /recovery generation limit/);
+    assert.equal(ownerDecision.choiceSource, 'explicit');
+    assert.deepEqual(ownerDecision.chosenOption, { id: GRANT_CHOICE, description: 'Grant one more supported recovery generation' });
+    assert.deepEqual(ownerDecision.relatedDecisionIds, []);
+    assert.equal(ownerDecision.round, snapshot.values.round);
+    const ownerDigest = renderRunDigest(await session.orchestrator.getRunDigest(RUN_ID));
+    assert.match(ownerDigest, /Prior owner decisions/);
+    assert.match(ownerDigest, /Grant one more supported recovery generation/);
+    const sessionDigest = await session.orchestrator._sessionDigest({
+      runId: 'followup-run', runIds: ['followup-run', RUN_ID], state: { goal: 'Follow-up', status: null, outcomes: [], humanAnswers: [] },
+    });
+    assert.match(sessionDigest, /prior owner decisions/i);
+    assert.match(sessionDigest, /recovery generation limit/);
     assert.equal(world.dispatchInputs.length, 1, 'the grant itself submits nothing');
     // The earlier accepted verifier receipt covers the same target but is not reused by the fresh plan.
     assert.equal(snapshot.values.reviewObligations[0].receipts.filter((receipt) => receipt.role === 'verifier').length, 1);
@@ -7057,10 +7113,13 @@ test('an owner grant at the recovery generation limit starts one fresh recovery 
     assert.equal(done.generation, 3);
     assert.equal(done.phase, 'complete');
     assert.equal(done.ownerGrant.generationBefore, 2);
+    assert.ok(world.prompts.slice(1).some((prompt) => /The rules, roles, and output format from the start of this thread still apply/.test(prompt)
+      && /Owner answers in this run/.test(prompt)
+      && /Grant one more supported recovery generation/.test(prompt)), 'restarted delta prompt retains the scoped owner answer');
     assert.deepEqual(grantEvents(stagingLog), [
       ['owner_grant_applied', null], ['verifier_queued', 'owner_recovery_grant'], ['auditor_queued', null],
     ]);
-  }, { workspace, orchestrator: { stagingLog } });
+  }, { workspace, withSessions: true, orchestrator: { stagingLog } });
 });
 
 test('a second owner grant on the same checkpoint is rejected and changes no state', async () => {

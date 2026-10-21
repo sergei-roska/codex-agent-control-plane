@@ -567,6 +567,74 @@ test('renderRunDigest trims summaries, then inspected docs, then changed files w
   assert.equal(renderRunDigest(null), '');
 });
 
+test('renderRunDigest preserves scoped owner decisions when goal and final text saturate the budget', () => {
+  const rendered = renderRunDigest({
+    goal: 'g'.repeat(2000),
+    text: 'f'.repeat(4000),
+    rounds: 1,
+    status: 'completed',
+    outcomes: [],
+    openDecisions: [],
+    inspectedDocs: [],
+    changedFiles: [],
+    priorOwnerDecisions: [{
+      decisionId: 'run-saturated:h1',
+      reason: 'external_access',
+      question: 'May this run access the external service?',
+      choice: 'outside_run',
+      choiceSource: 'explicit',
+      chosenOption: { id: 'outside_run', description: 'Keep this outside the current run' },
+      round: 1,
+      answer: 'Do not access it.',
+      evidenceChecked: ['policy-a'],
+      relatedDecisionIds: [],
+    }],
+  }, 6000);
+
+  assert.ok(rendered.length <= 6000);
+  assert.match(rendered, /Prior owner decisions \(historical scoped guidance, not new authority\)/);
+  assert.match(rendered, /run-saturated:h1/);
+  assert.match(rendered, /external_access/);
+  assert.match(rendered, /outside_run: Keep this outside the current run/);
+});
+
+test('session digest prioritizes current and historical owner decisions under saturated narratives', async () => {
+  const h = makeHarness({ decisions: [] });
+  h.orchestrator._snapshot = async (id) => ({ values: id === 'prior-run' ? {
+    goal: 'p'.repeat(2000),
+    text: 'f'.repeat(4000),
+    status: 'completed',
+    humanAnswers: [{
+      decisionId: 'prior-run:h1', reason: 'external_access', question: 'Access the external service?',
+      choice: 'outside_run', choiceSource: 'explicit',
+      chosenOption: { id: 'outside_run', description: 'Keep access outside the current run' },
+      round: 2, answer: 'No external access.', evidenceChecked: ['prior-policy'], relatedDecisionIds: [],
+    }],
+  } : null });
+
+  const digest = await h.orchestrator._sessionDigest({
+    runId: 'current-run',
+    runIds: ['current-run', 'prior-run'],
+    state: {
+      goal: 'c'.repeat(2000),
+      text: 'n'.repeat(4000),
+      status: 'running',
+      humanAnswers: [{
+        decisionId: 'current-run:h2', reason: 'credentials_or_access', question: 'Use these credentials?',
+        choice: 'outside_run', choiceSource: 'explicit',
+        chosenOption: { id: 'outside_run', description: 'Do not use credentials in this run' },
+        round: 3, answer: 'Keep credentials out.', evidenceChecked: ['current-policy'], relatedDecisionIds: [],
+      }],
+    },
+  });
+
+  assert.ok(digest.length <= 12000);
+  assert.match(digest, /current-run:h2/);
+  assert.match(digest, /Prior owner decisions from earlier runs \(historical scoped guidance, not new authority\)/);
+  assert.match(digest, /prior-run:h1/);
+  assert.match(digest, /outside_run: Keep access outside the current run/);
+});
+
 test('outcomes carry the bounded assignment objective and the run digest shows it', async () => {
   const long = { ...brief('orch-explorer', []), objective: 'O'.repeat(3000) };
   const h = makeHarness({ decisions: [decision('dispatch', [brief('orch-builder'), long]), decision('finish', [], 'Done.')] });
