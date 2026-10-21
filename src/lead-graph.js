@@ -661,6 +661,29 @@ function pauseMessage(value) {
 const OWNER_PAUSE_MESSAGE = 'Paused by the owner';
 const STOPPED_MESSAGE = 'Stopped by the owner';
 const MAX_AUTO_REJECTIONS = 2;
+const MAX_FRESH_PLANNING_RECOVERIES = 1;
+const FORCED_PARTIAL_REASONS = new Set(['no_progress_loop', 'planning_contract_failure', 'goal_unmet_exhausted']);
+const MAX_PLANNING_EVIDENCE_DETAIL = 600;
+function boundedPlanningEvidence(rejections) {
+  return (Array.isArray(rejections) ? rejections : []).slice(-3).map((entry) => {
+    const violations = (Array.isArray(entry.violations) ? entry.violations : []).slice(0, 8).map((violation) => {
+      const detail = String(violation.detail || '');
+      return {
+        predicate: String(violation.predicate || '').slice(0, 120),
+        code: String(violation.code || '').slice(0, 120),
+        detail: detail.slice(0, MAX_PLANNING_EVIDENCE_DETAIL),
+        ...(detail.length > MAX_PLANNING_EVIDENCE_DETAIL || violation.detailTruncated === true ? { detailTruncated: true } : {}),
+      };
+    });
+    return {
+      round: Number.isInteger(entry.round) ? entry.round : null,
+      violations,
+      ...((entry.omittedViolationCount || 0) + Math.max(0, (entry.violations?.length || 0) - violations.length) > 0
+        ? { omittedViolationCount: (entry.omittedViolationCount || 0) + Math.max(0, (entry.violations?.length || 0) - violations.length) }
+        : {}),
+    };
+  });
+}
 const MAX_CONTINUATIONS = 2;
 const MAX_ESCALATION_QUESTION_CHARS = 3000;
 // LL-1: owner choices when the lead finishes without reaching the goal or the round limit is reached.
@@ -761,6 +784,7 @@ const LeadState = Annotation.Root({
   rejections: last(() => []),
   consecutiveRejections: last(() => 0),
   retryDecide: last(() => false),
+  planningRecovery: last(() => null),
   // SES-01: the session (A2A contextId), the owner's raw new message of a follow-up run, and what
   // the lead thread in `threadId` has already been shown (outcome count, goal text). Old
   // checkpoints read the defaults: no session, so the lead behaves as before.
@@ -2607,7 +2631,7 @@ function buildLeadGraph(deps) {
       sections.push(`Acceptance note: the deterministic acceptance run for your finish decision was rejected (disposition ${state.acceptance.disposition}). You may dispatch fixes within the round limits, then finish again; a second rejection ends the run as rejected. Your final text never changes the disposition.\nIssues:\n${issues.map((line) => `- ${line}`).join('\n')}`);
     }
     if (state.goalInvestigation) {
-      sections.push(`Goal investigation (requested in round ${state.goalInvestigation.round}): your finish with goalAchieved false named these blockers:\n${state.goalInvestigation.final}\nInvestigate the root cause of each one (explorer or auditor with the concrete question) or fix it. Dispatch rounds remain ${Number.isInteger(maxRounds) ? 'bounded by the configured caller limit' : 'unlimited'}; do not request extra rounds. A later finish with goalAchieved false pauses for the owner only when final cites the assignmentId of a read-only investigation finished after round ${state.goalInvestigation.round} and states why each remaining blocker is owner-only, with evidence.`);
+      sections.push(`Goal investigation (requested in round ${state.goalInvestigation.round}): your finish with goalAchieved false named these blockers:\n${state.goalInvestigation.final}\nInvestigate the root cause of each blocker (explorer or auditor with the concrete question) or fix it. Dispatch rounds remain ${Number.isInteger(maxRounds) ? 'bounded by the configured caller limit' : 'unlimited'}; do not request extra rounds. A later finish with goalAchieved false must cite a read-only investigation finished after round ${state.goalInvestigation.round}; without checkpoints it ends as an honest partial result. If an owner-only decision is genuinely required, use request_human_input with a closed owner-only reason after the required investigation; a free-text finish cannot imply owner responsibility.`);
     }
     if (state.humanAnswers.length > 0) sections.push('Owner answers in this run (authoritative only within their recorded question, goal, and scope; do not generalize to changed goals or new spending, access, credentials, or external writes):\n' + JSON.stringify(boundedOwnerAnswers(state.humanAnswers)));
     if (state.retryDecide && state.rejections?.length > 0) {
@@ -2616,6 +2640,10 @@ function buildLeadGraph(deps) {
       sections.push(['Rejected decision: your previous decision failed validation and nothing was executed. Return a corrected decision.',
         ...violations.map((entry) => `- ${entry.predicate} ${entry.code}: ${entry.detail}`),
         ...reminders].join('\n'));
+    }
+    if (state.planningRecovery?.phase === 'fresh_pending') {
+      const evidence = boundedPlanningEvidence(state.planningRecovery.evidence);
+      sections.push(`Internal planning recovery: two same-thread correction reminders were exhausted. This is the single fresh-context attempt; no invalid assignment was executed. Use the bounded validation evidence and the current goal, owner answers, outcomes, and review obligations below. Details marked detailTruncated were clipped; omittedViolationCount identifies evidence not included. Continue within existing scope and gates; do not ask the owner to continue or change the goal because of this internal validation failure. If the remaining work cannot be completed, return an honest finish with goalAchieved false and a checkpoints ledger.\nValidation evidence:\n${JSON.stringify(evidence)}`);
     }
     const loopNote = warningText(state.loopGuard);
     if (loopNote) sections.push(loopNote);
@@ -2695,10 +2723,10 @@ function buildLeadGraph(deps) {
       'Worker decision requests are open decisions: resolve each one yourself (resolutions: decisionId, choice, rationale), investigating first when the evidence does not settle it; list one in humanInput.relatedDecisionIds only when it is an owner-only decision. Never leave one unanswered. Worker reports are self-reported; check scopeViolations and reportError.',
       `Investigate first: never ask the owner what investigation can answer; the owner has no one to ask either. ${OWNER_ONLY_RULE}`,
       `request_human_input is accepted only for an owner-only decision and only after an investigation of that blocker: ${INVESTIGATION_RULE} Give options, a recommendation, the evidence checked, and the independent work that can proceed.`,
-      'A blocker that persists needs its root cause located (an explorer first; use an auditor only for a concrete risk-boundary question, or scout/architect when appropriate). Once an investigation locates it outside what the team may change (a missing capability of a dependency or the environment, or the requirement itself), stop investigating that blocker and escalate it.',
-      `goalAchieved: on finish set it honestly, true only when the goal is met; false names the blockers in final. The first finish with false does not end the run: investigate the root cause of each blocker or fix it${Number.isInteger(maxRounds) ? ' within the caller-granted round allowance' : ' while dispatch rounds remain unlimited'}. A later finish with false pauses for the owner only when final cites a read-only investigation finished since then and states why each remaining blocker is owner-only, with evidence. Use null for dispatch and request_human_input. A finish with false may instead carry checkpoints, a ledger of {id, status, reason, evidence} (status accepted with evidence, blocked, or not_started, with a reason); it ends the run as a partial result without an owner pause. Use checkpoints null otherwise.`,
+      'A blocker that persists needs its root cause located (an explorer first; use an auditor only for a concrete risk-boundary question, or scout/architect when appropriate). Once an investigation locates it outside what the team may change (a missing capability of a dependency or the environment, or the requirement itself), stop investigating that blocker and use request_human_input with the matching closed owner-only reason if an owner decision is needed.',
+      `goalAchieved: on finish set it honestly, true only when the goal is met; false names the blockers in final. The first finish with false does not end the run: investigate the root cause of each blocker or fix it${Number.isInteger(maxRounds) ? ' within the caller-granted round allowance' : ' while dispatch rounds remain unlimited'}. A later finish with false must cite a read-only investigation finished since then. Without checkpoints it ends as an honest partial result; use a checkpoints ledger of {id, status, reason, evidence} when you can report per-checkpoint status. For a genuine owner-only decision, use request_human_input with a closed owner-only reason after the required investigation; do not make a free-text finish imply owner responsibility. Use null for dispatch and request_human_input.`,
       ...(Number.isInteger(maxRounds) ? [`Dispatch rounds are capped at ${maxRounds} per caller-granted allowance. Reaching the cap pauses for the owner; only owner continue or change_goal grants another allowance.`] : ['Dispatch rounds are unlimited by default. A round number is for ordering only, not a spending authorization.']),
-      `acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks derived from the project's PRD, release or gate documents and its test commands; the first valid proposal is pinned for the run and runs at finish in a sandbox with a read-only workspace and no network. ${CHECK_RULE} Otherwise use null. A check that cannot pass is a blocker to investigate; only an owner-only cause is escalated. A changed pinned check script is reviewed by a read-only auditor against the PRD: preserved requirements are re-pinned, weakened ones keep failing.`,
+      `acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks derived from the project's PRD, release or gate documents and its test commands; the first valid proposal is pinned for the run and runs at finish in a sandbox with a read-only workspace and no network. ${CHECK_RULE} Otherwise use null. A check that cannot pass is a blocker to investigate; a genuine owner-only cause uses request_human_input after the investigation. A changed pinned check script is reviewed by a read-only auditor against the PRD: preserved requirements are re-pinned, weakened ones keep failing.`,
       ...(deps.parallelWriters ? ['A writer outcome can be not_integrated (the lane field gives the reason and the lane path, which is kept): its changes never reached the shared workspace. You may re-dispatch with corrected allowedFiles, or resolve a conflict with a follow-up assignment.'] : []),
       'Writer reconciliation is mechanical: before you decide, the server reconciles every writable outcome whose effects were unknown and lists the result as an outcome of kind reconciliation, with the attested changedPaths. attestedScopeViolations are changes the server observed outside allowedFiles; a report filesChanged list is self-reported and advisory. A writable dispatch is refused while any writer outcome is unresolved. For a read-only role, dispatch_error means the submission could not be matched to a task at lookup time; such a role cannot have workspace write effects.',
     ].join('\n'));
@@ -2812,9 +2840,12 @@ function buildLeadGraph(deps) {
       const current = readPinned({ roles, leadRole, workspace, skillCatalog, mcpCatalog });
       notes.push(...instructionChanges(state.pinned, current));
       update.pinned = current;
-      // A resume is new human intent: the automatic-retry allowance starts over.
-      update.consecutiveRejections = 0;
-      update.retryDecide = false;
+      // Owner continuation resets legacy retries, but never replenishes a fresh-context attempt.
+      if (runtime.resumeOrigin === 'owner' && state.planningRecovery?.phase !== 'fresh_pending') {
+        update.consecutiveRejections = 0;
+        update.retryDecide = false;
+        update.planningRecovery = null;
+      }
     }
     const priorRejections = update.consecutiveRejections ?? (state.consecutiveRejections || 0);
     const stateForPrompt = { ...state, verificationPreflight: currentPreflight };
@@ -2846,14 +2877,15 @@ function buildLeadGraph(deps) {
       : roleProfileSha256(leadRole);
     let threadId = null;
     let rolledOver = false;
+    const forceFreshPlanning = state.planningRecovery?.phase === 'fresh_pending';
     const retrySameThread = update.retryDecide ?? state.retryDecide;
-    if (retrySameThread && state.threadId) threadId = state.threadId;
-    else if (session?.threadId) {
+    if (!forceFreshPlanning && retrySameThread && state.threadId) threadId = state.threadId;
+    else if (!forceFreshPlanning && session?.threadId) {
       const sameProfile = session.profileSha256 === leadProfileSha256
         || (!leadSkillContext.enabled && !session.profileSha256);
       if (sameProfile && session.codexHome === codexHome && (session.lastInputTokens == null || session.lastInputTokens <= rolloverThreshold(session.contextWindow))) threadId = session.threadId;
       else rolledOver = true;
-    }
+    } else if (forceFreshPlanning && session?.threadId) rolledOver = true;
     const goalKey = state.goalOverride || state.goal;
     const turnInputs = async (resumeThreadId) => {
       // What the lead thread already saw: nothing unless it is this run's own thread.
@@ -2904,12 +2936,12 @@ function buildLeadGraph(deps) {
       activity?.end(activityOutcome);
     }
     update.leadSkillContext = leadSkillContext;
-    update.threadId = leadResult.threadId || state.threadId;
+    update.threadId = leadResult.threadId || (forceFreshPlanning ? null : state.threadId);
     // The thread has now seen this turn's goal and outcomes (a new thread got them in its full prompt).
     update.leadSeenOutcomes = state.outcomes.length;
     update.leadSeenGoal = goalKey;
     recordLeadTurn(state, leadResult, leadResult.status || 'completed');
-    if (sessions && update.threadId) {
+    if (sessions && (update.threadId || forceFreshPlanning)) {
       try {
         const contextTokens = leadResult.usage?.contextTokens;
         const contextWindow = leadResult.usage?.contextWindow;
@@ -3033,26 +3065,46 @@ function buildLeadGraph(deps) {
         round: state.round + 1,
         violations: error.violations.map(({ predicate, code, detail }) => ({ predicate, code, detail })),
       });
+      const rejection = { round: state.round + 1, at: new Date().toISOString(), violations: error.violations };
+      const rejections = [...(state.rejections || []), rejection].slice(-5);
       if (consecutive > MAX_AUTO_REJECTIONS) {
-        const codes = [...new Set([...(state.retryDecide ? (state.rejections.at(-1)?.violations || []) : []), ...error.violations].map((entry) => entry.code))];
-        const question = `The lead decision failed validation ${consecutive} times in a row (${codes.join(', ')}): ${error.message}. Continue to replan with a note, change the goal, or accept the current result as is.`;
+        const attempts = state.planningRecovery?.attempts || 0;
+        if (attempts < MAX_FRESH_PLANNING_RECOVERIES) {
+          return {
+            ...update,
+            rejections,
+            consecutiveRejections: consecutive,
+            retryDecide: true,
+            planningRecovery: { version: 1, attempts: attempts + 1, phase: 'fresh_pending', evidence: boundedPlanningEvidence(rejections) },
+          };
+        }
+        const issueSummary = error.violations.map((entry) => `${entry.predicate} ${entry.code}: ${entry.detail}`).join('; ');
+        const final = `Technical partial result: lead planning remained invalid after two same-thread correction reminders and one fresh-context attempt. Goal not achieved. Validation issues: ${issueSummary}`.slice(0, MAX_ESCALATION_QUESTION_CHARS);
         return {
           ...update,
-          rejections: [...(state.rejections || []), { round: state.round + 1, at: new Date().toISOString(), violations: error.violations }].slice(-5),
+          rejections,
           consecutiveRejections: consecutive,
           retryDecide: false,
-          ...escalate(state, 'loop_detected', question, 'The lead could not produce a valid decision after two correction reminders.'),
+          planningRecovery: { version: 1, attempts, phase: 'exhausted' },
+          status: 'completed',
+          text: final,
+          partial: {
+            checkpoints: technicalPartialLedger(state, { description: final }),
+            round: state.round,
+            reason: 'planning_contract_failure',
+          },
         };
       }
       return {
         ...update,
-        rejections: [...(state.rejections || []), { round: state.round + 1, at: new Date().toISOString(), violations: error.violations }].slice(-5),
+        rejections,
         consecutiveRejections: consecutive,
         retryDecide: true,
       };
     }
     update.consecutiveRejections = 0;
     update.retryDecide = false;
+    if (state.planningRecovery?.phase === 'fresh_pending') update.planningRecovery = null;
     deps.emit(runtime.onEvent, { type: 'decision', round: state.round + 1, action: decision.action });
     recordSemanticRecords(state, decision.records);
     recordLeadResolutions(state, decision.resolutions);
@@ -3091,8 +3143,13 @@ function buildLeadGraph(deps) {
             redecide: true,
           };
         }
-        // A later one passed validation with a cited investigation: the owner decides how to go on.
-        return { ...update, ...escalate(state, 'goal_not_achieved', final, final) };
+        // A repeated unmet finish is a technical partial. Owner authority stays on the typed request path.
+        const partial = {
+          checkpoints: technicalPartialLedger(state, { description: `The goal remains unmet after investigation. ${final}` }),
+          round: state.round,
+          reason: 'goal_unmet_exhausted',
+        };
+        return { ...update, status: 'completed', text: final, partial };
       }
       return { ...update, status: 'completed', text: final };
     }
@@ -3703,7 +3760,7 @@ function buildLeadGraph(deps) {
     return { batch, ...(runtime.signal?.aborted ? canceledUpdate(runtime.signal) : {}) };
   }
 
-  function noProgressPartialLedger(state, pause) {
+  function technicalPartialLedger(state, pause) {
     const obligations = state.reviewObligations || [];
     const kept = obligations.slice(0, Math.max(0, MAX_LEDGER_ENTRIES - 1));
     const ledger = [];
@@ -3832,7 +3889,7 @@ function buildLeadGraph(deps) {
     const stopForNoProgress = Boolean(loopPause && batchSettled && unresolvedWriters.length === 0
       && state.status !== 'canceled' && !limited && !state.budget
       && !state.humanRequest && !ownerPauseRequested(config));
-    const partialLedger = stopForNoProgress ? noProgressPartialLedger(settledSnapshot, loopPause) : null;
+    const partialLedger = stopForNoProgress ? technicalPartialLedger(settledSnapshot, loopPause) : null;
     const stopReferences = (loopPause?.references || []).slice(-10)
       .map((entry) => String(entry?.attemptId || entry?.assignmentId || '').slice(0, 120))
       .filter(Boolean);
@@ -4291,7 +4348,8 @@ function buildLeadGraph(deps) {
   // Deterministic acceptance of a finish decision. The lead's final text never changes the disposition.
   async function accept(state, config) {
     const runtime = runtimeOf(config);
-    const forcedNoProgressPartial = state.partial?.reason === 'no_progress_loop';
+    const forcedTechnicalPartial = FORCED_PARTIAL_REASONS.has(state.partial?.reason);
+    if (forcedTechnicalPartial && ownerPauseRequested(config)) interrupt({ kind: 'owner_pause', message: OWNER_PAUSE_MESSAGE });
     throwIfAborted(runtime.signal);
     let acceptance;
     try {
@@ -4308,9 +4366,9 @@ function buildLeadGraph(deps) {
     const newlyPassing = state.acceptance ? (acceptance.checks || []).filter((check) => check?.result === 'passed' && !before.has(check.id)).map((check) => check.id) : [];
     if (newlyPassing.length > 0) runs.progress = addProgress(state, [{ round: state.round, kind: 'check_passed', detail: newlyPassing.join(', ') }]);
     // LL-6: a changed pinned check goes to an independent read-only review first; the run is not finished yet.
-    const review = forcedNoProgressPartial ? null : startReview(state, acceptance);
+    const review = forcedTechnicalPartial ? null : startReview(state, acceptance);
     if (review) return { ...runs, ...review, status: null };
-    if (forcedNoProgressPartial) return { ...runs, status: 'completed' };
+    if (forcedTechnicalPartial) return { ...runs, status: 'completed' };
     if (acceptance.disposition === 'rejected' && state.acceptanceAttempts < 1) {
       return { ...runs, acceptanceAttempts: state.acceptanceAttempts + 1, status: null, text: '', partial: null };
     }
@@ -4393,7 +4451,7 @@ function buildLeadGraph(deps) {
     if (state.unresolvedWriters.length > 0) return 'reconcile';
     if (state.budget) return 'budget_pause';
     if (state.humanRequest) return 'human_input';
-    if (state.partial?.reason === 'no_progress_loop') return 'accept';
+    if (FORCED_PARTIAL_REASONS.has(state.partial?.reason)) return 'accept';
     if (state.checkReview) return 'review_check';
     if (state.pendingAssignments) return ownerPauseRequested(config) ? 'pause_before_dispatch' : 'dispatch';
     return 'decide';

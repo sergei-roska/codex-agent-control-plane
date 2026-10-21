@@ -345,8 +345,6 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       metadata: {},
     };
     const resuming = requestContext.task?.status?.state === TaskState.TASK_STATE_INPUT_REQUIRED;
-    // Whoever resumes the run (a human or the watcher), it no longer waits for budget.
-    if (resuming) budgetWatcher?.forget(taskId);
     let effectivePause = null;
     // LL-4: checks the lead pins during the run are recorded in the task like an owner contract,
     // with source 'agent', so a restart and the launcher see them.
@@ -381,7 +379,21 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       }
       const pauseKind = effectivePause?.kind;
       const automaticResume = requestContext.userMessage?.metadata?.autoResume;
+      const automaticBudget = automaticResume?.reason === 'budget';
       const automaticTransient = automaticResume?.reason === 'transient_recovery';
+      if (automaticBudget && (autoResume !== true || !resuming || livePause?.kind !== 'waiting_for_budget')) {
+        if (resuming) {
+          republishPause(effectivePause, 'The automatic budget retry is no longer eligible; the task remains paused.', 'budget-resume-rejected');
+        } else {
+          eventBus.publish(AgentEvent.statusUpdate({
+            taskId,
+            contextId,
+            status: status(TaskState.TASK_STATE_FAILED, agentMessage(taskId, contextId, 'budget-resume-rejected', 'Automatic budget resume is only accepted for a task currently waiting for budget.')),
+            metadata: {},
+          }));
+        }
+        return;
+      }
       if (automaticTransient && (autoResume !== true || !transientRecovery?.acceptAutomatic(taskId, {
         attempt: automaticResume.attempt,
         checkpointId: automaticResume.checkpointId,
@@ -394,6 +406,8 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
         }
         return;
       }
+      // Once a valid manual or automatic resume is admitted, it no longer waits for budget.
+      if (resuming) budgetWatcher?.forget(taskId);
       if (resuming) transientRecovery?.markRunning(taskId);
       try {
         goal = extractGoal(requestContext.userMessage, { allowEmpty: resuming && pauseKind !== 'human_decision' });
@@ -506,7 +520,8 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       let result;
       if (resuming) {
         try {
-          result = await orchestrator.resume({ runId: taskId, input: resumeInput, signal: controller.signal, onEvent, contextId });
+          const resumeOrigin = ['budget', 'transient_recovery'].includes(automaticResume?.reason) ? 'automatic' : 'owner';
+          result = await orchestrator.resume({ runId: taskId, input: resumeInput, signal: controller.signal, onEvent, contextId, resumeOrigin });
         } catch (error) {
           if (error?.name !== 'RunNotFoundError' || (pauseKind !== 'restart' && pauseKind !== 'stopped')) throw error;
           // Crash before the first checkpoint: start over from the original goal.

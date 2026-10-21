@@ -150,3 +150,35 @@ persistent decisions (A2), then internal planning recovery and structured owner
 boundaries (A3/A4). Acceptance should include transient failure then success,
 restart during backoff, exhausted retry budget, owner stop during wait, unknown
 writer effects, and no duplicate dispatch or unapproved model fallback.
+
+## Implementation status after the audit
+
+A1 is implemented in `2a9f65a`: bounded durable transient Lead recovery with
+checkpoint/writer gates and no automatic model fallback. The local A2 portion
+is implemented in `576fbdf`: command-free local verification capability inventory,
+existing owner-route reuse, and scoped owner-decision context across bounded
+prompts and digests. Capability inventory is not passing verification evidence.
+External CI route selection, execution, and runner qualification remain absent;
+the historical need for an owner-operated external runner is not claimed solved.
+
+A3 now allows two same-thread correction reminders and one fresh planning
+context with bounded validation evidence, then a technical partial result if
+planning remains invalid. Automatic infrastructure/budget continuation and an
+owner pause preserve the pending fresh-attempt counter and allowance together.
+A4 no longer infers owner responsibility from a repeated free-text unmet-goal
+finish. After required investigation that path ends as an honest partial ledger;
+genuine owner questions use the existing typed `request_human_input` contract.
+This reuses the closed owner-only reason boundary instead of adding a second
+blocker classification schema. Legacy stored owner escalations remain resumable.
+
+Adversarial checks also exposed and repaired a pre-existing budget-message
+admission gap: automatic budget continuation requires enabled auto-resume and a
+live `waiting_for_budget` checkpoint pause. A delayed budget message cannot
+resume an owner, stopped, or human-decision pause. Manual continuation and valid
+budget watcher recovery remain supported.
+
+The local A3/A4 implementation passed independent review and targeted adversarial
+probes. Full suite: 1,422 tests, 1,413 passed, 8 unchanged baseline failures,
+1 skipped; no new failures. Focused affected suites passed 452/452. No live
+provider/model trial, application restart, deployment, or target-project change
+was performed. The application remains stopped at the owner's request.

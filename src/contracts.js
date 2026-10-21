@@ -1040,7 +1040,7 @@ function validateDecision(decision, ctx) {
     // A partial ledger is the lead's own conclusion with per-checkpoint evidence; it needs no further investigation.
     if (decision.goalAchieved === false && !decision.checkpoints && Number.isInteger(since) && !citedInvestigation(ctx, since, { texts: [decision.final] })) {
       throw violation('decision.investigate_first', 'investigation_missing',
-        `A repeated finish with goalAchieved false needs a finished read-only investigation from a round after ${since}, cited by its assignmentId in final, and final must state why each remaining blocker is owner-only`);
+        `A repeated finish with goalAchieved false needs a finished read-only investigation from a round after ${since}, cited by its assignmentId in final`);
     }
   } else if (decision.action === 'request_human_input') {
     if (decision.assignments.length !== 0) throw violation('decision.envelope', 'decision_envelope_invalid', 'request_human_input decisions require no assignments');

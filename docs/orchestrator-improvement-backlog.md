@@ -811,6 +811,32 @@ The local change does not establish CI access or satisfy an external verificatio
 requirement; that part remains unqualified and any credentials, spending, or
 external writes still require the owner's decision.
 
+### A3/A4 - Bounded planning recovery and typed owner boundary [implemented and reviewed]
+
+Three consecutive invalid Lead decisions trigger one fresh planning context with
+bounded exact validation evidence and the existing run, owner, and review
+context. The same selected Lead model/profile is retained. Provider failures and
+automatic budget/transient resumes do not consume or replenish this validation
+allowance. A further invalid decision ends in a bounded technical partial ledger
+and one final acceptance run without an owner continuation question. Owner pauses
+and cancellation remain effective before recovery or acceptance work proceeds.
+
+A repeated `goalAchieved: false` finish after the required investigation also
+ends as a technical partial ledger. Missing required investigation evidence
+remains a contract error. Only typed `request_human_input` with a closed
+owner-only reason creates an owner decision; legacy checkpointed escalations
+remain resumable. External runner selection, execution, and qualification are
+still absent; local behavior does not establish external CI access or qualify an
+external verification requirement.
+
+An adversarial challenge exposed a pre-existing server admission gap: stale
+budget auto-resume metadata could resume a run paused by the owner. Automatic
+budget continuation now requires the automatic-resume policy to be enabled, an
+actually resuming task, and a current authoritative `waiting_for_budget` pause.
+Stale budget messages cannot resume owner, stopped, human-decision, or other
+non-budget pauses. Manual resumes and the budget watcher's live positive path
+remain supported; transient recovery keeps its separate durable checkpoint gate.
+
 ## Verification and rollout policy
 
 1. Run focused tests in implementation tasks, then the existing project checks at

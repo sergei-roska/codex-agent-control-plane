@@ -876,7 +876,7 @@ test('a repeated unmet-goal finish needs an investigation finished after the fir
   investigateFirst(finish({ goalAchieved: false, final: 'Still blocked on X' }), since(2, [INVESTIGATION]));
   investigateFirst(finish({ goalAchieved: false, final: 'run:r1:a0 shows X' }), since(2, [INVESTIGATION]));
   const caught = investigateFirst(finish({ goalAchieved: false, final: 'No evidence' }), since(2, [{ assignmentId: 'run:r3:a0', round: 3 }]));
-  assert.match(caught.message, /state why each remaining blocker is owner-only/);
+  assert.match(caught.message, /needs a finished read-only investigation from a round after 2, cited by its assignmentId in final/);
   validateDecision(finish({ goalAchieved: false, final: 'X needs a paid license (run:r3:a0)' }), since(2, [{ assignmentId: 'run:r3:a0', round: 3 }]));
   validateDecision(finish({ goalAchieved: true, final: 'Done' }), since(2, []));
 });

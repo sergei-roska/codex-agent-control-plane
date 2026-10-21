@@ -458,7 +458,7 @@ class LeadOrchestrator {
     }, { signal, onEvent, interruptAfter, resumed: false, contextId });
   }
 
-  async resume({ runId, input, signal, onEvent, interruptAfter, contextId } = {}) {
+  async resume({ runId, input, signal, onEvent, interruptAfter, contextId, resumeOrigin = 'owner' } = {}) {
     if (!isNonEmptyString(runId)) throw new TypeError('runId must be a non-empty string');
     const snapshot = await this._snapshot(runId);
     if (!LeadOrchestrator._exists(snapshot)) throw new RunNotFoundError(runId);
@@ -483,11 +483,11 @@ class LeadOrchestrator {
     } else if (pending) {
       graphInput = new Command({ resume: input ?? true });
     }
-    return this._drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed: true, contextId });
+    return this._drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed: true, contextId, resumeOrigin });
   }
 
-  async _drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed, contextId }) {
-    const runtime = { signal, onEvent, resumed, pendingNotes: [], ...(isNonEmptyString(contextId) ? { contextId } : {}) };
+  async _drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed, contextId, resumeOrigin }) {
+    const runtime = { signal, onEvent, resumed, resumeOrigin, pendingNotes: [], ...(isNonEmptyString(contextId) ? { contextId } : {}) };
     this.completedPauseRequests.delete(runId);
     this.runtimes.set(runId, runtime);
     try {

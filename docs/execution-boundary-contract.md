@@ -121,9 +121,15 @@ Lead loop fixes ([design](lead-loop-fixes-design.md)): `finish` with
 `goalAchieved: false` requires investigation before an owner decision. LL-8
 (2026-10-12) removes the default dispatch-round limit. Only an explicitly
 configured positive `maxRounds` can cause a `round_limit` pause. A repeated-work
-warning followed by an unchanged recurrence, or exhausted invalid-decision
-corrections, produces a `loop_detected` owner decision. These pauses use options
-`continue`, `accept_as_is`, `change_goal`; they never satisfy an acceptance or
+warning followed by an unchanged recurrence produces a bounded technical partial
+result. Invalid lead decisions retain two same-thread correction turns, then get
+one fresh planning context with bounded validation evidence and the current
+run, owner, and review context; another invalid decision produces a technical
+partial result. Both technical stops run acceptance once and do not request
+owner continuation. A later `goalAchieved: false` after required investigation
+also produces a technical partial ledger rather than implying owner
+responsibility. Genuine owner decisions use typed `request_human_input` with a
+closed owner-only reason. These technical results never satisfy an acceptance or
 review gate themselves. Worker decision requests with a
 recommendation outside the option ids, and over-long report strings, are normalized
 (`report.normalizations`) instead of invalidating the report.

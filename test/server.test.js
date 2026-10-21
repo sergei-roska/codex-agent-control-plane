@@ -196,6 +196,81 @@ test('disabled automatic resume rejects a stale dispatched transient message', a
   }
 });
 
+test('budget auto-resume metadata cannot resume disabled, owner-paused, nonwaiting, or new tasks', async (t) => {
+  const scenarios = [
+    {
+      name: 'automatic budget resume is disabled',
+      autoResume: false,
+      livePause: BUDGET_PAUSE,
+      taskPause: BUDGET_PAUSE,
+      taskState: TaskState.TASK_STATE_INPUT_REQUIRED,
+      expectedState: TaskState.TASK_STATE_INPUT_REQUIRED,
+    },
+    {
+      name: 'live owner pause overrides stale budget metadata',
+      autoResume: true,
+      livePause: { kind: 'owner_pause', message: 'Paused by the owner' },
+      taskPause: BUDGET_PAUSE,
+      taskState: TaskState.TASK_STATE_INPUT_REQUIRED,
+      expectedState: TaskState.TASK_STATE_INPUT_REQUIRED,
+    },
+    {
+      name: 'human decision is not a budget pause',
+      autoResume: true,
+      livePause: { kind: 'human_decision', decisionId: 'd1' },
+      taskPause: BUDGET_PAUSE,
+      taskState: TaskState.TASK_STATE_INPUT_REQUIRED,
+      expectedState: TaskState.TASK_STATE_INPUT_REQUIRED,
+    },
+    {
+      name: 'a new task is not a paused budget run',
+      autoResume: true,
+      livePause: null,
+      taskPause: BUDGET_PAUSE,
+      taskState: TaskState.TASK_STATE_SUBMITTED,
+      expectedState: TaskState.TASK_STATE_FAILED,
+    },
+  ];
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      let resumes = 0;
+      let runs = 0;
+      const events = [];
+      const executor = makeLeadExecutor({
+        autoResume: scenario.autoResume,
+        orchestrator: {
+          async getPause() { return scenario.livePause; },
+          async resume() { resumes += 1; return { status: 'completed', text: 'done' }; },
+          async run() { runs += 1; return { status: 'completed', text: 'new run' }; },
+        },
+      });
+      const task = {
+        id: `budget-gate-${scenario.name}`,
+        contextId: 'ctx',
+        status: { state: scenario.taskState },
+        artifacts: [],
+        history: [],
+        metadata: { pause: scenario.taskPause },
+      };
+      await executor.execute({
+        taskId: task.id,
+        contextId: task.contextId,
+        task,
+        userMessage: {
+          parts: [{ text: 'Automatic resume: Codex usage budget is available again.' }],
+          metadata: { autoResume: { reason: 'budget' } },
+        },
+      }, { publish: (event) => events.push(event) });
+      assert.equal(resumes, 0);
+      assert.equal(runs, 0);
+      assert.equal(events.at(-1).data.status.state, scenario.expectedState);
+      if (scenario.taskState === TaskState.TASK_STATE_INPUT_REQUIRED) {
+        assert.equal(events.at(-1).data.metadata.pause.kind, scenario.livePause.kind);
+      }
+    });
+  }
+});
+
 test('lead executor reports cancellation as failed until downstream cancellation is confirmed', async () => {
   const seen = [];
   const executor = makeLeadExecutor({
@@ -723,7 +798,7 @@ test('lead executor resumes a restart pause with an empty message', async () => 
     task: { id: 't-restart', contextId: 'ctx', status: { state: TaskState.TASK_STATE_INPUT_REQUIRED }, artifacts: [], history: [], metadata: { pause: { kind: 'restart' } } },
     userMessage: { parts: [{ text: '' }] },
   }, { publish: (event) => seen.push(event) });
-  assert.deepEqual(resumes[0], { runId: 't-restart', input: { answer: '' }, signal: resumes[0].signal, onEvent: resumes[0].onEvent, contextId: 'ctx' });
+  assert.deepEqual(resumes[0], { runId: 't-restart', input: { answer: '' }, signal: resumes[0].signal, onEvent: resumes[0].onEvent, contextId: 'ctx', resumeOrigin: 'owner' });
   assert.equal(typeof resumes[0].onEvent, 'function');
   assert.equal(seen.at(-1).data.status.state, TaskState.TASK_STATE_COMPLETED);
 });
@@ -846,6 +921,7 @@ test('a transient model capacity failure records a safe checkpoint retry and man
     async resume(args) {
       assert.equal(args.runId, 'transient-run');
       assert.equal('model' in args, false);
+      assert.equal(args.resumeOrigin, 'automatic');
       return { status: 'completed', text: 'Recovered', rounds: 1, assignments: [] };
     },
   };
@@ -1662,6 +1738,7 @@ test('a budget pause registers with the watcher and the loopback resume reaches 
     assert.equal(resumes.length, 1);
     assert.match(resumes[0].input.answer, /Automatic resume: Codex usage budget is available again\./);
     assert.equal(resumes[0].runId, first.id);
+    assert.equal(resumes[0].resumeOrigin, 'automatic');
     for (let i = 0; i < 100; i++) {
       const task = await handler.getTask({ id: first.id }, CALL());
       if (task.status.state === TaskState.TASK_STATE_COMPLETED) break;

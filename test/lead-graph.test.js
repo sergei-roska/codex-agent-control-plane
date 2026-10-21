@@ -881,14 +881,17 @@ test('worker needs_decision must be resolved by the lead', async () => {
   });
   const attempt = attemptId(assignmentId(RUN_ID, 1, 0));
 
-  const unresolved = makeWorld({ script: [dispatch(brief('orch-explorer', [])), finish('Ignored it'), finish('Ignored it'), finish('Ignored it')], workerFinal });
+  const unresolved = makeWorld({ script: [dispatch(brief('orch-explorer', [])), finish('Ignored it'), finish('Ignored it'), finish('Ignored it'), finish('Ignored it')], workerFinal });
   await withSession(unresolved, async (session) => {
-    const paused = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
-    assert.equal(paused.status, 'input_required');
-    assert.equal(paused.pause.escalation, 'loop_detected');
-    assert.match(paused.pause.question, /must be resolved/);
+    const result = await session.orchestrator.run({ goal: 'Explore', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.disposition, 'partial');
+    assert.match(result.text, /Technical partial result/);
+    assert.equal(unresolved.leadTurns, 5);
     assert.match(unresolved.prompts[1], new RegExp(attempt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(unresolved.prompts[1], /Keep the API\?/);
+    assert.match(unresolved.prompts[4], /Internal planning recovery/);
+    assert.equal(result.assignments[0].report.outcome, 'needs_decision');
   });
 
   const resolved = makeWorld({
@@ -3149,31 +3152,220 @@ test('a reconciliation with thousands of changed paths stores capped lists and s
   });
 });
 
-test('three consecutive rejected decisions pause the run with the violation codes', async () => {
+test('three consecutive rejected decisions receive a fresh planning attempt', async () => {
   const bad = dispatch(brief('orch-builder', ['src/*']));
-  const world = makeWorld({ script: [bad, bad, bad, finish('Never reached')] });
+  const world = makeWorld({ script: [bad, bad, bad, finish('Fresh plan succeeded')] });
   await withSession(world, async (session) => {
-    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
-    assert.equal(paused.status, 'input_required');
-    assert.equal(paused.pause.escalation, 'loop_detected');
-    assert.match(paused.pause.question, /failed validation 3 times.*path_glob_unsupported/);
-    assert.equal(world.leadTurns, 3);
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Fresh plan succeeded');
+    assert.match(world.prompts[3], /Internal planning recovery/);
+    assert.match(world.prompts[3], /path_glob_unsupported/);
+    assert.equal(world.leadTurns, 4);
     assert.equal(world.sends.length, 0);
   });
 });
 
-test('a resume after the rejection pause allows two automatic retries again', async () => {
-  const bad = dispatch(brief('orch-builder', ['src/*']));
-  const world = makeWorld({ script: [bad, bad, bad, bad, bad, finish('Done')] });
+test('a legacy loop-detected owner escalation remains resumable', async () => {
+  const world = makeWorld({ script: [humanRequest(), finish('Done')] });
   await withSession(world, async (session) => {
-    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID });
-    assert.equal(paused.pause.escalation, 'loop_detected');
-    assert.match(paused.pause.question, /failed validation 3 times/);
-    assert.equal(world.leadTurns, 3);
-    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Retry the decision', choice: 'continue' } });
+    const parked = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, interruptAfter: 'decide' });
+    assert.equal(parked.status, 'interrupted_for_test');
+    const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    await session.orchestrator.graph.updateState({ configurable: { thread_id: RUN_ID } }, {
+      humanRequest: { ...snapshot.values.humanRequest, escalation: 'loop_detected', reason: 'loop_detected', final: 'Legacy technical escalation' },
+    });
+    const input = await session.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(input.status, 'input_required');
+    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Retry the decision' } });
     assert.equal(result.status, 'completed');
-    assert.equal(world.leadTurns, 6);
+    assert.equal(result.text, 'Done');
+    assert.equal(world.leadTurns, 2);
   });
+});
+
+test('three invalid decisions get one fresh full-context attempt with owner and review context', async () => {
+  const workspace = gitRepo();
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.mkdirSync(path.join(workspace, 'test'));
+  fs.writeFileSync(path.join(workspace, 'src', 'file.js'), 'baseline');
+  fs.writeFileSync(path.join(workspace, 'test', 'review.test.js'), 'baseline');
+  vcs(workspace, 'add', '.');
+  vcs(workspace, 'commit', '-q', '-m', 'review fixture');
+  const review = { kind: 'routine', checkpointId: 'planning-context', reason: 'Scoped implementation', paths: ['src/file.js'], evidenceIds: ['issue-1'] };
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  const world = makeWorld({
+    script: [
+      dispatch({ ...brief('orch-builder', ['src/file.js']), review }),
+      dispatch({ ...brief('orch-verifier', ['test']), review }),
+      dispatch(brief('orch-explorer', [])),
+      humanRequest([], [`${assignmentId(RUN_ID, 3, 0)} confirmed the required owner decision`], 'credentials_or_access'),
+      bad, bad, bad, finish('Recovered in a new planning context'),
+    ],
+    workerFinal: reviewWorkerFinal,
+  });
+  world.freshThreads = true;
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Build and verify the scoped change', runId: RUN_ID, contextId: 'planning-session' });
+    assert.equal(paused.status, 'input_required');
+    const result = await session.orchestrator.resume({
+      runId: RUN_ID, contextId: 'planning-session', input: { answer: 'Use variant A', choice: 'a', decisionId: `${RUN_ID}:h1` },
+    });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.text, 'Recovered in a new planning context');
+    assert.equal(world.leadTurns, 8);
+    assert.equal(world.sends.length, 3, 'the three invalid dispatch decisions execute no assignments');
+    assert.equal(world.threadArgs[7], undefined, 'the recovery attempt starts a fresh lead thread');
+    assert.match(world.prompts[7], /Internal planning recovery/);
+    assert.match(world.prompts[7], /path_glob_unsupported/);
+    assert.match(world.prompts[7], /Available roles:/);
+    assert.match(world.prompts[7], /Owner answers in this run/);
+    assert.match(world.prompts[7], /Use variant A/);
+    assert.match(world.prompts[7], /Checkpoint review obligations/);
+    assert.match(world.prompts[7], /planning-context/);
+    assert.equal(await session.orchestrator.getPause(RUN_ID), null);
+  }, { workspace, withSessions: true });
+});
+
+test('an invalid fresh planning attempt ends as a technical partial without an owner ask', async () => {
+  const workspace = gitRepo();
+  let acceptanceCalls = 0;
+  const runCheckImpl = async (check) => {
+    acceptanceCalls += 1;
+    return { id: check.id, argv: check.argv, exitCode: 3, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'failed' };
+  };
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  const world = makeWorld({ script: [bad, bad, bad, bad] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, contract: contractOf(nodeCheck('unit', 'process.exit(1)')) });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.disposition, 'partial');
+    assert.match(result.text, /Technical partial result/);
+    assert.match(result.text, /planning-contract|path_glob_unsupported/);
+    assert.deepEqual(world.sends, []);
+    assert.equal(world.leadTurns, 4);
+    assert.ok(result.checkpoints.some((entry) => entry.id.startsWith('unfinished-goal') && entry.status === 'blocked'));
+    const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(values.partial.reason, 'planning_contract_failure');
+    assert.equal(values.planningRecovery.phase, 'exhausted');
+    assert.equal(values.acceptanceRuns, 1);
+    assert.equal(values.acceptance.disposition, 'rejected');
+    assert.equal(acceptanceCalls, 1, 'a failed final acceptance does not re-enter planning or run twice');
+    assert.equal(values.humanRequest, null);
+  }, { workspace, orchestrator: { runCheckImpl } });
+});
+
+test('owner pause requested during the final invalid planning turn precedes acceptance', async () => {
+  const workspace = gitRepo();
+  let checks = 0;
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  let session;
+  const world = makeWorld({ script: [bad, bad, bad, async () => {
+    session.orchestrator.requestPause(RUN_ID);
+    return bad;
+  }] });
+  await withSession(world, async (activeSession) => {
+    session = activeSession;
+    const paused = await activeSession.orchestrator.run({
+      goal: 'Build', runId: RUN_ID, contract: contractOf(nodeCheck('unit', 'process.exit(0)')),
+    });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'owner_pause');
+    assert.equal(checks, 0);
+    assert.equal(world.leadTurns, 4);
+    const resumed = await activeSession.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(resumed.status, 'completed');
+    assert.equal(resumed.disposition, 'partial');
+    assert.equal(checks, 1, 'the final acceptance check runs once after the owner resumes');
+    assert.equal(world.leadTurns, 4, 'resume continues acceptance without another planning turn');
+  }, { workspace, orchestrator: { runCheckImpl: async (check) => {
+    checks += 1;
+    return { id: check.id, argv: check.argv, exitCode: 0, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'passed' };
+  } } });
+});
+
+test('owner pause between invalid reminders and fresh planning preserves the one-attempt limit', async () => {
+  const workspace = gitRepo();
+  let session;
+  let checks = 0;
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  const world = makeWorld({ script: [bad, bad, async () => {
+    session.orchestrator.requestPause(RUN_ID);
+    return bad;
+  }, bad] });
+  world.freshThreads = true;
+  await withSession(world, async (activeSession) => {
+    session = activeSession;
+    const paused = await activeSession.orchestrator.run({
+      goal: 'Build', runId: RUN_ID, contract: contractOf(nodeCheck('unit', 'process.exit(1)')),
+    });
+    assert.equal(paused.status, 'input_required');
+    assert.equal(paused.pause.kind, 'owner_pause');
+    assert.equal(world.leadTurns, 3, 'the fresh-context turn has not started before the pause');
+    let snapshot = await activeSession.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(snapshot.values.consecutiveRejections, 3);
+    assert.equal(snapshot.values.planningRecovery.phase, 'fresh_pending');
+    await activeSession.restart();
+    const result = await activeSession.orchestrator.resume({ runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.disposition, 'partial');
+    assert.match(result.text, /Technical partial result/);
+    assert.equal(world.leadTurns, 4, 'the single fresh-context result is terminal');
+    assert.equal(world.threadArgs[3], undefined, 'the pending fresh attempt starts a new Lead thread');
+    assert.match(world.prompts[3], /Internal planning recovery/);
+    snapshot = await activeSession.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(snapshot.values.consecutiveRejections, 4);
+    assert.equal(snapshot.values.planningRecovery.phase, 'exhausted');
+    assert.equal(snapshot.values.partial.reason, 'planning_contract_failure');
+    assert.equal(snapshot.values.acceptanceRuns, 1);
+    assert.equal(snapshot.values.acceptance.disposition, 'rejected');
+    assert.equal(checks, 1, 'failed acceptance runs exactly once on the technical partial');
+    assert.equal(snapshot.values.humanRequest, null);
+  }, { workspace, orchestrator: { runCheckImpl: async (check) => {
+    checks += 1;
+    return { id: check.id, argv: check.argv, exitCode: 3, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'failed' };
+  } } });
+});
+
+test('an automatic budget resume preserves the pending fresh planning attempt', async () => {
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  const world = makeWorld({ script: [bad, bad, bad, usageLimitError(), finish('Recovered after budget')] });
+  world.freshThreads = true;
+  await withSession(world, async (session) => {
+    const paused = await session.orchestrator.run({ goal: 'Build', runId: RUN_ID, contextId: 'budget-planning-session' });
+    assert.equal(paused.status, 'waiting_for_budget');
+    const pending = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(pending.values.planningRecovery.phase, 'fresh_pending');
+    await session.restart();
+    const resumed = await session.orchestrator.resume({ runId: RUN_ID, contextId: 'budget-planning-session', resumeOrigin: 'automatic' });
+    assert.equal(resumed.status, 'completed');
+    assert.equal(world.leadTurns, 5);
+    assert.equal(world.threadArgs[3], undefined);
+    assert.equal(world.threadArgs[4], undefined);
+    assert.match(world.prompts[4], /Internal planning recovery/);
+    assert.match(world.prompts[4], /path_glob_unsupported/);
+  }, { withSessions: true });
+});
+
+test('an automatic transient resume preserves the pending fresh planning attempt', async () => {
+  const bad = dispatch(brief('orch-builder', ['src/*']));
+  const world = makeWorld({ script: [bad, bad, bad, new Error('temporary App Server disconnect'), finish('Recovered after reconnect')] });
+  world.freshThreads = true;
+  await withSession(world, async (session) => {
+    await assert.rejects(session.orchestrator.run({ goal: 'Build', runId: RUN_ID, contextId: 'transient-planning-session' }), /temporary App Server disconnect/);
+    let snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(snapshot.values.planningRecovery.phase, 'fresh_pending');
+    await session.restart();
+    const resumed = await session.orchestrator.resume({ runId: RUN_ID, contextId: 'transient-planning-session', resumeOrigin: 'automatic' });
+    assert.equal(resumed.status, 'completed');
+    assert.equal(world.leadTurns, 5);
+    assert.equal(world.threadArgs[3], undefined);
+    assert.equal(world.threadArgs[4], undefined);
+    assert.match(world.prompts[4], /Internal planning recovery/);
+    snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
+    assert.equal(snapshot.values.planningRecovery, null);
+    assert.equal(snapshot.values.consecutiveRejections, 0);
+  }, { withSessions: true });
 });
 
 test('an accepted decision resets the consecutive rejection counter', async () => {
@@ -4704,12 +4896,17 @@ test('retry exhaustion blocks recovery after an actual stale A2A continuation', 
       },
     });
     const stopped = await session.orchestrator.resume({ runId: RUN_ID });
-    assert.equal(stopped.status, 'input_required');
+    assert.equal(stopped.status, 'completed');
+    assert.equal(stopped.disposition, 'partial');
+    assert.equal(stopped.acceptance?.disposition, 'unverifiable');
     snapshot = await session.orchestrator.graph.getState(config);
     const recovery = snapshot.values.reviewRecovery.checkpoints[0];
     assert.equal(recovery.generation, 2);
     assert.equal(recovery.phase, 'replan_required');
     assert.equal(recovery.blockedReason, 'recovery_generation_limit');
+    assert.equal(snapshot.values.partial.reason, 'planning_contract_failure');
+    assert.equal(snapshot.values.acceptanceRuns, 1);
+    assert.equal(snapshot.values.humanRequest, null);
     assert.equal(snapshot.values.pendingAssignments, null);
     assert.equal(serviceInputs.length, 2, 'no fresh verifier request was sent');
     assert.equal(getWorkerCalls(), 1, 'no fresh verifier model call was made');
@@ -4743,10 +4940,15 @@ test('a stale continuation is not retried again when the recovery target is unch
     });
 
     const result = await session.orchestrator.resume({ runId: RUN_ID });
-    assert.equal(result.status, 'input_required');
+    assert.equal(result.status, 'completed');
+    assert.equal(result.disposition, 'partial');
+    assert.equal(result.acceptance?.disposition, 'unverifiable');
     const after = await session.orchestrator.graph.getState(config);
     assert.equal(after.values.reviewRecovery.checkpoints[0].phase, 'replan_required');
     assert.equal(after.values.reviewRecovery.checkpoints[0].blockedReason, 'repeated_stale_target');
+    assert.equal(after.values.partial.reason, 'planning_contract_failure');
+    assert.equal(after.values.acceptanceRuns, 1);
+    assert.equal(after.values.humanRequest, null);
     assert.equal(after.values.pendingAssignments, null);
     assert.equal(serviceInputs.length, 2, 'no fresh verifier request was submitted for the unchanged target');
     assert.equal(getWorkerCalls(), 1, 'no extra reviewer execution was made');
@@ -5182,7 +5384,9 @@ test('an unknown direct-service continuation origin blocks recovery without gues
 
   await withSession(world, async (session) => {
     const result = await session.orchestrator.run({ goal: 'Review the boundary', runId: RUN_ID });
-    assert.equal(result.status, 'input_required');
+    assert.equal(result.status, 'completed');
+    assert.equal(result.disposition, 'partial');
+    assert.equal(result.acceptance?.disposition, 'unverifiable');
     const snapshot = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
     const unknown = result.assignments.find((entry) => entry.failureKind === 'request_invalid');
     assert.ok(unknown);
@@ -5195,6 +5399,9 @@ test('an unknown direct-service continuation origin blocks recovery without gues
     assert.equal(stagingLog.list({ runId: RUN_ID, type: 'review_recovery' }).some((event) => event.status === 'verifier_queued'), false);
     assert.equal(snapshot.values.batch, null);
     assert.equal(snapshot.values.pendingAssignments, null);
+    assert.equal(snapshot.values.partial.reason, 'planning_contract_failure');
+    assert.equal(snapshot.values.acceptanceRuns, 1);
+    assert.equal(snapshot.values.humanRequest, null);
     assert.equal(snapshot.values.reviewObligations[0].checkpointId, review.checkpointId);
     assert.equal(snapshot.values.reviewObligations[0].receipts.some((entry) => entry.status === 'accepted'), false);
   }, { workspace, roles: rolesMap, orchestrator: { stagingLog } });
@@ -5296,15 +5503,14 @@ test('a checkpoint without the continuable channel resumes to decide as before',
   });
 });
 
-// ------------------------------------------------- LL-1: escalation instead of looping
+// ------------------------------------------------- LL-1 and LL-6: bounded planning recovery
 
 const notMet = (final) => decision({ action: 'finish', final, goalAchieved: false });
 const met = (final, extra = {}) => decision({ action: 'finish', final, goalAchieved: true, ...extra });
 const ESCALATION_IDS = ['continue', 'accept_as_is', 'change_goal'];
 
-// LL-6: the first unmet-goal finish only buys an investigation; the second one, citing it, pauses.
+// LL-6: the first unmet-goal finish requests investigation; a repeated false finish is partial.
 const INVESTIGATION_ID = assignmentId(RUN_ID, 1, 0);
-const toGoalPause = (secondFinal) => [notMet('Blocked: the gate needs live runtime qualification.'), dispatch(brief('orch-explorer', [])), notMet(secondFinal)];
 const cited = (text) => `${text} Evidence: ${INVESTIGATION_ID}.`;
 
 test('the first unmet-goal finish requests investigation without an owner pause', async () => {
@@ -5316,102 +5522,77 @@ test('the first unmet-goal finish requests investigation without an owner pause'
     assert.equal(world.leadTurns, 3);
     assert.match(world.prompts[1], /Dispatch rounds already used: 0\/80\. A dispatch decision consumes one round\./);
     assert.match(world.prompts[1], /Goal investigation \(requested in round 0\): your finish with goalAchieved false named these blockers:\nBlocked: the matrix has hard-coded counts\./);
-    assert.match(world.prompts[1], /cites the assignmentId of a read-only investigation finished after round 0 and states why each remaining blocker is owner-only/);
+    assert.match(world.prompts[1], /A later finish with goalAchieved false must cite a read-only investigation finished after round 0/);
+    assert.match(world.prompts[1], /a free-text finish cannot imply owner responsibility/);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
     assert.equal(values.extraRounds, 0);
     assert.deepEqual(values.goalInvestigation, { round: 0, final: 'Blocked: the matrix has hard-coded counts.' });
   });
 });
 
-test('a second unmet-goal finish pauses only with a cited investigation from after the first one', async () => {
-  const world = makeWorld({ script: [...toGoalPause('Still blocked.'), notMet(cited('x'.repeat(5000))), notMet(cited('The gate needs a paid device farm.'))] });
+test('a repeated fixable unmet goal becomes a partial after investigation; a missing citation is rejected', async () => {
+  const world = makeWorld({ script: [
+    notMet('Blocked: the local matrix has an implementation defect.'),
+    dispatch(brief('orch-explorer', [])),
+    notMet('Still blocked: an engineer can repair the local matrix defect within scope; no owner action is needed.'),
+    notMet(cited('The local defect remains; engineering repair is authorized within this run.')),
+  ] });
   await withSession(world, async (session) => {
-    const paused = await session.orchestrator.run({ goal: 'Close M3', runId: RUN_ID });
-    assert.equal(paused.status, 'input_required');
-    assert.match(world.prompts[3], /decision\.investigate_first investigation_missing: A repeated finish with goalAchieved false needs a finished read-only investigation from a round after 0/);
-    assert.match(world.prompts[3], /Investigate first: dispatch a read-only explorer first; use auditor only for a concrete risk-boundary question/);
-    const { pause } = paused;
-    assert.equal(pause.kind, 'human_decision');
-    assert.equal(pause.escalation, 'goal_not_achieved');
-    assert.equal(pause.question.length, 3000);
-    assert.deepEqual(pause.options.map((option) => option.id), ESCALATION_IDS);
-    assert.equal(pause.recommendation, 'continue');
-    assert.equal(pause.decisionId, `${RUN_ID}:h1`);
-    assert.equal('final' in pause, false);
-    assert.match(pause.message, /Human decision needed \(goal_not_achieved\)/);
-    await assert.rejects(session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'x', choice: 'retry' } }), /choice must match/);
-    const again = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Go on', choice: 'continue' } });
-    assert.equal(again.pause.escalation, 'goal_not_achieved');
-    assert.match(again.pause.question, /paid device farm/);
+    const result = await session.orchestrator.run({ goal: 'Fix the local matrix', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.disposition, 'partial');
+    assert.match(world.prompts[3], /decision\.investigate_first investigation_missing: A repeated finish with goalAchieved false needs a finished read-only investigation from a round after 0, cited by its assignmentId in final/);
+    assert.match(result.text, /engineering repair is authorized within this run/);
+    assert.ok(result.checkpoints.some((entry) => entry.id.startsWith('unfinished-goal') && entry.status === 'blocked'));
+    assert.equal(world.leadTurns, 4);
+    assert.equal(await session.orchestrator.getPause(RUN_ID), null);
   });
 });
 
 test('continue grants another maxRounds budget and passes the note to the lead', async () => {
-  const world = makeWorld({ script: [...toGoalPause(cited('Blocked on B.')), finish('Done')] });
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), dispatch(brief('orch-explorer', [])), finish('Done')] });
   await withSession(world, async (session) => {
     const paused = await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
-    assert.equal(paused.pause.escalation, 'goal_not_achieved');
-    assert.match(world.prompts[2], /Dispatch rounds already used: 1\/80\. A dispatch decision consumes one round\./);
+    assert.equal(paused.pause.escalation, 'round_limit');
+    assert.match(world.prompts[1], /Dispatch rounds already used: 1\/1\. A dispatch decision consumes one round\./);
     await session.restart();
     const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Try the other path', choice: 'continue' } });
     assert.equal(result.status, 'completed');
     assert.equal(result.text, 'Done');
-    assert.match(world.prompts[3], /Dispatch rounds already used: 1\/160\./);
-    assert.match(world.prompts[3], /"answer":"Try the other path","choice":"continue"/);
+    assert.match(world.prompts[2], /Dispatch rounds already used: 1\/2\./);
+    assert.match(world.prompts[2], /"answer":"Try the other path","choice":"continue"/);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
-    assert.equal(values.extraRounds, 80);
-  });
+    assert.equal(values.extraRounds, 1);
+  }, { orchestrator: { maxRounds: 1 } });
 });
 
-test('an answer without a choice on an escalation is the recommended continue', async () => {
-  const world = makeWorld({ script: [...toGoalPause(cited('Blocked.')), finish('Done')] });
+test('an answer without a choice on a round limit is the recommended continue', async () => {
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), dispatch(brief('orch-explorer', [])), finish('Done')] });
   await withSession(world, async (session) => {
     await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
     const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Keep going' } });
     assert.equal(result.status, 'completed');
-    assert.match(world.prompts[3], /Dispatch rounds already used: 1\/160\./);
-  });
-});
-
-test('accept_as_is finishes with the lead final text and acceptance still runs', async () => {
-  const workspace = gitRepo();
-  let runs = 0;
-  const runCheckImpl = async (check) => {
-    runs += 1;
-    return { id: check.id, argv: check.argv, exitCode: 0, signal: null, timedOut: false, error: null, durationMs: 1, stdoutTail: '', stderrTail: '', result: 'passed' };
-  };
-  const final = cited('Partial: 50 of 52 rows need a paid qualification run.');
-  const world = makeWorld({ script: toGoalPause(final) });
-  await withSession(world, async (session) => {
-    const paused = await session.orchestrator.run({ goal: 'Close M3', runId: RUN_ID, contract: contractOf(nodeCheck('unit', 'process.exit(0)')) });
-    assert.equal(paused.pause.escalation, 'goal_not_achieved');
-    assert.equal(runs, 0);
-    const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Ship what we have', choice: 'accept_as_is', decisionId: `${RUN_ID}:h1` } });
-    assert.equal(result.status, 'completed');
-    assert.equal(result.text, final);
-    assert.equal(result.acceptance.disposition, 'accepted');
-    assert.equal(runs, 1);
-    assert.equal(world.leadTurns, 3);
-  }, { workspace, orchestrator: { runCheckImpl } });
+    assert.match(world.prompts[2], /Dispatch rounds already used: 1\/2\./);
+  }, { orchestrator: { maxRounds: 1 } });
 });
 
 test('change_goal replaces the goal for the rest of the run with a fresh budget; state.goal stays', async () => {
-  const world = makeWorld({ script: [...toGoalPause(cited('Cannot do X without a paid vendor license.')), finish('Did Y')] });
+  const world = makeWorld({ script: [dispatch(brief('orch-explorer', [])), dispatch(brief('orch-explorer', [])), finish('Did Y')] });
   await withSession(world, async (session) => {
     await session.orchestrator.run({ goal: 'Do X', runId: RUN_ID });
     const result = await session.orchestrator.resume({ runId: RUN_ID, input: { answer: 'Only do Y', choice: 'change_goal' } });
     assert.equal(result.status, 'completed');
     assert.equal(result.text, 'Did Y');
-    assert.match(world.prompts[3], /Goal \(changed by the owner during this run; authoritative, it replaces the original goal\):\nOnly do Y/);
-    assert.match(world.prompts[3], /Original goal \(background only\):\nDo X/);
-    assert.doesNotMatch(world.prompts[3], /User goal:/);
-    assert.match(world.prompts[3], /Dispatch rounds already used: 1\/160\./);
-    assert.match(world.prompts[3], /"answer":"Only do Y","choice":"change_goal"/);
+    assert.match(world.prompts[2], /Goal \(changed by the owner during this run; authoritative, it replaces the original goal\):\nOnly do Y/);
+    assert.match(world.prompts[2], /Original goal \(background only\):\nDo X/);
+    assert.doesNotMatch(world.prompts[2], /User goal:/);
+    assert.match(world.prompts[2], /Dispatch rounds already used: 1\/2\./);
+    assert.match(world.prompts[2], /"answer":"Only do Y","choice":"change_goal"/);
     const { values } = await session.orchestrator.graph.getState({ configurable: { thread_id: RUN_ID } });
     assert.equal(values.goal, 'Do X');
     assert.equal(values.goalOverride, 'Only do Y');
     assert.equal(await session.orchestrator.getRunGoal(RUN_ID), 'Do X');
-  });
+  }, { orchestrator: { maxRounds: 1 } });
 });
 
 test('the round limit pauses with round_limit and continue grants another budget', async () => {
@@ -5782,7 +5963,8 @@ test('the decision prompt carries the investigate-first, owner-only, goalAchieve
     assert.match(prompt, /Investigate first: never ask the owner what investigation can answer/);
     assert.match(prompt, /Owner-only decisions are a closed list \(humanInput\.reason\): paid_resources \(spending money or paid resources beyond the run\), credentials_or_access \(credentials and access grants\), external_write \(publishing or writing to external systems\), irreversible_operation, prd_requirement_change \(removing or weakening a requirement the PRD states\), and infeasible_requirement \(an investigation proved that a requirement cannot be met because a dependency or the environment lacks a capability; cite the exact version or setting and the evidence; options must include substitute evidence, changing the dependency or environment, and deferring the requirement\)\. Interpreting the PRD, choosing an implementation, and expanding file scope are your decisions after investigation\. Fixing evidence tooling means collecting or presenting evidence the platform already provides; building a substitute for a capability the platform lacks is scope expansion that needs the owner\./);
     assert.match(prompt, /request_human_input is accepted only for an owner-only decision and only after an investigation of that blocker: An investigation is a finished read-only outcome/);
-    assert.match(prompt, /A blocker that persists needs its root cause located \(an explorer first; use an auditor only for a concrete risk-boundary question, or scout\/architect when appropriate\)\. Once an investigation locates it outside what the team may change \(a missing capability of a dependency or the environment, or the requirement itself\), stop investigating that blocker and escalate it\./);
+    assert.match(prompt, /A blocker that persists needs its root cause located \(an explorer first; use an auditor only for a concrete risk-boundary question, or scout\/architect when appropriate\)\. Once an investigation locates it outside what the team may change \(a missing capability of a dependency or the environment, or the requirement itself\), stop investigating that blocker and use request_human_input with the matching closed owner-only reason if an owner decision is needed\./);
+    assert.match(prompt, /do not make a free-text finish imply owner responsibility/);
     assert.match(prompt, /Worker decision requests are open decisions: resolve each one yourself .*investigating first.*Never leave one unanswered\./);
     assert.match(prompt, /The first finish with false does not end the run: investigate the root cause of each blocker or fix it within the caller-granted round allowance/);
     assert.match(prompt, /Dispatch rounds are capped at 80 per caller-granted allowance\. Reaching the cap pauses for the owner/);
@@ -7236,12 +7418,17 @@ test('a granted checkpoint stops again at generation 3 with recovery_generation_
       },
     });
     const stopped = await session.orchestrator.resume({ runId: RUN_ID });
-    assert.equal(stopped.status, 'input_required');
+    assert.equal(stopped.status, 'completed');
+    assert.equal(stopped.disposition, 'partial');
+    assert.equal(stopped.acceptance?.disposition, 'unverifiable');
     snapshot = await session.orchestrator.graph.getState(config);
     const recovery = snapshot.values.reviewRecovery.checkpoints[0];
     assert.equal(recovery.generation, 3);
     assert.equal(recovery.phase, 'replan_required');
     assert.equal(recovery.blockedReason, 'recovery_generation_limit');
+    assert.equal(snapshot.values.partial.reason, 'planning_contract_failure');
+    assert.equal(snapshot.values.acceptanceRuns, 1);
+    assert.equal(snapshot.values.humanRequest, null);
     assert.equal(snapshot.values.pendingAssignments, null);
     assert.equal(serviceInputs.length, 2, 'no fresh verifier request was sent');
     assert.equal(getWorkerCalls(), 1, 'no fresh verifier model call was made');

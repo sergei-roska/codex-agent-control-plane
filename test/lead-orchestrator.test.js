@@ -161,14 +161,14 @@ test('dispatches an authenticated A2A assignment and finishes with a fresh read-
   assert.equal(new URL(cardRequest.cardPath, cardRequest.url).href, 'http://127.0.0.1:4040/agents/orch-builder/agent-card.json');
 });
 
-const thrice = (value) => [value, value, value];
+const fourInvalidDecisions = (value) => [value, value, value, value];
 
-async function assertLoopDetected(h, goal, details, expectedLeadCalls = 3) {
+async function assertPlanningPartial(h, goal, details, expectedLeadCalls = 4) {
   const result = await h.orchestrator.run({ goal });
-  assert.equal(result.status, 'input_required');
-  assert.equal(result.pause.kind, 'human_decision');
-  assert.equal(result.pause.reason, 'loop_detected');
-  assert.match(result.pause.question, details);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.disposition, 'partial');
+  assert.match(result.text, /Technical partial result/);
+  assert.match(result.text, details);
   assert.equal(h.calls.filter((call) => call.type === 'lead').length, expectedLeadCalls);
   return result;
 }
@@ -176,21 +176,21 @@ async function assertLoopDetected(h, goal, details, expectedLeadCalls = 3) {
 test('rejects unknown roles and traversal paths before contacting A2A', async (t) => {
   for (const assignment of [brief('orch-missing'), brief('orch-builder', ['../secret.txt']), brief('orch-builder', ['/etc/passwd'])]) {
     await t.test(assignment.role + ':' + assignment.allowedFiles[0], async () => {
-      const h = makeHarness({ decisions: thrice(decision('dispatch', [assignment])) });
+      const h = makeHarness({ decisions: fourInvalidDecisions(decision('dispatch', [assignment])) });
       const code = assignment.role === 'orch-missing' ? 'role_unknown' : 'path_unsafe';
-      await assertLoopDetected(h, 'Implement feature', new RegExp(`3 times.*${code}.*(Unknown role|Unsafe allowedFiles path)`));
+      await assertPlanningPartial(h, 'Implement feature', new RegExp(`${code}.*(Unknown role|Unsafe allowedFiles path)`));
       assert.equal(h.calls.some((call) => call.type === 'send'), false);
     });
   }
 });
 
 test('enforces repair escalation order', async () => {
-  const h = makeHarness({ decisions: thrice(decision('dispatch', [brief('orch-repair-xhigh')])) });
-  await assertLoopDetected(h, 'Repair defect', /3 times.*role_ladder_violation.*only be dispatched after an engineer attempt/);
+  const h = makeHarness({ decisions: fourInvalidDecisions(decision('dispatch', [brief('orch-repair-xhigh')])) });
+  await assertPlanningPartial(h, 'Repair defect', /role_ladder_violation.*only be dispatched after an engineer attempt/);
   assert.equal(h.calls.some((call) => call.type === 'send'), false);
 
-  const sameBatch = makeHarness({ decisions: thrice(decision('dispatch', [brief('orch-builder'), brief('orch-repair-xhigh')])) });
-  await assertLoopDetected(sameBatch, 'Repair defect', /3 times.*role_ladder_violation.*only be dispatched after an engineer attempt/);
+  const sameBatch = makeHarness({ decisions: fourInvalidDecisions(decision('dispatch', [brief('orch-builder'), brief('orch-repair-xhigh')])) });
+  await assertPlanningPartial(sameBatch, 'Repair defect', /role_ladder_violation.*only be dispatched after an engineer attempt/);
   assert.equal(sameBatch.calls.some((call) => call.type === 'send'), false);
 
   const sequential = makeHarness({ decisions: [
@@ -205,15 +205,15 @@ test('enforces repair escalation order', async () => {
 });
 
 test('requires prior evidence and one narrow decision for the architect', async (t) => {
-  const noEvidence = makeHarness({ decisions: thrice(decision('dispatch', [brief('orch-architect')])) });
-  await assertLoopDetected(noEvidence, 'Review design', /3 times.*architect_constraint.*requires inspected prior evidence/);
+  const noEvidence = makeHarness({ decisions: fourInvalidDecisions(decision('dispatch', [brief('orch-architect')])) });
+  await assertPlanningPartial(noEvidence, 'Review design', /architect_constraint.*requires inspected prior evidence/);
   assert.equal(noEvidence.calls.some((call) => call.type === 'send'), false);
 
   const h = makeHarness({ decisions: [
     decision('dispatch', [brief('orch-explorer')]),
-    ...thrice(decision('dispatch', [brief('orch-architect'), brief('orch-explorer')])),
+    ...fourInvalidDecisions(decision('dispatch', [brief('orch-architect'), brief('orch-explorer')])),
   ] });
-  await assertLoopDetected(h, 'Review design', /3 times.*architect_constraint.*one narrowly framed decision/, 4);
+  await assertPlanningPartial(h, 'Review design', /architect_constraint.*one narrowly framed decision/, 5);
   assert.equal(h.calls.filter((call) => call.type === 'send').length, 1);
 });
 
