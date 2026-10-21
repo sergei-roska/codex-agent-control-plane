@@ -12,6 +12,8 @@
 //     Opt-in, 1-8 commands. Default owner acceptance checks of a new run that carries no explicit checks
 //     (see makeLeadExecutor in src/server.js). Each command is parsed like a CLI `--check`; owner checks run
 //     on the host outside the Codex sandbox. Absent, null, or [] disables the default.
+//   executionPermissions: "inherit" | "strict"
+//     Defaults to inherit for trusted projects. Strict retains Harness sandbox defaults.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -22,6 +24,7 @@ const MAX_OWNER_CHECKS = 8;
 const MAX_ENV_NAME = 64;
 const MAX_BASE_DIR = 1024;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
+const EXECUTION_PERMISSIONS = new Set(['inherit', 'strict']);
 // Names the control plane or the platform owns. TMPDIR is always set to the run's tmp directory.
 const RESERVED_ENV = new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'PWD', 'OLDPWD', 'IFS', 'ENV', 'BASH_ENV', 'TMPDIR', 'TMP', 'TEMP', 'TERM', 'LANG',
@@ -99,15 +102,18 @@ function validateSettingsDocument(doc) {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new ProjectSettingsError('Settings file must be an object');
   if (doc.version !== SETTINGS_VERSION) throw new ProjectSettingsError(`Unsupported settings version ${JSON.stringify(doc.version)}`);
   for (const key of Object.keys(doc)) {
-    if (!['version', 'acceptanceScratch', 'ownerChecks', 'aut03LeadSkillEnabled', 'updatedAt'].includes(key)) throw new ProjectSettingsError(`Unknown settings field: ${key}`);
+    if (!['version', 'acceptanceScratch', 'ownerChecks', 'aut03LeadSkillEnabled', 'executionPermissions', 'updatedAt'].includes(key)) throw new ProjectSettingsError(`Unknown settings field: ${key}`);
   }
   if (doc.aut03LeadSkillEnabled !== undefined && typeof doc.aut03LeadSkillEnabled !== 'boolean') {
     throw new ProjectSettingsError('aut03LeadSkillEnabled must be a boolean');
   }
+  const executionPermissions = doc.executionPermissions === undefined ? 'inherit' : doc.executionPermissions;
+  if (!EXECUTION_PERMISSIONS.has(executionPermissions)) throw new ProjectSettingsError('executionPermissions must be "inherit" or "strict"');
   return {
     acceptanceScratch: normalizeAcceptanceScratch(doc.acceptanceScratch),
     ownerChecks: normalizeOwnerChecks(doc.ownerChecks),
     aut03LeadSkillEnabled: doc.aut03LeadSkillEnabled === true,
+    executionPermissions,
   };
 }
 
@@ -116,18 +122,18 @@ function validateSettingsDocument(doc) {
  * `warning`; a broken file never enables anything. This never throws.
  */
 function readSettingsFile(file) {
-  const defaults = { acceptanceScratch: null, ownerChecks: null, aut03LeadSkillEnabled: false };
+  const defaults = { acceptanceScratch: null, ownerChecks: null, aut03LeadSkillEnabled: false, executionPermissions: 'inherit' };
   let raw;
   try {
     raw = fs.readFileSync(file, 'utf8');
   } catch (error) {
     if (error && error.code === 'ENOENT') return { ...defaults, warning: null };
-    return { ...defaults, warning: `Project settings ignored: cannot read ${file}: ${error && error.message}` };
+    return { ...defaults, executionPermissions: 'strict', warning: `Project settings ignored: cannot read ${file}: ${error && error.message}` };
   }
   try {
     return { ...validateSettingsDocument(JSON.parse(raw)), warning: null };
   } catch (error) {
-    return { ...defaults, warning: `Project settings ignored: ${file} is invalid: ${error && error.message}` };
+    return { ...defaults, executionPermissions: 'strict', warning: `Project settings ignored: ${file} is invalid: ${error && error.message}` };
   }
 }
 

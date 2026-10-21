@@ -173,16 +173,15 @@ function emptyLoopGuard() {
   return { observations: [], episodes: [], warnings: [], warning: null, lastRound: null };
 }
 
-// Counts rounds per recurrence key. A batch that integrated a change resets every count (the target
-// moved); the same batch's reviews then count from one.
+// Counts rounds per recurrence key. A scoped target change naturally creates a new key; unrelated
+// implementation must not erase history for other targets.
 function advanceRecurrence(previous, round, observations) {
   const batch = Array.isArray(observations) ? observations.filter((entry) => entry && typeof entry === 'object') : [];
-  let entries = batch.some((entry) => entry.implemented === true) ? []
-    : (Array.isArray(previous) ? previous.slice(-MAX_RECURRENCE).map((entry) => ({
-      ...entry,
-      rounds: Array.isArray(entry.rounds) ? [...entry.rounds] : [],
-      references: Array.isArray(entry.references) ? [...entry.references] : [],
-    })) : []);
+  let entries = Array.isArray(previous) ? previous.slice(-MAX_RECURRENCE).map((entry) => ({
+    ...entry,
+    rounds: Array.isArray(entry.rounds) ? [...entry.rounds] : [],
+    references: Array.isArray(entry.references) ? [...entry.references] : [],
+  })) : [];
   const keyed = new Map();
   for (const entry of batch.slice(0, MAX_BATCH_KEYS)) {
     const recurrence = entry.recurrence;

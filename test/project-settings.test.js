@@ -89,7 +89,7 @@ describe('normalizeOwnerChecks', () => {
 
 describe('settings file', () => {
   it('missing file means everything disabled', () => {
-    assert.deepEqual(readSettingsFile(file), { acceptanceScratch: null, ownerChecks: null, aut03LeadSkillEnabled: false, warning: null });
+    assert.deepEqual(readSettingsFile(file), { acceptanceScratch: null, ownerChecks: null, aut03LeadSkillEnabled: false, executionPermissions: 'inherit', warning: null });
   });
 
   it('reads a valid file and resolves the default base dir next to it', () => {
@@ -97,6 +97,7 @@ describe('settings file', () => {
     const settings = readSettingsFile(file);
     assert.equal(settings.warning, null);
     assert.equal(settings.aut03LeadSkillEnabled, false);
+    assert.equal(settings.executionPermissions, 'inherit');
     assert.deepEqual(resolveAcceptanceScratch(settings, file), { env: ['TEAMWORK_TEST_SCRATCH_ROOT'], baseDir: path.join(path.dirname(file), 'acceptance-scratch') });
     writeRaw({ version: 1, acceptanceScratch: { env: ['X'], baseDir: '/var/tmp/cp' } });
     assert.equal(resolveAcceptanceScratch(readSettingsFile(file), file).baseDir, '/var/tmp/cp');
@@ -118,6 +119,17 @@ describe('settings file', () => {
     }
   });
 
+  it('defaults execution permissions to native inheritance and accepts strict opt-out', () => {
+    writeRaw({ version: 1 });
+    assert.equal(readSettingsFile(file).executionPermissions, 'inherit');
+    writeRaw({ version: 1, executionPermissions: 'strict' });
+    assert.equal(readSettingsFile(file).executionPermissions, 'strict');
+    writeRaw({ version: 1, executionPermissions: 'danger-full-access' });
+    const invalid = readSettingsFile(file);
+    assert.equal(invalid.executionPermissions, 'strict');
+    assert.match(invalid.warning, /executionPermissions/);
+  });
+
   it('an invalid ownerChecks setting ignores the whole file and warns', () => {
     for (const ownerChecks of ['npm test', [1], [''], Array.from({ length: 9 }, (_, i) => `c${i}`), { a: 1 }]) {
       writeRaw({ version: 1, acceptanceScratch: { env: ['X'] }, ownerChecks });
@@ -135,11 +147,14 @@ describe('settings file', () => {
       const settings = readSettingsFile(file);
       assert.equal(settings.acceptanceScratch, null);
       assert.equal(settings.aut03LeadSkillEnabled, false);
+      assert.equal(settings.executionPermissions, 'strict');
       assert.match(settings.warning, /Project settings ignored/);
     }
     fs.rmSync(file);
     fs.mkdirSync(file);
-    assert.match(readSettingsFile(file).warning, /cannot read/);
+    const unreadable = readSettingsFile(file);
+    assert.equal(unreadable.executionPermissions, 'strict');
+    assert.match(unreadable.warning, /cannot read/);
     assert.throws(() => validateSettingsDocument({ version: 1, x: 1 }), /Unknown settings field/);
   });
 });

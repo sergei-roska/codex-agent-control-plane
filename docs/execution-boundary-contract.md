@@ -1,5 +1,11 @@
 # Execution boundary contract (DBC-01)
 
+October 20 execution extension: trusted projects default to native Codex
+permission inheritance for writable roles and agent-origin final checks.
+Contract source, pins, writer admission, and snapshot gates remain enforced.
+The read-only-workspace/no-network check policy below describes `strict` mode;
+see [execution-permissions.md](execution-permissions.md) for current selection.
+
 Status: Phase A record frozen as `boundary-contract/v1`; historical facts below
 were verified at `db61957`. The additive selective-review extension dated
 2026-10-12 reopens related runtime qualification without changing
@@ -179,7 +185,7 @@ report of an out-of-scope change is the only signal for those cases. (Corrected
 
 #### Opt-in acceptance scratch directory (owner-side)
 
-Sandboxed agent checks normally run with no writable root, /tmp writable, no
+Strict agent checks run with no writable root, /tmp writable, no
 network. A project owner can opt a project in to a per-run scratch directory in
 `<runtime>/projects/<id>/project-settings.json` (read once at server start; the
 launcher passes the path as `CODEX_A2A_PROJECT_SETTINGS`):

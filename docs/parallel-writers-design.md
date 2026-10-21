@@ -1,5 +1,12 @@
 # Parallel writers in isolated worktrees (PW)
 
+October 20 extension: the confinement requirements below describe strict
+execution. Owner-selected native full access uses explicit `cooperative` lanes:
+worktree ownership and integration remain, while sandbox confinement is not
+claimed. Both `worktree` and `cooperative` enable grouped parallel writers.
+Other inherited profiles use the shared workspace when lane compatibility
+cannot be established. See [execution-permissions.md](execution-permissions.md).
+
 Status: decided by the lead on 2026-10-10, owner-approved direction ("each writer gets
 its own git worktree"). Revision 2 after an independent review (verdict: sound with
 the changes below; R1 is a hard gate). PW-1 and PW-2 are done; PW-3 is split into

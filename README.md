@@ -10,7 +10,7 @@ A2A client -> /orchestrator (lead)
                   +-> /agents/...           -> Codex App Server thread
 ```
 
-The role profiles, team rules, and skills are bundled in [`profiles/`](profiles/) so this project does not depend on the original pack path. The profiles were adapted to act as A2A workers while keeping their model choices and task boundaries. The lead uses structured decisions, checks role names and file paths, runs read-only assignments in parallel, and runs batches containing a writer serially. Repair roles follow the pack's escalation order.
+The role profiles, team rules, and skills are bundled in [`profiles/`](profiles/) so this project does not depend on the original pack path. The profiles were adapted to act as A2A workers while keeping their model choices and task boundaries. The lead uses structured decisions, checks role names and file paths, and groups independent assignments into concurrent waves when worktree execution is available. Dependent steps and conflicting writes remain ordered. Repair roles follow the pack's escalation order.
 
 ## Requirements
 
@@ -71,6 +71,16 @@ skills = false                 # true keeps the Codex skills listing
 
 A missing table means no MCP servers and no automatic skills listing. The pack's own `orch-*` skills are read as files by path and do not need the listing. An allowlisted name that is not configured is ignored and reported in `permissionConfig.toolPolicy.mcpMissing`. If the configured servers cannot be enumerated, the turn still runs and the policy is marked `enforced: false` (a cost problem, not a safety boundary). Sandbox and approvals are unaffected.
 
+## Execution permissions
+
+Trusted projects inherit the active Codex account's configured permissions for
+writable roles and agent-proposed final checks. Inspection roles remain
+read-only. Set `executionPermissions: "strict"` in the project's settings to
+retain the previous sandbox policy; unavailable or untrusted native configuration
+also falls back to strict. See [execution-permissions.md](docs/execution-permissions.md)
+for worktree behavior, existing-thread policy updates, and authorized shared
+Git operations.
+
 ## Skills for each assignment
 
 The imported skill library lives in [`profiles/skills/library/`](profiles/skills/library/). It contains the remaining skills copied from `ws-knowledge/skills`, including their references, scripts, and evaluation files. The library includes computer science patterns and the retained project and tooling workflows.
@@ -127,14 +137,16 @@ fresh allowance, and `accept_as_is` finishes with the current result. A caller
 may pass another positive `maxRounds` to the orchestrator, or `null` for no
 cap. Progress does not extend the cap automatically.
 
-Two checkpointed detectors stop repeated work. Both pause the run with
-`loop_detected`; owner `continue` or `change_goal` resets both, restart and
-usage-limit resume retain their history, and `accept_as_is` still runs all
-acceptance and review gates.
+Two checkpointed detectors stop repeated work. Once a fully settled batch
+confirms no progress, the run completes with an honest partial result and final
+deterministic acceptance. It does not request owner continuation or dispatch
+another repair or review. Failed and unavailable checks remain visible, and
+unreviewed checkpoints cannot become accepted. Owner pauses, unresolved writers,
+and usage-limit recovery retain their existing behavior and guard history.
 
 - Evidence guard: the lead is warned after three equivalent outcomes with
   unchanged relevant evidence (the identity of the report's inspected files,
-  checks and findings); another unchanged recurrence pauses the run. The lead
+  checks and findings); another unchanged recurrence concludes the run. The lead
   gets the warning in its ordinary turn, without an extra model call.
 - Recurrence guard: the key is (checkpoint id, role class, target content
   identity). The role class is `verify` (verifier), `audit` (auditor) or
@@ -144,9 +156,9 @@ acceptance and review gates.
   for plain research (no checkpoint), which stays with the evidence guard.
   Report text and file lists are not part of the key, so a reviewer that words
   its findings differently each round still counts. When the same key recurs
-  in three rounds with no implementation in between (a writable dispatch whose
-  change reached the workspace resets every count), the run pauses with the
-  rounds and the checkpoint listed. There is no warning step.
+  in three rounds, the run concludes with the rounds and the checkpoint listed.
+  A changed target starts its own count; an unrelated integrated write does
+  not erase history for the unchanged target. There is no warning step.
 
 The detectors are heuristics over available evidence, not a guarantee that
 every semantic loop is recognized. Per-invocation graph step limits resume from
@@ -211,6 +223,10 @@ writer settlement and lane integration. Cleanup is scoped to the thread;
 other roles sharing the App Server continue. See
 [background process lifecycle](docs/background-process-lifecycle.md) for
 timeouts, failure handling and safe runtime application.
+
+Launcher startup failures retain a bounded, sanitized diagnostic in each
+project's runtime directory, so a launcher restart preserves the last failure.
+Readiness requires the actual listener announcement or a successful status probe.
 
 ## Usage
 

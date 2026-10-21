@@ -757,11 +757,24 @@ async function startServer({
     await reconcileInterruptedTasks(state, { leadNamespace: 'orchestrator' });
     const admission = new WriterAdmission({ db: state.db, workspace });
     await admission.reconcileStale();
-    // Writer isolation (docs/parallel-writers-design.md): mode selection with the confinement probe, then lane recovery.
-    const isolation = await selectWriterIsolation({ env: process.env, appServer, workspace, db: state.db, stateFile: state.filePath });
+    // Owner project settings are read once at startup; saved settings are never changed here.
+    let acceptanceScratch = null;
+    let aut03LeadSkillEnabled = false;
+    let ownerChecks = null;
+    let executionPermissions = 'inherit';
+    if (projectSettingsFile) {
+      const settings = readSettingsFile(projectSettingsFile);
+      if (settings.warning) console.warn(`[settings] ${settings.warning}`);
+      acceptanceScratch = resolveAcceptanceScratch(settings, projectSettingsFile);
+      ownerChecks = settings.ownerChecks;
+      executionPermissions = settings.executionPermissions;
+      aut03LeadSkillEnabled = settings.aut03LeadSkillEnabled === true;
+    }
+    // Writer isolation uses the resolved owner policy; inherited full access is cooperative, not confined.
+    const isolation = await selectWriterIsolation({ env: process.env, appServer, workspace, db: state.db, stateFile: state.filePath, executionPermissions });
     const lanes = new LaneManager({ db: state.db, workspace, admission, appServer, ...isolation });
     const laneRecovery = lanes.recover({ retentionHours: laneRetentionHours(process.env.CODEX_A2A_LANE_RETENTION_HOURS) });
-    const worktreeMode = isolation.mode === 'worktree';
+    const worktreeMode = isolation.mode === 'worktree' || isolation.mode === 'cooperative';
     const actualPort = httpServer?.address()?.port ?? port;
     const baseUrl = `http://${HOST}:${actualPort}`;
     // Per-project role overrides (model, effort, extra rules) are read once here; they are edited only while the server is stopped.
@@ -771,17 +784,6 @@ async function startServer({
       leadRole: createLeadRole(profilesDir ? { profilesDir } : undefined),
       warn: (message) => console.warn(`[roles] ${message}`),
     });
-    // Owner project settings (opt-ins such as the acceptance scratch directory) are read once here as well.
-    let acceptanceScratch = null;
-    let aut03LeadSkillEnabled = false;
-    let ownerChecks = null;
-    if (projectSettingsFile) {
-      const settings = readSettingsFile(projectSettingsFile);
-      if (settings.warning) console.warn(`[settings] ${settings.warning}`);
-      acceptanceScratch = resolveAcceptanceScratch(settings, projectSettingsFile);
-      ownerChecks = settings.ownerChecks;
-      aut03LeadSkillEnabled = settings.aut03LeadSkillEnabled === true;
-    }
     const usageLedger = new UsageLedger({ db: state.db });
     const stagingLog = new StagingLog({ db: state.db });
     const evidenceStore = createEvidenceStore(state.db);
@@ -794,10 +796,12 @@ async function startServer({
       checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, stagingLog, activityStore, evidenceStore, sessionThreads,
       parallelWriters: worktreeMode,
       ...(acceptanceScratch ? { acceptanceScratch } : {}),
+      executionPermissions,
     });
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
       roles, appServer, workspace, baseUrl, admission, usageLedger, activityStore, skillCatalog, mcpCatalog,
+      executionPermissions,
       stagingLog,
       lanes: worktreeMode ? lanes : null,
       taskStoreFactory: (roleId) => createTaskStore(state, roleId),

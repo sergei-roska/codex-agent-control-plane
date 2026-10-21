@@ -78,6 +78,8 @@ function createSwitchingAppServer({
   const wrapper = {
     run: (...args) => tracked('run', args),
     execCommand: (...args) => tracked('execCommand', args),
+    resolveExecutionPermissions: (...args) => tracked('resolveExecutionPermissions', args),
+    readConfig: (...args) => tracked('readConfig', args),
     switchTo,
     async close() {
       closed = true;

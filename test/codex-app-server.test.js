@@ -1172,7 +1172,11 @@ test('truncates, redacts and caps permission events', async (t) => {
 });
 
 test('reports permissionConfig for read-only and workspace-write roles', async (t) => {
-  const fake = fakeSpawn(permissionHandler([completedTurn]));
+  const permissionHandlerImpl = permissionHandler([completedTurn]);
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'thread/settings/update') return send({ id: request.id, result: {} });
+    return permissionHandlerImpl(request, send);
+  });
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
   const ro = await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/ro', input: 'go' });
@@ -1369,6 +1373,101 @@ test('pins approvalsReviewer to user on thread/start, thread/resume, and turn/st
     assert.equal(calls.length, method === 'thread/start' ? 2 : method === 'thread/resume' ? 2 : 4, method);
     for (const call of calls) assert.equal(call.params.approvalsReviewer, 'user', method);
   }
+});
+
+test('inherits trusted native writer and inspector profiles on new and resumed threads', async (t) => {
+  const handler = baseHandler();
+  const inherited = (request, send) => {
+    if (request.method === 'config/read') {
+      return send({ id: request.id, result: { config: {
+        projects: { '/tmp/project': { trust_level: 'trusted' } },
+        default_permissions: ':danger-full-access',
+        approval_policy: 'never',
+        mcp_servers: {},
+      } } });
+    }
+    if (request.method === 'permissionProfile/list') {
+      return send({ id: request.id, result: { data: [
+        { id: ':read-only', allowed: true },
+        { id: ':workspace', allowed: true },
+        { id: ':danger-full-access', allowed: true },
+      ] } });
+    }
+    return handler(request, send);
+  };
+  inherited.ownsConfigRead = true;
+  const fake = fakeSpawn(inherited);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  await client.run({ role, cwd: '/tmp/project', input: 'writer', executionPermissions: 'inherit' });
+  await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/tmp/project', input: 'inspector', executionPermissions: 'inherit' });
+  await client.run({ role, cwd: '/tmp/project', input: 'resumed', threadId: 'old-native-thread', executionPermissions: 'inherit' });
+
+  const sent = fake.getChild().sent;
+  const writerStart = sent.find(({ method }) => method === 'thread/start');
+  assert.equal(writerStart.params.permissions, ':danger-full-access');
+  assert.equal(writerStart.params.approvalPolicy, 'never');
+  assert.equal(Object.hasOwn(writerStart.params, 'sandbox'), false);
+  const inspectorStart = sent.filter(({ method }) => method === 'thread/start')[1];
+  assert.equal(inspectorStart.params.permissions, ':read-only');
+  assert.equal(Object.hasOwn(inspectorStart.params, 'sandboxPolicy'), false);
+  const resume = sent.find(({ method }) => method === 'thread/resume');
+  assert.equal(resume.params.permissions, ':danger-full-access');
+  assert.equal(resume.params.approvalPolicy, 'never');
+  const turnStarts = sent.filter(({ method }) => method === 'turn/start');
+  assert.deepEqual(turnStarts.map(({ params }) => params.permissions), [':danger-full-access', ':read-only', ':danger-full-access']);
+  assert.ok(turnStarts.every(({ params }) => !Object.hasOwn(params, 'sandboxPolicy')));
+  assert.ok(turnStarts.every(({ params }) => params.approvalPolicy === 'never'));
+});
+
+test('updates a loaded strict thread before using inherited native permissions', async (t) => {
+  const handler = baseHandler();
+  const inherited = (request, send) => {
+    if (request.method === 'config/read') {
+      return send({ id: request.id, result: { config: {
+        projects: { '/tmp/project': { trust_level: 'trusted' } },
+        default_permissions: ':danger-full-access',
+        approval_policy: 'never',
+        mcp_servers: {},
+      } } });
+    }
+    if (request.method === 'permissionProfile/list') {
+      return send({ id: request.id, result: { data: [
+        { id: ':read-only', allowed: true },
+        { id: ':danger-full-access', allowed: true },
+      ] } });
+    }
+    return handler(request, send);
+  };
+  inherited.ownsConfigRead = true;
+  const fake = fakeSpawn(inherited);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const strict = await client.run({ role, cwd: '/tmp/project', input: 'strict', executionPermissions: 'strict' });
+  await client.run({ role, cwd: '/tmp/project', input: 'inherit', threadId: strict.threadId, executionPermissions: 'inherit' });
+
+  const sent = fake.getChild().sent;
+  const updates = sent.filter(({ method }) => method === 'thread/settings/update').map(({ params }) => params);
+  assert.equal(updates.length, 2);
+  assert.deepEqual(updates[0], { threadId: strict.threadId, sandboxPolicy: null });
+  assert.equal(updates[1].threadId, strict.threadId);
+  assert.equal(updates[1].permissions, ':danger-full-access');
+  assert.equal(updates[1].approvalPolicy, 'never');
+  assert.equal(Object.hasOwn(updates[1], 'sandboxPolicy'), false);
+  const inheritedTurn = sent.filter(({ method }) => method === 'turn/start')[1];
+  assert.equal(inheritedTurn.params.permissions, ':danger-full-access');
+  assert.equal(inheritedTurn.params.approvalPolicy, 'never');
+});
+
+test('reuses the applied policy for a loaded thread without settings updates', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const first = await client.run({ role, cwd: '/tmp/project', input: 'first' });
+  await client.run({ role, cwd: '/tmp/project', input: 'second', threadId: first.threadId });
+  assert.equal(fake.getChild().sent.filter(({ method }) => method === 'thread/settings/update').length, 0);
 });
 
 // --- own-group signaling ---

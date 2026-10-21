@@ -41,9 +41,10 @@ test('schemas satisfy strict structured output rules', () => {
   assert.match(WORKER_REPORT_SCHEMA.properties.risks.description, /supplemental diagnostic commands/);
   assert.equal(DECISION_SCHEMA.properties.humanInput.anyOf[1].type, 'null');
   assert.deepEqual(DECISION_SCHEMA.properties.action.enum, ['dispatch', 'finish', 'request_human_input']);
-  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'wave', 'continueFrom', 'review', 'repair']);
+  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.required, [...ASSIGNMENT_FIELDS, 'skills', 'mcpTools', 'wave', 'continueFrom', 'review', 'repair', 'executionTarget']);
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.continueFrom, { type: ['string', 'null'] });
   assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.wave, { type: ['integer', 'null'], minimum: 1 });
+  assert.deepEqual(DECISION_SCHEMA.properties.assignments.items.properties.executionTarget, { type: ['string', 'null'], enum: ['shared', null] });
   assert.deepEqual(DECISION_SCHEMA.required, ['action', 'assignments', 'final', 'resolutions', 'humanInput', 'goalAchieved', 'acceptanceChecks', 'records', 'checkpoints']);
   const [ledger, noLedger] = DECISION_SCHEMA.properties.checkpoints.anyOf;
   assert.equal(noLedger.type, 'null');
@@ -604,11 +605,22 @@ function specialistCode(request, role, expectedPredicate, expectedCode) {
 test('checkSpecialistRequest accepts the shape the lead sends and returns a copy', () => {
   const input = specialist();
   const out = checkSpecialistRequest(input, WRITER, { workspace: '/ws' });
-  assert.deepEqual(out, input);
+  assert.deepEqual(out, { ...input, mcpTools: [], executionTarget: null });
   assert.notEqual(out.allowedFiles, input.allowedFiles);
   const minimal = checkSpecialistRequest({ objective: 'x', allowedFiles: [] }, READER, { workspace: '/ws' });
   assert.deepEqual(minimal.inputs, []);
   assert.equal(checkSpecialistRequest(specialist({ role: 'engineer' }), WRITER, { workspace: '/ws' }).role, 'engineer');
+});
+
+test('checkSpecialistRequest preserves and validates shared execution routing', () => {
+  const shared = checkSpecialistRequest(specialist({ executionTarget: 'shared', review: null, repair: null }), WRITER, { workspace: '/ws' });
+  assert.equal(shared.executionTarget, 'shared');
+  assert.equal(checkSpecialistRequest(specialist(), WRITER, { workspace: '/ws' }).executionTarget, null);
+  for (const bad of ['lane', 'auto']) {
+    specialistCode(specialist({ executionTarget: bad }), WRITER, 'dispatch.request_input', 'request_invalid');
+  }
+  specialistCode(specialist({ executionTarget: 'shared', review: { kind: 'routine', checkpointId: 'cp', reason: 'Review', paths: ['src/a'], evidenceIds: [], prerequisiteFor: [] } }), WRITER, 'dispatch.request_input', 'request_invalid');
+  specialistCode(specialist({ role: 'orch-explorer', allowedFiles: [], executionTarget: 'shared' }), READER, 'dispatch.request_input', 'request_invalid');
 });
 
 test('checkSpecialistRequest accepts linked gated verifier and auditor contexts only', () => {
@@ -734,6 +746,38 @@ test('wave_scope_overlap checks writers of one group for overlapping allowedFile
   // A bare root scope never reaches the group check: the path rules refuse it first.
   assert.throws(() => validateDecision(dispatch([writer(['x.js']), writer(['.'])]), ctx()), (error) => error.violations[0].code === 'path_unsafe');
   overlap([writer(['lib']), writer(['src/z']), writer(['src/z/y.js'])]);
+});
+
+test('executionTarget defaults to null and shared is restricted to a single administrative writer', () => {
+  const ordinary = assignment({ role: 'orch-builder', allowedFiles: ['src/a.js'] });
+  validateDecision(dispatch([ordinary]), ctx());
+  assert.equal(ordinary.executionTarget, null);
+
+  const shared = assignment({ role: 'orch-builder', allowedFiles: ['src/a.js'], executionTarget: 'shared' });
+  validateDecision(dispatch([shared]), ctx());
+  assert.equal(shared.executionTarget, 'shared');
+
+  for (const executionTarget of ['auto', 'lane']) {
+    throws(dispatch([assignment({ role: 'orch-builder', allowedFiles: ['src/a.js'], executionTarget })]), ctx(), /executionTarget shared is allowed only/);
+  }
+  throws(dispatch([assignment({ role: 'orch-planner', allowedFiles: [], executionTarget: 'shared' })]), ctx(), /executionTarget shared is allowed only/);
+  const review = { kind: 'routine', checkpointId: 'cp-1', reason: 'Review it', paths: ['src/a.js'], evidenceIds: [] };
+  throws(dispatch([assignment({ role: 'orch-builder', allowedFiles: ['src/a.js'], executionTarget: 'shared', review })]), ctx(), /executionTarget shared is allowed only/);
+  throws(dispatch([assignment({
+    role: 'orch-builder', allowedFiles: ['src/a.js'], executionTarget: 'shared', repair: { checkpointIds: ['critical-1'] },
+  })]), ctx({ incompleteCriticalCheckpointIds: ['critical-1'] }), /executionTarget shared is allowed only/);
+  assert.deepEqual([...BOUNDARY_PREDICATES['assignment.execution_target']], ['execution_target_invalid', 'execution_target_conflict']);
+});
+
+test('a shared-target writer cannot share a concurrent writer group', () => {
+  const shared = assignment({ role: 'orch-builder', allowedFiles: ['src/a.js'], executionTarget: 'shared', wave: 1 });
+  const ordinary = assignment({ role: 'orch-builder', allowedFiles: ['src/b.js'], wave: 1 });
+  assert.throws(() => validateDecision(dispatch([shared, ordinary]), ctx()), (error) => {
+    assert.equal(error.violations[0].predicate, 'assignment.execution_target');
+    assert.equal(error.violations[0].code, 'execution_target_conflict');
+    assert.match(error.message, /cannot share an execution group with another writer/);
+    return true;
+  });
 });
 
 test('settle.lane_scope is a known predicate that acceptance does not aggregate', () => {

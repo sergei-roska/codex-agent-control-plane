@@ -215,6 +215,19 @@ describe('start', () => {
     assert.equal(manager.get(p.id).status, 'running');
   });
 
+  it('does not treat generic product text or stderr as a successful listen marker', async () => {
+    const manager = makeManager();
+    const p = await manager.add(mkdir('a'));
+    await manager.start(p.id);
+    spawned[0].child.stderr.emit('data', 'Codex Universal A2A startup failed before listening\n');
+    spawned[0].child.stdout.emit('data', 'Codex Universal A2A is initializing\n');
+    assert.equal(manager.get(p.id).status, 'starting');
+    spawned[0].child.stdout.emit('data', 'Codex Universal A2A listening at http:');
+    assert.equal(manager.get(p.id).status, 'starting');
+    spawned[0].child.stdout.emit('data', '//127.0.0.1:4000\n');
+    assert.equal(manager.get(p.id).status, 'running');
+  });
+
   it('reallocates a busy port and persists it', async () => {
     const manager = makeManager();
     const a = await manager.add(mkdir('a'));
@@ -240,6 +253,70 @@ describe('start', () => {
     await m2.init();
     await assert.rejects(m2.start(p.id), /spawn/);
     assert.equal(m2.get(p.id).status, 'stopped');
+    const restarted = makeManager();
+    await restarted.init();
+    assert.equal(restarted.status(p.id).startupDiagnostic.outcome, 'failed');
+    assert.equal(restarted.status(p.id).startupDiagnostic.stage, 'spawn');
+    assert.match(restarted.status(p.id).logs.join(''), /spawn/);
+  });
+
+  it('persists early token failures for status after manager reinitialization', async () => {
+    const manager = makeManager({ ensureToken: () => { throw new Error('token setup unavailable'); } });
+    const p = await manager.add(mkdir('a'));
+    await assert.rejects(manager.start(p.id), /token setup unavailable/);
+    assert.equal(manager.status(p.id).startupDiagnostic.stage, 'token');
+    const file = path.join(tmp, 'runtime', 'projects', p.id, 'last-startup.json');
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
+
+    const restarted = makeManager();
+    await restarted.init();
+    const recovered = restarted.status(p.id);
+    assert.equal(recovered.status, 'stopped');
+    assert.equal(recovered.startupDiagnostic.outcome, 'failed');
+    assert.equal(recovered.startupDiagnostic.stage, 'token');
+    assert.match(recovered.logs.join(''), /token setup unavailable/);
+  });
+
+  it('redacts credential values with quoted JSON keys and values', async () => {
+    const dummy = ['review', 'dummy', 'credential', '123456'].join('_');
+    const message = `{"OPENAI_API_KEY":"${dummy}"}\n{'refresh_token':'${dummy}'}`;
+    const manager = makeManager({ ensureToken: () => { throw new Error(message); } });
+    const p = await manager.add(mkdir('a'));
+    await assert.rejects(manager.start(p.id));
+
+    const file = path.join(tmp, 'runtime', 'projects', p.id, 'last-startup.json');
+    const body = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.match(body.message, /"OPENAI_API_KEY":"\[REDACTED\]"/);
+    assert.match(body.message, /'refresh_token':"\[REDACTED\]"/);
+    assert.doesNotMatch(body.message, new RegExp(dummy));
+  });
+
+  it('persists sanitized startup stderr without stdout and restores it after manager reinitialization', async () => {
+    const manager = makeManager();
+    const p = await manager.add(mkdir('a'));
+    await manager.start(p.id);
+    spawned[0].child.stdout.emit('data', 'private conversation text must not persist\n');
+    spawned[0].child.stderr.emit('data', 'Startup failed OPENAI_API_KEY = sk-super-secret-value\n');
+    const file = path.join(tmp, 'runtime', 'projects', p.id, 'last-startup.json');
+    const duringStartup = fs.readFileSync(file, 'utf8');
+    assert.match(duringStartup, /Startup failed/);
+    assert.doesNotMatch(duringStartup, /private conversation text|sk-super-secret-value/);
+    spawned[0].child.emit('close', 3);
+    assert.equal(manager.status(p.id).startupDiagnostic.outcome, 'failed');
+
+    const body = fs.readFileSync(file, 'utf8');
+    assert.match(body, /Startup failed/);
+    assert.match(body, /OPENAI_API_KEY = \[REDACTED\]/);
+    assert.doesNotMatch(body, /sk-super-secret-value|private conversation text/);
+
+    const restarted = makeManager();
+    await restarted.init();
+    const recovered = restarted.status(p.id);
+    assert.equal(recovered.startupDiagnostic.outcome, 'failed');
+    assert.equal(recovered.startupDiagnostic.stage, 'server_startup');
+    assert.match(recovered.logs.join(''), /Startup failed/);
+    assert.match(recovered.logs.join(''), /OPENAI_API_KEY = \[REDACTED\]/);
   });
 
   it('caps logs at logLimit and status returns the tail', async () => {
@@ -273,11 +350,27 @@ describe('exit handling', () => {
     oldChild.emit('close', 1);
     await manager.start(p.id);
     const newChild = spawned[1].child;
-    newChild.stdout.emit('data', 'listening at x');
+    newChild.stdout.emit('data', 'Codex Universal A2A listening at http://127.0.0.1:4000');
     oldChild.emit('close', 0);
     oldChild.emit('error', new Error('late'));
     assert.equal(manager.get(p.id).status, 'running');
     assert.equal(manager.get(p.id).pid, newChild.pid);
+  });
+
+  it('ignores a late old-child close while a newer startup is still pending', async () => {
+    const manager = makeManager();
+    const p = await manager.add(mkdir('a'));
+    await manager.start(p.id);
+    const oldChild = spawned[0].child;
+    oldChild.emit('close', 1);
+    await manager.start(p.id);
+    assert.equal(manager.get(p.id).status, 'starting');
+    const before = manager.status(p.id).startupDiagnostic;
+
+    oldChild.emit('close', 2);
+
+    assert.equal(manager.get(p.id).status, 'starting');
+    assert.deepEqual(manager.status(p.id).startupDiagnostic, before);
   });
 
   it('handles the spawn error event', async () => {
@@ -383,7 +476,7 @@ describe('init and refresh', () => {
     await manager.start(p.id);
     await manager.refresh();
     assert.equal(manager.get(p.id).status, 'starting');
-    spawned[0].child.stdout.emit('data', 'listening at x');
+    spawned[0].child.stdout.emit('data', 'Codex Universal A2A listening at http://127.0.0.1:4000');
     await manager.refresh();
     assert.equal(manager.get(p.id).status, 'running');
     probeOk = () => true;

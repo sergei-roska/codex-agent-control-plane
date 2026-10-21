@@ -30,7 +30,7 @@ const {
 const {
   makeObservation, observeLoopGuard, resetLoopGuard, reportEvidenceIdentity, warningText,
 } = require('./loop-guard');
-const { unreviewedIds, finalizeLedger } = require('./partial-ledger');
+const { MAX_LEDGER_ENTRIES, MAX_LEDGER_EVIDENCE, unreviewedIds, finalizeLedger } = require('./partial-ledger');
 
 const DEFAULT_RECONCILE_WAIT_MS = 30_000;
 const MAX_OUTCOME_TEXT_CHARS = 12_000;
@@ -648,11 +648,12 @@ const RULE_REMINDERS = {
   'decision.investigate_first': `Investigate first: dispatch a read-only explorer first; use auditor only for a concrete risk-boundary question. ${INVESTIGATION_RULE} ${OWNER_ONLY_RULE}`,
   'decision.acceptance_checks': `${CHECK_RULE} Use null to propose nothing.`,
   'decision.resolutions': 'Resolve every open worker decision in resolutions, or list it in humanInput.relatedDecisionIds when it is owner-only; a dispatch of only read-only roles may leave them open while you investigate them.',
-  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, mcpTools, wave, continueFrom, and review; role must be an available role id.',
+  'assignment.shape': 'Each assignment needs exactly role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, mcpTools, wave, executionTarget, continueFrom, review, and repair; role must be an available role id.',
   'assignment.review': 'Use review:null for unrelated read-only or non-material administrative/document work. Material implementation declares {kind, checkpointId, reason, paths, evidenceIds, prerequisiteFor}, using prerequisiteFor:[] by default. Verifier and auditor must cite the same checkpoint, scope, reason, evidence IDs, and prerequisiteFor. A new gated verifier may link the exact complete set of pending critical checkpoint IDs; its matching auditor repeats the list. Routine material work needs verifier evidence; critical work needs verifier then auditor evidence.',
   'decision.review_gate': 'A required review receipt is missing, failed, stale, or has unknown target identity. Dispatch the verifier first; for critical work dispatch the auditor after a passing verifier. A single new gated verifier may cross pending critical gates only when it links their exact complete ID set and has no co-dispatched writer; its auditor repeats that link. All original and new critical checkpoints still need current-target verifier and auditor receipts before finish. Repair may continue under the same checkpoint; unrelated writers wait for critical audit completion.',
   'assignment.continue_from': 'continueFrom is null or the assignmentId of a finished outcome of this run with the same role; each such id may be used by one assignment of a decision.',
   'assignment.wave': 'wave is an integer >= 1 or null; consecutive assignments with the same wave run concurrently, and writers in one wave need pairwise disjoint allowedFiles. Reviewers cannot share a wave with writers; run verifier before auditor in successive execution groups of the same decision when possible.',
+  'assignment.execution_target': 'executionTarget is required and must be null or shared. Use null for the normal isolated-lane default. shared is allowed only for a writable engineering administrative assignment with review:null and repair:null; it must run without another writer in its execution group.',
   'assignment.skills': 'Select at most 5 unique skill IDs from the trusted listed skill IDs; use [] when none apply.',
   'assignment.mcp_tools': 'Select the minimum useful MCP tool IDs for the exact task. Use [] by default and never exceed 5 unique IDs. Only select IDs listed in the trusted MCP catalog; live Drupal tools can return sensitive data, and drupal-db-ops includes settings.php execution.',
   'dispatch.mcp_tool_pins': 'The selected MCP tool catalog changed after planning. Re-read the current catalog and select tools again before dispatch.',
@@ -797,6 +798,11 @@ function buildLeadGraph(deps) {
       && (template.mcpToolPins === undefined || (Array.isArray(template.mcpToolPins) && template.mcpToolPins.length <= 5
         && template.mcpToolPins.every((pin) => pin && typeof pin.id === 'string' && typeof pin.sha256 === 'string'
           && /^[a-f0-9]{64}$/.test(pin.sha256))))
+      && (template.brief === undefined || (template.brief && typeof template.brief === 'object' && !Array.isArray(template.brief)
+        && typeof template.brief.objective === 'string' && template.brief.objective.length > 0 && template.brief.objective.length <= 3000
+        && ['inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'].every((field) => Array.isArray(template.brief[field])
+          && template.brief[field].length <= 20
+          && template.brief[field].every((value) => typeof value === 'string' && value.length > 0 && value.length <= 3000))))
       && typeof template.roleProfileSha256 === 'string' && /^[a-f0-9]{64}$/.test(template.roleProfileSha256);
     return Boolean(value && value.version === REVIEW_RECOVERY_VERSION && Array.isArray(value.checkpoints)
       && value.checkpoints.length <= MAX_REVIEW_RECOVERY_CHECKPOINTS
@@ -863,6 +869,14 @@ function buildLeadGraph(deps) {
         skillPins: (assignment.skillPins || []).map(({ id, sha256: hash }) => ({ id, sha256: hash })),
         mcpTools: [...(assignment.mcpTools || [])],
         mcpToolPins: (assignment.mcpToolPins || []).map(({ id, sha256: hash }) => ({ id, sha256: hash })),
+        brief: {
+          objective: assignment.objective,
+          inputs: [...assignment.inputs],
+          evidence: [...assignment.evidence],
+          acceptanceCriteria: [...assignment.acceptanceCriteria],
+          checks: [...assignment.checks],
+          stopConditions: [...assignment.stopConditions],
+        },
         roleProfileSha256: roleProfileSha256(profile),
       };
     }
@@ -924,15 +938,23 @@ function buildLeadGraph(deps) {
     } catch (_) {
       return null;
     }
-    return {
-      role: template.role,
+    const brief = template.brief || {
       objective: `Review the current workspace for checkpoint ${review.checkpointId}. The candidate changed after a prior review; use only the current target and stored checkpoint scope.`,
-      allowedFiles: [...template.allowedFiles],
       inputs: [`Checkpoint: ${review.checkpointId}`],
       evidence: [...review.evidenceIds],
       acceptanceCriteria: [`Complete the ${roleName} review for the exact stored checkpoint context.`],
       checks: roleName === 'verifier' ? ['Run the relevant checks within the stored verifier scope.'] : ['Evaluate the current target and report a verdict.'],
       stopConditions: ['Stop if the current target, stored checkpoint context, or allowed scope is unavailable.'],
+    };
+    return {
+      role: template.role,
+      objective: brief.objective,
+      allowedFiles: [...template.allowedFiles],
+      inputs: [...brief.inputs],
+      evidence: [...brief.evidence],
+      acceptanceCriteria: [...brief.acceptanceCriteria],
+      checks: [...brief.checks],
+      stopConditions: [...brief.stopConditions],
       skills: [...template.skills],
       skillPins: template.skillPins.map(({ id, sha256: hash }) => ({ id, sha256: hash })),
       mcpTools: [...mcpTools],
@@ -2609,14 +2631,14 @@ function buildLeadGraph(deps) {
     // The objective is kept for the run digest only; the bounded prompt stays as before.
     sections.push('Prior worker outcomes (including failures):\n' + JSON.stringify(outcomesForPrompt(state.outcomes)));
     sections.push([
-      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, continueFrom, review, and repair. Set repair:null for ordinary work. Use review:null for unrelated read-only work and non-material administrative or document-only changes. For material implementation set review to {kind,checkpointId,reason,paths,evidenceIds,prerequisiteFor}; use prerequisiteFor:[] by default. Use routine for ordinary material changes, risk_change for trust-boundary/security/authority/recovery/concurrency/migration/public-contract changes, performance for performance requirements, component_complete for an integrated independently usable component, investigation for diagnostic audit only, and owner_request for an explicit owner audit. Do not classify risk by filenames. Routine material changes need a verifier after integration; they do not trigger an auditor. Critical changes need a passing verifier first and then a bounded auditor before dependent writes or finish. Verifier and auditor must use the same kind, checkpointId, reason, paths, evidenceIds, and prerequisiteFor. A checkpoint review context is immutable: do not downgrade its kind or narrow its paths during repair or review; create a new checkpoint for a new scope. If other critical checkpoints are pending, one new gated verifier may include prerequisiteFor:[...] naming the exact complete set of currently incomplete critical checkpoint IDs (up to 20 unique IDs, each at most 160 characters); its matching auditor repeats the same list. This admits only that verifier scope: do not combine it with unrelated writers, do not dispatch multiple linked scopes, and wait to finish until every original and new checkpoint has its own current-target verifier and auditor receipt. If critical checkpoint gates block an authorized repair, one writable engineer, recovery-engineer, or senior-engineer may be dispatched alone with review:null and repair:{checkpointIds:[...]} naming the exact complete set of currently incomplete critical checkpoint IDs (up to 20 unique IDs, each at most 160 characters). Keep allowedFiles bounded. This repair scope only permits work on those checkpoint obligations; it does not permit unrelated writers, and it preserves each stored review context. Repair admission preserves prior receipt history and blocks its use while any listed checkpoint writer is pending or effects remain unsettled. After a repair, prior receipts are reusable only when the controller attests a known unchanged target, immutable review context, complete trusted effects with no scope violations, and unchanged captured target identity; otherwise obtain fresh current-target verifier and auditor evidence for every listed checkpoint before finish. Unknown targets block the write. The verifier and auditor may run in successive execution groups of one decision after verifier evidence is evaluated. An investigation never satisfies acceptance.',
+      'Every assignment must include role, objective, allowedFiles, inputs, evidence, acceptanceCriteria, checks, stopConditions, skills, wave, executionTarget, continueFrom, review, and repair. Set executionTarget:null normally for the isolated-lane default. Use executionTarget:"shared" only for a writable engineer, recovery-engineer, or senior-engineer performing an administrative operation that must update shared workspace Git metadata. Set review:null and repair:null, and place it in a group with no other writer. When the owner already authorized a specific local Git operation, assign executionTarget:"shared" and do not ask the owner to authorize it again; local authorization never includes push or deployment. Set repair:null for ordinary work. Use review:null for unrelated read-only work and non-material administrative or document-only changes. For material implementation set review to {kind,checkpointId,reason,paths,evidenceIds,prerequisiteFor}; use prerequisiteFor:[] by default. Use routine for ordinary material changes, risk_change for trust-boundary/security/authority/recovery/concurrency/migration/public-contract changes, performance for performance requirements, component_complete for an integrated independently usable component, investigation for diagnostic audit only, and owner_request for an explicit owner audit. Do not classify risk by filenames. Routine material changes need a verifier after integration; they do not trigger an auditor. Critical changes need a passing verifier first and then a bounded auditor before dependent writes or finish. Verifier and auditor must use the same kind, checkpointId, reason, paths, evidenceIds, and prerequisiteFor. A checkpoint review context is immutable: do not downgrade its kind or narrow its paths during repair or review; create a new checkpoint for a new scope. If other critical checkpoints are pending, one new gated verifier may include prerequisiteFor:[...] naming the exact complete set of currently incomplete critical checkpoint IDs (up to 20 unique IDs, each at most 160 characters); its matching auditor repeats the same list. This admits only that verifier scope: do not combine it with unrelated writers, do not dispatch multiple linked scopes, and wait to finish until every original and new checkpoint has its own current-target verifier and auditor receipt. If critical checkpoint gates block an authorized repair, one writable engineer, recovery-engineer, or senior-engineer may be dispatched alone with review:null and repair:{checkpointIds:[...]} naming the exact complete set of currently incomplete critical checkpoint IDs (up to 20 unique IDs, each at most 160 characters). Keep allowedFiles bounded. This repair scope only permits work on those checkpoint obligations; it does not permit unrelated writers, and it preserves each stored review context. Repair admission preserves prior receipt history and blocks its use while any listed checkpoint writer is pending or effects remain unsettled. After a repair, prior receipts are reusable only when the controller attests a known unchanged target, immutable review context, complete trusted effects with no scope violations, and unchanged captured target identity; otherwise obtain fresh current-target verifier and auditor evidence for every listed checkpoint before finish. Unknown targets block the write. The verifier and auditor may run in successive execution groups of one decision after verifier evidence is evaluated. An investigation never satisfies acceptance.',
       'Every assignment also needs mcpTools. Use [] by default and choose the minimum useful MCP tool IDs only when the task needs them. Never exceed five unique IDs. MCP server access is resolved from the role profile and narrowed to those exact tool names for this assignment.',
       `${ASSIGNMENT_SCOPE_RULE} ${PATH_RULE}`,
       'Record durable semantic lessons in records (max 20): {id,kind,status,summary,evidenceIds,relatedIds,adrPath}. Use stable IDs for problems/decisions, relate remedies and verification records to problem IDs, and keep proposed, accepted, implemented, and tested states distinct. Architecture records require a safe workspace-relative Markdown ADR path; all other records use adrPath:null. Use records:[] when there is nothing material to record. Do not claim a fix or verification that the evidence does not establish.',
       'Briefing rules: in each assignment inputs and evidence, give exact file paths with line ranges and the facts already established, so workers do not re-explore; reuse explorer findings by quoting the relevant paths and ranges. Do not read large files yourself: read at most a few narrow ranges and dispatch an explorer for broad reading.',
       deps.parallelWriters
-        ? 'Waves: assignment.wave is an integer >= 1 or null. Consecutive assignments sharing the same wave run concurrently. Writers in one wave each work in an isolated copy of the workspace made from the same starting state and do not see each other\'s changes; their changes are integrated into the shared workspace as each finishes. A later wave (or a null-wave assignment after them), for example a verifier, sees the integrated result. Writers in one wave must own disjoint allowedFiles. Use null for strictly sequential steps.'
-        : 'Waves: assignment.wave may be used to group read-only work that runs concurrently. Writers always run one at a time in array order regardless of wave. Use null otherwise.',
+        ? 'Waves: assignment.wave is an integer >= 1 or null. Consecutive assignments sharing the same wave run concurrently. By default, put independent writers in the same wave when each has disjoint allowedFiles and neither needs the other\'s output or an earlier state change. Each writer works in an isolated copy of the workspace made from the same starting state and does not see other writers\' changes; their changes are integrated into the shared workspace as each finishes. Use a later wave when work depends on an earlier wave, and keep reviewers after the writers they assess. Writers in one wave must own disjoint allowedFiles. Use null for strictly sequential steps.'
+        : 'Waves: assignment.wave may be used to group read-only work that runs concurrently. Parallel writers are unavailable for this run because safe isolated worktree execution is not enabled; writers use the shared workspace and always run one at a time in array order regardless of wave. Use null otherwise.',
       'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, records, and checkpoints. Use empty arrays, an empty string, or null for unused fields.',
       'Repair and debugging assignments should use directory prefixes that cover the module and its tests, not single files. When a worker reports scopeExpansion or asks for a scope decision, prefer re-dispatching with continueFrom set to that outcome\'s assignmentId (same role) and the expanded allowedFiles over a fresh assignment: the worker continues its own thread instead of re-discovering its context.',
       'Worker decision requests are open decisions: resolve each one yourself (resolutions: decisionId, choice, rationale), investigating first when the evidence does not settle it; list one in humanInput.relatedDecisionIds only when it is an owner-only decision. Never leave one unanswered. Worker reports are self-reported; check scopeViolations and reportError.',
@@ -2790,6 +2812,7 @@ function buildLeadGraph(deps) {
       ...(selectedLeadSkills.length ? { selectedSkills: selectedLeadSkills } : {}),
       outputSchema: DECISION_SCHEMA,
       signal,
+      executionPermissions: deps.executionPermissions || 'inherit',
       ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
     });
     try {
@@ -3613,6 +3636,42 @@ function buildLeadGraph(deps) {
     return { batch, ...(runtime.signal?.aborted ? canceledUpdate(runtime.signal) : {}) };
   }
 
+  function noProgressPartialLedger(state, pause) {
+    const obligations = state.reviewObligations || [];
+    const kept = obligations.slice(0, Math.max(0, MAX_LEDGER_ENTRIES - 1));
+    const ledger = [];
+    const ids = new Set();
+    for (const obligation of kept) {
+      const id = String(obligation.checkpointId || '').trim().slice(0, 160);
+      if (!id || ids.has(id)) continue;
+      ids.add(id);
+      const ownerBlock = (state.blockedCheckpoints || []).find((entry) => entry.checkpointId === id);
+      const pending = (obligation.pendingAssignmentIds || []).length > 0;
+      const gate = currentGateState(state, obligation);
+      const needsAuditor = isGatedReview(obligation.review);
+      const evidence = [gate.verifier?.assignmentId, gate.auditor?.assignmentId].filter(Boolean)
+        .slice(0, MAX_LEDGER_EVIDENCE).map((value) => String(value).slice(0, 300));
+      const accepted = !ownerBlock && !pending && Boolean(gate.verifier) && (!needsAuditor || Boolean(gate.auditor)) && evidence.length > 0;
+      const reason = ownerBlock?.reason || (pending
+        ? 'Review work remains pending or unsettled.'
+        : !gate.target?.known
+          ? 'The current review target is unknown.'
+          : !gate.verifier
+            ? 'No passing current-target verifier receipt is available.'
+            : needsAuditor && !gate.auditor
+              ? 'No passing current-target auditor receipt is available.'
+              : 'No current review receipt qualifies for this checkpoint.');
+      ledger.push({ id, status: accepted ? 'accepted' : 'blocked', reason: accepted ? '' : reason.slice(0, 1000), evidence });
+    }
+    const omitted = obligations.length - kept.length;
+    let aggregateId = 'unfinished-goal';
+    for (let suffix = 2; ids.has(aggregateId); suffix += 1) aggregateId = `unfinished-goal-${suffix}`;
+    const details = String(pause?.description || 'Repeated work completed without relevant progress.').slice(0, 600);
+    const reason = `${details} Goal not achieved.${omitted > 0 ? ` ${omitted} additional review obligation(s) are summarized here and are not asserted accepted.` : ''}`;
+    ledger.push({ id: aggregateId, status: 'blocked', reason: reason.slice(0, 1000), evidence: [] });
+    return ledger;
+  }
+
   async function verify(state, config) {
     const runtime = runtimeOf(config);
     const integrated = integrateFinishedGroup(state, state.batch);
@@ -3696,7 +3755,26 @@ function buildLeadGraph(deps) {
       loopGuard = observeLoopGuard(state.loopGuard, batch.round, observations);
     }
     const loopPause = loopGuard?.pause || null;
-    const loopReferences = (loopPause?.references || []).map((entry) => entry.attemptId || entry.assignmentId).filter(Boolean).join(', ');
+    const settledSnapshot = {
+      ...state,
+      outcomes: [...state.outcomes, ...summaries],
+      reviewObligations: integrated.reviewObligations,
+      unresolvedWriters,
+      batch: null,
+    };
+    const stopForNoProgress = Boolean(loopPause && batchSettled && unresolvedWriters.length === 0
+      && state.status !== 'canceled' && !limited && !state.budget
+      && !state.humanRequest && !ownerPauseRequested(config));
+    const partialLedger = stopForNoProgress ? noProgressPartialLedger(settledSnapshot, loopPause) : null;
+    const stopReferences = (loopPause?.references || []).slice(-10)
+      .map((entry) => String(entry?.attemptId || entry?.assignmentId || '').slice(0, 120))
+      .filter(Boolean);
+    const stopCheckpoint = String(loopPause?.checkpoint || '').slice(0, 300);
+    const stopRounds = (loopPause?.rounds || (loopPause?.references || []).map((entry) => entry?.round).filter(Number.isFinite))
+      .slice(-10).map((round) => String(round).slice(0, 20));
+    const stopText = stopForNoProgress
+      ? `Stopped after ${Math.min(999999, Number(loopPause.attempts) || 0)} repeated settled attempts (recent rounds ${stopRounds.join(', ') || 'unknown'}) for ${stopCheckpoint || 'the same scoped target'}: ${String(loopPause.description || 'the same scoped work repeated without relevant new evidence').slice(0, 600)}${stopReferences.length ? ` (attempt refs: ${stopReferences.join(', ')})` : ''}. Goal not achieved; see the partial checkpoint ledger.`
+      : null;
     if (loopGuard?.pause) {
       const { pause: _pause, ...persistedGuard } = loopGuard;
       loopGuard = persistedGuard;
@@ -3714,10 +3792,12 @@ function buildLeadGraph(deps) {
       reviewRecovery: recoveryPlan.recovery,
       ...(recoveryPlan.pendingAssignments ? { pendingAssignments: recoveryPlan.pendingAssignments } : {}),
       ...(loopGuard ? { loopGuard } : {}),
-      ...(loopPause ? {
-        ...(loopPause.recurrence
-          ? escalate(state, 'loop_detected', `Repeated ${loopPause.roleClass} work paused: checkpoint ${loopPause.checkpoint} was reviewed or investigated ${loopPause.attempts} times on the same target in rounds ${loopPause.rounds.join(', ')} with no implementation in between${loopReferences ? ` (attempts: ${loopReferences})` : ''}. Continue with a different approach, change the goal, or accept the current result as is.`, `The same ${loopPause.roleClass} of checkpoint ${loopPause.checkpoint} recurred ${loopPause.attempts} times with no implementation in between.`)
-          : escalate(state, 'loop_detected', `Repeated work paused after ${loopPause.attempts} completed rounds with unchanged evidence: ${loopPause.description}${loopReferences ? ` (attempts: ${loopReferences})` : ''}. Continue with a different approach, change the goal, or accept the current result as is.`, `The same scoped work repeated ${loopPause.attempts} times without relevant new evidence.`)),
+      ...(stopForNoProgress ? {
+        status: 'completed',
+        text: stopText,
+        pendingAssignments: null,
+        checkReview: null,
+        partial: { checkpoints: partialLedger, round: batch.round, reason: 'no_progress_loop' },
       } : {}),
       ...(limited ? { budget: { source: 'worker' } } : {}),
     };
@@ -4132,6 +4212,7 @@ function buildLeadGraph(deps) {
       unresolvedWriterCount,
       admission: deps.admission,
       runCheckImpl: deps.runCheckImpl,
+      executionPermissions: deps.executionPermissions || 'inherit',
       ...(deps.acceptanceScratch ? { acceptanceScratch: deps.acceptanceScratch } : {}),
       // Agent-proposed checks run only through the App Server sandbox.
       appServer,
@@ -4147,6 +4228,7 @@ function buildLeadGraph(deps) {
   // Deterministic acceptance of a finish decision. The lead's final text never changes the disposition.
   async function accept(state, config) {
     const runtime = runtimeOf(config);
+    const forcedNoProgressPartial = state.partial?.reason === 'no_progress_loop';
     throwIfAborted(runtime.signal);
     let acceptance;
     try {
@@ -4163,8 +4245,9 @@ function buildLeadGraph(deps) {
     const newlyPassing = state.acceptance ? (acceptance.checks || []).filter((check) => check?.result === 'passed' && !before.has(check.id)).map((check) => check.id) : [];
     if (newlyPassing.length > 0) runs.progress = addProgress(state, [{ round: state.round, kind: 'check_passed', detail: newlyPassing.join(', ') }]);
     // LL-6: a changed pinned check goes to an independent read-only review first; the run is not finished yet.
-    const review = startReview(state, acceptance);
+    const review = forcedNoProgressPartial ? null : startReview(state, acceptance);
     if (review) return { ...runs, ...review, status: null };
+    if (forcedNoProgressPartial) return { ...runs, status: 'completed' };
     if (acceptance.disposition === 'rejected' && state.acceptanceAttempts < 1) {
       return { ...runs, acceptanceAttempts: state.acceptanceAttempts + 1, status: null, text: '', partial: null };
     }
@@ -4247,6 +4330,7 @@ function buildLeadGraph(deps) {
     if (state.unresolvedWriters.length > 0) return 'reconcile';
     if (state.budget) return 'budget_pause';
     if (state.humanRequest) return 'human_input';
+    if (state.partial?.reason === 'no_progress_loop') return 'accept';
     if (state.checkReview) return 'review_check';
     if (state.pendingAssignments) return ownerPauseRequested(config) ? 'pause_before_dispatch' : 'dispatch';
     return 'decide';
@@ -4291,7 +4375,7 @@ function buildLeadGraph(deps) {
     .addEdge('dispatch', 'collect')
     .addConditionalEdges('collect', afterCollect, ['dispatch', 'verify', 'owner_pause'])
     .addConditionalEdges('owner_pause', afterOwnerPause, ['system_pause', 'dispatch', 'verify'])
-    .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'human_input', 'review_check', 'pause_before_dispatch', 'dispatch', 'decide'])
+    .addConditionalEdges('verify', afterVerify, ['finish', 'reconcile', 'budget_pause', 'human_input', 'review_check', 'accept', 'pause_before_dispatch', 'dispatch', 'decide'])
     .addConditionalEdges('reconcile', afterReconcile, ['budget_pause', 'dispatch', 'decide'])
     .addConditionalEdges('human_input', afterHumanInput, ['accept', 'decide', 'dispatch'])
     .addEdge('system_pause', 'decide')

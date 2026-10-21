@@ -364,7 +364,7 @@ function messageCorrelations(requestContext) {
 
 function makeExecutor({
   roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, activityStore = null, skillCatalog,
-  mcpCatalog, lanes = null, stagingLog,
+  mcpCatalog, lanes = null, stagingLog, executionPermissions = 'inherit',
 }) {
   const writable = role.sandbox !== 'read-only';
   const reservations = new Map();
@@ -859,6 +859,7 @@ function makeExecutor({
 
         // A lane only for a structured workspace-write request while the lane probe holds (R11).
         const useLane = writable && Boolean(lanes) && role.sandbox === 'workspace-write'
+          && structured?.executionTarget !== 'shared'
           && Array.isArray(structured?.allowedFiles) && structured.allowedFiles.length > 0 && await lanes.available();
         if (useLane) {
           let prepared;
@@ -1002,6 +1003,7 @@ function makeExecutor({
           return appServer.run({
             role: { id: roleId, ...role },
             cwd: lane ? lane.workspacePath : workspace,
+            permissionWorkspace: workspace,
             input: lane ? lanes.laneInput(lane, text)
               : auditRole && reviewContext?.kind === 'pinned_check'
                 ? `${text}\n\n${PINNED_CHECK_REPORT_GUIDANCE}`
@@ -1010,6 +1012,7 @@ function makeExecutor({
             ...(threadId ? { threadId } : {}),
             selectedSkills,
             selectedMcpTools,
+            executionPermissions,
             outputSchema: WORKER_REPORT_SCHEMA,
             signal: controller.signal,
             ...(reviewExecution ? { onTurnStart: (info) => admission.recordTurnStart(reviewExecution.executionId, info) }
@@ -1453,7 +1456,7 @@ function rejectOverlappingTask(executor) {
 /** Mount one independently stored A2A JSON-RPC agent per role. */
 function registerRoleAgents(app, {
   roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger, activityStore,
-  skillCatalog = loadSkillCatalog(), mcpCatalog = loadMcpCatalog(), lanes = null, stagingLog = new InMemoryStagingLog(),
+  skillCatalog = loadSkillCatalog(), mcpCatalog = loadMcpCatalog(), lanes = null, stagingLog = new InMemoryStagingLog(), executionPermissions = 'inherit',
 }) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
     throw new TypeError('app must be an Express application');
@@ -1477,7 +1480,7 @@ function registerRoleAgents(app, {
     const endpoint = new URL(route, `${origin.origin}/`).toString();
     const card = makeRoleCard({ roleId, role, endpoint });
     const executor = makeExecutor({
-      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, mcpCatalog, lanes, stagingLog,
+      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, mcpCatalog, lanes, stagingLog, executionPermissions,
     });
     const handler = new DefaultRequestHandler(
       card,

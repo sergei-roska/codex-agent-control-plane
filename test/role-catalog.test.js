@@ -46,6 +46,18 @@ test('resolved role instructions define A2A runtime behavior and an absolute loc
   }
 });
 
+test('implementation roles allow only explicitly authorized local Git actions and stop on denied operations', () => {
+  const roles = loadRoles();
+  for (const name of ['engineer', 'recovery-engineer', 'senior-engineer']) {
+    const instructions = roles.get(name).instructions;
+    assert.match(instructions, /lead's brief explicitly authorizes a specific local Git operation/i, name);
+    assert.match(instructions, /Only perform the operation if the active App Server policy permits it/i, name);
+    assert.match(instructions, /Treat an approval decline or explicit sandbox denial as definitive/i, name);
+    assert.match(instructions, /Do not repeat it, switch to a host command or another tool, or broaden permissions/i, name);
+    assert.match(instructions, /TEAMWORK_TEST_SCRATCH_ROOT/i, name);
+  }
+});
+
 test('profile model and effort values are unchanged by inlining the team rules', () => {
   for (const role of loadRoles().values()) {
     const toml = fs.readFileSync(path.join(PROFILES_DIR, 'agents', `${role.name}.toml`), 'utf8');

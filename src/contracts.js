@@ -11,7 +11,7 @@ const MAX_CHARS = 3_000;
 const TRUNCATION_SUFFIX = '... [truncated]';
 const WORKER_REPORT_CONTRACT = 'worker-report/v1';
 const ASSIGNMENT_FIELDS = ['role', 'objective', 'allowedFiles', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
-const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'mcpTools', 'wave', 'continueFrom', 'review', 'repair'];
+const DECISION_ASSIGNMENT_FIELDS = [...ASSIGNMENT_FIELDS, 'skills', 'mcpTools', 'wave', 'continueFrom', 'review', 'repair', 'executionTarget'];
 const DECISION_BASE_KEYS = ['action', 'assignments', 'final', 'resolutions', 'humanInput'];
 const DECISION_KEYS = [...DECISION_BASE_KEYS, 'goalAchieved', 'acceptanceChecks', 'records', 'checkpoints'];
 const ASSIGNMENT_ARRAY_FIELDS = ASSIGNMENT_FIELDS.filter((field) => field !== 'role' && field !== 'objective');
@@ -48,6 +48,7 @@ const BOUNDARY_PREDICATES = Object.freeze({
   'assignment.skills': Object.freeze(['skill_invalid']),
   'assignment.mcp_tools': Object.freeze(['mcp_tool_invalid']),
   'assignment.wave': Object.freeze(['wave_invalid', 'wave_scope_overlap']),
+  'assignment.execution_target': Object.freeze(['execution_target_invalid', 'execution_target_conflict']),
   'assignment.continue_from': Object.freeze(['continue_from_unknown', 'continue_from_role', 'continue_from_duplicate']),
   'assignment.review': Object.freeze(['review_context_invalid', 'review_context_missing', 'review_wave_conflict']),
   'dispatch.skill_pins': Object.freeze(['skill_pin_drift']),
@@ -166,6 +167,7 @@ const DECISION_SCHEMA = {
           skills: { type: 'array', items: { type: 'string' }, maxItems: 5 },
           mcpTools: { type: 'array', items: { type: 'string' }, maxItems: 5 },
           wave: { type: ['integer', 'null'], minimum: 1 },
+          executionTarget: { type: ['string', 'null'], enum: ['shared', null] },
           continueFrom: { type: ['string', 'null'] },
           review: {
             anyOf: [
@@ -550,9 +552,10 @@ function checkContinueFrom(assignment, role, decision, ctx) {
 function checkAssignment(assignment, decision, ctx) {
   if (!isPlainObject(assignment)) throw violation('assignment.shape', 'assignment_shape_invalid', 'Each assignment must be an object');
   const keys = Object.keys(assignment);
-  const shapeOk = ASSIGNMENT_FIELDS.every((field) => keys.includes(field)) && keys.every((field) => DECISION_ASSIGNMENT_FIELDS.includes(field));
+  const allowedFields = DECISION_ASSIGNMENT_FIELDS;
+  const shapeOk = ASSIGNMENT_FIELDS.every((field) => keys.includes(field)) && keys.every((field) => allowedFields.includes(field));
   if (!shapeOk) {
-    throw violation('assignment.shape', 'assignment_shape_invalid', 'Assignment must contain the ordinary fields and may include skills, mcpTools, wave, continueFrom, review, and repair');
+    throw violation('assignment.shape', 'assignment_shape_invalid', 'Assignment must contain the ordinary fields and may include skills, mcpTools, wave, continueFrom, review, repair, and executionTarget');
   }
   // Older checkpoints and callers predate assignment skill routing and waves.
   if (!keys.includes('skills')) assignment.skills = [];
@@ -561,6 +564,8 @@ function checkAssignment(assignment, decision, ctx) {
   if (!keys.includes('continueFrom')) assignment.continueFrom = null;
   if (!keys.includes('review')) assignment.review = null;
   if (!keys.includes('repair')) assignment.repair = null;
+  // Older checkpoints and callers predate shared execution routing.
+  if (!keys.includes('executionTarget')) assignment.executionTarget = null;
   if (assignment.wave !== null && !(Number.isInteger(assignment.wave) && assignment.wave >= 1)) {
     throw violation('assignment.wave', 'wave_invalid', `Assignment wave must be an integer >= 1 or null, got ${JSON.stringify(assignment.wave)}`);
   }
@@ -596,6 +601,15 @@ function checkAssignment(assignment, decision, ctx) {
     auditor: canonicalRole === 'auditor',
     writable: role.sandbox !== 'read-only' && canonicalRole !== 'verifier',
   });
+  if (assignment.executionTarget !== null) {
+    const administrativeRoles = new Set(['engineer', 'recovery-engineer', 'senior-engineer']);
+    if (assignment.executionTarget !== 'shared'
+      || role.sandbox === 'read-only' || !administrativeRoles.has(canonicalRole)
+      || assignment.review !== null || assignment.repair !== null) {
+      throw violation('assignment.execution_target', 'execution_target_invalid',
+        'executionTarget shared is allowed only for a writable engineering administrative assignment with review null and repair null');
+    }
+  }
   if (assignment.review?.prerequisiteFor.length > 0
     && (!['verifier', 'auditor'].includes(canonicalRole) || !REVIEW_GATED_KINDS.includes(assignment.review.kind))) {
     throw violation('assignment.review', 'review_context_invalid', 'review.prerequisiteFor is allowed only on a gated verifier scope and its matching auditor');
@@ -678,7 +692,7 @@ function checkAssignment(assignment, decision, ctx) {
 const SPECIALIST_REQUIRED_KEYS = ['objective', 'allowedFiles'];
 const SPECIALIST_OPTIONAL_KEYS = [
   'role', 'inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions',
-  'skills', 'mcpTools', 'wave', 'skillPins', 'mcpToolPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance', 'continuation', 'review', 'repair',
+  'skills', 'mcpTools', 'wave', 'executionTarget', 'skillPins', 'mcpToolPins', 'assignmentId', 'workspace', 'reportContract', 'requireAcceptance', 'continuation', 'review', 'repair',
 ];
 const SPECIALIST_ARRAY_KEYS = ['inputs', 'evidence', 'acceptanceCriteria', 'checks', 'stopConditions'];
 
@@ -752,6 +766,15 @@ function checkSpecialistRequest(request, role, { workspace } = {}) {
       required: reviewRequired,
       auditor: canonicalRole === 'auditor',
     });
+  }
+  out.executionTarget = request.executionTarget === undefined ? null : request.executionTarget;
+  if (out.executionTarget !== null) {
+    const administrativeRoles = new Set(['engineer', 'recovery-engineer', 'senior-engineer']);
+    if (out.executionTarget !== 'shared' || readOnly || !administrativeRoles.has(canonicalRole)
+      || (out.review ?? null) !== null || (out.repair ?? null) !== null) {
+      throw violation('dispatch.request_input', 'request_invalid',
+        'executionTarget shared is allowed only for a writable engineering administrative request with review null and repair null');
+    }
   }
   if (out.review?.prerequisiteFor.length > 0
     && (!['verifier', 'auditor'].includes(canonicalRole) || !REVIEW_GATED_KINDS.includes(out.review.kind))) {
@@ -905,6 +928,11 @@ function checkWaveScopes(assignments, ctx) {
   groups.forEach((members, groupIndex) => members.forEach((index) => groupOf.set(index, groupIndex)));
   for (const group of groups) {
     const writers = group.filter((index) => getRole(ctx.roles, assignments[index].role)?.sandbox !== 'read-only');
+    const sharedTargetWriter = writers.find((index) => assignments[index].executionTarget === 'shared');
+    if (sharedTargetWriter !== undefined && writers.length > 1) {
+      throw violation('assignment.execution_target', 'execution_target_conflict',
+        `Shared-target writer assignment #${sharedTargetWriter} cannot share an execution group with another writer`);
+    }
     const reviewers = group.filter((index) => ['auditor', 'verifier'].includes(canonicalRoleId(assignments[index].role)));
     for (const reviewerIndex of reviewers) {
       const concurrentWriter = writers.find((index) => index !== reviewerIndex);

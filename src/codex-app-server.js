@@ -8,6 +8,7 @@ const { classifyCodexError } = require('./contracts');
 const { DEFAULT_SKILLS_ROOT } = require('./skill-catalog');
 const { loadMcpCatalog, resolveMcpToolSelection, mcpToolPins } = require('./mcp-catalog');
 const { withConnectors, resolveConnectorToolSelection, resolveManagedToolSelection } = require('./connector-catalog');
+const { READ_ONLY_PROFILE, WORKSPACE_PROFILE, resolveExecutionPermissions } = require('./execution-permissions');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_TURN_TIMEOUT_MS = 3_600_000;
@@ -186,6 +187,7 @@ class CodexAppServer {
     this.exitError = null;
     this.loadedThreads = new Set();
     this.threadMcpPolicies = new Map();
+    this.threadExecutionPolicies = new Map();
     this.generation = 0;
     this.failedGeneration = 0;
     this.backgroundTerminalCleanupFailure = null;
@@ -196,6 +198,7 @@ class CodexAppServer {
     this.currentChildState = null;
     this.hookInventories = new Map();
     this.mcpInventories = new Map();
+    this.configReads = new Map();
     this.clock = { ...DEFAULT_CLOCK, ...clock };
     this.policy = { maxRestarts, windowMs, backoffMs: [...backoffMs], exitWaitMs, cooldownMs };
     this.supState = 'stopped';
@@ -409,9 +412,11 @@ class CodexAppServer {
     this.closed = false;
     this.exitError = null;
     this.loadedThreads = new Set();
+    this.threadExecutionPolicies = new Map();
     this.threadTotals = new Map();
     this.hookInventories = new Map();
     this.mcpInventories = new Map();
+    this.configReads = new Map();
     const identity = typeof child.pid === 'number' ? this.readProcessIdentityImpl(child.pid) : null;
     const state = {
       child,
@@ -627,9 +632,25 @@ class CodexAppServer {
   }
 
   // Names of MCP servers configured for a cwd, read without a model call or a thread.
-  async listMcpServerNames(cwd) {
+  async readConfig(cwd) {
     await this.start();
-    const result = await this._request('config/read', { cwd, includeLayers: false }, { timeoutMs: Math.min(this.requestTimeoutMs, MCP_ENUMERATION_TIMEOUT_MS) });
+    const key = cwd || '';
+    if (!this.configReads.has(key)) {
+      const pending = this._request('config/read', { cwd, includeLayers: false }, { timeoutMs: Math.min(this.requestTimeoutMs, MCP_ENUMERATION_TIMEOUT_MS) });
+      this.configReads.set(key, pending);
+      pending.catch(() => { if (this.configReads.get(key) === pending) this.configReads.delete(key); });
+    }
+    return this.configReads.get(key);
+  }
+
+  async resolveExecutionPermissions(cwd, requested = 'inherit') {
+    if (requested === 'strict') return resolveExecutionPermissions(this, cwd, requested);
+    await this.start();
+    return resolveExecutionPermissions(this, cwd, requested);
+  }
+
+  async listMcpServerNames(cwd) {
+    const result = await this.readConfig(cwd);
     const servers = result?.config?.mcp_servers;
     if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
       throw new CodexAppServerError('config/read returned no mcp_servers table');
@@ -774,7 +795,7 @@ class CodexAppServer {
     }
   }
 
-  async run({ role, cwd, input, onEvent, signal, threadId: existingThreadId, outputSchema, onTurnStart, selectedSkills = [], selectedMcpTools = [], sandboxPolicy: sandboxPolicyOverride = null } = {}) {
+  async run({ role, cwd, permissionWorkspace = cwd, input, onEvent, signal, threadId: existingThreadId, outputSchema, onTurnStart, selectedSkills = [], selectedMcpTools = [], sandboxPolicy: sandboxPolicyOverride = null, executionPermissions = 'strict' } = {}) {
     if (!role || !role.name) throw new TypeError('role.name is required');
     if (!cwd) throw new TypeError('cwd is required');
     if (typeof input !== 'string' || !input.trim()) throw new TypeError('input must be a non-empty string');
@@ -783,6 +804,31 @@ class CodexAppServer {
     const validatedMcpTools = resolveManagedToolSelection(this.mcpCatalog,
       selectedMcpTools.map((item) => item?.id),
       { allowedServers: role.tools?.mcpServers || [], pins: mcpToolPins(selectedMcpTools) });
+    const permissionMode = await this.resolveExecutionPermissions(permissionWorkspace, executionPermissions);
+    const readOnly = role.sandbox === 'read-only';
+    const usePermissionProfile = permissionMode.mode === 'inherit' && permissionMode.profileApi === true;
+    const inheritedProfile = permissionMode.mode === 'inherit'
+      ? (readOnly ? READ_ONLY_PROFILE : permissionMode.writerProfile)
+      : null;
+    const enforcedProfile = readOnly ? READ_ONLY_PROFILE : WORKSPACE_PROFILE;
+    const selectedProfile = inheritedProfile || enforcedProfile;
+    const applyNativeApprovals = permissionMode.mode === 'inherit';
+    const nativeLegacy = applyNativeApprovals && !usePermissionProfile;
+    const threadPermissions = usePermissionProfile
+      ? { permissions: selectedProfile }
+      : nativeLegacy
+        ? { sandbox: readOnly ? 'read-only' : permissionMode.sandboxMode }
+        : { sandbox: normalizeSandbox(role.sandbox) };
+    const turnPermissions = usePermissionProfile
+      ? { permissions: selectedProfile }
+      : nativeLegacy && readOnly
+        ? { sandboxPolicy: { type: 'readOnly', networkAccess: false } }
+        : nativeLegacy
+          ? { sandboxPolicy: nativeSandboxPolicy(permissionWorkspace, permissionMode.sandboxMode, permissionMode.sandboxWorkspaceWrite) }
+          : { sandboxPolicy: sandboxPolicyOverride || sandboxPolicy(role.sandbox) };
+    const approvalSettings = applyNativeApprovals
+      ? { approvalPolicy: permissionMode.approvalPolicy, approvalsReviewer: permissionMode.approvalsReviewer }
+      : { approvalPolicy: 'on-request', approvalsReviewer: APPROVALS_REVIEWER };
 
     const ctx = {
       processIdentity: null,
@@ -801,10 +847,22 @@ class CodexAppServer {
       permissionEvents: [],
       pendingHooks: new Map(),
       permissionConfig: {
-        sandbox: normalizeSandbox(role.sandbox),
-        sandboxPolicy: sandboxPolicy(role.sandbox).type,
-        approvalPolicy: 'on-request',
-        approvalsReviewer: APPROVALS_REVIEWER,
+        ...(permissionMode.mode === 'inherit' ? {
+          mode: 'inherit',
+          reason: permissionMode.reason,
+          inherited: true,
+          ...(nativeLegacy ? { nativeSandbox: permissionMode.sandboxMode } : {}),
+        } : {
+          sandbox: normalizeSandbox(role.sandbox),
+          sandboxPolicy: sandboxPolicy(role.sandbox).type,
+          approvalPolicy: 'on-request',
+          approvalsReviewer: APPROVALS_REVIEWER,
+        }),
+        ...(usePermissionProfile ? { profile: selectedProfile } : {}),
+        ...(permissionMode.mode === 'inherit' ? {
+          approvalPolicy: permissionMode.approvalPolicy ?? null,
+          approvalsReviewer: permissionMode.approvalsReviewer ?? null,
+        } : {}),
         cwd,
       },
     };
@@ -812,7 +870,7 @@ class CodexAppServer {
       ctx.permissionConfig.selectedSkills = validatedSkills.map(({ id, sha256 }) => ({ id, sha256 }));
     }
     try {
-      const result = await this._run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills: validatedSkills, selectedMcpTools: validatedMcpTools, sandboxPolicyOverride });
+      const result = await this._run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills: validatedSkills, selectedMcpTools: validatedMcpTools, permissionMode, threadPermissions, turnPermissions, approvalSettings });
       return { ...result, execution: executionOf(ctx), usage: this._usageOf(ctx), ...permissionOf(ctx) };
     } catch (error) {
       // Concurrent runs can share one error instance (child failure); give each its own copy.
@@ -829,7 +887,7 @@ class CodexAppServer {
     }
   }
 
-  async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills, selectedMcpTools, sandboxPolicyOverride }) {
+  async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills, selectedMcpTools, permissionMode, threadPermissions, turnPermissions, approvalSettings }) {
     await this.start();
     ctx.generation = this.generation;
     this._assertTurnAdmission(ctx);
@@ -843,6 +901,7 @@ class CodexAppServer {
     }
 
     const developerInstructions = [role.instructions || `You are the ${role.name} agent.`, SKILL_BOUNDARY, READING_DISCIPLINE].join('\n\n');
+    const executionPolicyDigest = JSON.stringify({ threadPermissions, turnPermissions, approvalSettings });
     const mcpPolicyDigest = JSON.stringify(mcpToolPins(selectedMcpTools));
     if (existingThreadId) {
       const priorPolicy = this.threadMcpPolicies.get(existingThreadId);
@@ -866,14 +925,14 @@ class CodexAppServer {
         model: role.model || null,
         cwd,
         developerInstructions,
-        sandbox: normalizeSandbox(role.sandbox),
-        approvalPolicy: 'on-request',
-        approvalsReviewer: APPROVALS_REVIEWER,
+        ...threadPermissions,
+        ...approvalSettings,
         config: toolConfig,
       }, { signal });
       if (threadResult?.thread?.id) {
         this.loadedThreads.add(threadResult.thread.id);
         this.threadMcpPolicies.set(threadResult.thread.id, mcpPolicyDigest);
+        this.threadExecutionPolicies.set(threadResult.thread.id, executionPolicyDigest);
         // A brand-new thread has consumed nothing yet.
         if (!this.threadTotals.has(threadResult.thread.id)) this.threadTotals.set(threadResult.thread.id, ZERO_TOTAL);
       }
@@ -885,17 +944,32 @@ class CodexAppServer {
       const resumed = await this._request('thread/resume', {
         threadId: existingThreadId,
         cwd,
-        approvalPolicy: 'on-request',
-        approvalsReviewer: APPROVALS_REVIEWER,
-        sandbox: normalizeSandbox(role.sandbox),
+        ...threadPermissions,
+        ...approvalSettings,
         model: role.model || null,
         developerInstructions,
         config: toolConfig,
       }, { signal });
       this.loadedThreads.add(existingThreadId);
       this.threadMcpPolicies.set(existingThreadId, mcpPolicyDigest);
+      this.threadExecutionPolicies.set(existingThreadId, executionPolicyDigest);
       ctx.model = resumed?.model || ctx.model;
       ctx.effort = ctx.effort || resumed?.reasoningEffort || null;
+    } else {
+      const priorExecutionPolicy = this.threadExecutionPolicies.get(existingThreadId);
+      if (priorExecutionPolicy !== executionPolicyDigest) {
+        if (permissionMode.mode === 'inherit' && permissionMode.profileApi === true) {
+          await this._request('thread/settings/update', { threadId: existingThreadId, sandboxPolicy: null }, { signal });
+        } else {
+          await this._request('thread/settings/update', { threadId: existingThreadId, permissions: null }, { signal });
+        }
+        await this._request('thread/settings/update', {
+          threadId: existingThreadId,
+          ...turnPermissions,
+          ...approvalSettings,
+        }, { signal });
+        this.threadExecutionPolicies.set(existingThreadId, executionPolicyDigest);
+      }
     }
 
     const threadId = existingThreadId || threadResult?.thread?.id;
@@ -933,9 +1007,8 @@ class CodexAppServer {
         ...(role.model ? { model: role.model } : {}),
         ...(role.effort ? { effort: role.effort } : {}),
         cwd,
-        sandboxPolicy: sandboxPolicyOverride || sandboxPolicy(role.sandbox),
-        approvalPolicy: 'on-request',
-        approvalsReviewer: APPROVALS_REVIEWER,
+        ...turnPermissions,
+        ...approvalSettings,
         ...(outputSchema ? { outputSchema } : {}),
       }, { onSending: (generation) => {
         ctx.turnStartSent = true;
@@ -1107,6 +1180,7 @@ class CodexAppServer {
     if (this.closed) return;
     this.closed = true;
     this.loadedThreads.clear();
+    this.threadExecutionPolicies.clear();
     this.reader?.close();
     this.sleepCancel?.();
     this.supState = 'stopped';
@@ -1134,14 +1208,16 @@ class CodexAppServer {
   }
 
   // Runs one standalone command in the server sandbox (no thread, no turn); buffered result.
-  async execCommand({ command, cwd, sandboxPolicy: policy, env = null, timeoutMs = 30000 } = {}) {
+  async execCommand({ command, cwd, sandboxPolicy: policy, permissionProfile = null, env = null, timeoutMs = 30000 } = {}) {
     if (!Array.isArray(command) || !command.length) throw new TypeError('command must be a non-empty array');
+    if (policy && permissionProfile) throw new TypeError('sandboxPolicy and permissionProfile cannot be combined');
     await this.start();
     return this._request('command/exec', {
       command,
       ...(cwd ? { cwd } : {}),
       ...(env ? { env } : {}),
       ...(policy ? { sandboxPolicy: policy } : {}),
+      ...(permissionProfile ? { permissionProfile } : {}),
       timeoutMs,
     }, { timeoutMs: timeoutMs + 5000 });
   }
@@ -1500,6 +1576,7 @@ class CodexAppServer {
     this._charge(error.failureClass);
     this.exitError = error;
     this.loadedThreads.clear();
+    this.threadExecutionPolicies.clear();
     for (const [id, pending] of this.pending) {
       if (pending.generation !== generation) continue;
       const run = pending.threadId ? this.runs.get(pending.threadId) : null;
@@ -1672,6 +1749,20 @@ function sandboxPolicy(sandbox) {
   if (normalized === 'read-only') return { type: 'readOnly' };
   if (normalized === 'danger-full-access') return { type: 'dangerFullAccess' };
   return { type: 'workspaceWrite' };
+}
+
+function nativeSandboxPolicy(workspace, mode, settings = null) {
+  if (mode === 'read-only') return { type: 'readOnly', networkAccess: false };
+  if (mode === 'danger-full-access') return { type: 'dangerFullAccess' };
+  const writableRoots = [workspace, ...(Array.isArray(settings?.writable_roots) ? settings.writable_roots : [])]
+    .filter((root, index, roots) => typeof root === 'string' && path.isAbsolute(root) && roots.indexOf(root) === index);
+  return {
+    type: 'workspaceWrite',
+    writableRoots,
+    networkAccess: settings?.network_access === true,
+    excludeTmpdirEnvVar: settings?.exclude_tmpdir_env_var === true,
+    excludeSlashTmp: settings?.exclude_slash_tmp === true,
+  };
 }
 
 function laneSandboxPolicy({ workspacePath, networkAccess = false } = {}) {

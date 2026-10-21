@@ -25,6 +25,8 @@ function harness() {
       getCodexHome() { return home; },
       async run(args) { this.calls.push('run'); if (args?.hold) await gate.promise; return { home }; },
       async execCommand(args) { if (args?.hold) await gate.promise; return { home }; },
+      async resolveExecutionPermissions(...args) { this.calls.push(['resolveExecutionPermissions', ...args]); return { home, args }; },
+      async readConfig(cwd) { this.calls.push(['readConfig', cwd]); return { home, cwd }; },
       async close() { this.closed = true; },
     };
     created.push(inst);
@@ -43,6 +45,8 @@ test('forwards the App Server surface to the current instance', async () => {
   assert.equal(wrapper.getCodexHome(), null);
   assert.deepEqual(await wrapper.run({}), { home: null });
   assert.deepEqual(await wrapper.execCommand({}), { home: null });
+  assert.deepEqual(await wrapper.resolveExecutionPermissions('/workspace', 'inherit'), { home: null, args: ['/workspace', 'inherit'] });
+  assert.deepEqual(await wrapper.readConfig('/workspace'), { home: null, cwd: '/workspace' });
   assert.equal(created.length, 1);
 });
 

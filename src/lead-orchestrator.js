@@ -186,6 +186,7 @@ class LeadOrchestrator {
     runCheckImpl,
     snapshot,
     acceptanceScratch = null,
+    executionPermissions = 'inherit',
     skillCatalog = loadSkillCatalog(),
     mcpCatalog = loadMcpCatalog(),
     aut03TrialRunIds = new Set(),
@@ -247,6 +248,7 @@ class LeadOrchestrator {
       snapshot,
       // Owner-side setting (project-settings.json); never read from the lead's output.
       acceptanceScratch,
+      executionPermissions,
       skillCatalog,
       mcpCatalog,
       aut03TrialRunIds,

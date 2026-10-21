@@ -590,6 +590,111 @@ test('agent checks run only through execCommand with the read-only-workspace pol
   assert.equal(check.stdoutEvidence.kind, 'check_stdout');
 });
 
+test('agent checks use native execution only after inherit is resolved and retain pin and snapshot gates', async () => {
+  const dir = pinWorkspace();
+  const contract = validateAgentChecks([{ id: 'py', argv: ['python', 'tools/validate.py'], timeoutMs: 1234 }], { workspace: dir });
+  const resolutions = [];
+  const exec = {
+    calls: [],
+    async resolveExecutionPermissions(workspace, requested) {
+      resolutions.push({ workspace, requested });
+      return { mode: 'inherit', profileApi: true, writerProfile: ':workspace' };
+    },
+    async execCommand(args) {
+      this.calls.push(args);
+      return { exitCode: 0, stdout: 'all good', stderr: '' };
+    },
+  };
+  const snapshots = [
+    { kind: 'git', head: 'h', entries: [], fingerprint: 'before' },
+    { kind: 'git', head: 'h', entries: [], fingerprint: 'after' },
+    { kind: 'git', head: 'h', entries: [], fingerprint: 'same' },
+    { kind: 'git', head: 'h', entries: [], fingerprint: 'same' },
+  ];
+  const snapshot = () => snapshots.shift();
+
+  assert.equal(contract.source, 'agent');
+  const changedCandidate = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 1, contract, appServer: exec, snapshot, runCheckImpl: noHostRun,
+  });
+  assert.deepEqual(resolutions, [{ workspace: dir, requested: 'inherit' }]);
+  assert.deepEqual(exec.calls, [{ command: ['python', 'tools/validate.py'], cwd: dir, timeoutMs: 1234 }]);
+  assert.equal(changedCandidate.checks[0].result, 'passed');
+  assert.deepEqual(codes(changedCandidate), ['candidate_changed']);
+  assert.equal(changedCandidate.disposition, 'rejected');
+
+  fs.writeFileSync(path.join(dir, 'tools', 'validate.py'), 'print(2)\n');
+  const changedPin = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 2, contract, appServer: exec, snapshot, runCheckImpl: noHostRun,
+  });
+  assert.equal(contract.source, 'agent');
+  assert.equal(changedPin.disposition, 'unverifiable');
+  assert.deepEqual(codes(changedPin), ['check_changed']);
+  assert.equal(exec.calls.length, 1);
+  assert.equal(resolutions.length, 2);
+});
+
+test('agent checks retain strict sandbox policy when native inheritance is not resolved', async () => {
+  const dir = repo();
+  const calls = [];
+  let resolutions = 0;
+  const appServer = {
+    async resolveExecutionPermissions(workspace, requested) {
+      resolutions += 1;
+      assert.equal(workspace, dir);
+      assert.equal(requested, 'inherit');
+      return { mode: 'strict', profileApi: false, reason: 'native_policy_unavailable' };
+    },
+    async execCommand(args) { calls.push(args); return { exitCode: 0, stdout: '', stderr: '' }; },
+  };
+  const result = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 1, contract: agentContract({ id: 'unit', argv: ['npm', 'test'] }),
+    appServer, runCheckImpl: noHostRun,
+  });
+
+  assert.equal(result.disposition, 'accepted');
+  assert.equal(resolutions, 1);
+  assert.deepEqual(calls, [{
+    command: ['npm', 'test'], cwd: dir, sandboxPolicy: EXACT_POLICY, timeoutMs: 600000,
+  }]);
+});
+
+test('explicit strict acceptance keeps the exact scratch-only no-network policy', async (t) => {
+  const dir = repo();
+  const baseDir = fs.mkdtempSync(path.join(process.cwd(), '.test-accept-scratch-base-'));
+  t.after(() => fs.rmSync(baseDir, { recursive: true, force: true }));
+  let resolutions = 0;
+  const exec = {
+    calls: [],
+    async resolveExecutionPermissions() { resolutions += 1; throw new Error('strict must not resolve native policy'); },
+    async execCommand(args) { this.calls.push(args); return { exitCode: 0, stdout: '', stderr: '' }; },
+  };
+  const result = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 1, contract: agentContract({ id: 'unit', argv: ['npm', 'test'] }),
+    appServer: exec, runCheckImpl: noHostRun, executionPermissions: 'strict',
+    acceptanceScratch: { env: ['TEST_SCRATCH_ROOT'], baseDir },
+  });
+
+  assert.equal(resolutions, 0);
+  assert.equal(result.disposition, 'accepted');
+  assert.equal(result.scratch.cleaned, true);
+  assert.equal(exec.calls.length, 1);
+  const [call] = exec.calls;
+  assert.deepEqual(Object.keys(call).sort(), ['command', 'cwd', 'env', 'sandboxPolicy', 'timeoutMs']);
+  assert.deepEqual(call.command, ['npm', 'test']);
+  assert.equal(call.cwd, dir);
+  assert.equal(call.sandboxPolicy.type, 'workspaceWrite');
+  assert.equal(call.sandboxPolicy.networkAccess, false);
+  assert.equal(call.sandboxPolicy.excludeTmpdirEnvVar, true);
+  assert.equal(call.sandboxPolicy.excludeSlashTmp, true);
+  assert.equal(call.sandboxPolicy.writableRoots.length, 1);
+  assert.equal(call.sandboxPolicy.writableRoots[0].startsWith(baseDir + path.sep), true);
+  assert.deepEqual(Object.keys(call.env).sort(), ['TEST_SCRATCH_ROOT', 'TMPDIR']);
+  assert.equal(call.env.TEST_SCRATCH_ROOT, path.join(call.sandboxPolicy.writableRoots[0], 'scratch'));
+  assert.equal(call.env.TMPDIR, path.join(call.sandboxPolicy.writableRoots[0], 'tmp'));
+  assert.equal(fs.existsSync(call.sandboxPolicy.writableRoots[0]), false);
+});
+
 test('a failing agent check is rejected with check_failed and its output', async () => {
   const dir = repo();
   const exec = fakeExec({ exitCode: 2, stdout: '', stderr: '3 failed' });
@@ -709,7 +814,7 @@ test('a modified or deleted pinned script gives check_changed and the check is n
   assert.equal(exec.calls.length, 0);
   assert.equal(modified.disposition, 'unverifiable');
   assert.deepEqual(codes(modified), ['check_changed']);
-  assert.match(modified.issues[0].detail, /tools\/validate\.py.*owner's decision/);
+  assert.match(modified.issues[0].detail, /tools\/validate\.py.*independent integrity review before it can run/);
   assert.equal(modified.issues[0].result, 'UNKNOWN');
   fs.rmSync(path.join(dir, 'tools', 'validate.py'));
   const deleted = await runAcceptance({ workspace: dir, runId: 'r', attempt: 2, contract, appServer: exec, runCheckImpl: noHostRun });

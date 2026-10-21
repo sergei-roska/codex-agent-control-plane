@@ -512,6 +512,74 @@ function writerMessage(text, ids = {}) {
 
 const okResult = (text = 'done') => ({ threadId: 't', turnId: 'u', status: 'completed', text });
 
+test('shared execution target uses admitted workspace while the default target uses an available lane', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-shared-target-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const laneWorkspace = path.join(workspace, 'lane-workspace');
+  const roleMap = new Map([
+    ['engineer', { name: 'engineer', description: 'Implements scoped work.', instructions: 'Implement.', model: 'test', effort: 'low', sandbox: 'workspace-write' }],
+  ]);
+  const lane = { id: 'lane-1', path: path.join(workspace, 'lane-1'), workspacePath: laneWorkspace, base: 'base' };
+  const laneStore = new Map([[lane.id, lane]]);
+  const writerExecution = {
+    executionId: null, state: null, reason: null, effects: 'none',
+    lane: { id: lane.id, state: 'integrated', reason: null },
+    delta: { known: true, headChanged: false, changedPaths: [], changedPathCount: 0, source: 'lane_collection' },
+  };
+  const laneCalls = { available: 0, prepare: 0, complete: 0 };
+  const lanes = {
+    store: laneStore,
+    async available() { laneCalls.available += 1; return true; },
+    async prepare() { laneCalls.prepare += 1; return { lane }; },
+    laneInput(_lane, input) { return input; },
+    sandboxPolicy() { return { type: 'workspaceWrite', writableRoots: [laneWorkspace], networkAccess: false }; },
+    markRunning() {},
+    recordTurnStart() {},
+    async complete() {
+      laneCalls.complete += 1;
+      laneStore.delete(lane.id);
+      return { canceled: false, writerExecution };
+    },
+  };
+  const admission = makeAdmission({});
+  const acquire = admission.acquire.bind(admission);
+  let admissions = 0;
+  admission.acquire = async (details) => { admissions += 1; return acquire(details); };
+  const calls = [];
+  const service = makeService({
+    async run(options) {
+      calls.push(options);
+      return okResult(JSON.stringify(validReport()));
+    },
+  }, { roles: roleMap, workspace, lanes, admission });
+
+  const sharedInput = JSON.stringify({ objective: 'Edit shared workspace.', allowedFiles: ['src'], executionTarget: 'shared' });
+  const shared = taskResult(await service.agents.get('engineer').handler.sendMessage(
+    sendParams(message(sharedInput)), service.context,
+  ));
+  assert.equal(shared.status.state, 3, JSON.stringify(shared.status.message?.metadata));
+  assert.equal(admissions, 1);
+  assert.deepEqual(laneCalls, { available: 0, prepare: 0, complete: 0 });
+  assert.equal(calls[0].cwd, workspace);
+  assert.equal(calls[0].permissionWorkspace, workspace);
+  assert.equal(calls[0].executionPermissions, 'inherit');
+  assert.equal(admission.holder(), null);
+
+  const ordinaryInput = JSON.stringify({ objective: 'Use the default isolated target.', allowedFiles: ['src'] });
+  const ordinary = taskResult(await service.agents.get('engineer').handler.sendMessage(
+    sendParams(message(ordinaryInput)), service.context,
+  ));
+  assert.equal(ordinary.status.state, 3);
+  assert.equal(admissions, 1);
+  assert.deepEqual(laneCalls, { available: 1, prepare: 1, complete: 1 });
+  assert.equal(calls[1].cwd, laneWorkspace);
+  assert.equal(calls[1].permissionWorkspace, workspace);
+  assert.equal(calls[1].executionPermissions, 'inherit');
+});
+
 test('a second writer on another role waits for the first; a read-only role runs concurrently', async () => {
   const gate = deferred();
   const started = [];

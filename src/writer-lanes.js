@@ -192,7 +192,7 @@ async function probeVersion({ appServer, db, workspace, lanesRoot, links, networ
  * Startup mode selection (design "Mode selection"). Never creates a lane unless the App Server
  * can run the probe and the workspace is the top of a git work tree without submodules.
  */
-async function selectWriterIsolation({ env = process.env, appServer, workspace, db, stateFile, home, runProbe }) {
+async function selectWriterIsolation({ env = process.env, appServer, workspace, db, stateFile, home, runProbe, executionPermissions = 'inherit' }) {
   const lanesRoot = resolveLanesRoot({ workspace, stateFile, home });
   const links = laneLinks(env.CODEX_A2A_LANE_LINKS);
   const shared = (reason, extra = {}) => ({ mode: 'shared', reason, lanesRoot, links, networkAccess: false, probe: null, ...extra });
@@ -203,6 +203,18 @@ async function selectWriterIsolation({ env = process.env, appServer, workspace, 
   const repo = inspectRepo(workspace);
   if (!repo.ok) return shared(repo.reason);
   if (repo.prefix !== '') return shared('not_work_tree_top');
+  if (typeof appServer?.resolveExecutionPermissions === 'function') {
+    let native = null;
+    try { native = await appServer.resolveExecutionPermissions(workspace, executionPermissions); } catch (_) { /* strict fallback */ }
+    if (native?.mode === 'inherit') {
+      const fullAccess = native.writerProfile === ':danger-full-access' || native.sandboxMode === 'danger-full-access';
+      if (!fullAccess) return shared('native_permissions_use_shared_workspace', { inherited: true, profile: native.writerProfile || null });
+      return {
+        mode: 'cooperative', reason: 'trusted_native_full_access_cooperative', lanesRoot, links,
+        networkAccess: true, inherited: true, profile: native.writerProfile || null, probe: null,
+      };
+    }
+  }
   const networkAccess = await readNetworkAccess(appServer, workspace);
   const probe = await probeVersion({ appServer, db, workspace, lanesRoot, links, networkAccess, runProbe });
   if (!probe.ok) return shared(`probe_failed: ${probe.reason}`, { networkAccess, probe });
@@ -270,6 +282,8 @@ class LaneManager {
   status() {
     return {
       mode: this.mode, reason: this.reason, lanesRoot: this.lanesRoot, links: [...this.links], networkAccess: this.networkAccess,
+      confinement: this.mode === 'worktree' ? 'probe-confirmed' : this.mode === 'cooperative' ? 'none' : null,
+      inherited: this.mode === 'cooperative',
       probe: this.probe ? { version: this.probe.version, ok: this.probe.ok, reason: this.probe.reason ?? null } : null,
     };
   }
@@ -277,6 +291,7 @@ class LaneManager {
   // Worktree mode and a passing probe for the running App Server version; a new version is
   // probed once (serialized), and a failure sends attempts to shared mode.
   async available() {
+    if (this.mode === 'cooperative') return true;
     if (this.mode !== 'worktree') return false;
     const version = versionKey(this.appServer?.getVersion?.());
     if (this.probe?.version === version) return this.probe.ok === true;
@@ -345,10 +360,14 @@ class LaneManager {
   }
 
   laneInput(lane, input) {
-    return `You work in an isolated copy of the workspace, and it is already your current working directory (${lane.workspacePath}). Run commands without a workdir argument and use relative paths; never type this directory path yourself. Edit files only here. The server integrates your changes into the shared workspace after your turn.\n${input}`;
+    const boundary = this.mode === 'cooperative'
+      ? `You work in a separate Git worktree as a coordination aid, and it is already your current working directory (${lane.workspacePath}). Run commands without a workdir argument and use relative paths. This worktree is not a security boundary: the configured native permissions may let commands reach the shared workspace. Follow the assigned file scope. The server integrates content changes after your turn; Git commits made in this worktree do not update the shared project branch.`
+      : `You work in an isolated copy of the workspace, and it is already your current working directory (${lane.workspacePath}). Run commands without a workdir argument and use relative paths; never type this directory path yourself. Edit files only here. The server integrates your changes into the shared workspace after your turn.`;
+    return `${boundary}\n${input}`;
   }
 
   sandboxPolicy(lane) {
+    if (this.mode === 'cooperative') return null;
     return laneSandboxPolicy({ workspacePath: lane.workspacePath, networkAccess: this.networkAccess });
   }
 

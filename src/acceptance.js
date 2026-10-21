@@ -425,7 +425,7 @@ function runCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
  * pass); a check that outlives its timeoutMs is a timed-out failure, as with runCheck.
  */
 async function runSandboxedCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
-  appServer, cwd, signal, onCapture, graceMs = EXEC_GRACE_MS, scratch = null,
+  appServer, cwd, signal, onCapture, graceMs = EXEC_GRACE_MS, scratch = null, executionMode = 'strict', permissionProfile = null,
 } = {}) {
   const started = Date.now();
   const stdout = new StreamCapture();
@@ -464,7 +464,13 @@ async function runSandboxedCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
       signal.addEventListener('abort', onAbort, { once: true });
     }
     Promise.resolve()
-      .then(() => appServer.execCommand(scratch
+      .then(() => appServer.execCommand(executionMode === 'inherit'
+        ? {
+          command: [...argv], cwd, ...(scratch ? { env: { ...scratch.env } } : {}), timeoutMs,
+        }
+        : permissionProfile
+          ? { command: [...argv], cwd, permissionProfile, ...(scratch ? { env: { ...scratch.env } } : {}), timeoutMs }
+          : scratch
         // Owner opt-in (src/acceptance-scratch.js): the run's scratch directory is the only writable root.
         ? {
           command: [...argv], cwd, sandboxPolicy: { ...scratch.policy, writableRoots: [...scratch.policy.writableRoots] }, env: { ...scratch.env }, timeoutMs,
@@ -647,11 +653,16 @@ async function runAcceptance({
   workspace, runId, attempt, contract, writers = [], unresolvedWriterCount = 0, admission, signal,
   snapshot = takeSnapshot, runCheckImpl = runCheck, evidenceStore = null, appServer = null, weakened = [],
   acceptanceScratch = null, scratchForbiddenRoots,
+  executionPermissions = 'inherit',
 }) {
   const validated = validateAcceptanceContract(contract);
   const { requiredChecks } = validated;
   // Agent-proposed checks never run on the host: only through the App Server sandbox.
   const sandboxed = validated.source === AGENT_SOURCE;
+  let checkPolicy = { mode: 'strict', profileApi: false };
+  if (sandboxed && executionPermissions === 'inherit' && typeof appServer?.resolveExecutionPermissions === 'function') {
+    try { checkPolicy = await appServer.resolveExecutionPermissions(workspace, executionPermissions); } catch (_) { /* strict fallback */ }
+  }
   let held = null;
   if (admission) {
     const id = `${runId}:accept:${attempt}`;
@@ -708,10 +719,14 @@ async function runAcceptance({
         : changed.length > 0
         ? {
           id: check.id, argv: check.argv, result: 'error', error: 'check_changed', exitCode: null, sandboxed: true,
-          detail: `Pinned acceptance check "${check.id}" was not run: ${changed.join(', ')} changed since it was pinned. Changing a pinned acceptance check needs the owner's decision.`,
+          detail: `Pinned acceptance check "${check.id}" was not run: ${changed.join(', ')} changed since it was pinned. The changed check needs an independent integrity review before it can run.`,
         }
         : sandboxed
-        ? await runSandboxedCheck(check, { appServer, cwd: workspace, signal, onCapture, scratch })
+        ? await runSandboxedCheck(check, {
+          appServer, cwd: workspace, signal, onCapture, scratch,
+          executionMode: checkPolicy.mode,
+          permissionProfile: checkPolicy.mode === 'strict' && checkPolicy.profileApi ? ':workspace' : null,
+        })
         : await runCheckImpl(check, { cwd: workspace, onSpawn, signal, onCapture });
       if (captured && result && typeof result === 'object') {
         const out = evidenceStore ? storeCheckStream(evidenceStore, runId, `${runId}:acceptance:${attempt}`, check, result, 'stdout', captured.stdout) : { ref: null, error: null };

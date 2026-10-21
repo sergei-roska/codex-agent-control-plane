@@ -321,6 +321,44 @@ test('a stored failed probe is not reused: the next process re-probes and a pass
   assert.equal(createLaneProbeStore(db).get('v1').ok, true);
 });
 
+test('trusted native full access selects cooperative lanes without claiming confinement', async (t) => {
+  const repo = makeRepo();
+  const lanesRoot = tmp('cooperative-lanes-');
+  const stateDir = tmp('cooperative-state-');
+  const db = new Database(':memory:');
+  const admission = new WriterAdmission({ db, workspace: repo, settleMs: 20 });
+  let probes = 0;
+  const appServer = {
+    getVersion: () => 'v-native',
+    async resolveExecutionPermissions(workspace, requested) {
+      assert.equal(workspace, repo);
+      assert.equal(requested, 'inherit');
+      return { mode: 'inherit', writerProfile: ':danger-full-access' };
+    },
+    async execCommand() { throw new Error('cooperative mode must not run the confinement probe'); },
+  };
+  t.after(() => {
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(lanesRoot, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+  const isolation = await selectWriterIsolation({
+    env: {}, appServer, workspace: repo, db, stateFile: path.join(stateDir, 'state.sqlite'), lanesRoot,
+    runProbe: async () => { probes += 1; throw new Error('unexpected probe'); },
+  });
+  assert.deepEqual([isolation.mode, isolation.inherited, isolation.profile, isolation.probe], [
+    'cooperative', true, ':danger-full-access', null,
+  ]);
+  assert.equal(probes, 0);
+  const manager = new LaneManager({ db, workspace: repo, admission, appServer, ...isolation });
+  assert.equal(await manager.available(), true);
+  assert.deepEqual(manager.status().confinement, 'none');
+  assert.deepEqual(manager.sandboxPolicy({ workspacePath: path.join(lanesRoot, 'lane') }), null);
+  const input = manager.laneInput({ workspacePath: path.join(lanesRoot, 'lane') }, 'task');
+  assert.match(input, /not a security boundary/);
+  assert.match(input, /Git commits made in this worktree do not update the shared project branch/);
+});
+
 test('after a failed re-probe a version is not probed again within the process', async (t) => {
   let probes = 0;
   let version = 'v2';

@@ -1,5 +1,23 @@
 # Orchestrator improvement backlog
 
+## Critical Harness incidents, 2026-10-20
+
+Owner requests diagnosis first, durable findings, and implementation. These
+incidents concern the current Harness runtime, separately from historical
+Orchestrator milestone gates below. Confirmed causes and repairs are saved;
+implementation and independent review are complete. HAR-01 still needs a
+matched live overlap measurement; HAR-04's original lost-log incident remains
+unproven, while current isolated native startup succeeds.
+Detailed findings and qualification are recorded in
+[harness-critical-incidents-2026-10-20.md](harness-critical-incidents-2026-10-20.md).
+
+| ID | Priority | Problem and initial evidence | Acceptance |
+| --- | --- | --- | --- |
+| HAR-01 | P0 | `contracts.js:executionGroups` serializes null waves; saved runs mostly contain singleton/null-wave assignments despite a passing lane probe. Lead planning guidance now groups independent disjoint writers into waves. | Scheduler and prompt regressions pass; conflicting writes and unstable review targets remain ordered. Measure actual model-generated overlap in a future matched trial. |
+| HAR-02 | P0 | Work does not converge after final checks. Confirmed causes: recovery loses execution guidance; unrelated writes reset every recurrence counter; a settled no-progress detector requests owner continuation. | Preserve bounded recovery briefs and relevant history; terminate settled repetition with an honest partial result and one final acceptance run, without another owner continuation. |
+| HAR-03 | P0 | Hard-coded App Server and final-check policies narrow native owner access; role Git bans conflict with authorized Git work, and lane commits do not update shared branches. Native policy inheritance and explicit admitted shared Git routing are implemented. | Native socket acceptance and disposable local commit pass; inspection remains read-only, strict fallback is retained, and no host fallback or fabricated acceptance is added. |
+| HAR-04 | P0 | Launcher loses startup stderr after restart and treats generic branding in error output as readiness. Bounded sanitized diagnostics and exact listener readiness are implemented. The original crash log is unavailable. | 32 launcher tests and isolated native HTTP startup pass. Future failures retain actionable evidence; the original incident's precise cause remains unknown. |
+
 Status: M1 done; M2 owner scope done; the Phase C conditional-decision rollout
 is complete and its independent audit is accepted. All nine Phase C epic
 decisions have a go/defer outcome; no runtime implementation was selected for

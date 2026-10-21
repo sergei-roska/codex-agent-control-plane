@@ -378,7 +378,7 @@ test('the same checkpoint, role class, and target pauses on the third round even
   assert.deepEqual(state.pause.references.map((entry) => entry.attemptId), ['attempt-1', 'attempt-2', 'attempt-3']);
 });
 
-test('an implementation round in between resets the recurrence count', () => {
+test('an unrelated implementation preserves recurrence history across a serialized restart', () => {
   let state = null;
   state = observeLoopGuard(state, 1, [reviewObservation({ round: 1 })]);
   state = observeLoopGuard(state, 2, [reviewObservation({ round: 2 })]);
@@ -390,11 +390,30 @@ test('an implementation round in between resets the recurrence count', () => {
   assert.equal(writer.recurrence, null);
   state = observeLoopGuard(state, 3, [writer]);
   assert.equal(state.pause, undefined);
+  assert.equal(state.recurrence[0].count, 2);
+  state = JSON.parse(JSON.stringify(state));
   state = observeLoopGuard(state, 4, [reviewObservation({ round: 4 })]);
-  state = observeLoopGuard(state, 5, [reviewObservation({ round: 5 })]);
+  assert.equal(state.pause.recurrence, true);
+  assert.equal(state.pause.attempts, 3);
+  assert.deepEqual(state.pause.rounds, [1, 2, 4]);
+});
+
+test('a changed target starts its own recurrence count and keeps prior target history', () => {
+  const originalTargetKey = reviewObservation({ round: 1 }).recurrence.key;
+  const changedTargetKey = reviewObservation({ round: 3, target: 'tree-B' }).recurrence.key;
+  let state = null;
+  state = observeLoopGuard(state, 1, [reviewObservation({ round: 1 })]);
+  state = observeLoopGuard(state, 2, [reviewObservation({ round: 2 })]);
+  state = observeLoopGuard(state, 3, [reviewObservation({ round: 3, target: 'tree-B' })]);
   assert.equal(state.pause, undefined);
-  state = observeLoopGuard(state, 6, [reviewObservation({ round: 6 })]);
-  assert.equal(state.pause.rounds.join(','), '4,5,6');
+  assert.equal(state.recurrence.find((entry) => entry.key === changedTargetKey).count, 1);
+  state = observeLoopGuard(state, 4, [reviewObservation({ round: 4, target: 'tree-B' })]);
+  assert.equal(state.pause, undefined);
+  state = observeLoopGuard(state, 5, [reviewObservation({ round: 5, target: 'tree-B' })]);
+  assert.equal(state.pause.recurrence, true);
+  assert.equal(state.pause.attempts, 3);
+  assert.deepEqual(state.pause.rounds, [3, 4, 5]);
+  assert.equal(state.recurrence.find((entry) => entry.key === originalTargetKey).count, 2);
 });
 
 test('a writable dispatch that changed nothing does not reset the recurrence count', () => {
