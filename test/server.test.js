@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { AgentCard, TaskState } = require('@a2a-js/sdk');
-const { startServer, describePause, makeLeadExecutor, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts } = require('../src/server');
+const { startServer, describePause, persistTransientRecoveryStatus, makeLeadExecutor, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts } = require('../src/server');
 const { makeLeadCard } = require('../src/server');
 const fs = require('node:fs');
 const { ResumeInputError } = require('../src/lead-orchestrator');
@@ -11,6 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { ServerCallContext } = require('@a2a-js/sdk/server');
 const { openStateDatabase, createTaskStore } = require('../src/durable-store');
+const { createTransientRecoveryStore, createTransientRecovery } = require('../src/transient-recovery');
 const { WriterAdmission } = require('../src/writer-admission');
 const { validateAcceptanceContract } = require('../src/acceptance');
 const { createRuntimeIdentity } = require('../src/runtime-identity');
@@ -31,6 +32,41 @@ test('startup requires a ChatGPT OAuth account and closes the app server on reje
     },
   }), /requires an authenticated ChatGPT account/);
   assert.equal(closed, true);
+});
+
+test('server close stays within its declared bound with a stalled recovery preflight', async (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const { createTransientRecovery } = require('../src/transient-recovery');
+  const { SHUTDOWN_TOTAL_MS } = require('../src/server');
+  let recovery;
+  let releaseGate;
+  let dispatches = 0;
+  const runtime = await startServer({
+    listen: false,
+    stateFile: ':memory:',
+    tokenFile: path.join(dir, 'token'),
+    workspace: dir,
+    appServer: CHATGPT_APP_SERVER(),
+    transientRecoveryFactory(options) {
+      recovery = createTransientRecovery({
+        ...options,
+        canResume: () => new Promise((resolve, reject) => { releaseGate = reject; }),
+        resumeRun: async () => { dispatches += 1; return true; },
+      });
+      return recovery;
+    },
+  });
+  recovery.failure('stalled-preflight', { category: 'capacity', cause: 'capacity', checkpointId: 'cp-stalled' });
+  const pending = recovery.attempt('stalled-preflight');
+  while (!releaseGate) await Promise.resolve();
+  const startedAt = Date.now();
+  await runtime.close();
+  assert.ok(Date.now() - startedAt < SHUTDOWN_TOTAL_MS + 1000);
+  assert.equal(runtime.state.db.open, false);
+  releaseGate(new Error('late shutdown rejection'));
+  assert.equal(await pending, false);
+  assert.equal(dispatches, 0);
 });
 
 test('lead executor publishes working, artifact and completed task events', async () => {
@@ -121,6 +157,43 @@ test('specialist RPC mounts require bearer auth while their cards remain public'
   assert.equal(mounts[1][1] === authMiddleware, false);
   assert.equal(mounts[2][1], authMiddleware);
   assert.equal(mounts[3][1] === authMiddleware, false);
+});
+
+test('disabled automatic resume rejects a stale dispatched transient message', async () => {
+  const db = new (require('better-sqlite3'))(':memory:');
+  const store = createTransientRecoveryStore(db);
+  const recovery = createTransientRecovery({ store, canResume: async () => true, resumeRun: async () => true });
+  recovery.failure('disabled-auto', { category: 'capacity', cause: 'capacity', checkpointId: 'checkpoint-auto' });
+  recovery.markRunning('disabled-auto');
+  assert.equal(recovery.acceptAutomatic('disabled-auto', { attempt: 1, checkpointId: 'checkpoint-auto' }), true);
+  assert.equal(recovery.acceptAutomatic('disabled-auto', { attempt: 2, checkpointId: 'checkpoint-auto' }), false);
+  assert.equal(recovery.acceptAutomatic('disabled-auto', { attempt: 1, checkpointId: 'stale-checkpoint' }), false);
+  let resumes = 0;
+  const executor = makeLeadExecutor({
+    transientRecovery: recovery,
+    autoResume: false,
+    orchestrator: {
+      async getPause() { return null; },
+      async resume() { resumes += 1; return { status: 'completed', text: 'done', rounds: 1, assignments: [] }; },
+    },
+  });
+  const task = {
+    id: 'disabled-auto', contextId: 'ctx',
+    status: { state: TaskState.TASK_STATE_INPUT_REQUIRED },
+    history: [], metadata: { pause: { kind: 'restart' } },
+  };
+  try {
+    await executor.execute({
+      taskId: task.id, contextId: task.contextId, task,
+      userMessage: { parts: [{ text: 'Continue' }], metadata: { autoResume: {
+        reason: 'transient_recovery', attempt: 1, checkpointId: 'checkpoint-auto',
+      } } },
+    }, { publish() {} });
+    assert.equal(resumes, 0);
+  } finally {
+    recovery.stop();
+    db.close();
+  }
 });
 
 test('lead executor reports cancellation as failed until downstream cancellation is confirmed', async () => {
@@ -344,6 +417,65 @@ function userMessage(text, extra = {}) {
 function statusText(task) {
   return task.status?.message?.parts?.map((part) => part.content?.value).join('\n') || '';
 }
+
+test('transient recovery delivery updates durable pause text only while the task is still paused', async (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const state = await openStateDatabase({ filePath: path.join(dir, 'state.sqlite') });
+  t.after(() => state.close());
+  const taskStore = createTaskStore(state, 'orchestrator');
+  const recoveryStore = createTransientRecoveryStore(state.db);
+  const taskId = 'recovery-status';
+  const call = new ServerCallContext({ tenant: '' });
+  const originalPause = {
+    kind: 'transient_recovery', category: 'capacity', message: 'Selected model is at capacity',
+    attempts: 1, checkpointId: 'checkpoint-1', nextAttemptAt: Date.now() + 5000,
+    automatic: true,
+  };
+  await taskStore.save({
+    id: taskId,
+    contextId: 'context-1',
+    status: { state: TaskState.TASK_STATE_INPUT_REQUIRED, timestamp: new Date().toISOString(), message: {
+      taskId, contextId: 'context-1', role: 2, parts: [{ content: { $case: 'text', value: 'The server will retry this checkpoint automatically.' } }],
+    } },
+    artifacts: [], history: [], metadata: { pause: originalPause },
+  }, call);
+  recoveryStore.put({
+    runId: taskId, attempts: 1, nextAttemptAt: Date.now() + 5000, category: 'capacity',
+    cause: 'capacity', checkpointId: 'checkpoint-1', state: 'waiting', updatedAt: Date.now(),
+  });
+  const first = recoveryStore.get(taskId);
+  const rearmed = { ...first, attempts: 2, next_attempt_at: Date.now() + 9000, updated_at: first.updated_at + 1 };
+  recoveryStore.put(rearmed);
+  assert.equal(persistTransientRecoveryStatus({
+    db: state.db, recoveryStore, taskId, record: rearmed, now: () => 10_000,
+  }), true);
+  const updated = await taskStore.load(taskId, call);
+  assert.equal(updated.metadata.pause.attempts, 2);
+  assert.equal(updated.metadata.pause.nextAttemptAt, rearmed.next_attempt_at);
+  assert.match(statusText(updated), /Automatic recovery attempt: 2/);
+  assert.match(statusText(updated), /The server will retry this checkpoint automatically\./);
+
+  const exhausted = { ...rearmed, attempts: 5, next_attempt_at: null, state: 'exhausted', updated_at: rearmed.updated_at + 1 };
+  recoveryStore.put(exhausted);
+  assert.equal(persistTransientRecoveryStatus({
+    db: state.db, recoveryStore, taskId, record: exhausted, now: () => 11_000,
+  }), true);
+  const exhaustedTask = await taskStore.load(taskId, call);
+  assert.equal(exhaustedTask.metadata.pause.recoveryExhausted, true);
+  assert.equal(exhaustedTask.metadata.pause.nextAttemptAt, null);
+  assert.match(statusText(exhaustedTask), /Automatic recovery exhausted after 5 attempts\./);
+
+  await taskStore.save({ ...exhaustedTask, status: { ...exhaustedTask.status, state: TaskState.TASK_STATE_WORKING } }, call);
+  const newer = { ...exhausted, attempts: 6, updated_at: exhausted.updated_at + 1 };
+  recoveryStore.put(newer);
+  assert.equal(persistTransientRecoveryStatus({
+    db: state.db, recoveryStore, taskId, record: newer, now: () => 12_000,
+  }), false);
+  const working = await taskStore.load(taskId, call);
+  assert.equal(working.status.state, TaskState.TASK_STATE_WORKING);
+  assert.equal(working.metadata.pause.attempts, 5);
+});
 
 async function startLeadServer(orchestrator, dir, extra = {}) {
   return startServer({
@@ -682,6 +814,66 @@ test('a resumable run error becomes an error pause and a follow-up retries; othe
   await unconfirmed.cancelTask('t-abort', { publish() {}, finished() {} });
   await running;
   assert.equal(lastStatus(canceled).status.state, TaskState.TASK_STATE_FAILED);
+});
+
+test('a transient model capacity failure records a safe checkpoint retry and manual resume clears it', async () => {
+  const { createTransientRecoveryStore, createTransientRecovery } = require('../src/transient-recovery');
+  const Database = require('better-sqlite3');
+  const db = new Database(':memory:');
+  const store = createTransientRecoveryStore(db);
+  let now = 1_800_000_000_000;
+  const timers = new Map();
+  const recovery = createTransientRecovery({
+    store,
+    clock: {
+      now: () => now,
+      setTimeout(fn, ms) { const handle = { fn, at: now + ms, unref() {} }; timers.set(handle, handle); return handle; },
+      clearTimeout(handle) { timers.delete(handle); },
+    },
+    random: () => 0,
+    baseDelayMs: 100,
+    canResume: async () => true,
+    resumeRun: async () => true,
+  });
+  let runCalls = 0;
+  const orchestrator = {
+    async run() {
+      runCalls += 1;
+      throw Object.assign(new Error('Selected model is at capacity. Please try a different model.'), { failureClass: 'domain_failure' });
+    },
+    async isResumable() { return true; },
+    async getRecoveryCheckpoint() { return { checkpointId: 'cp-safe', next: ['decide'], unresolvedWriters: 0 }; },
+    async resume(args) {
+      assert.equal(args.runId, 'transient-run');
+      assert.equal('model' in args, false);
+      return { status: 'completed', text: 'Recovered', rounds: 1, assignments: [] };
+    },
+  };
+  const executor = makeLeadExecutor({ orchestrator, transientRecovery: recovery, autoResume: true });
+  const seen = [];
+  const task = { id: 'transient-run', contextId: 'ctx', status: { state: TaskState.TASK_STATE_SUBMITTED }, history: [], metadata: {} };
+  await executor.execute({ taskId: task.id, contextId: task.contextId, task, userMessage: userMessage('Build it') }, { publish: (event) => seen.push(event) });
+  const pauseEvent = seen.findLast((event) => event.data?.status?.state === TaskState.TASK_STATE_INPUT_REQUIRED);
+  assert.equal(pauseEvent.data.metadata.pause.kind, 'transient_recovery');
+  assert.equal(pauseEvent.data.metadata.pause.category, 'capacity');
+  assert.equal(pauseEvent.data.metadata.pause.checkpointId, 'cp-safe');
+  assert.equal(pauseEvent.data.metadata.pause.nextAttemptAt, 1_800_000_000_050);
+  assert.match(pauseEvent.data.status.message.parts[0].content.value, /Next recovery attempt:/);
+  assert.equal(runCalls, 1);
+  assert.equal(store.get(task.id).state, 'waiting');
+
+  await executor.execute({ taskId: task.id, contextId: task.contextId, task: { ...task, status: { state: TaskState.TASK_STATE_INPUT_REQUIRED }, metadata: { pause: pauseEvent.data.metadata.pause } }, userMessage: userMessage('continue') }, { publish() {} });
+  assert.equal(store.get(task.id), null);
+  recovery.stop(); db.close();
+});
+
+test('transient recovery pause text exposes exhausted recovery and manual classifications', () => {
+  const exhausted = describePause('task-recovery', {
+    kind: 'transient_recovery', category: 'service', message: 'service unavailable', attempts: 5, recoveryExhausted: true,
+  });
+  assert.match(exhausted, /Automatic recovery exhausted after 5 attempts/);
+  const manual = describePause('task-manual', { kind: 'error', recoveryCategory: 'auth', message: 'unauthorized' });
+  assert.match(manual, /Recovery classification: auth; automatic retry is disabled/);
 });
 
 test('cancelTask on a paused lead task returns CANCELED promptly', async () => {
@@ -2086,6 +2278,30 @@ test('the control routes need the loopback token and drive the orchestrator paus
     await runtime.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('control pause routes suspend and re-enable a durable transient retry', () => {
+  const Database = require('better-sqlite3');
+  const { createTransientRecoveryStore, createTransientRecovery } = require('../src/transient-recovery');
+  const db = new Database(':memory:');
+  const store = createTransientRecoveryStore(db);
+  const recovery = createTransientRecovery({ store, canResume: async () => true, resumeRun: async () => true });
+  recovery.failure('run-retry', { category: 'capacity', cause: 'capacity', checkpointId: 'cp-control' });
+  const routes = new Map();
+  registerControl({ get(route, ...handlers) { routes.set(`GET ${route}`, handlers); }, post(route, ...handlers) { routes.set(`POST ${route}`, handlers); } }, {
+    authMiddleware() {}, orchestrator: { activeRuns: () => [] }, runtimeIdentity: { snapshot: {} }, transientRecovery: recovery,
+  });
+  const invoke = (key, body = {}) => {
+    const response = { value: null, json(value) { this.value = value; } };
+    routes.get(key).at(-1)({ body }, response);
+    return response.value;
+  };
+  assert.deepEqual(invoke('POST /control/pause', { taskId: 'run-retry' }), { runs: [{ taskId: 'run-retry', pauseRequested: true }] });
+  assert.equal(store.get('run-retry').state, 'owner_paused');
+  assert.deepEqual(invoke('GET /control/pause'), { runs: [{ taskId: 'run-retry', pauseRequested: true }] });
+  assert.deepEqual(invoke('POST /control/pause/cancel', { taskId: 'run-retry' }), { runs: [{ taskId: 'run-retry', pauseRequested: false }] });
+  assert.equal(store.get('run-retry').state, 'waiting');
+  recovery.stop(); db.close();
 });
 
 test('runtime control route requires bearer auth and returns the loaded identity snapshot', () => {

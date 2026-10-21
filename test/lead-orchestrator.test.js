@@ -123,6 +123,14 @@ function completedTask(roleName, reportText = workerReport(`${roleName} done`), 
   };
 }
 
+test('a new invocation clears a stale completed owner-pause flag', async () => {
+  const h = makeHarness({ decisions: [decision('finish', [], 'Finished')] });
+  h.orchestrator.completedPauseRequests.add('run-stale-pause');
+  const result = await h.orchestrator.run({ goal: 'Finish request', runId: 'run-stale-pause' });
+  assert.equal(result.status, 'completed');
+  assert.equal(h.orchestrator.consumeCompletedPauseRequest('run-stale-pause'), false);
+});
+
 test('dispatches an authenticated A2A assignment and finishes with a fresh read-only lead turn', async () => {
   const h = makeHarness({ decisions: [decision('dispatch', [brief('orch-builder')]), decision('finish', [], 'Implemented successfully')] });
   const result = await h.orchestrator.run({ goal: 'Implement feature' });

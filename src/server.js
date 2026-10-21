@@ -6,7 +6,7 @@ const express = require('express');
 const fs = require('node:fs');
 const path = require('node:path');
 const { AgentEvent, InMemoryTaskStore, DefaultRequestHandler } = require('@a2a-js/sdk/server');
-const { AgentCard, TaskState } = require('@a2a-js/sdk');
+const { AgentCard, Message, TaskState } = require('@a2a-js/sdk');
 const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/server/express');
 const { ClientFactory } = require('@a2a-js/sdk/client');
 const { createAccountProfiles } = require('./account-profiles');
@@ -19,6 +19,7 @@ const { registerRoleAgents } = require('./a2a-role-service');
 const { LeadOrchestrator, ResumeInputError, renderRunDigest } = require('./lead-orchestrator');
 const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
 const { createBudgetWatcher } = require('./budget-watcher');
+const { classifyTransientFailure, createTransientRecoveryStore, createTransientRecovery } = require('./transient-recovery');
 const { WriterAdmission } = require('./writer-admission');
 const { LaneManager, selectWriterIsolation, laneRetentionHours } = require('./writer-lanes');
 const { UsageLedger } = require('./usage-ledger');
@@ -115,7 +116,17 @@ function describePause(taskId, pause, { autoResume = false, nextCheckAt = null, 
     lines.push('Send any message to this task to retry reconciliation once the earlier writer is proven stopped.');
   } else if (pause?.kind === 'error') {
     lines.push(`The run stopped on an error${pause.errorName ? ` (${pause.errorName})` : ''}: ${pause.message || 'unknown error'}`);
+    if (pause.recoveryCategory && pause.recoveryCategory !== 'unknown') lines.push(`Recovery classification: ${pause.recoveryCategory}; automatic retry is disabled.`);
     lines.push('Send a message to this task to retry the failed step.');
+  } else if (pause?.kind === 'transient_recovery') {
+    lines.push(`The run stopped after a ${pause.category || 'transient'} failure: ${pause.message || 'unknown error'}`);
+    if (pause.attempts) lines.push(`Automatic recovery attempt: ${pause.attempts}`);
+    if (pause.nextAttemptAt) lines.push(`Next recovery attempt: ${new Date(pause.nextAttemptAt).toISOString()}`);
+    if (pause.recoveryExhausted) lines.push(`Automatic recovery exhausted after ${pause.attempts} attempts.`);
+    else if (pause.ownerPauseRequested) lines.push('Automatic recovery is paused by the owner. Use the pause control to resume it, or send a message to continue manually.');
+    else if (pause.recoveryState === 'dispatched') lines.push('The server is submitting this automatic recovery attempt.');
+    else if (pause.automatic !== true) lines.push('Automatic recovery is disabled or unsafe for this checkpoint; send a message to retry manually.');
+    else lines.push('The server will retry this checkpoint automatically.');
   } else if (pause?.kind === 'owner_pause') {
     lines.push('Paused by the owner. Running worker turns finished first; no new work is planned until you continue.');
     lines.push('Send a message to this task to continue.');
@@ -251,6 +262,48 @@ function isResumeInputError(error) {
   return error instanceof ResumeInputError;
 }
 
+/** Refreshes an existing paused task from the latest durable recovery record without overwriting a newer task state. */
+function persistTransientRecoveryStatus({ db, recoveryStore, taskId, record, now = Date.now }) {
+  const update = db.transaction(() => {
+    const row = db.prepare(`SELECT status_state, status_last_updated, status, metadata FROM tasks
+      WHERE tenant = ? AND owner = ? AND id = ?`).get('', 'orchestrator', taskId);
+    if (!row || row.status_state !== 'TASK_STATE_INPUT_REQUIRED') return false;
+    const currentRecord = recoveryStore.get(taskId);
+    if (!currentRecord || currentRecord.updated_at !== record.updated_at || currentRecord.state !== record.state
+      || currentRecord.attempts !== record.attempts || currentRecord.checkpoint_id !== record.checkpoint_id) return false;
+    let metadata;
+    let taskStatus;
+    try {
+      metadata = row.metadata ? JSON.parse(row.metadata) : {};
+      taskStatus = row.status ? JSON.parse(row.status) : {};
+    } catch (_) { return false; }
+    const prior = metadata.pause;
+    if (!prior || !['transient_recovery', 'restart'].includes(prior.kind)) return false;
+    if (prior.checkpointId && prior.checkpointId !== record.checkpoint_id) return false;
+    const pause = {
+      ...prior,
+      kind: 'transient_recovery',
+      category: record.category,
+      attempts: record.attempts,
+      checkpointId: record.checkpoint_id,
+      nextAttemptAt: record.state === 'waiting' ? record.next_attempt_at : null,
+      recoveryState: record.state,
+      recoveryExhausted: record.state === 'exhausted',
+      ownerPauseRequested: record.state === 'owner_paused',
+      automatic: ['waiting', 'dispatched'].includes(record.state),
+    };
+    const message = Message.toJSON(agentMessage(taskId, taskStatus.message?.contextId || '', `recovery-${record.updated_at}`, describePause(taskId, pause)));
+    const timestamp = new Date(now()).toISOString();
+    const updatedStatus = { ...taskStatus, state: 'TASK_STATE_INPUT_REQUIRED', message, timestamp };
+    const result = db.prepare(`UPDATE tasks SET status = ?, metadata = ?, status_last_updated = ?
+      WHERE tenant = ? AND owner = ? AND id = ? AND status_state = ? AND status_last_updated = ?`)
+      .run(JSON.stringify(updatedStatus), JSON.stringify({ ...metadata, pause }), now(), '', 'orchestrator', taskId,
+        'TASK_STATE_INPUT_REQUIRED', row.status_last_updated);
+    return result.changes === 1;
+  });
+  return update();
+}
+
 const STOPPED_PAUSE = { kind: 'stopped', message: 'Stopped by the owner' };
 
 // STOP-01: the abort reason of a server shutdown. The lead graph parks such a run instead of ending it;
@@ -261,7 +314,7 @@ function ownerStopReason() {
 
 // `ownerChecks` (project setting, see src/project-settings.js): command strings pinned as an owner contract for a
 // new run whose message carries no acceptance contract. Explicit checks replace them; a resume never repins.
-function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, budgetWatcher = null, ownerChecks = null }) {
+function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, budgetWatcher = null, transientRecovery = null, autoResume = true, ownerChecks = null }) {
   const controllers = new Map();
   const reservations = new Set();
   const inflight = new Set();
@@ -327,6 +380,21 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
         effectivePause = livePause || requestContext.task.metadata?.pause || null;
       }
       const pauseKind = effectivePause?.kind;
+      const automaticResume = requestContext.userMessage?.metadata?.autoResume;
+      const automaticTransient = automaticResume?.reason === 'transient_recovery';
+      if (automaticTransient && (autoResume !== true || !transientRecovery?.acceptAutomatic(taskId, {
+        attempt: automaticResume.attempt,
+        checkpointId: automaticResume.checkpointId,
+      }))) {
+        const recoveryState = transientRecovery?.status(taskId);
+        if (recoveryState?.state === 'owner_paused') {
+          republishPause(effectivePause, 'The automatic retry was paused by the owner before it could continue.', 'recovery-paused');
+        } else if (controller.signal.aborted && controller.signal.reason?.ownerStop === true) {
+          republishPause(STOPPED_PAUSE, '', 'stopped');
+        }
+        return;
+      }
+      if (resuming) transientRecovery?.markRunning(taskId);
       try {
         goal = extractGoal(requestContext.userMessage, { allowEmpty: resuming && pauseKind !== 'human_decision' });
       } catch (error) {
@@ -477,6 +545,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       const paused = (result?.status === 'input_required' || result?.status === 'waiting_for_budget') && !controller.signal.aborted;
       if (paused) {
         const pause = result.pause || await orchestrator.getPause?.(taskId) || { kind: result.status === 'waiting_for_budget' ? 'waiting_for_budget' : 'human_decision' };
+        if (pause.kind !== 'transient_recovery') transientRecovery?.forget(taskId);
         eventBus.publish(AgentEvent.statusUpdate({
           taskId,
           contextId,
@@ -496,6 +565,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
         ? 'Cancellation was requested, but downstream A2A cancellation could not be confirmed.'
         : typeof result?.text === 'string' ? result.text : '';
       if (completed) {
+        transientRecovery?.forget(taskId);
         const partial = result?.disposition === 'partial' && Array.isArray(result.checkpoints) ? result.checkpoints : null;
         const acceptanceText = [formatAcceptance(result?.acceptance), partial ? formatLedger(partial) : ''].filter(Boolean).join('\n\n');
         eventBus.publish(AgentEvent.artifactUpdate({
@@ -545,10 +615,33 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       }
       if (resumable) {
         const message = String(error?.message || error).slice(0, MAX_ERROR_PAUSE_CHARS);
-        const pause = { kind: 'error', message, errorName: error?.name || 'Error' };
+        const classification = classifyTransientFailure(error);
+        const checkpoint = classification.eligible ? await orchestrator.getRecoveryCheckpoint?.(taskId) : null;
+        const ownerPaused = orchestrator.consumeCompletedPauseRequest?.(taskId) === true;
+        const safeCheckpoint = Boolean(checkpoint?.checkpointId && checkpoint.next.length === 1
+          && checkpoint.next[0] === 'decide' && checkpoint.unresolvedWriters === 0 && !ownerPaused);
+        let record = null;
+        if (classification.eligible && checkpoint?.checkpointId) {
+          record = transientRecovery?.failure(taskId, {
+            category: classification.category,
+            cause: message,
+            checkpointId: checkpoint.checkpointId,
+            enabled: autoResume && safeCheckpoint,
+          }) || null;
+        }
+        const pause = record ? {
+          kind: 'transient_recovery', message, errorName: error?.name || 'Error',
+          category: classification.category, attempts: record.attempts,
+          checkpointId: record.checkpoint_id, nextAttemptAt: record.next_attempt_at,
+          recoveryExhausted: record.state === 'exhausted',
+          automatic: record.state === 'waiting',
+          ...(ownerPaused ? { ownerPauseRequested: true } : {}),
+        } : { kind: 'error', message, errorName: error?.name || 'Error', recoveryCategory: classification.category };
+        if (pause.kind !== 'transient_recovery') transientRecovery?.forget(taskId);
         republishPause(pause, '', 'error-pause');
         return;
       }
+      transientRecovery?.forget(taskId);
       eventBus.publish(AgentEvent.statusUpdate({
         taskId,
         contextId,
@@ -571,6 +664,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
     },
     async cancelTask(taskId, eventBus) {
       budgetWatcher?.forget(taskId, { dropHistory: true });
+      transientRecovery?.forget(taskId);
       const controller = controllers.get(taskId);
       if (controller) {
         controller.abort();
@@ -629,10 +723,10 @@ function rejectOverlappingLeadTask(executor) {
   };
 }
 
-function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), budgetWatcher = null, ownerChecks = null }) {
+function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), budgetWatcher = null, transientRecovery = null, autoResume = true, ownerChecks = null }) {
   const endpoint = new URL('/orchestrator', `${baseUrl}/`).toString();
   const card = makeLeadCard({ leadRole, endpoint });
-  const executor = makeLeadExecutor({ orchestrator, loadTask: (id) => taskStore.load(id, {}), budgetWatcher, ownerChecks });
+  const executor = makeLeadExecutor({ orchestrator, loadTask: (id) => taskStore.load(id, {}), budgetWatcher, transientRecovery, autoResume, ownerChecks });
   const requestHandler = new DefaultRequestHandler(card, taskStore, executor);
   app.use('/orchestrator/agent-card.json', agentCardHandler({ agentCardProvider: async () => AgentCard.toJSON(card) }));
   app.use('/orchestrator', authMiddleware, express.json(), rejectOverlappingLeadTask(executor), jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));
@@ -645,7 +739,7 @@ function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, ta
  * Responses: { runs: [{ taskId, pauseRequested }] } for the runs the call applied to (all active runs, or
  * the one named by body.taskId).
  */
-function registerControl(app, { authMiddleware, orchestrator, runtimeIdentity }) {
+function registerControl(app, { authMiddleware, orchestrator, runtimeIdentity, transientRecovery = null }) {
   const view = (runs) => ({ runs: runs.map((run) => ({ taskId: run.runId, pauseRequested: run.pauseRequested })) });
   const target = (req) => {
     const active = orchestrator.activeRuns?.() || [];
@@ -656,15 +750,26 @@ function registerControl(app, { authMiddleware, orchestrator, runtimeIdentity })
     res.json(runtimeIdentity.snapshot);
   });
   app.get('/control/pause', authMiddleware, (req, res) => {
-    res.json(view(orchestrator.activeRuns?.() || []));
+    const active = orchestrator.activeRuns?.() || [];
+    const pending = (transientRecovery?.pausedRuns?.() || []).map((record) => ({ runId: record.run_id, pauseRequested: record.state === 'owner_paused' }));
+    const merged = new Map([...active, ...pending].map((run) => [run.runId, run]));
+    res.json(view([...merged.values()]));
   });
   app.post('/control/pause', authMiddleware, express.json(), (req, res) => {
     const applied = target(req).filter((run) => orchestrator.requestPause(run.runId));
-    res.json(view(applied.map((run) => ({ runId: run.runId, pauseRequested: true }))));
+    const paused = typeof req.body?.taskId === 'string' && req.body.taskId
+      ? [req.body.taskId].filter((id) => transientRecovery?.pause(id))
+      : (transientRecovery?.pausedRuns?.() || []).filter((run) => ['waiting', 'dispatched'].includes(run.state)).filter((run) => transientRecovery.pause(run.run_id)).map((run) => run.run_id);
+    const updates = [...applied.map((run) => ({ runId: run.runId, pauseRequested: true })), ...paused.map((runId) => ({ runId, pauseRequested: true }))];
+    res.json(view([...new Map(updates.map((run) => [run.runId, run])).values()]));
   });
   app.post('/control/pause/cancel', authMiddleware, express.json(), (req, res) => {
     const canceled = target(req).filter((run) => orchestrator.cancelPauseRequest(run.runId));
-    res.json(view(canceled.map((run) => ({ runId: run.runId, pauseRequested: false }))));
+    const resumed = typeof req.body?.taskId === 'string' && req.body.taskId
+      ? [req.body.taskId].filter((id) => transientRecovery?.cancelPauseRequest(id))
+      : (transientRecovery?.pausedRuns?.() || []).filter((run) => run.state === 'owner_paused').filter((run) => transientRecovery.cancelPauseRequest(run.run_id)).map((run) => run.run_id);
+    const updates = [...canceled.map((run) => ({ runId: run.runId, pauseRequested: false })), ...resumed.map((runId) => ({ runId, pauseRequested: false }))];
+    res.json(view([...new Map(updates.map((run) => [run.runId, run])).values()]));
   });
 }
 
@@ -702,6 +807,7 @@ async function startServer({
   workspaceLockDir,
   autoResume = autoResumeEnabled(),
   budgetWatcherOptions = {},
+  transientRecoveryFactory = createTransientRecovery,
 } = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new RangeError('port must be an integer from 0 to 65535');
   const aut03TrialRunIds = parseTrialRunIds(process.env.CODEX_A2A_AUT03_TRIAL_RUN_IDS ?? '');
@@ -807,6 +913,26 @@ async function startServer({
       taskStoreFactory: (roleId) => createTaskStore(state, roleId),
     });
     const leadTaskStore = createTaskStore(state, 'orchestrator');
+    const transientRecoveryStore = createTransientRecoveryStore(state.db);
+    const transientRecovery = transientRecoveryFactory({
+      store: transientRecoveryStore,
+      onState: (taskId, record) => persistTransientRecoveryStatus({ db: state.db, recoveryStore: transientRecoveryStore, taskId, record }),
+      canResume: async (taskId, record) => {
+        const task = await leadTaskStore.load(taskId, {});
+        if (!task || task.status?.state !== TaskState.TASK_STATE_INPUT_REQUIRED) return false;
+        const taskPause = task.metadata?.pause;
+        if (taskPause?.kind && !['transient_recovery', 'restart'].includes(taskPause.kind)) return false;
+        if (await orchestrator.getPause?.(taskId)) return false;
+        const checkpoint = await orchestrator.getRecoveryCheckpoint?.(taskId);
+        return Boolean(checkpoint?.checkpointId === record.checkpoint_id
+          && checkpoint.next.length === 1 && checkpoint.next[0] === 'decide'
+          && checkpoint.unresolvedWriters === 0 && !leadAgent.executor.isTaskActive(taskId));
+      },
+      resumeRun: (taskId, record, signal) => resumeTransientRun({
+        taskId, record, baseUrl, authToken, taskStore: leadTaskStore, orchestrator,
+        executor: () => leadAgent.executor, loopback, signal,
+      }),
+    });
     let budgetWatcher = null;
     const loopback = { client: null };
     if (autoResume) {
@@ -832,11 +958,13 @@ async function startServer({
       });
     }
     const leadAgent = registerLead(app, {
-      leadRole, orchestrator, baseUrl, authMiddleware, taskStore: leadTaskStore, budgetWatcher, ownerChecks,
+      leadRole, orchestrator, baseUrl, authMiddleware, taskStore: leadTaskStore, budgetWatcher,
+      transientRecovery, autoResume, ownerChecks,
     });
-    registerControl(app, { authMiddleware, orchestrator, runtimeIdentity });
+    registerControl(app, { authMiddleware, orchestrator, runtimeIdentity, transientRecovery });
     ready = true;
     budgetWatcher?.start();
+    if (autoResume) transientRecovery.start();
     return {
       app,
       httpServer,
@@ -855,9 +983,10 @@ async function startServer({
       port: actualPort,
       async close() {
         budgetWatcher?.stop();
+        transientRecovery.stop();
         leadAgent.executor.cancelAll();
-        // Let canceled runs confirm downstream and persist their terminal state first.
-        await bounded(leadAgent.executor.settled(), SHUTDOWN_TIMEOUT_MS);
+        // Let canceled runs confirm downstream and recovery projections drain within one shutdown window.
+        await waitForShutdownWork(leadAgent.executor, transientRecovery, SHUTDOWN_TIMEOUT_MS);
         // The SDK persists the executor's last events on its own consumer loop, which only awaits
         // microtask-based SQLite calls; one macrotask turn lets it finish before the db closes.
         await new Promise((resolve) => setImmediate(resolve));
@@ -950,6 +1079,39 @@ async function resumeBudgetRun({ taskId, baseUrl, authToken, taskStore, orchestr
   return true;
 }
 
+async function resumeTransientRun({ taskId, record, baseUrl, authToken, taskStore, orchestrator, executor, loopback, signal }) {
+  if (signal?.aborted) return false;
+  const task = await taskStore.load(taskId, {});
+  if (signal?.aborted) return false;
+  if (!task || task.status?.state !== TaskState.TASK_STATE_INPUT_REQUIRED || executor().isTaskActive(taskId)) return false;
+  const taskPause = task.metadata?.pause;
+  if (taskPause?.kind && !['transient_recovery', 'restart'].includes(taskPause.kind)) return false;
+  if (await orchestrator.getPause?.(taskId)) return false;
+  if (signal?.aborted) return false;
+  const checkpoint = await orchestrator.getRecoveryCheckpoint?.(taskId);
+  if (signal?.aborted) return false;
+  if (!checkpoint || checkpoint.checkpointId !== record.checkpoint_id || checkpoint.next.join(',') !== 'decide'
+    || checkpoint.unresolvedWriters !== 0) return false;
+  if (!loopback.client) loopback.client = await new ClientFactory().createFromUrl(baseUrl, '/orchestrator/agent-card.json');
+  if (signal?.aborted) return false;
+  await loopback.client.sendMessage({
+    tenant: '',
+    message: {
+      messageId: `auto-recovery-${taskId}-${Date.now()}`,
+      contextId: task.contextId || '',
+      taskId,
+      role: 1,
+      parts: [textPart('Continue the existing run from its current checkpoint after a transient service failure.')],
+      metadata: { autoResume: { reason: 'transient_recovery', attempt: record.attempts, checkpointId: record.checkpoint_id } },
+      extensions: [],
+      referenceTaskIds: [],
+    },
+    configuration: { acceptedOutputModes: ['text/plain'], returnImmediately: true },
+    metadata: undefined,
+  }, { serviceParameters: { Authorization: `Bearer ${authToken}` }, signal });
+  return true;
+}
+
 function bounded(promise, timeoutMs) {
   if (!promise || typeof promise.then !== 'function') return Promise.resolve(promise);
   let timer;
@@ -957,6 +1119,10 @@ function bounded(promise, timeoutMs) {
     promise,
     new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); }),
   ]).finally(() => clearTimeout(timer));
+}
+
+function waitForShutdownWork(executor, recovery, timeoutMs = SHUTDOWN_TIMEOUT_MS) {
+  return bounded(Promise.allSettled([executor.settled(), recovery.drain()]), timeoutMs);
 }
 
 function closeHttpServer(server) {
@@ -986,4 +1152,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { SHUTDOWN_TIMEOUT_MS, SHUTDOWN_TOTAL_MS, startServer, describePause, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts };
+module.exports = { SHUTDOWN_TIMEOUT_MS, SHUTDOWN_TOTAL_MS, startServer, describePause, persistTransientRecoveryStatus, waitForShutdownWork, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts };

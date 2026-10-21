@@ -1,5 +1,13 @@
 # Orchestrator improvement backlog
 
+## Harness autonomy audit, 2026-10-21
+
+A1 transient Lead recovery is implemented and independently reviewed. It adds a
+durable retry path with conservative classification and a read-only decide-node
+replay boundary. The retry behavior, validation, and limits are documented in
+[transient-recovery.md](transient-recovery.md). The source finding and historical evidence remain in
+[harness-autonomy-audit-2026-10-21.md](harness-autonomy-audit-2026-10-21.md).
+
 ## Critical Harness incidents, 2026-10-20
 
 Owner requests diagnosis first, durable findings, and implementation. These

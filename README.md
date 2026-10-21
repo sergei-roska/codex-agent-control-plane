@@ -122,6 +122,15 @@ again (`account/rateLimits/read`: `ordinaryUsageAllowed` and no reached limit fo
 team's models). Checks run at the reported reset plus a minute and every 5 minutes;
 sending a message still resumes at once. `CODEX_A2A_AUTO_RESUME=0` turns it off.
 
+### Transient Lead recovery
+
+Selected-model capacity and eligible service/transport failures can retry at the
+same safe Lead decision checkpoint with bounded backoff. Automatic recovery
+requires an unchanged checkpoint and no unresolved writers; quota, authentication,
+configuration, and unknown errors remain on their existing budget or manual
+paths. See [transient-recovery.md](docs/transient-recovery.md) for categories,
+retry limits, pause controls, and restart behavior.
+
 ### Reconciliation pause
 
 After a batch, the lead graph settles every writable outcome that is not provably finished, without asking a model. If quiescence cannot be proven, the lead task is `INPUT_REQUIRED` with pause `writer_unresolved`. Send any message to the task to retry once the earlier writer is stopped. Writable dispatch is refused while a writer is unresolved, and in a serial batch the remaining writers are skipped (`skipped_unresolved_writer`) after an unsettled one.
@@ -277,7 +286,7 @@ The design is in [hardening-spec.md](docs/hardening-spec.md); [efficiency-compar
 - The client pins `approvalsReviewer: "user"` on thread/start, thread/resume, and turn/start, overriding any `auto_review` in the user's Codex config, so every approval request reaches the local App Server client, which declines it. A task that needs an additional permission must report that need; this service does not grant it silently.
 - Runs are durable. LangGraph checkpoints, A2A tasks, and the dispatch journal live in `.runtime/state.sqlite` (override with `CODEX_A2A_STATE_DB`), and only one server may use a state file at a time. After a crash, the lead task shows `INPUT_REQUIRED` (pause `restart`). Worker tasks that were running show `FAILED` (`interrupted`). On startup the server reconciles the interrupted writer mechanically (see Writer admission), so the lead sees attested effects instead of inspecting the workspace itself.
 - If the Codex App Server child exits or times out, the next request starts a replacement process. An interrupted writer may have changed files, so its outcome is unknown until the server proves the writer stopped (reconciliation); no new writer runs before that.
-- Pauses: a usage limit (`waiting_for_budget`), a rare human decision (`human_decision`), a restart, or a resumable error leaves the lead task `INPUT_REQUIRED` with `metadata.pause`. Continue with `npm run ask -- --task <taskId> [--decision <id>] [--choice <optionId>] "<answer>"`. The CLI exits with code 3 while a task is paused, 4 when acceptance is `rejected` or `unverifiable`, and 5 when the run finished with a partial result.
+- Pauses: a usage limit (`waiting_for_budget`), a transient recovery wait, a rare human decision (`human_decision`), a restart, or a resumable error leaves the lead task `INPUT_REQUIRED` with `metadata.pause`. Continue with `npm run ask -- --task <taskId> [--decision <id>] [--choice <optionId>] "<answer>"`. The CLI exits with code 3 while a task is paused, 4 when acceptance is `rejected` or `unverifiable`, and 5 when the run finished with a partial result.
 - The lead validates assigned file paths and passes allowed files to workers. The Codex workspace sandbox restricts writes to the workspace, but the per-file assignment is enforced by worker instructions, not by a separate filesystem boundary. Use a trusted local workspace.
 - A local bearer token protects the A2A JSON-RPC endpoints, and the server binds only to loopback. Agent Cards remain public for A2A discovery. Codex App Server is currently documented as experimental and unsupported for production workloads.
 

@@ -229,6 +229,7 @@ class LeadOrchestrator {
     this.checkpointer = checkpointer;
     // Per-run runtime objects (signal, onEvent). Never checkpointed and never passed to LangGraph.
     this.runtimes = new Map();
+    this.completedPauseRequests = new Set();
     this.graph = buildLeadGraph({
       appServer: this.appServer,
       roles: this.roles,
@@ -293,6 +294,23 @@ class LeadOrchestrator {
   async getPause(runId) {
     if (!isNonEmptyString(runId)) return null;
     return LeadOrchestrator._pendingInterrupt(await this._snapshot(runId));
+  }
+
+  /** Stable checkpoint facts used to decide whether automatic transient recovery is safe. */
+  async getRecoveryCheckpoint(runId) {
+    if (!isNonEmptyString(runId)) return null;
+    const snapshot = await this._snapshot(runId);
+    return {
+      checkpointId: snapshot.config?.configurable?.checkpoint_id || null,
+      next: Array.isArray(snapshot.next) ? [...snapshot.next] : [],
+      unresolvedWriters: Array.isArray(snapshot.values?.unresolvedWriters) ? snapshot.values.unresolvedWriters.length : 0,
+    };
+  }
+
+  /** True when an owner pause request was pending when a failed invocation exited. */
+  consumeCompletedPauseRequest(runId) {
+    const requested = this.completedPauseRequests.delete(runId);
+    return requested;
   }
 
   /**
@@ -408,7 +426,9 @@ class LeadOrchestrator {
   }
 
   async _drive(runId, graphInput, { signal, onEvent, interruptAfter, resumed, contextId }) {
-    this.runtimes.set(runId, { signal, onEvent, resumed, pendingNotes: [], ...(isNonEmptyString(contextId) ? { contextId } : {}) });
+    const runtime = { signal, onEvent, resumed, pendingNotes: [], ...(isNonEmptyString(contextId) ? { contextId } : {}) };
+    this.completedPauseRequests.delete(runId);
+    this.runtimes.set(runId, runtime);
     try {
       let input = graphInput;
       for (;;) {
@@ -446,8 +466,10 @@ class LeadOrchestrator {
         const snapshot = await this._snapshot(runId);
         return { runId, status: 'canceled', text: 'Canceled after all active A2A tasks were confirmed stopped.', rounds: snapshot.values.round || 0, assignments: snapshot.values.outcomes || [], acceptance: snapshot.values.acceptance ?? null };
       }
+      runtime.failed = true;
       throw error;
     } finally {
+      if (runtime.failed && runtime.pauseRequested === true) this.completedPauseRequests.add(runId);
       this.runtimes.delete(runId);
     }
   }

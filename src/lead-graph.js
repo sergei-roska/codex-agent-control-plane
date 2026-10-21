@@ -8,7 +8,7 @@ const {
 } = require('@langchain/langgraph');
 const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
 const {
-  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, BoundaryViolation, parseWorkerReport, classifyCodexError, executionGroups,
+  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, BoundaryViolation, parseWorkerReport, executionGroups,
   checkDecisionRecordsShape, safeRelativePath,
 } = require('./contracts');
 const {
@@ -23,6 +23,7 @@ const {
   resolveLeadSelectedSkills, sameLeadSkillContext,
 } = require('./aut03-lead-skill');
 const { canonicalRoleId, getRole, roleDisplayName } = require('./role-names');
+const { classifyTransientFailure } = require('./transient-recovery');
 const { InMemoryStagingLog } = require('./staging-log');
 const {
   POLICY_ID, isGatedReview, sameReviewScope, computeReviewTarget, reviewResult,
@@ -2828,7 +2829,8 @@ function buildLeadGraph(deps) {
       activityOutcome = String(leadResult?.status ?? 'completed');
     } catch (error) {
       activityOutcome = signal?.aborted ? 'canceled' : 'failed';
-      const kind = error?.name === 'AbortError' && signal?.aborted ? 'aborted' : classifyCodexError(error) === 'usage_limit' ? 'usage_limit' : 'error';
+      const kind = error?.name === 'AbortError' && signal?.aborted ? 'aborted'
+        : classifyTransientFailure(error).category === 'quota' ? 'usage_limit' : 'error';
       if (error?.usage || error?.execution) recordLeadTurn(state, error, kind);
       if (kind === 'aborted') return canceledUpdate(signal, update);
       if (kind === 'usage_limit') return { ...update, budget: { source: 'lead' } };

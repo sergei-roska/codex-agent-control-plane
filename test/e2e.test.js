@@ -12,6 +12,7 @@ const { ClientFactory } = require('@a2a-js/sdk/client');
 const { TaskState } = require('@a2a-js/sdk');
 const { startServer } = require('../src/server');
 const { LeadOrchestrator } = require('../src/lead-orchestrator');
+const { classifyFailure } = require('../src/codex-app-server');
 const { DECISION_SCHEMA } = require('../src/contracts');
 
 // Test files run in parallel processes; keep workspace locks private to this process.
@@ -195,6 +196,73 @@ test('e2e real stack', async (suite) => {
       assert.equal(appServer.workerCalls[0].role, 'explorer');
       assert.equal(appServer.leadCalls.length, 2);
       assert.match(appServer.leadCalls[1].input, /All good/);
+    });
+  });
+
+  await suite.test('transient capacity failure retries the same real Lead checkpoint automatically', async (t) => {
+    const appServer = makeFakeAppServer({
+      leadScript: [
+        () => { throw new Error('Selected model is at capacity. Please try a different model.'); },
+        decision({ final: 'Finished after capacity returned.' }),
+      ],
+    });
+    await withStack(t, appServer, async (stack) => {
+      const paused = await send(stack, { text: 'Finish this request' });
+      assert.equal(paused.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+      assert.equal(paused.metadata.pause.kind, 'transient_recovery');
+      assert.equal(paused.metadata.pause.category, 'capacity');
+      assert.ok(paused.metadata.pause.nextAttemptAt > Date.now());
+      const threadId = appServer.leadCalls[0].threadId;
+
+      await waitFor(async () => {
+        const current = await stack.runtime.leadAgent.requestHandler.getTask({ id: paused.id }, { tenant: '' });
+        return current.status.state === TaskState.TASK_STATE_COMPLETED;
+      }, 'automatic capacity recovery', 10_000);
+      const completed = await stack.runtime.leadAgent.requestHandler.getTask({ id: paused.id }, { tenant: '' });
+      assert.equal(completed.status.state, TaskState.TASK_STATE_COMPLETED);
+      assert.equal(appServer.leadCalls.length, 2);
+      assert.deepEqual(appServer.leadCalls.map((call) => call.threadId), [threadId, threadId]);
+      assert.equal(stack.runtime.state.db.prepare('SELECT COUNT(*) AS count FROM transient_recovery WHERE run_id = ?').get(paused.id).count, 0);
+    });
+  });
+
+  await suite.test('explicit rateLimitExceeded uses transient recovery', async (t) => {
+    const appServer = makeFakeAppServer({
+      leadScript: [
+        () => {
+          const error = Object.assign(new Error('rate limited'), { codexError: { codexErrorInfo: 'rateLimitExceeded' } });
+          error.failureClass = classifyFailure(error);
+          assert.equal(error.failureClass, 'usage_limit');
+          throw error;
+        },
+        decision({ final: 'Finished after rate limit recovery.' }),
+      ],
+    });
+    await withStack(t, appServer, async (stack) => {
+      const paused = await send(stack, { text: 'Finish this request' });
+      assert.equal(paused.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+      assert.equal(paused.metadata.pause.kind, 'transient_recovery');
+      assert.equal(paused.metadata.pause.category, 'rate_limit');
+      await waitFor(async () => {
+        const current = await stack.runtime.leadAgent.requestHandler.getTask({ id: paused.id }, { tenant: '' });
+        return current.status.state === TaskState.TASK_STATE_COMPLETED;
+      }, 'automatic rate-limit recovery', 10_000);
+      assert.equal(appServer.leadCalls.length, 2);
+    });
+  });
+
+  await suite.test('anonymous nested HTTP 429 preserves legacy budget handling', async (t) => {
+    const appServer = makeFakeAppServer({
+      leadScript: [
+        () => { throw new Error('request failed', { cause: { rpcData: { codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 429 } } } } }); },
+      ],
+    });
+    await withStack(t, appServer, async (stack) => {
+      const paused = await send(stack, { text: 'Finish this request' });
+      assert.equal(paused.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+      assert.equal(paused.metadata.pause.kind, 'waiting_for_budget');
+      assert.equal(stack.runtime.state.db.prepare('SELECT COUNT(*) AS count FROM transient_recovery WHERE run_id = ?').get(paused.id).count, 0);
+      assert.equal(appServer.leadCalls.length, 1);
     });
   });
 
