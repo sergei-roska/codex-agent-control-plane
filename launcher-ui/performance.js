@@ -59,10 +59,32 @@
   function metricDetails(task, metric, amount) {
     const ids = [task.taskId && 'task ' + task.taskId, task.assignmentId && 'assignment ' + task.assignmentId].filter(Boolean).join(', ');
     if (metric === 'tokens') return taskLabel(task) + ': ' + fmt(amount) + ' known tokens' + (task.unknownTokenRows ? ', ' + task.unknownTokenRows + ' contributions unknown' : '') + (ids ? '; ' + ids : '') + '; input ' + fmt(task.inputTokens) + ', cached input ' + fmt(task.cachedInputTokens) + ', output ' + fmt(task.outputTokens);
-    return taskLabel(task) + ': ' + duration(amount) + (task.unknownTimeRows ? ', ' + task.unknownTimeRows + ' contributions unknown' : '') + (ids ? '; ' + ids : '');
+    const source = task.timingKind === 'lifecycle' ? 'dispatch lifecycle span, not model latency' : 'recorded execution time';
+    return taskLabel(task) + ': ' + duration(amount) + ' (' + source + ')' + (task.unknownTimeRows ? ', ' + task.unknownTimeRows + ' contributions unknown' : '') + (ids ? '; ' + ids : '');
+  }
+  function timeProvenance(tasks) {
+    const known = tasks.filter(function (task) { return task.elapsedMs !== null; });
+    return {
+      measured: known.filter(function (task) { return task.timingKind !== 'lifecycle'; }).length,
+      lifecycle: known.filter(function (task) { return task.timingKind === 'lifecycle'; }).length,
+      unknown: tasks.length - known.length,
+      unknownContributions: tasks.reduce(function (sum, task) { return sum + task.unknownTimeRows; }, 0)
+    };
+  }
+  function timeProvenanceText(counts, total) {
+    return counts.measured + ' measured, ' + counts.lifecycle + ' lifecycle spans, ' + counts.unknown + ' unknown / ' + total + ' tasks';
+  }
+  function timeSourceNote(counts) {
+    const sources = [];
+    if (counts.measured) sources.push(counts.measured + ' measured execution ' + (counts.measured === 1 ? 'duration' : 'durations') + ', including tools and startup when present');
+    if (counts.lifecycle) sources.push(counts.lifecycle + ' dispatch-created to journal-updated lifecycle ' + (counts.lifecycle === 1 ? 'span' : 'spans') + ', not model latency');
+    if (counts.unknown) sources.push(counts.unknown + ' task ' + (counts.unknown === 1 ? 'duration' : 'durations') + ' unknown');
+    return (sources.length ? 'Time values: ' + sources.join('; ') + '. ' : 'No task durations are known. ')
+      + 'Task durations may overlap.';
   }
   function renderMetricChart(containerId, coverageId, tasks, metric) {
     const tokenChart = metric === 'tokens';
+    const timing = tokenChart ? null : timeProvenance(tasks);
     const amountOf = function (task) { return tokenChart ? task.totalTokens : task.elapsedMs; };
     const known = tasks.filter(function (task) { return amountOf(task) !== null; }).sort(function (a, b) { return amountOf(b) - amountOf(a); });
     const partialCount = known.filter(function (task) { return tokenChart ? task.unknownTokenRows > 0 : task.unknownTimeRows > 0; }).length;
@@ -70,7 +92,11 @@
     const container = $(containerId);
     if (!known.length) {
       container.innerHTML = '<div class="empty-chart">No known per-task ' + (tokenChart ? 'token totals' : 'working times') + ' are available.</div>';
-      $(coverageId).textContent = tasks.length ? 'All ' + tasks.length + ' tasks have unknown ' + (tokenChart ? 'token totals.' : 'working time.') : 'No task rows are recorded.';
+      $(coverageId).textContent = tasks.length
+        ? tokenChart ? 'All ' + tasks.length + ' tasks have unknown token totals.' : timeProvenanceText(timing, tasks.length) + '. '
+          + (timing.unknownContributions ? timing.unknownContributions + ' timing contribution(s) unknown. ' : '')
+          + 'Lifecycle spans are not model latency.'
+        : 'No task rows are recorded.';
       return;
     }
     const visible = known.slice(0, 12);
@@ -94,7 +120,9 @@
     const patternId = prefix + 'PartialPattern';
     const svg = svgNode('svg', { viewBox: '0 0 ' + width + ' ' + height, role: 'img', 'aria-labelledby': containerId + 'Title ' + containerId + 'Description', preserveAspectRatio: 'xMinYMin meet' });
     const title = svgNode('title', { id: containerId + 'Title' }, tokenChart ? 'Top tasks by known token use' : 'Top tasks by recorded working time');
-    const desc = svgNode('desc', { id: containerId + 'Description' }, 'Horizontal bars scaled to the largest displayed value. Focus a row for exact metrics and coverage.');
+    const desc = svgNode('desc', { id: containerId + 'Description' }, tokenChart
+      ? 'Horizontal bars scaled to the largest displayed value. Focus a row for exact metrics and coverage.'
+      : 'Horizontal bars scale recorded durations. Rows identify measured execution time or lifecycle spans; lifecycle spans are not model latency.');
     const defs = svgNode('defs');
     const pattern = svgNode('pattern', { id: patternId, width: 8, height: 8, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' });
     pattern.appendChild(svgNode('rect', { width: 8, height: 8, fill: tokenChart ? '#564c9f' : '#27695f' }));
@@ -119,10 +147,15 @@
     });
     container.textContent = '';
     container.appendChild(svg);
-    const knownText = 'Showing top ' + visible.length + ' of ' + known.length + ' known task ' + (tokenChart ? 'token totals' : 'working times');
+    const knownText = 'Showing top ' + visible.length + ' of ' + known.length + ' known task ' + (tokenChart ? 'token totals' : 'durations');
     const coverage = partialCount ? '; ' + partialCount + ' partial' : '';
     const missing = unknownCount ? '; ' + unknownCount + ' unknown' : '';
-    $(coverageId).textContent = knownText + coverage + missing + '. ' + (tokenChart ? 'Partial bars show known tokens only.' : 'Durations can overlap and are not end-to-end wall time.');
+    const timeSources = tokenChart ? '' : '; ' + timing.measured + ' measured; ' + timing.lifecycle + ' lifecycle spans';
+    const timeNote = tokenChart ? 'Partial bars show known tokens only.'
+      : (timing.lifecycle ? 'Lifecycle spans are not model latency. ' : '')
+        + (timing.measured ? 'Measured execution durations include tools and startup when present. ' : '')
+        + 'Durations can overlap and are not end-to-end wall time.';
+    $(coverageId).textContent = knownText + timeSources + coverage + missing + '. ' + timeNote;
   }
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
@@ -162,9 +195,16 @@
     return Number.isFinite(result) ? result : null;
   }
   function normalizeTask(task) {
-    const inputTokens = finite(task.inputTokens);
-    const outputTokens = finite(task.outputTokens);
-    const explicitTotal = finite(task.totalTokens);
+    const tokens = task.tokens && typeof task.tokens === 'object' ? task.tokens : task;
+    const tokenField = function (field, legacy) {
+      if (task[field] !== undefined) return task[field];
+      if (task[legacy] !== undefined) return task[legacy];
+      if (tokens[field] !== undefined) return tokens[field];
+      return tokens[legacy];
+    };
+    const inputTokens = finite(tokenField('inputTokens', 'input_tokens'));
+    const outputTokens = finite(tokenField('outputTokens', 'output_tokens'));
+    const explicitTotal = finite(tokenField('totalTokens', 'total_tokens'));
     const totalTokens = explicitTotal !== null ? explicitTotal : inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null;
     const elapsedMs = finite(task.elapsedMs);
     const reportedUnknownTokens = finite(task.unknownTokenRows);
@@ -176,14 +216,151 @@
       role: roleLabel(task.role),
       totalTokens: totalTokens,
       inputTokens: inputTokens,
-      cachedInputTokens: finite(task.cachedInputTokens),
+      cachedInputTokens: finite(tokenField('cachedInputTokens', 'cached_input_tokens')),
       outputTokens: outputTokens,
       elapsedMs: elapsedMs,
       state: taskState(task.state || task.taskState),
       unknownTokenRows: reportedUnknownTokens !== null ? reportedUnknownTokens : totalTokens === null ? 1 : 0,
       unknownTimeRows: reportedUnknownTime !== null ? reportedUnknownTime : elapsedMs === null ? 1 : 0,
-      timingKind: 'measured'
+      timingKind: task.timingKind === 'lifecycle' ? 'lifecycle' : 'measured'
     };
+  }
+  function liveTokenTasks(performance) {
+    if (!performance || performance.schema !== 'session-performance/v1' || !Array.isArray(performance.attempts)) return null;
+    const groups = new Map();
+    let unattributedUsageRows = 0;
+    performance.attempts.forEach(function (attempt) {
+      const taskId = attempt.kind === 'lead_turn' ? attempt.runId || attempt.taskId : attempt.taskId;
+      const assignmentId = attempt.assignmentId || null;
+      if (!taskId && !assignmentId) {
+        unattributedUsageRows += 1;
+        return;
+      }
+      const key = assignmentId ? JSON.stringify(['assignment', assignmentId]) : JSON.stringify(['task', taskId || null]);
+      if (!groups.has(key)) groups.set(key, {
+        taskId: taskId || null, assignmentId: assignmentId, round: attempt.round,
+        role: attempt.role, input: [], cached: [], output: [], totals: [], elapsed: [], entryIds: [], attempts: 0, known: 0, timed: 0
+      });
+      const group = groups.get(key);
+      if (!group.taskId && taskId) group.taskId = taskId;
+      if (typeof attempt.entryId === 'string') group.entryIds.push(attempt.entryId);
+      group.attempts += 1;
+      const tokens = attempt.tokens || {};
+      if (finite(attempt.elapsedMs) !== null) {
+        group.elapsed.push(attempt.elapsedMs);
+        group.timed += 1;
+      }
+      for (const [value, field] of [[tokens.inputTokens, 'input'], [tokens.cachedInputTokens, 'cached'], [tokens.outputTokens, 'output']]) {
+        if (finite(value) !== null) group[field].push(value);
+      }
+      const total = finite(tokens.totalTokens) !== null ? tokens.totalTokens
+        : finite(tokens.inputTokens) !== null && finite(tokens.outputTokens) !== null
+          ? tokens.inputTokens + tokens.outputTokens : null;
+      if (total !== null) { group.totals.push(total); group.known += 1; }
+    });
+    const sum = function (values) { return values.length ? values.reduce(function (total, value) { return total + value; }, 0) : null; };
+    const tasks = [...groups.values()].map(function (group) { return {
+      taskId: group.taskId, assignmentId: group.assignmentId, round: group.round, role: group.role,
+      totalTokens: sum(group.totals), inputTokens: sum(group.input), cachedInputTokens: sum(group.cached),
+      outputTokens: sum(group.output), unknownTokenRows: group.attempts - group.known,
+      elapsedMs: sum(group.elapsed), unknownTimeRows: group.attempts - group.timed,
+      entryIds: group.entryIds, attempts: group.attempts
+    }; });
+    return { tasks: tasks, unattributedUsageRows: unattributedUsageRows };
+  }
+  function liveCoversPersistedTask(snapshotTask, liveTask) {
+    if (!Array.isArray(snapshotTask.entryIds) || !snapshotTask.entryIds.length || !Array.isArray(liveTask.entryIds)) return false;
+    const liveIds = new Set(liveTask.entryIds);
+    return snapshotTask.entryIds.every(function (entryId) { return typeof entryId === 'string' && liveIds.has(entryId); });
+  }
+  function taskHasKnownTokens(task) {
+    const tokens = normalizeTask(task);
+    return [tokens.totalTokens, tokens.inputTokens, tokens.cachedInputTokens, tokens.outputTokens].some(function (value) { return finite(value) !== null; });
+  }
+  function missingAttemptCount(snapshotTask, liveTask) {
+    const expected = finite(snapshotTask.attempts);
+    return expected === null ? 0 : Math.max(0, expected - liveTask.attempts);
+  }
+  function liveCoversPersistedSession(snapshot, live, usage) {
+    const snapshotTasks = snapshot && Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
+    if (!snapshotTasks.length || live.unattributedUsageRows) return false;
+    const liveByKey = new Map(live.tasks.map(function (task) { return [JSON.stringify([
+      task.assignmentId ? 'assignment' : 'task', task.assignmentId || task.taskId || null
+    ]), task]; }));
+    if (liveByKey.size !== snapshotTasks.length) return false;
+    for (const task of snapshotTasks) {
+      const key = task.assignmentId || task.assignment_id
+        ? JSON.stringify(['assignment', task.assignmentId || task.assignment_id])
+        : JSON.stringify(['task', task.taskId || task.task_id || null]);
+      const liveTask = liveByKey.get(key);
+      if (!liveTask || !liveCoversPersistedTask(task, liveTask)) return false;
+      if (!Array.isArray(task.entryIds) || !Array.isArray(liveTask.entryIds)
+        || task.entryIds.length !== liveTask.entryIds.length
+        || new Set(task.entryIds).size !== task.entryIds.length
+        || new Set(liveTask.entryIds).size !== liveTask.entryIds.length) return false;
+      const expectedAttempts = finite(task.attempts);
+      if (expectedAttempts !== null && expectedAttempts !== liveTask.attempts) return false;
+    }
+    const snapshotAttempts = finite(snapshot.total && snapshot.total.attempts);
+    const liveAttempts = finite(usage && usage.total && usage.total.attempts);
+    return snapshotAttempts === null || liveAttempts === null || snapshotAttempts === liveAttempts;
+  }
+  function mergeLiveTokenData(snapshot, usage) {
+    const live = liveTokenTasks(usage && usage.performance);
+    if (!live) return snapshot;
+    const merged = Object.assign({}, snapshot, { tasks: (snapshot.tasks || []).map(function (task) { return Object.assign({}, task); }) });
+    const keyOf = function (task) {
+      const assignmentId = task.assignmentId || task.assignment_id || null;
+      return assignmentId
+        ? JSON.stringify(['assignment', assignmentId])
+        : JSON.stringify(['task', task.taskId || task.task_id || null]);
+    };
+    const byKey = new Map(merged.tasks.map(function (task) { return [keyOf(task), task]; }));
+    live.tasks.forEach(function (task) {
+      const key = keyOf(task);
+      let target = byKey.get(key);
+      if (!target) {
+        target = Object.assign({ state: null, timingKind: 'measured' }, task);
+        merged.tasks.push(target);
+        byKey.set(key, target);
+      } else {
+        const complete = liveCoversPersistedTask(target, task);
+        const missingAttempts = missingAttemptCount(target, task);
+        if (!taskHasKnownTokens(target) || complete) {
+          target.totalTokens = task.totalTokens;
+          target.inputTokens = task.inputTokens;
+          target.cachedInputTokens = task.cachedInputTokens;
+          target.outputTokens = task.outputTokens;
+          target.unknownTokenRows = task.unknownTokenRows + missingAttempts;
+        }
+        const hasPersistedMeasuredTime = finite(target.elapsedMs) !== null && target.timingKind !== 'lifecycle';
+        const canUpgradeLifecycle = target.timingKind === 'lifecycle';
+        if ((!hasPersistedMeasuredTime || complete || canUpgradeLifecycle) && finite(task.elapsedMs) !== null) {
+          target.elapsedMs = task.elapsedMs;
+          target.unknownTimeRows = task.unknownTimeRows + missingAttempts;
+          target.timingKind = 'measured';
+        } else if (!hasPersistedMeasuredTime && !canUpgradeLifecycle) {
+          target.unknownTimeRows = task.unknownTimeRows + missingAttempts;
+          target.timingKind = 'measured';
+        }
+      }
+    });
+    if (usage && usage.total) {
+      merged.total = Object.assign({}, merged.total);
+      const tokenFields = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens', 'totalTokens'];
+      const knownSnapshotAggregate = tokenFields.some(function (field) { return finite(merged.total[field]) !== null; });
+      const completeCoverage = liveCoversPersistedSession(snapshot, live, usage);
+      if (!knownSnapshotAggregate || completeCoverage) {
+        for (const field of tokenFields) merged.total[field] = finite(usage.total[field]) !== null ? usage.total[field] : null;
+      }
+      if ((completeCoverage || finite(merged.total.attempts) === null) && finite(usage.total.attempts) !== null) {
+        merged.total.attempts = usage.total.attempts;
+      }
+      if (completeCoverage || (!knownSnapshotAggregate && finite(snapshot.unattributedUsageRows) === null)) {
+        merged.unattributedUsageRows = live.unattributedUsageRows;
+      }
+    }
+    return merged;
   }
   function lifecycleTasks() {
     const tasks = [];
@@ -227,9 +404,10 @@
     const knownTimes = tasks.map(function (task) { return task.elapsedMs; }).filter(function (value) { return value !== null; });
     const workTotal = knownTimes.reduce(function (sum, value) { return sum + value; }, 0);
     const partialTokenRows = tasks.reduce(function (sum, task) { return sum + task.unknownTokenRows; }, 0);
-    const unattributedUsageRows = snapshot ? 0 : finite(state.usage && state.usage.unknownCount) || 0;
+    const unattributedUsageRows = snapshot ? finite(snapshot.unattributedUsageRows) || 0 : finite(state.usage && state.usage.unknownCount) || 0;
     const unknownTokenRows = partialTokenRows + unattributedUsageRows;
     const unknownTimeRows = tasks.reduce(function (sum, task) { return sum + task.unknownTimeRows; }, 0);
+    const timing = timeProvenance(tasks);
     $('tokenTotal').textContent = totalTokens === null ? 'Unknown' : fmt(totalTokens) + (unknownTokenRows ? '+' : '');
     const tokenParts = [];
     if (total && finite(total.inputTokens) !== null) tokenParts.push('Input ' + fmt(total.inputTokens));
@@ -240,9 +418,11 @@
     if (unattributedUsageRows) tokenParts.push(unattributedUsageRows + ' unattributed usage row(s)');
     $('tokenDetail').textContent = tokenParts.join(' | ') || (snapshot ? 'Token detail unavailable' : 'Session-level usage total');
     $('timeTotal').textContent = knownTimes.length ? duration(workTotal) + (unknownTimeRows ? '+' : '') : 'Unknown';
-    $('timeDetail').textContent = snapshot
-      ? knownTimes.length + '/' + tasks.length + ' tasks measured' + (unknownTimeRows ? '; ' + unknownTimeRows + ' task contribution(s) unknown' : '') + '; spans may overlap'
-      : knownTimes.length + '/' + tasks.length + ' lifecycle spans known; these are not model latency';
+    $('timeDetail').textContent = timeProvenanceText(timing, tasks.length)
+      + (unknownTimeRows ? '; ' + unknownTimeRows + ' timing contribution(s) unknown' : '')
+      + (timing.lifecycle ? '; lifecycle spans are not model latency' : '')
+      + (timing.measured ? '; measured durations include tools and startup when present' : '')
+      + (knownTimes.length ? '; spans may overlap' : '');
     renderMetricChart('taskTokenChart', 'taskTokenCoverage', tasks, 'tokens');
     renderMetricChart('taskTimeChart', 'taskTimeCoverage', tasks, 'time');
 
@@ -271,11 +451,12 @@
     }
     $('rowCount').textContent = tasks.length ? 'Showing ' + Math.min(state.visibleTaskCount, tasks.length) + ' of ' + tasks.length + ' tasks' : '';
     $('loadMoreButton').classList.toggle('hidden', tasks.length <= state.visibleTaskCount);
-    if (snapshot) {
-      $('tableNote').textContent = 'Snapshot generated ' + (snapshot.generatedAt ? new Date(snapshot.generatedAt).toLocaleString() : 'at an unknown time') + '. Task elapsed time includes tools and startup when present; total task time may overlap.';
-    } else {
-      $('tableNote').textContent = 'Legacy fallback: task token values are unknown because the live usage endpoint only reports session and role totals.' + (finite(state.usage && state.usage.unknownCount) ? ' ' + state.usage.unknownCount + ' usage row(s) are unattributed; session token total is partial.' : '') + ' Working time uses dispatch-created to journal-updated lifecycle spans.';
-    }
+    const timestamp = snapshot && snapshot.generatedAt
+      ? 'Performance data generated ' + new Date(snapshot.generatedAt).toLocaleString() + '. '
+      : '';
+    const legacyTokens = !snapshot && state.usage && !state.usage.performance
+      ? 'Legacy token fallback provides session and role totals only. ' : '';
+    $('tableNote').textContent = timestamp + legacyTokens + timeSourceNote(timing);
   }
 
   async function requestJson(url, signal, noStore) {
@@ -354,14 +535,23 @@
     setMessage('Loading session performance...');
     const base = '/api/projects/' + encodeURIComponent(projectId) + '/sessions/' + encodeURIComponent(sessionId);
     const snapshotUrl = '/ui/metrics/' + encodeURIComponent(projectId) + '/' + encodeURIComponent(sessionId) + '.json';
+    let detailedUsageRequest;
     try {
-      const snapshot = await requestJson(snapshotUrl, controller.signal, true);
+      detailedUsageRequest = requestJson(base + '/usage?details=performance', controller.signal);
+      const results = await Promise.allSettled([
+        requestJson(snapshotUrl, controller.signal, true),
+        detailedUsageRequest
+      ]);
       if (requestId !== state.requestId || projectId !== state.projectId || sessionId !== state.sessionId) return;
+      const snapshotResult = results[0];
+      const usageResult = results[1];
+      const snapshot = snapshotResult.status === 'fulfilled' ? snapshotResult.value : null;
+      const usage = usageResult.status === 'fulfilled' ? usageResult.value : null;
       if (snapshot.schema !== 'task-metrics/v1' || snapshot.contextId !== sessionId) throw new Error('Task metrics snapshot does not match this session');
-      state.snapshot = snapshot;
-      state.usage = null;
+      state.snapshot = mergeLiveTokenData(snapshot, usage);
+      state.usage = usage;
       state.session = null;
-      render(snapshot);
+      render(state.snapshot);
       setRefreshStatus('Updated ' + new Date().toLocaleTimeString());
       return;
     } catch (snapshotError) {
@@ -369,12 +559,26 @@
       state.snapshot = null;
     }
     const results = await Promise.allSettled([
-      requestJson(base + '/usage', controller.signal),
+      detailedUsageRequest || requestJson(base + '/usage?details=performance', controller.signal),
       requestJson(base, controller.signal)
     ]);
     if (requestId !== state.requestId || projectId !== state.projectId || sessionId !== state.sessionId) return;
-    state.usage = results[0].status === 'fulfilled' ? results[0].value : null;
+    const usage = results[0].status === 'fulfilled' ? results[0].value : null;
+    state.usage = usage;
     state.session = results[1].status === 'fulfilled' ? results[1].value : null;
+    if (usage && usage.performance && usage.performance.schema === 'session-performance/v1') {
+      state.snapshot = mergeLiveTokenData({
+        schema: 'task-metrics/v1', generatedAt: usage.performance.generatedAt, contextId: sessionId,
+        total: usage.total, tasks: lifecycleTasks()
+      }, usage);
+      render(state.snapshot);
+      if (!state.session) {
+        $('pageMessage').textContent = 'Partial data: task lifecycle data is unavailable.';
+        $('pageMessage').classList.remove('hidden');
+      }
+      setRefreshStatus('Updated ' + new Date().toLocaleTimeString());
+      return;
+    }
     if (!state.usage && !state.session) {
       setMessage('Could not load session data. Try refreshing.', true);
       setRefreshStatus('Refresh failed');
