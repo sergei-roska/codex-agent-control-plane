@@ -64,7 +64,7 @@ test('disabled by default: the policy and exec request are exactly the agent che
   assert.deepEqual(exec.calls, [{
     command: ['pytest'],
     cwd: ws,
-    sandboxPolicy: { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
+    sandboxPolicy: { type: 'workspaceWrite', writableRoots: [], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
     timeoutMs: 600000,
   }]);
   assert.deepEqual(Object.keys(exec.calls[0]), ['command', 'cwd', 'sandboxPolicy', 'timeoutMs']);
@@ -89,7 +89,7 @@ test('enabled: policy, env, and a fresh directory that is removed after a pass',
   const [call] = exec.calls;
   const [dir] = call.sandboxPolicy.writableRoots;
   assert.deepEqual(call.sandboxPolicy, {
-    type: 'workspaceWrite', writableRoots: [dir], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true,
+    type: 'workspaceWrite', writableRoots: [dir], networkAccess: true, excludeTmpdirEnvVar: true, excludeSlashTmp: true,
   });
   assert.equal(path.dirname(dir), root);
   assert.equal(call.cwd, ws);

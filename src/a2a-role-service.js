@@ -8,8 +8,9 @@ const express = require('express');
 const Database = require('better-sqlite3');
 const {
   WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, classifyCodexError, findCodexErrorInfo,
-  BoundaryViolation, checkSpecialistRequest, parseWorkerReport, pathsOutsideAllowed,
+  BoundaryViolation, checkSpecialistRequest, normalizeSpecialistRequest, parseWorkerReport, pathsOutsideAllowed,
 } = require('./contracts');
+const { scopedExecutionDetails } = require('./delivery-role-capabilities');
 const { WriterAdmission } = require('./writer-admission');
 const { loadSkillCatalog, resolveSkillSelection } = require('./skill-catalog');
 const { loadMcpCatalog, mcpToolPins } = require('./mcp-catalog');
@@ -364,10 +365,11 @@ function messageCorrelations(requestContext) {
 
 function makeExecutor({
   roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, activityStore = null, skillCatalog,
-  mcpCatalog, lanes = null, stagingLog, executionPermissions = 'inherit',
+  mcpCatalog, lanes = null, stagingLog, executionPermissions = 'inherit', resolveVerifierCapability = null,
 }) {
   const writable = role.sandbox !== 'read-only';
   const reservations = new Map();
+  const verifierReservations = new Map();
 
   // Release the workspace when the outcome is known; otherwise mark the writer unresolved and
   // retry reconciliation while its process is being terminated. Returns writerExecution metadata.
@@ -691,6 +693,9 @@ function makeExecutor({
         }
       };
       let structured = null;
+      let deliveryCapability = null;
+      let deliveryReservationSettled = false;
+      let verifierRunEvidence = null;
       try {
         let input;
         let rejection = null;
@@ -703,11 +708,36 @@ function makeExecutor({
           }
           if (raw) {
             try {
-              structured = checkSpecialistRequest(raw, {
+              const boundaryRole = {
                 id: roleId,
                 name: auditRole ? 'auditor' : role.name,
                 sandbox: role.sandbox,
-              }, { workspace });
+              };
+              const normalized = normalizeSpecialistRequest(raw, boundaryRole, { workspace });
+              const metadata = requestContext.userMessage?.metadata || {};
+              if (verifierRole && metadata.capabilityId !== undefined) {
+                if (typeof resolveVerifierCapability !== 'function') throw new BoundaryViolation('review.capability', 'verifier_capability_unavailable', 'Scoped verifier admission is unavailable.');
+                if (metadata.providerContextId !== contextId) throw new BoundaryViolation('review.capability', 'verifier_context_mismatch', 'Scoped verifier context does not match the provider context.');
+                deliveryCapability = await resolveVerifierCapability({
+                  projectId: metadata.projectId, objectiveId: metadata.objectiveId, taskId: metadata.taskId,
+                  attemptId: metadata.attemptId, fencingToken: metadata.fencingToken,
+                  providerContextId: metadata.providerContextId, requestDigest: metadata.requestDigest,
+                  capabilityId: metadata.capabilityId, externalTaskId: taskId, role: 'verifier', request: normalized,
+                }, normalized);
+                const details = scopedExecutionDetails(deliveryCapability);
+                details.assertCurrent();
+                if (details.capabilityId !== metadata.capabilityId || details.taskId !== metadata.taskId
+                  || details.attemptId !== metadata.attemptId || details.requestDigest !== metadata.requestDigest) {
+                  throw new BoundaryViolation('review.capability', 'verifier_capability_mismatch', 'Scoped verifier identity does not match the request.');
+                }
+                const prior = verifierReservations.get(details.attemptId);
+                if (prior && prior !== taskId) throw new BoundaryViolation('review.capability', 'verifier_attempt_busy', 'This verifier attempt already has an active invocation.');
+                verifierReservations.set(details.attemptId, taskId);
+              }
+              structured = checkSpecialistRequest(raw, boundaryRole, {
+                workspace, capability: deliveryCapability, requestDigest: metadata.requestDigest,
+              });
+              if (deliveryCapability) deliveryReservationSettled = true;
               const pinnedFallbackCandidate = role.sandbox === 'read-only'
                 && PINNED_CHECK_READ_ONLY_ROLES.has(canonicalRole)
                 && structured.review?.kind === 'pinned_check';
@@ -730,7 +760,7 @@ function makeExecutor({
                     throw new BoundaryViolation('review.continuation', 'review_origin_unknown', 'The originating review target is unavailable; start a fresh review.');
                   }
                 }
-                if (auditRole || pinnedCheckReviewer) {
+                if ((auditRole || pinnedCheckReviewer) && !deliveryCapability) {
                   const holder = externalWriterHolder();
                   if (holder && ['active', 'unresolved'].includes(holder.state)) {
                     throw new BoundaryViolation('review.concurrent_writer', 'review_writer_unsettled', 'A pinned review cannot start while a workspace writer is active or unresolved.');
@@ -741,7 +771,9 @@ function makeExecutor({
                     throw new BoundaryViolation('review.reservation', 'review_reservation_unavailable', `Review reservation could not be acquired: ${error?.code || 'admission_blocked'}`);
                   }
                 }
-                reviewTargetBefore = targetForDirectReview(reviewContext, structured);
+                reviewTargetBefore = deliveryCapability
+                  ? { known: true, identity: `candidate:${scopedExecutionDetails(deliveryCapability).candidateId}` }
+                  : targetForDirectReview(reviewContext, structured);
                 if (!reviewTargetBefore.known) {
                   throw new BoundaryViolation('review.target', 'review_target_unknown', `Review target identity is unavailable: ${reviewTargetBefore.reason}`);
                 }
@@ -808,7 +840,7 @@ function makeExecutor({
           }
         } catch (error) {
           if (auditRole && error instanceof BoundaryViolation) rejection = error;
-          if (auditRole || pinnedCheckReviewer || (verifierRole && reviewContext)) {
+          if (!deliveryCapability && (auditRole || pinnedCheckReviewer || (verifierRole && reviewContext))) {
             const code = error?.violations?.[0]?.code || (stagingWriteFailed ? 'staging_log_unavailable' : 'review_preflight_failed');
             setReviewOutcome({ status: 'rejected', reason: code, targetAfter: reviewTargetBefore, stable: false });
             try {
@@ -858,7 +890,7 @@ function makeExecutor({
         }
 
         // A lane only for a structured workspace-write request while the lane probe holds (R11).
-        const useLane = writable && Boolean(lanes) && role.sandbox === 'workspace-write'
+        const useLane = !deliveryCapability && writable && Boolean(lanes) && role.sandbox === 'workspace-write'
           && structured?.executionTarget !== 'shared'
           && Array.isArray(structured?.allowedFiles) && structured.allowedFiles.length > 0 && await lanes.available();
         if (useLane) {
@@ -910,7 +942,7 @@ function makeExecutor({
             return;
           }
           lane = prepared.lane;
-        } else if (writable) {
+        } else if (writable && !deliveryCapability) {
           if (admission.holder()) {
             eventBus.publish(AgentEvent.statusUpdate({
               taskId,
@@ -975,8 +1007,8 @@ function makeExecutor({
             laneDone = true;
           }
           recordPreTurn('canceled');
-          if (auditRole) writeStaging('audit_failure', 'canceled', { stage: 'pre_run', reason: 'canceled' });
-          else if (verifierRole && reviewContext) writeStaging('verifier_failure', 'canceled', { stage: 'pre_run', reason: 'canceled' });
+          if (!deliveryCapability && auditRole) writeStaging('audit_failure', 'canceled', { stage: 'pre_run', reason: 'canceled' });
+          else if (!deliveryCapability && verifierRole && reviewContext) writeStaging('verifier_failure', 'canceled', { stage: 'pre_run', reason: 'canceled' });
           else writeStaging('role_failure', 'canceled', { stage: 'pre_run' }, { required: false });
           publishTerminalStatus(TaskState.TASK_STATE_CANCELED);
           return;
@@ -987,7 +1019,7 @@ function makeExecutor({
           key: taskId, runId: activityRunId(requestContext, input), role: canonicalRoleId(roleId),
         });
         const callRun = (threadId, text) => {
-          if (auditRole || pinnedCheckReviewer) {
+          if ((auditRole || pinnedCheckReviewer) && !deliveryCapability) {
             const holder = externalWriterHolder();
             if (holder) {
               throw new BoundaryViolation('review.concurrent_writer', 'review_writer_unsettled', 'A pinned review cannot run while another workspace writer is active or unresolved.');
@@ -1000,9 +1032,13 @@ function makeExecutor({
               targetKnown: Boolean(reviewTargetBefore?.known),
             });
           }
-          return appServer.run({
+          const scoped = deliveryCapability ? scopedExecutionDetails(deliveryCapability) : null;
+          if (scoped) scoped.assertCurrent();
+          if (scoped && !scoped.verifyCandidate()) throw new BoundaryViolation('review.candidate', 'verifier_candidate_drift', 'Frozen verifier candidate changed before execution.');
+          if (scoped) deliveryReservationSettled = false;
+          const runPromise = appServer.run({
             role: { id: roleId, ...role },
-            cwd: lane ? lane.workspacePath : workspace,
+            cwd: scoped ? scoped.scratchRoot : lane ? lane.workspacePath : workspace,
             permissionWorkspace: workspace,
             input: lane ? lanes.laneInput(lane, text)
               : auditRole && reviewContext?.kind === 'pinned_check'
@@ -1013,12 +1049,37 @@ function makeExecutor({
             selectedSkills,
             selectedMcpTools,
             executionPermissions,
+            ...(scoped ? { deliveryCapability } : {}),
             outputSchema: WORKER_REPORT_SCHEMA,
             signal: controller.signal,
             ...(reviewExecution ? { onTurnStart: (info) => admission.recordTurnStart(reviewExecution.executionId, info) }
               : execution ? { onTurnStart: (info) => admission.recordTurnStart(execution.executionId, info) } : {}),
             ...(lane ? { sandboxPolicy: lanes.sandboxPolicy(lane), onTurnStart: (info) => lanes.recordTurnStart(lane, info) } : {}),
             ...(activity ? { onEvent: (event) => activity.observe(event) } : {}),
+          });
+          return runPromise.then((result) => {
+            if (scoped) {
+              deliveryReservationSettled = result.execution?.turnTerminal === true || result.execution?.turnStartRejected === true;
+              const candidateVerified = scoped.verifyCandidate();
+              if (!candidateVerified) throw new BoundaryViolation('review.candidate', 'verifier_candidate_drift', 'Frozen verifier candidate changed during execution.');
+              if (result.threadId) scoped.pinObservedThread(result.threadId);
+              verifierRunEvidence = {
+                capabilityId: scoped.capabilityId,
+                taskId: scoped.taskId,
+                attemptId: scoped.attemptId,
+                candidateId: scoped.candidateId,
+                inputManifestDigest: scoped.inputManifestDigest,
+                candidateVerified: true,
+                providerThreadId: result.threadId || null,
+                execution: result.execution ? {
+                  turnStartSent: result.execution.turnStartSent === true,
+                  turnStartRejected: result.execution.turnStartRejected === true,
+                  turnTerminal: result.execution.turnTerminal === true,
+                  processIdentity: result.execution.processIdentity || null,
+                } : null,
+              };
+            }
+            return result;
           });
         };
         try {
@@ -1057,6 +1118,11 @@ function makeExecutor({
           }
         } catch (error) {
           runError = error;
+          if (deliveryCapability && !deliveryReservationSettled) {
+            const execution = error?.execution;
+            deliveryReservationSettled = Boolean(error?.outcomeUnknown !== true && execution
+              && (execution.turnTerminal === true || execution.turnStartRejected === true || execution.turnStartSent === false));
+          }
         } finally {
           activity?.end(runError
             ? (controller.signal.aborted ? 'canceled' : 'failed')
@@ -1111,7 +1177,7 @@ function makeExecutor({
         const completed = result?.status === 'completed';
         const parsedReport = completed ? parseWorkerReport(resultText) : { report: null, error: null };
         let effectiveCompleted = completed;
-        if ((auditRole || pinnedCheckReviewer) && !canceled) {
+        if (!deliveryCapability && (auditRole || pinnedCheckReviewer) && !canceled) {
           const targetAfter = targetForDirectReview(reviewContext, structured);
           const writerClear = !externalWriterHolder();
           const stable = Boolean(reviewTargetBefore?.known && targetAfter.known
@@ -1177,7 +1243,7 @@ function makeExecutor({
             effectiveCompleted = false;
             setReviewOutcome({ status: 'inconclusive', reason: 'staging_log_unavailable', targetAfter, stable: false });
           }
-        } else if (verifierRole && reviewContext && !canceled) {
+        } else if (!deliveryCapability && verifierRole && reviewContext && !canceled) {
           const targetAfter = targetForDirectReview(reviewContext, structured);
           const holder = admission.holder();
           const writerClear = !(holder && ['active', 'unresolved'].includes(holder.state));
@@ -1247,7 +1313,7 @@ function makeExecutor({
           }
         } else if (auditRole || pinnedCheckReviewer) {
           writeStaging(auditRole ? 'audit_failure' : 'pinned_check_failure', 'failed', { stage: 'execution', reason: 'review_canceled' });
-        } else if (verifierRole && reviewContext) {
+        } else if (!deliveryCapability && verifierRole && reviewContext) {
           writeStaging('verifier_failure', 'failed', { stage: 'execution', reason: 'verification_canceled' });
         } else if (!reviewRole) {
           writeStaging(completed && !canceled ? 'role_result' : 'role_failure', completed && !canceled ? 'completed' : 'failed', {
@@ -1300,6 +1366,7 @@ function makeExecutor({
                 ...(parsedReport.error ? { reportError: parsedReport.error } : {}),
                 boundary,
                 threadId: result.threadId || null,
+                ...(verifierRunEvidence ? { verifierExecution: verifierRunEvidence } : {}),
                 ...(continued ? { continued } : {}),
                 ...continuationMetadata(),
             ...(selectedSkills.length ? { selectedSkills: selectedSkills.map(({ id, sha256 }) => ({ id, sha256 })) } : {}),
@@ -1335,7 +1402,7 @@ function makeExecutor({
           laneDone = true;
           try { writer = lanes.abandon(lane); } catch (_) { /* keep the original error */ }
         }
-        if (auditRole || pinnedCheckReviewer) {
+        if (!deliveryCapability && (auditRole || pinnedCheckReviewer)) {
           const reason = error?.violations?.[0]?.code || (stagingWriteFailed ? 'staging_log_unavailable' : 'audit_execution_failed');
           if (!reviewOutcomeMetadata) {
             const targetAfter = reviewContext && structured ? targetForDirectReview(reviewContext, structured) : null;
@@ -1356,7 +1423,7 @@ function makeExecutor({
             });
           } catch (_) { stagingWriteFailed = true; }
           if (stagingWriteFailed) setReviewOutcome({ status: 'inconclusive', reason: 'staging_log_unavailable', stable: false });
-        } else if (verifierRole && reviewContext) {
+        } else if (!deliveryCapability && verifierRole && reviewContext) {
           const targetAfter = structured ? targetForDirectReview(reviewContext, structured) : null;
           if (!reviewOutcomeMetadata) setReviewOutcome({
             status: 'inconclusive',
@@ -1393,6 +1460,10 @@ function makeExecutor({
           },
         );
       } finally {
+        if (deliveryCapability && deliveryReservationSettled) {
+          const details = scopedExecutionDetails(deliveryCapability);
+          if (verifierReservations.get(details.attemptId) === taskId) verifierReservations.delete(details.attemptId);
+        }
         if (reviewExecution && !reviewExecutionSettled) {
           const turnStarted = Boolean(admission.get(reviewExecution.executionId)?.turnStart);
           await settleReviewReservation(!turnStarted, controller.signal.aborted ? 'review_canceled' : 'review_exit');
@@ -1456,7 +1527,7 @@ function rejectOverlappingTask(executor) {
 /** Mount one independently stored A2A JSON-RPC agent per role. */
 function registerRoleAgents(app, {
   roles, appServer, workspace, baseUrl, taskStoreFactory = () => new InMemoryTaskStore(), admission, reconcileRetry, usageLedger, activityStore,
-  skillCatalog = loadSkillCatalog(), mcpCatalog = loadMcpCatalog(), lanes = null, stagingLog = new InMemoryStagingLog(), executionPermissions = 'inherit',
+  skillCatalog = loadSkillCatalog(), mcpCatalog = loadMcpCatalog(), lanes = null, stagingLog = new InMemoryStagingLog(), executionPermissions = 'inherit', resolveVerifierCapability = null,
 }) {
   if (!app || typeof app.use !== 'function' || typeof app.get !== 'function') {
     throw new TypeError('app must be an Express application');
@@ -1480,7 +1551,7 @@ function registerRoleAgents(app, {
     const endpoint = new URL(route, `${origin.origin}/`).toString();
     const card = makeRoleCard({ roleId, role, endpoint });
     const executor = makeExecutor({
-      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, mcpCatalog, lanes, stagingLog, executionPermissions,
+      roleId, role, appServer, workspace, admission, reconcileRetry, usageLedger, activityStore, skillCatalog, mcpCatalog, lanes, stagingLog, executionPermissions, resolveVerifierCapability,
     });
     const handler = new DefaultRequestHandler(
       card,

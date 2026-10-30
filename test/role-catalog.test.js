@@ -106,10 +106,20 @@ test('rejects profiles with missing required settings', (t) => {
   assert.throws(() => loadRoles({ profilesDir: copiedProfiles }), /model_reasoning_effort is missing/);
 });
 
-test('every shipped role and the lead have an empty MCP allowlist and skills off', () => {
-  for (const role of [...loadRoles().values(), createLeadRole()]) {
-    assert.deepEqual(role.tools, { mcpServers: [], skills: false }, role.name);
-  }
+test('shipped roles have their curated MCP allowlists and skills off', () => {
+  const drupal = ['harness-drupal-static', 'harness-drupal-config', 'harness-drupal-content', 'harness-drupal-ops', 'harness-drupal-render', 'harness-drupal-db-ops'];
+  const expected = {
+    architect: [...drupal, 'harness-atlassian', 'harness-figma', 'harness-context7'],
+    auditor: drupal,
+    engineer: [...drupal, 'harness-figma', 'harness-context7'],
+    explorer: [...drupal, 'harness-atlassian', 'harness-context7'],
+    'senior-engineer': [...drupal, 'harness-figma', 'harness-context7'],
+    'recovery-engineer': drupal,
+    scout: [...drupal, 'harness-atlassian', 'harness-context7'],
+    verifier: drupal,
+  };
+  for (const [name, role] of loadRoles()) assert.deepEqual(role.tools, { mcpServers: expected[name], skills: false }, name);
+  assert.deepEqual(createLeadRole().tools, { mcpServers: [], skills: false });
 });
 
 function withProfile(mutate) {
@@ -134,8 +144,8 @@ test('parses an a2a_tools table and treats a missing table as deny-all', (t) => 
 test('rejects malformed a2a_tools tables', (t) => {
   const bad = [
     ['unknown key', (s) => `${s}extra = 1\n`],
-    ['non-array allowlist', (s) => s.replace('mcp_servers = []', 'mcp_servers = "alpha"')],
-    ['bad server name', (s) => s.replace('mcp_servers = []', 'mcp_servers = ["a b"]')],
+    ['non-array allowlist', (s) => s.replace(/^mcp_servers = .*$/m, 'mcp_servers = "alpha"')],
+    ['bad server name', (s) => s.replace(/^mcp_servers = .*$/m, 'mcp_servers = ["a b"]')],
     ['non-boolean skills', (s) => s.replace('skills = false', 'skills = "yes"')],
     ['duplicate field', (s) => `${s}skills = true\n`],
     ['unknown table', (s) => `${s}\n[other]\n`],
@@ -157,6 +167,21 @@ test('canonical role names and labels retain legacy ID compatibility', () => {
   assert.equal(getRole(loadRoles(), 'orch-builder').name, 'engineer');
   assert.equal(createLeadRole().name, 'coordinator');
   assert.equal(createLeadRole().displayName, 'Team Coordinator');
+  assert.equal(createLeadRole().fastMode, 'off');
+});
+
+test('role defaults implement the Luna to Terra to Sol model ladder with Fast disabled', () => {
+  const roles = loadRoles();
+  assert.deepEqual(Object.fromEntries([...roles].map(([name, role]) => [name, [role.model, role.effort, role.fastMode]])), {
+    architect: ['gpt-6.1-sol', 'xhigh', 'off'],
+    auditor: ['gpt-6.1-sol', 'high', 'off'],
+    engineer: ['gpt-6-luna', 'high', 'off'],
+    explorer: ['gpt-6-luna', 'medium', 'off'],
+    'recovery-engineer': ['gpt-6.1-terra', 'high', 'off'],
+    scout: ['gpt-6-luna', 'medium', 'off'],
+    'senior-engineer': ['gpt-6.1-sol', 'high', 'off'],
+    verifier: ['gpt-6.1-terra', 'high', 'off'],
+  });
 });
 
 test('legacy-named custom profiles normalize IDs while checking their source filenames', (t) => {

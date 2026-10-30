@@ -41,7 +41,7 @@ const writeRaw = (value) => {
 
 describe('normalizeOverride', () => {
   it('keeps set fields and drops empty ones', () => {
-    assert.deepEqual(normalizeOverride({ model: ' gpt-6-luna ', effort: 'xhigh', extraRules: ' rule ' }), { model: 'gpt-6-luna', effort: 'xhigh', extraRules: 'rule' });
+    assert.deepEqual(normalizeOverride({ model: ' custom/model:v2 ', effort: 'xhigh', extraRules: ' rule ', maxConcurrentAgents: 4, fastMode: 'on' }), { model: 'custom/model:v2', effort: 'xhigh', extraRules: 'rule', maxConcurrentAgents: 4, fastMode: 'on' });
     assert.deepEqual(normalizeOverride({ model: '', effort: null, extraRules: '  \n' }), {});
     assert.deepEqual(normalizeOverride(null), {});
     assert.deepEqual(normalizeOverride(undefined), {});
@@ -49,13 +49,15 @@ describe('normalizeOverride', () => {
 
   it('rejects bad values with a message', () => {
     for (const input of [
-      { model: 'claude-3' }, { model: 'gpt-' }, { model: 7 }, { effort: 'max' }, { effort: 1 },
+      { model: 7 }, { model: 'gpt-\nmalformed' }, { effort: 1 }, { effort: 'bad\nvalue' },
       { extraRules: 'a {{X}}' }, { extraRules: 'a }}' }, { extraRules: 'x'.repeat(4001) }, { extraRules: {} },
       { extra: 'x' }, [], 'text',
     ]) {
       assert.throws(() => normalizeOverride(input), RoleOverrideError, JSON.stringify(input).slice(0, 40));
     }
     assert.equal(normalizeOverride({ extraRules: 'x'.repeat(4000) }).extraRules.length, 4000);
+    assert.throws(() => normalizeOverride({ model: 'custom-v1', effort: 'high', maxConcurrentAgents: 0 }), /integer from 1 to 12/);
+    assert.throws(() => normalizeOverride({ model: 'custom-v1', effort: 'high', fastMode: 'turbo' }), /Fast mode/);
   });
 });
 
@@ -78,10 +80,10 @@ describe('role names and documents', () => {
 });
 
 describe('effectiveRole', () => {
-  it('returns the base role itself without an override', () => {
+  it('projects capacity defaults without mutating the base role', () => {
     const base = baseRoles.get('architect');
-    assert.equal(effectiveRole(base, undefined), base);
-    assert.equal(effectiveRole(base, {}), base);
+    assert.equal(effectiveRole(base, undefined).maxConcurrentAgents, 1);
+    assert.equal(effectiveRole(base, {}).fastMode, 'off');
   });
 
   it('replaces model and effort and appends the rules block, leaving the base untouched', () => {
@@ -92,6 +94,8 @@ describe('effectiveRole', () => {
     assert.equal(role.effort, 'low');
     assert.equal(role.instructions, `${base.instructions}\n\n${RULES_HEADING}\nBe brief.`);
     assert.equal(role.sandbox, base.sandbox);
+    assert.equal(effectiveRole(base, { maxConcurrentAgents: 3, fastMode: 'off' }).maxConcurrentAgents, 3);
+    assert.equal(effectiveRole(base, { fastMode: 'off' }).fastMode, 'off');
     assert.deepEqual(base, original);
     const onlyRules = effectiveRole(base, { extraRules: 'R' });
     assert.equal(onlyRules.model, base.model);
@@ -114,7 +118,7 @@ describe('file read and write', () => {
 
   it('a missing file means no overrides; an invalid file is ignored with a warning, never thrown', () => {
     assert.deepEqual(readOverridesFile(file, known), { roles: {}, warning: null });
-    for (const raw of ['{ nope', '[]', JSON.stringify({ version: 1, roles: { architect: { effort: 'max' } } }), JSON.stringify({ version: 1, roles: { architect: { effort: 'low' }, ghost: { effort: 'low' } } })]) {
+    for (const raw of ['{ nope', '[]', JSON.stringify({ version: 1, roles: { architect: { effort: 1 } } }), JSON.stringify({ version: 1, roles: { architect: { effort: 'low' }, ghost: { effort: 'low' } } })]) {
       writeRaw(raw);
       const result = readOverridesFile(file, known);
       assert.deepEqual(result.roles, {});
@@ -127,17 +131,18 @@ describe('file read and write', () => {
 });
 
 describe('loadEffectiveRoles', () => {
-  it('without a file returns the base roles as they are', () => {
+  it('without a file exposes effective capacity defaults', () => {
     const loaded = loadEffectiveRoles({ roles: baseRoles, leadRole: baseLead });
-    assert.equal(loaded.roles, baseRoles);
-    assert.equal(loaded.leadRole, baseLead);
+    assert.equal(loaded.roles.get('engineer').maxConcurrentAgents, 4);
+    assert.equal(loaded.roles.get('explorer').maxConcurrentAgents, 2);
+    assert.equal(loaded.leadRole.maxConcurrentAgents, 1);
   });
 
   it('a missing file means the defaults without a warning', () => {
     const warnings = [];
     const loaded = loadEffectiveRoles({ file, roles: baseRoles, leadRole: baseLead, warn: (m) => warnings.push(m) });
-    assert.equal(loaded.roles, baseRoles);
-    assert.equal(loaded.leadRole, baseLead);
+    assert.equal(loaded.roles.get('engineer').maxConcurrentAgents, 4);
+    assert.equal(loaded.leadRole.maxConcurrentAgents, 1);
     assert.deepEqual(warnings, []);
   });
 
@@ -146,7 +151,8 @@ describe('loadEffectiveRoles', () => {
     const loaded = loadEffectiveRoles({ file, roles: baseRoles, leadRole: baseLead });
     assert.notEqual(loaded.roles, baseRoles);
     assert.equal(loaded.roles.get('architect').model, 'gpt-6-luna');
-    assert.equal(loaded.roles.get('engineer'), baseRoles.get('engineer'));
+    assert.equal(loaded.roles.get('engineer').model, baseRoles.get('engineer').model);
+    assert.equal(loaded.roles.get('engineer').maxConcurrentAgents, 4);
     assert.equal(loaded.leadRole.effort, 'high');
     assert.match(loaded.leadRole.instructions, /Lead rule\.$/);
     assert.equal(baseRoles.get('architect').model, loadRoles().get('architect').model);
@@ -160,8 +166,8 @@ describe('loadEffectiveRoles', () => {
     const warnings = [];
     writeRaw('{ nope');
     const loaded = loadEffectiveRoles({ file, roles: baseRoles, leadRole: baseLead, warn: (m) => warnings.push(m) });
-    assert.equal(loaded.roles, baseRoles);
-    assert.equal(loaded.leadRole, baseLead);
+    assert.equal(loaded.roles.get('engineer').maxConcurrentAgents, 4);
+    assert.equal(loaded.leadRole.maxConcurrentAgents, 1);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /Role overrides ignored/);
   });

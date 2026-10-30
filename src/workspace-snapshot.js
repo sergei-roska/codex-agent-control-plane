@@ -8,11 +8,12 @@ const { execFileSync } = require('node:child_process');
 // Ignored files are invisible to `git status`, so they are outside this snapshot.
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 
-function runGit(workspace, args) {
+function runGit(workspace, args, gitEnv) {
   return execFileSync('git', ['--no-optional-locks', '-C', workspace, ...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
     maxBuffer: GIT_MAX_BUFFER,
+    ...(gitEnv ? { env: gitEnv } : {}),
   });
 }
 
@@ -53,15 +54,17 @@ function compare(a, b) {
   return (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || (a.status < b.status ? -1 : a.status > b.status ? 1 : 0);
 }
 
-function takeSnapshot(workspace) {
+function takeSnapshot(workspace, options = {}) {
+  const gitEnv = options && typeof options === 'object' ? options.gitEnv : null;
+  const git = (args) => runGit(workspace, args, gitEnv);
   try {
-    if (runGit(workspace, ['rev-parse', '--is-inside-work-tree']).trim() !== 'true') {
+    if (git(['rev-parse', '--is-inside-work-tree']).trim() !== 'true') {
       return { kind: 'unavailable', reason: 'not_a_git_work_tree' };
     }
-    const prefix = runGit(workspace, ['rev-parse', '--show-prefix']).trim();
+    const prefix = git(['rev-parse', '--show-prefix']).trim();
     let head = null;
-    try { head = runGit(workspace, ['rev-parse', 'HEAD']).trim() || null; } catch (_) { head = null; }
-    const entries = parseStatus(runGit(workspace, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.']))
+    try { head = git(['rev-parse', 'HEAD']).trim() || null; } catch (_) { head = null; }
+    const entries = parseStatus(git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.']))
       .map(({ path: file, status }) => {
         // Porcelain paths are repository-root-relative even for a subtree query; report them workspace-relative.
         const rel = prefix && file.startsWith(prefix) ? file.slice(prefix.length) : file;
@@ -75,7 +78,9 @@ function takeSnapshot(workspace) {
   }
 }
 
-function diffSnapshots(before, after, workspace) {
+function diffSnapshots(before, after, workspace, options = {}) {
+  const gitEnv = options && typeof options === 'object' ? options.gitEnv : null;
+  const git = (args) => runGit(workspace, args, gitEnv);
   if (before?.kind !== 'git' || after?.kind !== 'git') {
     return { known: false, headChanged: false, changedPaths: [] };
   }
@@ -92,13 +97,13 @@ function diffSnapshots(before, after, workspace) {
   if (headChanged && after.head && workspace) {
     try {
       if (before.head) {
-        for (const file of runGit(workspace, ['diff', '--name-only', '--relative', '-z', before.head, after.head]).split('\0')) {
+        for (const file of git(['diff', '--name-only', '--relative', '-z', before.head, after.head]).split('\0')) {
           if (file) changed.add(file);
         }
       } else {
         // First commit in a repository that had none: every committed path in the subtree is new.
-        const prefix = runGit(workspace, ['rev-parse', '--show-prefix']).trim();
-        for (const file of runGit(workspace, ['ls-tree', '-r', '--name-only', '-z', '--full-tree', after.head]).split('\0')) {
+        const prefix = git(['rev-parse', '--show-prefix']).trim();
+        for (const file of git(['ls-tree', '-r', '--name-only', '-z', '--full-tree', after.head]).split('\0')) {
           if (!file || (prefix && !file.startsWith(prefix))) continue;
           changed.add(prefix ? file.slice(prefix.length) : file);
         }

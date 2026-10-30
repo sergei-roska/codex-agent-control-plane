@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { findExecutable, preflightVerification } = require('../src/verification-preflight');
+const { findExecutable, preflightVerification, routeIdentity } = require('../src/verification-preflight');
 
 function tempDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verification-preflight-'));
@@ -32,6 +32,8 @@ test('owner executable lookup handles cwd-relative and PATH commands without exe
   });
   assert.equal(result.status, 'available');
   assert.equal(result.scope, 'local_route_capability_only');
+  assert.equal(result.routeType, 'fingerprint');
+  assert.equal(result.routeCallable, false);
   assert.equal(result.checks[0].dependencies, 'unverified');
   assert.equal(fs.existsSync(marker), false);
 });
@@ -70,12 +72,56 @@ test('agent checks require execCommand and inherited resolved policy and never r
   assert.equal(strict.checks[0].reason, 'native_policy_unavailable');
 
   const available = await preflightVerification({
-    appServer: { execCommand: async () => ({}), resolveExecutionPermissions: async () => ({ mode: 'inherit' }) },
+    appServer: { execCommand: async () => ({}), resolveExecutionPermissions: async () => ({ mode: 'inherit', profileApi: false, sandboxMode: 'workspace-write' }) },
     workspace, contract,
   });
   assert.equal(available.status, 'available');
+  assert.equal(available.routeType, 'fingerprint');
+  assert.equal(available.routeCallable, false);
+  assert.equal(available.policy.verifierIpcNetworkAccess, true);
   assert.equal(available.checks[0].dependencies, 'unverified');
   assert.match(available.evidence, /test results.*unverified/);
+});
+
+test('preflight hashes verifier IPC network capability and reports managed profiles honestly', async (t) => {
+  const workspace = tempDir(t);
+  const contract = { source: 'agent', requiredChecks: [{ id: 'unit', argv: ['node', 'test.js'] }] };
+  const execCommand = async () => ({});
+  const legacy = await preflightVerification({
+    appServer: { execCommand, resolveExecutionPermissions: async () => ({ mode: 'inherit', profileApi: false, sandboxMode: 'workspace-write' }) },
+    workspace, contract,
+  });
+  const managed = await preflightVerification({
+    appServer: { execCommand, resolveExecutionPermissions: async () => ({ mode: 'inherit', profileApi: true, writerProfile: ':workspace' }) },
+    workspace, contract,
+  });
+  const fullAccess = await preflightVerification({
+    appServer: { execCommand, resolveExecutionPermissions: async () => ({ mode: 'full-access', profileApi: true,
+      writerProfile: ':danger-full-access', approvalPolicy: 'never', approvalsReviewer: 'user' }) },
+    workspace, contract,
+  });
+
+  assert.notEqual(legacy.route, managed.route);
+  assert.equal(legacy.policy.verifierIpcNetworkAccess, true);
+  assert.equal(managed.status, 'unknown');
+  assert.equal(managed.checks[0].reason, 'managed_profile_network_unverified');
+  assert.equal(managed.policy.verifierIpcNetworkAccess, false);
+  assert.equal(fullAccess.status, 'available');
+  assert.equal(fullAccess.policy.verifierIpcNetworkAccess, true);
+  assert.deepEqual(fullAccess.policy, { mode: 'full-access', reason: null, verifierIpcNetworkAccess: true,
+    ownerFullAccess: true, profile: ':danger-full-access', approvalPolicy: 'never' });
+});
+
+test('verification route identity changes when the verifier IPC network grant changes', () => {
+  const input = {
+    project: '/workspace/project',
+    contract: { source: 'agent', requiredChecks: [{ id: 'unit', argv: ['npm', 'test'] }] },
+    policy: { mode: 'inherit', profileApi: false, sandboxMode: 'workspace-write', verifierIpcNetworkAccess: false },
+    policySetting: 'inherit',
+  };
+  const withoutGrant = routeIdentity(input);
+  const withGrant = routeIdentity({ ...input, policy: { ...input.policy, verifierIpcNetworkAccess: true } });
+  assert.notEqual(withGrant, withoutGrant);
 });
 
 test('native policy resolution is cached for an unchanged project setting', async (t) => {

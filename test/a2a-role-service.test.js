@@ -1513,7 +1513,7 @@ test('direct review continuations bind thread lane and codex home to their origi
   const second = await sendReview('binding-B');
   assert.equal(second.status.state, 3);
   const origin = second.artifacts[0].metadata.continuation;
-  assert.deepEqual(origin, { threadId: 'thread-2', laneId: null, codexHome: 'home-A' });
+  assert.deepEqual(origin, { threadId: 'thread-2', laneId: null, codexHome: 'home-A', mcpToolPins: [] });
 
   for (const [field, value] of [
     ['threadId', 'thread-1'],
@@ -1731,11 +1731,13 @@ test('direct verifier continuation requires its originating target and preserves
   assert.equal(calls.length, 1);
   assert.equal(laneExistedAtCompletion, true);
   assert.equal(first.artifacts[0].metadata.continuation.laneId, null, 'published tuple reflects lane removal during completion');
+  const origin = first.artifacts[0].metadata.continuation;
+  assert.deepEqual(origin, { threadId: 'verifier-thread-a', laneId: null, codexHome: null, mcpToolPins: [] });
   const firstTarget = first.artifacts[0].metadata.reviewCoverage.targetIdentity;
 
   const forgedRequest = JSON.stringify({
     ...JSON.parse(request),
-    continuation: { ofAttemptId: 'verifier-a', threadId: 'different-thread', laneId: null, codexHome: null },
+    continuation: { ofAttemptId: 'verifier-a', ...origin, threadId: 'different-thread' },
   });
   const forged = taskResult(await service.agents.get('verifier').handler.sendMessage(
     sendParams(message(forgedRequest, undefined, { runId: 'verifier-run', assignmentId: 'verifier-forged', attemptId: 'verifier-forged' })), service.context,
@@ -1749,7 +1751,7 @@ test('direct verifier continuation requires its originating target and preserves
 
   const continuedRequest = JSON.stringify({
     ...JSON.parse(request),
-    continuation: { ofAttemptId: 'verifier-a', threadId: 'verifier-thread-a', laneId: null, codexHome: null },
+    continuation: { ofAttemptId: 'verifier-a', ...origin },
   });
   const unchanged = taskResult(await service.agents.get('verifier').handler.sendMessage(
     sendParams(message(continuedRequest, undefined, { runId: 'verifier-run', assignmentId: 'verifier-2', attemptId: 'verifier-same' })), service.context,

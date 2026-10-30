@@ -5,7 +5,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
-const { loadOrCreateAuthToken } = require('./local-auth');
+const { loadOrCreateAuthToken, tokenPath } = require('./local-auth');
+const { readLauncherSettings, writeExecutionPermissionsDefault } = require('./launcher-project-settings');
 
 const REGISTRY_VERSION = 1;
 const PROBE_TIMEOUT_MS = 800;
@@ -22,6 +23,7 @@ const STARTUP_STDERR_PERSIST_MAX_WRITES = 24;
 const SERVER_SHUTDOWN_TOTAL_MS = 10000;
 const KILL_GRACE_MS = SERVER_SHUTDOWN_TOTAL_MS + 2000;
 const RUNNING_MARKERS = ['Codex Universal A2A listening at http://'];
+const AUTH_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 class ProjectError extends Error {
   constructor(code, message) {
@@ -78,6 +80,22 @@ function sanitizeStartupText(value, limit) {
     .slice(-limit);
 }
 
+function readProbeToken() {
+  let descriptor;
+  try {
+    const file = tokenPath();
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || (stat.mode & 0o777) !== 0o600) return null;
+    const token = fs.readFileSync(descriptor, 'utf8').trim();
+    return AUTH_TOKEN_PATTERN.test(token) ? token : null;
+  } catch {
+    return null;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
 function createProjectManager(options = {}) {
   const {
     repoDir = path.resolve(__dirname, '..'),
@@ -85,6 +103,7 @@ function createProjectManager(options = {}) {
     portRange = [3000, 3099],
     spawn = childProcess.spawn,
     fetch = globalThis.fetch,
+    readProbeToken: getProbeToken = readProbeToken,
     isPortFree = defaultIsPortFree,
     listenersOnPort = defaultListenersOnPort,
     isPidAlive = defaultIsPidAlive,
@@ -112,8 +131,10 @@ function createProjectManager(options = {}) {
     let rt = runtimes.get(id);
     if (!rt) {
       rt = {
-        child: null, status: 'stopped', logs: [], exited: null, starting: null, startupDiagnostic: null,
-        startupStderr: '', startupError: null, startupStage: null, startupStdout: '',
+        child: null, status: 'stopped', readiness: 'stopped', readinessReason: null,
+        logs: [], exited: null, starting: null, startupDiagnostic: null,
+        startupStderr: '', startupStderrPending: '', startupStderrDroppingLine: false,
+        startupError: null, startupStage: null, startupStdout: '',
         startupStderrPersistedLength: 0, startupStderrPersistWrites: 0
       };
       runtimes.set(id, rt);
@@ -128,7 +149,19 @@ function createProjectManager(options = {}) {
   }
 
   function view(record) {
-    return { ...record, status: runtimeFor(record.id).status };
+    const runtime = runtimeFor(record.id);
+    return {
+      ...record,
+      status: runtime.status,
+      readiness: runtime.readiness,
+      readinessReason: runtime.readinessReason,
+      taskReady: runtime.status === 'running' && runtime.readiness === 'ready'
+    };
+  }
+
+  function applyProbe(runtime, result) {
+    runtime.readiness = result.readiness;
+    runtime.readinessReason = result.reason || null;
   }
 
   function appendLog(rt, chunk) {
@@ -261,12 +294,32 @@ function createProjectManager(options = {}) {
   }
 
   async function probe(port) {
+    const token = getProbeToken();
+    if (token) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/control/quarantine`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
+        });
+        if (response && response.ok) {
+          const body = await response.json().catch(() => null);
+          if (body?.state === 'quarantined') {
+            const reason = typeof body.reason === 'string' ? sanitizeStartupText(body.reason, 160) : 'startup_recovery_unsafe';
+            return { reachable: true, readiness: 'quarantined', reason };
+          }
+        }
+      } catch {
+        // The normal task-ready probe below is authoritative for ordinary startup.
+      }
+    }
     try {
       const response = await fetch(`http://127.0.0.1:${port}/orchestrator/agent-card.json`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
-      return Boolean(response && response.ok);
+      if (response && response.ok) return { reachable: true, readiness: 'ready', reason: null };
+      if (response) return { reachable: true, readiness: 'unavailable', reason: 'a2a_agent_card_unavailable' };
     } catch {
-      return false;
+      // A failed agent-card request means this process cannot accept A2A tasks.
     }
+    return { reachable: false, readiness: 'unavailable', reason: 'a2a_agent_card_unavailable' };
   }
 
   async function allocatePort(exceptId) {
@@ -311,11 +364,19 @@ function createProjectManager(options = {}) {
       let changed = false;
       await Promise.all(records.map(async (record) => {
         if (record.pid === null) return;
-        if (isPidAlive(record.pid) && await probe(record.port)) {
-          runtimeFor(record.id).status = 'running';
+        const alive = isPidAlive(record.pid);
+        const probeResult = alive ? await probe(record.port) : null;
+        if (alive && probeResult?.reachable) {
+          const runtime = runtimeFor(record.id);
+          runtime.status = 'running';
+          applyProbe(runtime, probeResult);
         } else {
           record.pid = null;
           changed = true;
+          const runtime = runtimeFor(record.id);
+          runtime.status = 'stopped';
+          runtime.readiness = 'stopped';
+          runtime.readinessReason = null;
         }
       }));
       if (changed) persist();
@@ -414,6 +475,8 @@ function createProjectManager(options = {}) {
     const rt = runtimeFor(id);
     if (rt.status === 'starting' || rt.status === 'running') return view(record);
     rt.status = 'starting';
+    rt.readiness = 'starting';
+    rt.readinessReason = null;
     const pending = runStart(record, rt);
     rt.starting = pending;
     try {
@@ -425,16 +488,76 @@ function createProjectManager(options = {}) {
 
   async function runStart(record, rt) {
     const id = record.id;
-    let stage = 'token';
+    let stage = 'launcher_settings';
     rt.startupStderr = '';
+    rt.startupStderrPending = '';
+    rt.startupStderrDroppingLine = false;
     rt.startupError = null;
     rt.startupStage = stage;
     rt.startupStdout = '';
     rt.startupStderrPersistedLength = 0;
     rt.startupStderrPersistWrites = 0;
     rt.logs = [];
+    rt.readiness = 'starting';
+    rt.readinessReason = null;
     recordStartup(rt, record, { outcome: 'starting', stage });
+    const publishStartupStderr = (text) => {
+      if (!text) return;
+      appendLog(rt, text);
+      rt.startupStderr = sanitizeStartupText(`${rt.startupStderr}${text}`, STARTUP_STDERR_LIMIT);
+      if (rt.startupStderrPersistWrites < STARTUP_STDERR_PERSIST_MAX_WRITES
+        && (rt.startupStderrPersistWrites === 0
+          || rt.startupStderr.length - rt.startupStderrPersistedLength >= STARTUP_STDERR_PERSIST_INTERVAL
+          || rt.startupStderr.length === STARTUP_STDERR_LIMIT)) {
+        recordStartup(rt, record, { outcome: 'starting', stage: 'server_startup', stderr: rt.startupStderr });
+        rt.startupStderrPersistedLength = rt.startupStderr.length;
+        rt.startupStderrPersistWrites += 1;
+      }
+    };
+    const captureStartupStderr = (chunk) => {
+      let remaining = String(chunk);
+      while (remaining) {
+        if (rt.startupStderrDroppingLine) {
+          const newline = remaining.indexOf('\n');
+          if (newline === -1) return;
+          rt.startupStderrDroppingLine = false;
+          remaining = remaining.slice(newline + 1);
+          continue;
+        }
+        const newline = remaining.indexOf('\n');
+        if (newline !== -1) {
+          const line = rt.startupStderrPending + remaining.slice(0, newline + 1);
+          rt.startupStderrPending = '';
+          remaining = remaining.slice(newline + 1);
+          publishStartupStderr(line.length > STARTUP_STDERR_LIMIT
+            ? '[LAUNCHER] Startup stderr line omitted because it exceeded the diagnostic limit.\n'
+            : sanitizeStartupText(line, STARTUP_STDERR_LIMIT));
+          continue;
+        }
+        rt.startupStderrPending += remaining;
+        remaining = '';
+        if (rt.startupStderrPending.length > STARTUP_STDERR_LIMIT) {
+          rt.startupStderrPending = '';
+          rt.startupStderrDroppingLine = true;
+          publishStartupStderr('[LAUNCHER] Startup stderr line omitted because it exceeded the diagnostic limit.\n');
+        }
+      }
+    };
+    const flushStartupStderr = () => {
+      if (rt.startupStderrPending) {
+        publishStartupStderr(sanitizeStartupText(rt.startupStderrPending, STARTUP_STDERR_LIMIT));
+        rt.startupStderrPending = '';
+      }
+      rt.startupStderrDroppingLine = false;
+    };
     try {
+      const launcherSettings = readLauncherSettings(path.join(runtimeDir, 'launcher-settings.json'));
+      if (launcherSettings) {
+        writeExecutionPermissionsDefault(projectSettingsPath(id), launcherSettings.defaultExecutionPermissions);
+      }
+      stage = 'token';
+      rt.startupStage = stage;
+      recordStartup(rt, record, { outcome: 'starting', stage });
       await ensureToken();
       stage = 'port';
       rt.startupStage = stage;
@@ -461,6 +584,7 @@ function createProjectManager(options = {}) {
           PORT: String(record.port),
           CODEX_WORKSPACE: record.path,
           CODEX_A2A_STATE_DB: record.stateDb,
+          CODEX_A2A_PROJECT_ID: record.id,
           CODEX_A2A_ROLE_OVERRIDES: roleOverrides,
           CODEX_A2A_PROJECT_SETTINGS: path.resolve(projectSettingsPath(id))
         }
@@ -473,6 +597,7 @@ function createProjectManager(options = {}) {
         const onGone = (code) => {
           resolve();
           if (rt.child !== child) return;
+          flushStartupStderr();
           const failedDuringStartup = rt.status === 'starting';
           if (failedDuringStartup) {
             recordStartup(rt, record, {
@@ -486,6 +611,8 @@ function createProjectManager(options = {}) {
           rt.child = null;
           rt.exited = null;
           rt.status = 'stopped';
+          rt.readiness = 'stopped';
+          rt.readinessReason = null;
           record.pid = null;
           appendLog(rt, `\n[LAUNCHER] Server process exited (code: ${code})\n`);
           persistQuietly();
@@ -508,25 +635,26 @@ function createProjectManager(options = {}) {
           rt.startupStdout = sanitizeStartupText(`${rt.startupStdout}${text}`, STARTUP_STDOUT_MARKER_BUFFER);
         }
         if (rt.status === 'starting' && RUNNING_MARKERS.some((marker) => rt.startupStdout.includes(marker))) {
+          flushStartupStderr();
           rt.status = 'running';
+          rt.readiness = 'checking';
+          rt.readinessReason = null;
           recordStartup(rt, record, { outcome: 'started', stage: 'listening' });
+          probe(record.port).then((result) => {
+            if (rt.child === child && rt.status === 'running') applyProbe(rt, result);
+          }).catch(() => {
+            if (rt.child === child && rt.status === 'running') {
+              rt.readiness = 'unavailable';
+              rt.readinessReason = 'a2a_agent_card_unavailable';
+            }
+          });
         }
       };
       const onStderr = (chunk) => {
         if (rt.child !== child) return;
-        const text = String(chunk);
-        appendLog(rt, text);
         if (rt.status === 'starting') {
-          rt.startupStderr = sanitizeStartupText(`${rt.startupStderr}${text}`, STARTUP_STDERR_LIMIT);
-          if (rt.startupStderrPersistWrites < STARTUP_STDERR_PERSIST_MAX_WRITES
-            && (rt.startupStderrPersistWrites === 0
-              || rt.startupStderr.length - rt.startupStderrPersistedLength >= STARTUP_STDERR_PERSIST_INTERVAL
-              || rt.startupStderr.length === STARTUP_STDERR_LIMIT)) {
-            recordStartup(rt, record, { outcome: 'starting', stage: 'server_startup', stderr: rt.startupStderr });
-            rt.startupStderrPersistedLength = rt.startupStderr.length;
-            rt.startupStderrPersistWrites += 1;
-          }
-        }
+          captureStartupStderr(chunk);
+        } else appendLog(rt, String(chunk));
       };
       if (child.stdout) child.stdout.on('data', onStdout);
       if (child.stderr) child.stderr.on('data', onStderr);
@@ -537,6 +665,8 @@ function createProjectManager(options = {}) {
     } catch (error) {
       if (!rt.child) {
         rt.status = 'stopped';
+        rt.readiness = 'stopped';
+        rt.readinessReason = null;
         recordStartup(rt, record, {
           outcome: 'failed',
           stage,
@@ -565,6 +695,8 @@ function createProjectManager(options = {}) {
       kill(pid, 'SIGTERM');
       record.pid = null;
       rt.status = 'stopped';
+      rt.readiness = 'stopped';
+      rt.readinessReason = null;
       await persistQuietly();
       return view(record);
     }
@@ -574,15 +706,20 @@ function createProjectManager(options = {}) {
   async function refresh() {
     await Promise.all(records.map(async (record) => {
       const rt = runtimeFor(record.id);
-      const ok = await probe(record.port);
-      if (ok) {
+      const probeResult = await probe(record.port);
+      if (probeResult.reachable) {
         rt.status = 'running';
+        applyProbe(rt, probeResult);
       } else if (!rt.child && rt.status !== 'starting') {
         rt.status = 'stopped';
+        rt.readiness = 'stopped';
+        rt.readinessReason = null;
         if (record.pid !== null) {
           record.pid = null;
           await persistQuietly();
         }
+      } else if (rt.status === 'running') {
+        applyProbe(rt, probeResult);
       }
     }));
     return list();

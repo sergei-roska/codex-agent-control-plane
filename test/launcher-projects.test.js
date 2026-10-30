@@ -30,6 +30,7 @@ let tmp;
 let spawned;
 let busyPorts;
 let probeOk;
+let quarantineReason;
 let events;
 let alivePids;
 let listeners;
@@ -48,7 +49,16 @@ function makeManager(extra = {}) {
       spawned.push({ cmd, args, opts, child });
       return child;
     },
-    fetch: async (url) => ({ ok: probeOk(url) }),
+    fetch: async (url) => {
+      if (url.endsWith('/control/quarantine')) {
+        return quarantineReason
+          ? { ok: true, json: async () => ({ state: 'quarantined', reason: quarantineReason }) }
+          : Promise.reject(new Error('quarantine endpoint is not present'));
+      }
+      if (!probeOk(url)) throw new Error('server is not listening');
+      return { ok: true };
+    },
+    readProbeToken: () => 'a'.repeat(43),
     isPortFree: async (port) => !busyPorts.has(port),
     listenersOnPort: async () => listeners,
     isPidAlive: (pid) => alivePids.has(pid),
@@ -69,6 +79,7 @@ beforeEach(() => {
   spawned = [];
   busyPorts = new Set();
   probeOk = () => false;
+  quarantineReason = null;
   events = [];
   alivePids = new Set();
   listeners = [];
@@ -193,6 +204,7 @@ describe('start', () => {
     assert.ok(fs.existsSync(path.dirname(s.opts.env.CODEX_A2A_ROLE_OVERRIDES)));
     assert.equal(s.opts.env.CODEX_A2A_PROJECT_SETTINGS, path.join(tmp, 'runtime', 'projects', p.id, 'project-settings.json'));
     assert.ok(fs.existsSync(path.dirname(p.stateDb)));
+    assert.equal(fs.existsSync(s.opts.env.CODEX_A2A_PROJECT_SETTINGS), false, 'missing launcher settings preserve existing project defaults');
     assert.equal(manager.get(p.id).pid, s.child.pid);
     assert.match(manager.status(p.id).logs[0], /^\[LAUNCHER\] Starting orchestrator for workspace: .* on port \d+\n$/);
   });
@@ -205,6 +217,63 @@ describe('start', () => {
     assert.equal(spawned.length, 1);
   });
 
+  it('applies the owner launcher default only where project execution permissions are omitted', async () => {
+    const manager = makeManager();
+    const runtime = path.join(tmp, 'runtime');
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(runtime, 'launcher-settings.json'), JSON.stringify({ version: 1, defaultExecutionPermissions: 'full-access' }));
+
+    const optedInProject = await manager.add(mkdir('new-after-opt-in'));
+    const optedInSettingsPath = manager.projectSettingsPath(optedInProject.id);
+    assert.equal(fs.existsSync(optedInSettingsPath), false);
+    await manager.start(optedInProject.id);
+    const applied = JSON.parse(fs.readFileSync(optedInSettingsPath, 'utf8'));
+    assert.equal(applied.version, 1);
+    assert.equal(applied.executionPermissions, 'full-access');
+    assert.equal(applied.deliveryEngine, undefined);
+
+    const omittedProject = await manager.add(mkdir('existing-omitted-permissions'));
+    const omittedSettingsPath = manager.projectSettingsPath(omittedProject.id);
+    const omittedSettings = { version: 1, deliveryEngine: 'concurrent-v1', aut03LeadSkillEnabled: true };
+    fs.mkdirSync(path.dirname(omittedSettingsPath), { recursive: true });
+    fs.writeFileSync(omittedSettingsPath, JSON.stringify(omittedSettings));
+    await manager.start(omittedProject.id);
+    const merged = JSON.parse(fs.readFileSync(omittedSettingsPath, 'utf8'));
+    assert.equal(merged.executionPermissions, 'full-access');
+    assert.equal(merged.deliveryEngine, omittedSettings.deliveryEngine);
+    assert.equal(merged.aut03LeadSkillEnabled, omittedSettings.aut03LeadSkillEnabled);
+
+    const explicitProject = await manager.add(mkdir('explicit-settings'));
+    const explicitSettingsPath = manager.projectSettingsPath(explicitProject.id);
+    const explicitSettings = { version: 1, executionPermissions: 'strict', deliveryEngine: 'concurrent-v1', aut03LeadSkillEnabled: true };
+    fs.mkdirSync(path.dirname(explicitSettingsPath), { recursive: true });
+    fs.writeFileSync(explicitSettingsPath, JSON.stringify(explicitSettings));
+    await manager.start(explicitProject.id);
+    assert.deepEqual(JSON.parse(fs.readFileSync(explicitSettingsPath, 'utf8')), explicitSettings);
+    assert.equal(spawned.length, 3);
+  });
+
+  it('fails before spawn for malformed or unsupported launcher defaults', async () => {
+    const invalidDocuments = ['{not json', JSON.stringify({ version: 1, defaultExecutionPermissions: 'danger-full-access' }),
+      JSON.stringify({ version: 1, defaultExecutionPermissions: 'full-access', extra: true })];
+    for (let index = 0; index < invalidDocuments.length; index += 1) {
+      const runtime = path.join(tmp, 'runtime-invalid-' + index);
+      const manager = makeManager({ runtimeDir: runtime });
+      const project = await manager.add(mkdir('invalid-' + index));
+      fs.writeFileSync(path.join(runtime, 'launcher-settings.json'), invalidDocuments[index]);
+
+      await assert.rejects(manager.start(project.id), /Launcher settings are invalid/);
+      assert.equal(manager.get(project.id).status, 'stopped');
+      assert.equal(spawned.length, 0);
+      assert.deepEqual(events, [], 'invalid launcher settings must fail before token setup');
+      const diagnostic = manager.status(project.id).startupDiagnostic;
+      assert.equal(diagnostic.outcome, 'failed');
+      assert.equal(diagnostic.stage, 'launcher_settings');
+      assert.match(diagnostic.message, /Launcher settings are invalid/);
+      assert.equal(fs.existsSync(manager.projectSettingsPath(project.id)), false);
+    }
+  });
+
   it('becomes running on stdout marker', async () => {
     const manager = makeManager();
     const p = await manager.add(mkdir('a'));
@@ -213,6 +282,43 @@ describe('start', () => {
     assert.equal(manager.get(p.id).status, 'starting');
     spawned[0].child.stdout.emit('data', 'Codex Universal A2A listening at http://x\n');
     assert.equal(manager.get(p.id).status, 'running');
+    assert.equal(manager.get(p.id).taskReady, false);
+    await tick();
+    assert.equal(manager.get(p.id).readiness, 'unavailable');
+  });
+
+  it('marks a quarantine stub as process-running but not task-ready', async () => {
+    const manager = makeManager();
+    const p = await manager.add(mkdir('quarantined'));
+    quarantineReason = 'concurrent_startup_recovery_unsafe';
+    await manager.start(p.id);
+    spawned[0].child.stdout.emit('data', 'Codex Universal A2A listening at http://x\n');
+    await tick();
+
+    const view = manager.get(p.id);
+    assert.equal(view.status, 'running');
+    assert.equal(view.readiness, 'quarantined');
+    assert.equal(view.readinessReason, 'concurrent_startup_recovery_unsafe');
+    assert.equal(view.taskReady, false);
+    await manager.start(p.id);
+    assert.equal(spawned.length, 1, 'quarantine must not trigger a second process start');
+    await assert.rejects(manager.remove(p.id), (error) => error.code === 'running');
+  });
+
+  it('adopts a live quarantined process without clearing its managed pid', async () => {
+    const manager = makeManager();
+    const p = await manager.add(mkdir('adopt-quarantined'));
+    await manager.start(p.id);
+    const pid = spawned[0].child.pid;
+    alivePids.add(pid);
+    quarantineReason = 'concurrent_startup_recovery_unsafe';
+
+    const adopter = makeManager();
+    await adopter.init();
+    assert.equal(adopter.get(p.id).status, 'running');
+    assert.equal(adopter.get(p.id).readiness, 'quarantined');
+    assert.equal(adopter.get(p.id).taskReady, false);
+    assert.equal(adopter.get(p.id).pid, pid);
   });
 
   it('does not treat generic product text or stderr as a successful listen marker', async () => {
@@ -297,18 +403,26 @@ describe('start', () => {
     const p = await manager.add(mkdir('a'));
     await manager.start(p.id);
     spawned[0].child.stdout.emit('data', 'private conversation text must not persist\n');
-    spawned[0].child.stderr.emit('data', 'Startup failed OPENAI_API_KEY = sk-super-secret-value\n');
+    spawned[0].child.stderr.emit('data', 'Startup failed\nOPENAI_API_');
+    assert.doesNotMatch(manager.status(p.id).logs.join(''), /OPENAI_API_/);
+    spawned[0].child.stderr.emit('data', 'KEY=first-half-');
+    assert.doesNotMatch(manager.status(p.id).logs.join(''), /OPENAI_API_|first-half/);
+    assert.doesNotMatch(JSON.stringify(manager.status(p.id).startupDiagnostic), /OPENAI_API_|first-half/);
+    spawned[0].child.stderr.emit('data', 'second-half-private');
     const file = path.join(tmp, 'runtime', 'projects', p.id, 'last-startup.json');
     const duringStartup = fs.readFileSync(file, 'utf8');
     assert.match(duringStartup, /Startup failed/);
-    assert.doesNotMatch(duringStartup, /private conversation text|sk-super-secret-value/);
+    assert.doesNotMatch(duringStartup, /private conversation text|first-half|second-half-private/);
+    assert.doesNotMatch(manager.status(p.id).logs.join(''), /second-half-private/);
     spawned[0].child.emit('close', 3);
+    assert.match(manager.status(p.id).logs.join(''), /OPENAI_API_KEY=\[REDACTED\]/);
+    assert.doesNotMatch(manager.status(p.id).logs.join(''), /first-half|second-half-private/);
     assert.equal(manager.status(p.id).startupDiagnostic.outcome, 'failed');
 
     const body = fs.readFileSync(file, 'utf8');
     assert.match(body, /Startup failed/);
-    assert.match(body, /OPENAI_API_KEY = \[REDACTED\]/);
-    assert.doesNotMatch(body, /sk-super-secret-value|private conversation text/);
+    assert.match(body, /OPENAI_API_KEY=\[REDACTED\]/);
+    assert.doesNotMatch(body, /first-half|second-half-private|private conversation text/);
 
     const restarted = makeManager();
     await restarted.init();
@@ -316,7 +430,46 @@ describe('start', () => {
     assert.equal(recovered.startupDiagnostic.outcome, 'failed');
     assert.equal(recovered.startupDiagnostic.stage, 'server_startup');
     assert.match(recovered.logs.join(''), /Startup failed/);
-    assert.match(recovered.logs.join(''), /OPENAI_API_KEY = \[REDACTED\]/);
+    assert.match(recovered.logs.join(''), /OPENAI_API_KEY=\[REDACTED\]/);
+    assert.doesNotMatch(recovered.logs.join(''), /first-half|second-half-private/);
+  });
+
+  it('omits overlong startup stderr lines from logs and persistence', async () => {
+    const manager = makeManager();
+    const p = await manager.add(mkdir('a'));
+    await manager.start(p.id);
+    spawned[0].child.stderr.emit('data', 'OPENAI_API_KEY=' + 'private-value-'.repeat(700));
+    assert.doesNotMatch(manager.status(p.id).logs.join(''), /private-value/);
+    spawned[0].child.emit('close', 2);
+    const file = path.join(tmp, 'runtime', 'projects', p.id, 'last-startup.json');
+    const body = fs.readFileSync(file, 'utf8');
+    assert.match(body, /Startup stderr line omitted/);
+    assert.doesNotMatch(body, /private-value/);
+    const restarted = makeManager();
+    await restarted.init();
+    assert.match(restarted.status(p.id).logs.join(''), /Startup stderr line omitted/);
+    assert.doesNotMatch(restarted.status(p.id).logs.join(''), /private-value/);
+
+    const completeLineProject = await manager.add(mkdir('b'));
+    await manager.start(completeLineProject.id);
+    spawned[1].child.stderr.emit('data', 'TOKEN=' + 'private-value-'.repeat(700) + '\n');
+    assert.match(manager.status(completeLineProject.id).logs.join(''), /Startup stderr line omitted/);
+    assert.doesNotMatch(manager.status(completeLineProject.id).logs.join(''), /private-value/);
+    spawned[1].child.emit('close', 2);
+  });
+
+  it('replaces a failed startup diagnostic after a later successful start', async () => {
+    const manager = makeManager();
+    const p = await manager.add(mkdir('a'));
+    await manager.start(p.id);
+    spawned[0].child.stderr.emit('data', 'Concurrent delivery requires supported isolation\n');
+    spawned[0].child.emit('close', 1);
+    assert.equal(manager.status(p.id).startupDiagnostic.outcome, 'failed');
+
+    await manager.start(p.id);
+    spawned[1].child.stdout.emit('data', 'Codex Universal A2A listening at http://127.0.0.1:4000\n');
+    assert.equal(manager.status(p.id).startupDiagnostic.outcome, 'started');
+    assert.doesNotMatch(manager.status(p.id).logs.join(''), /Concurrent delivery requires/);
   });
 
   it('caps logs at logLimit and status returns the tail', async () => {
@@ -482,6 +635,36 @@ describe('init and refresh', () => {
     probeOk = () => true;
     await manager.refresh();
     assert.equal(manager.get(p.id).status, 'running');
+  });
+
+  it('refresh preserves process liveness while changing task readiness', async () => {
+    const manager = makeManager();
+    const p = await manager.add(mkdir('readiness-refresh'));
+    quarantineReason = 'concurrent_startup_recovery_unsafe';
+    await manager.refresh();
+
+    assert.equal(manager.get(p.id).status, 'running');
+    assert.equal(manager.get(p.id).readiness, 'quarantined');
+    assert.equal(manager.get(p.id).taskReady, false);
+
+    quarantineReason = null;
+    probeOk = () => true;
+    await manager.refresh();
+    assert.equal(manager.get(p.id).status, 'running');
+    assert.equal(manager.get(p.id).readiness, 'ready');
+    assert.equal(manager.get(p.id).taskReady, true);
+  });
+
+  it('keeps an HTTP server manageable when its A2A agent card is missing', async () => {
+    const manager = makeManager({
+      fetch: async () => ({ ok: false, status: 404 }),
+    });
+    const p = await manager.add(mkdir('missing-agent-card'));
+    await manager.refresh();
+
+    assert.equal(manager.get(p.id).status, 'running');
+    assert.equal(manager.get(p.id).readiness, 'unavailable');
+    assert.equal(manager.get(p.id).taskReady, false);
   });
 });
 

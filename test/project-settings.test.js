@@ -89,7 +89,7 @@ describe('normalizeOwnerChecks', () => {
 
 describe('settings file', () => {
   it('missing file means everything disabled', () => {
-    assert.deepEqual(readSettingsFile(file), { acceptanceScratch: null, ownerChecks: null, aut03LeadSkillEnabled: false, executionPermissions: 'inherit', warning: null });
+    assert.deepEqual(readSettingsFile(file), { acceptanceScratch: null, ownerChecks: null, aut03LeadSkillEnabled: false, executionPermissions: 'inherit', deliveryEngine: 'legacy', warning: null });
   });
 
   it('reads a valid file and resolves the default base dir next to it', () => {
@@ -119,15 +119,29 @@ describe('settings file', () => {
     }
   });
 
-  it('defaults execution permissions to native inheritance and accepts strict opt-out', () => {
+  it('defaults execution permissions to native inheritance and accepts explicit strict and full-access modes', () => {
     writeRaw({ version: 1 });
     assert.equal(readSettingsFile(file).executionPermissions, 'inherit');
     writeRaw({ version: 1, executionPermissions: 'strict' });
     assert.equal(readSettingsFile(file).executionPermissions, 'strict');
+    writeRaw({ version: 1, executionPermissions: 'full-access' });
+    assert.equal(readSettingsFile(file).executionPermissions, 'full-access');
     writeRaw({ version: 1, executionPermissions: 'danger-full-access' });
     const invalid = readSettingsFile(file);
     assert.equal(invalid.executionPermissions, 'strict');
     assert.match(invalid.warning, /executionPermissions/);
+  });
+
+  it('selects the concurrent engine only when explicitly configured and warns on invalid values', () => {
+    writeRaw({ version: 1 });
+    assert.equal(readSettingsFile(file).deliveryEngine, 'legacy');
+    writeRaw({ version: 1, deliveryEngine: 'concurrent-v1' });
+    assert.equal(readSettingsFile(file).deliveryEngine, 'concurrent-v1');
+    writeRaw({ version: 1, deliveryEngine: 'unknown' });
+    const invalid = readSettingsFile(file);
+    assert.equal(invalid.deliveryEngine, 'legacy');
+    assert.equal(invalid.executionPermissions, 'strict');
+    assert.match(invalid.warning, /deliveryEngine/);
   });
 
   it('an invalid ownerChecks setting ignores the whole file and warns', () => {

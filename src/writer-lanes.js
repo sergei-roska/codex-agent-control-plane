@@ -7,6 +7,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { pathsOutsideAllowed } = require('./contracts');
 const { laneSandboxPolicy } = require('./codex-app-server');
+const { nativeWorkspaceWriteBinding, createLaneExecutionCapability } = require('./lane-execution-policy');
 const { inspectRepo, createBase, addLane, collectPatch, applyPatch, removeLane } = require('./writer-worktree');
 const { runConfinementProbe, createLaneProbeStore } = require('./lane-probe');
 const { readProcessIdentity } = require('./process-quiescence');
@@ -203,10 +204,33 @@ async function selectWriterIsolation({ env = process.env, appServer, workspace, 
   const repo = inspectRepo(workspace);
   if (!repo.ok) return shared(repo.reason);
   if (repo.prefix !== '') return shared('not_work_tree_top');
+  if (executionPermissions === 'full-access' && typeof appServer?.resolveExecutionPermissions !== 'function') {
+    throw Object.assign(new Error('Owner full-access execution is unavailable (permission_api_unavailable)'), { code: 'full_access_unavailable' });
+  }
   if (typeof appServer?.resolveExecutionPermissions === 'function') {
     let native = null;
-    try { native = await appServer.resolveExecutionPermissions(workspace, executionPermissions); } catch (_) { /* strict fallback */ }
+    try { native = await appServer.resolveExecutionPermissions(workspace, executionPermissions, { fresh: true }); } catch (_) { /* strict fallback */ }
+    if (executionPermissions === 'full-access') {
+      if (native?.mode !== 'full-access' || native.writerProfile !== ':danger-full-access' || native.approvalPolicy !== 'never') {
+        throw Object.assign(new Error(`Owner full-access execution is unavailable (${native?.reason || 'full_access_policy_unavailable'})`), {
+          code: 'full_access_unavailable',
+        });
+      }
+      return {
+        mode: 'cooperative', reason: 'owner_full_access_cooperative', lanesRoot, links,
+        networkAccess: true, inherited: false, ownerFullAccess: true, profile: native.writerProfile, probe: null,
+      };
+    }
     if (native?.mode === 'inherit') {
+      if (native.sandboxMode === 'workspace-write' && !native.writerProfile) {
+        const lanePolicyBinding = nativeWorkspaceWriteBinding(native, workspace);
+        if (!lanePolicyBinding) return shared('native_permissions_use_shared_workspace', { inherited: true, profile: null });
+        return {
+          mode: 'cooperative', reason: 'trusted_native_workspace_write_cooperative', lanesRoot, links,
+          networkAccess: lanePolicyBinding.sandboxPolicy.networkAccess, inherited: true, profile: null, probe: null,
+          lanePolicyBinding,
+        };
+      }
       const fullAccess = native.writerProfile === ':danger-full-access' || native.sandboxMode === 'danger-full-access';
       if (!fullAccess) return shared('native_permissions_use_shared_workspace', { inherited: true, profile: native.writerProfile || null });
       return {
@@ -251,7 +275,8 @@ function sameEntry(shared, lane) {
 class LaneManager {
   constructor({
     db, workspace, admission, appServer = null, mode = 'shared', reason = null, lanesRoot, links = [], networkAccess = false,
-    probe = null, runProbe = runConfinementProbe, spawnFn = spawn, quiescence,
+    probe = null, runProbe = runConfinementProbe, spawnFn = spawn, quiescence, lanePolicyBinding = null,
+    inherited = null, ownerFullAccess = false, profile = null,
   }) {
     if (!db || typeof db.prepare !== 'function') throw new TypeError('db (better-sqlite3) is required');
     if (!admission) throw new TypeError('admission is required');
@@ -263,9 +288,13 @@ class LaneManager {
     this.appServer = appServer;
     this.mode = mode;
     this.reason = reason;
+    this.inherited = inherited ?? (mode === 'cooperative' && !ownerFullAccess);
+    this.ownerFullAccess = ownerFullAccess;
+    this.profile = profile;
     this.lanesRoot = lanesRoot;
     this.links = links;
     this.networkAccess = networkAccess;
+    this.lanePolicyBinding = lanePolicyBinding;
     this.probe = probe;
     this.runProbe = runProbe;
     this.spawnFn = spawnFn;
@@ -283,7 +312,8 @@ class LaneManager {
     return {
       mode: this.mode, reason: this.reason, lanesRoot: this.lanesRoot, links: [...this.links], networkAccess: this.networkAccess,
       confinement: this.mode === 'worktree' ? 'probe-confirmed' : this.mode === 'cooperative' ? 'none' : null,
-      inherited: this.mode === 'cooperative',
+      inherited: this.inherited,
+      ...(this.ownerFullAccess ? { ownerFullAccess: true, profile: this.profile } : {}),
       probe: this.probe ? { version: this.probe.version, ok: this.probe.ok, reason: this.probe.reason ?? null } : null,
     };
   }
@@ -367,7 +397,23 @@ class LaneManager {
   }
 
   sandboxPolicy(lane) {
-    if (this.mode === 'cooperative') return null;
+    if (this.mode === 'cooperative') {
+      if (!this.lanePolicyBinding) return null;
+      const lanePath = lane?.path;
+      const laneId = lane?.id;
+      const isCurrent = () => {
+        if (!lane || lane.workspacePath !== lanePath || lane.workspace !== undefined && lane.workspace !== this.workspace) return false;
+        try {
+          const row = this.store.get(laneId);
+          return Boolean(row && row.workspace === this.workspace && row.path === lanePath
+            && ['prepared', 'running'].includes(row.state) && fs.realpathSync(row.path) === lanePath
+            && typeof this.admission.isFenced === 'function' && !this.admission.isFenced(row.contextId));
+        } catch (_) { return false; }
+      };
+      return createLaneExecutionCapability({
+        laneId, workspace: this.workspace, lanePath, binding: this.lanePolicyBinding, isCurrent,
+      });
+    }
     return laneSandboxPolicy({ workspacePath: lane.workspacePath, networkAccess: this.networkAccess });
   }
 

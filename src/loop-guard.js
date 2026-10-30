@@ -107,7 +107,7 @@ function recurrenceOf({ item, outcome, role, contentIdentity }) {
   };
 }
 
-function makeObservation({ item = {}, outcome = {}, contentIdentity = null, implemented = false } = {}) {
+function makeObservation({ item = {}, outcome = {}, contentIdentity = null, implemented = false, resolvedRecurrence = false, ignoreRecurrence = false } = {}) {
   const assignment = item.assignment || {};
   const report = outcome.report || {};
   const role = String(outcome.role || item.role || 'unknown').toLowerCase();
@@ -163,7 +163,8 @@ function makeObservation({ item = {}, outcome = {}, contentIdentity = null, impl
     description,
     assignmentId: outcome.assignmentId || item.assignmentId || null,
     attemptId: outcome.attemptId || item.attemptId || null,
-    recurrence: recurrenceOf({ item, outcome, role, contentIdentity }),
+    recurrence: ignoreRecurrence === true ? null : recurrenceOf({ item, outcome, role, contentIdentity }),
+    resolvedRecurrence: resolvedRecurrence === true,
     implemented: implemented === true,
     unknown: !reportIdentity && !evidence.contentKnown && !evidence.contentIdentity,
   };
@@ -185,11 +186,19 @@ function advanceRecurrence(previous, round, observations) {
   const keyed = new Map();
   for (const entry of batch.slice(0, MAX_BATCH_KEYS)) {
     const recurrence = entry.recurrence;
-    if (recurrence && typeof recurrence.key === 'string' && !keyed.has(recurrence.key)) keyed.set(recurrence.key, entry);
+    if (!recurrence || typeof recurrence.key !== 'string') continue;
+    const previousEntry = keyed.get(recurrence.key);
+    if (!previousEntry || entry.resolvedRecurrence === true) keyed.set(recurrence.key, entry);
   }
   let pause = null;
   for (const [key, entry] of keyed) {
     let record = entries.find((candidate) => candidate.key === key);
+    if (entry.resolvedRecurrence === true) {
+      if (record) {
+        entries = entries.filter((candidate) => candidate.key !== key);
+        continue;
+      }
+    }
     if (!record) {
       record = { key, roleClass: entry.recurrence.roleClass, checkpoint: entry.recurrence.checkpoint, count: 0, rounds: [], references: [] };
       entries.push(record);

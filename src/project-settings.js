@@ -12,8 +12,10 @@
 //     Opt-in, 1-8 commands. Default owner acceptance checks of a new run that carries no explicit checks
 //     (see makeLeadExecutor in src/server.js). Each command is parsed like a CLI `--check`; owner checks run
 //     on the host outside the Codex sandbox. Absent, null, or [] disables the default.
-//   executionPermissions: "inherit" | "strict"
+//   executionPermissions: "inherit" | "strict" | "full-access"
 //     Defaults to inherit for trusted projects. Strict retains Harness sandbox defaults.
+//   deliveryEngine: "legacy" | "concurrent-v1"
+//     Defaults to legacy; the startup selection only applies to new lead runs.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -24,7 +26,8 @@ const MAX_OWNER_CHECKS = 8;
 const MAX_ENV_NAME = 64;
 const MAX_BASE_DIR = 1024;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
-const EXECUTION_PERMISSIONS = new Set(['inherit', 'strict']);
+const EXECUTION_PERMISSIONS = new Set(['inherit', 'strict', 'full-access']);
+const DELIVERY_ENGINES = new Set(['legacy', 'concurrent-v1']);
 // Names the control plane or the platform owns. TMPDIR is always set to the run's tmp directory.
 const RESERVED_ENV = new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'PWD', 'OLDPWD', 'IFS', 'ENV', 'BASH_ENV', 'TMPDIR', 'TMP', 'TEMP', 'TERM', 'LANG',
@@ -97,23 +100,30 @@ function normalizeOwnerChecks(input) {
   return commands;
 }
 
+function normalizeDeliveryEngine(input) {
+  const value = input === undefined ? 'legacy' : input;
+  if (!DELIVERY_ENGINES.has(value)) throw new ProjectSettingsError('deliveryEngine must be "legacy" or "concurrent-v1"');
+  return value;
+}
+
 /** Validates a whole settings document. Owner opt-ins are strict and default off. */
 function validateSettingsDocument(doc) {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new ProjectSettingsError('Settings file must be an object');
   if (doc.version !== SETTINGS_VERSION) throw new ProjectSettingsError(`Unsupported settings version ${JSON.stringify(doc.version)}`);
   for (const key of Object.keys(doc)) {
-    if (!['version', 'acceptanceScratch', 'ownerChecks', 'aut03LeadSkillEnabled', 'executionPermissions', 'updatedAt'].includes(key)) throw new ProjectSettingsError(`Unknown settings field: ${key}`);
+    if (!['version', 'acceptanceScratch', 'ownerChecks', 'aut03LeadSkillEnabled', 'executionPermissions', 'deliveryEngine', 'updatedAt'].includes(key)) throw new ProjectSettingsError(`Unknown settings field: ${key}`);
   }
   if (doc.aut03LeadSkillEnabled !== undefined && typeof doc.aut03LeadSkillEnabled !== 'boolean') {
     throw new ProjectSettingsError('aut03LeadSkillEnabled must be a boolean');
   }
   const executionPermissions = doc.executionPermissions === undefined ? 'inherit' : doc.executionPermissions;
-  if (!EXECUTION_PERMISSIONS.has(executionPermissions)) throw new ProjectSettingsError('executionPermissions must be "inherit" or "strict"');
+  if (!EXECUTION_PERMISSIONS.has(executionPermissions)) throw new ProjectSettingsError('executionPermissions must be "inherit", "strict", or "full-access"');
   return {
     acceptanceScratch: normalizeAcceptanceScratch(doc.acceptanceScratch),
     ownerChecks: normalizeOwnerChecks(doc.ownerChecks),
     aut03LeadSkillEnabled: doc.aut03LeadSkillEnabled === true,
     executionPermissions,
+    deliveryEngine: normalizeDeliveryEngine(doc.deliveryEngine),
   };
 }
 
@@ -122,7 +132,7 @@ function validateSettingsDocument(doc) {
  * `warning`; a broken file never enables anything. This never throws.
  */
 function readSettingsFile(file) {
-  const defaults = { acceptanceScratch: null, ownerChecks: null, aut03LeadSkillEnabled: false, executionPermissions: 'inherit' };
+  const defaults = { acceptanceScratch: null, ownerChecks: null, aut03LeadSkillEnabled: false, executionPermissions: 'inherit', deliveryEngine: 'legacy' };
   let raw;
   try {
     raw = fs.readFileSync(file, 'utf8');
@@ -154,6 +164,7 @@ module.exports = {
   ProjectSettingsError,
   normalizeAcceptanceScratch,
   normalizeOwnerChecks,
+  normalizeDeliveryEngine,
   validateSettingsDocument,
   readSettingsFile,
   resolveAcceptanceScratch,

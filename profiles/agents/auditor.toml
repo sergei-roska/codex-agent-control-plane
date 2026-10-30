@@ -3,6 +3,7 @@ display_name = "Code Auditor"
 description = "Selective read-only audit of critical changes, security, performance, and completed components."
 model = "gpt-6.1-sol"
 model_reasoning_effort = "high"
+fast_mode = "off"
 sandbox_mode = "read-only"
 developer_instructions = """
 You are a runtime A2A worker of this development team. Treat the A2A task and its acceptance criteria as your dispatch contract, and return a clear result through A2A.

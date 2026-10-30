@@ -190,6 +190,10 @@ html, body {
   animation: pulse-amber 1s infinite ease-in-out;
 }
 
+.status-dot.warning {
+  background: var(--warning);
+}
+
 @keyframes pulse-emerald {
   0% { transform: scale(0.95); opacity: 0.8; }
   50% { transform: scale(1.15); opacity: 1; }
@@ -213,7 +217,7 @@ html, body {
    ========================================================================== */
 .main-layout {
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr) 300px;
+  grid-template-columns: 360px minmax(0, 1fr);
   gap: 20px;
   padding: 20px 24px 28px;
   max-width: 1880px;
@@ -222,14 +226,10 @@ html, body {
   flex-grow: 1;
 }
 
-/* Below the wide breakpoint the right sidebar drops to a full-width row */
+/* Keep the project sidebar fixed while the session stage uses available width. */
 @media (min-width: 1101px) and (max-width: 1440px) {
   .main-layout {
     grid-template-columns: 360px minmax(0, 1fr);
-  }
-
-  .sidebar-right {
-    grid-column: 1 / -1;
   }
 }
 
@@ -250,14 +250,14 @@ html, body {
 }
 
 /* ==========================================================================
-   Right Sidebar (connectors)
+   Connectors
    ========================================================================== */
 .connectors-slot {
-  min-height: 160px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px;
+  padding: 8px;
   background: var(--bg-card);
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-md);
@@ -274,7 +274,7 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px;
+  padding: 8px;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -291,9 +291,7 @@ html, body {
 .connector-title {
   font-size: 14px;
   color: var(--text-main);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   min-width: 0;
 }
 
@@ -475,6 +473,23 @@ html, body {
   gap: 8px;
 }
 
+.account-handshake {
+  min-width: 30px;
+  padding: 2px 6px;
+  font-size: 15px;
+}
+
+.accounts-refresh-status { color: var(--text-dim); font-size: 11px; }
+.accounts-refresh-status.is-error { color: var(--danger-text); }
+
+.handshake-status {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.handshake-status.success { color: var(--success-text); }
+.handshake-status.error { color: var(--danger-text); }
+
 .account-link {
   color: var(--accent-text);
   font-size: 13px;
@@ -626,10 +641,13 @@ html, body {
   margin-top: 8px;
 }
 
-/* Team band: full-width card at the bottom, one role card per grid cell */
-.team-band {
-  grid-column: 1 / -1;
-}
+/* Compact read-only activity stays in the sidebar; settings live on the Roles page. */
+.team-activity-card .about-list { display: flex; flex-direction: column; gap: 4px; }
+.team-activity-card .about-role { padding: 6px 8px; gap: 0; }
+.team-activity-card .about-desc, .team-activity-card .about-chips, .team-activity-card .role-tokens { display: none; }
+.team-activity-card .about-role-head { gap: 6px; }
+.team-activity-card .about-role-name { font-size: 12px; }
+.team-activity-card .about-role-id { font-size: 10px; }
 
 .team-band-header {
   display: flex;

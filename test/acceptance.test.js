@@ -509,7 +509,7 @@ test('check evidence carries the acceptance attempt; identical output in two run
 
 // ------------------------------------------------- LL-4: agent-proposed checks
 
-const EXACT_POLICY = { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+const EXACT_POLICY = { type: 'workspaceWrite', writableRoots: [], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
 const agentContract = (...requiredChecks) => ({ id: 'acceptance-contract/v1', source: 'agent', requiredChecks });
 const noHostRun = async () => { throw new Error('an agent check must never run on the host'); };
 function fakeExec(reply) {
@@ -659,7 +659,37 @@ test('agent checks retain strict sandbox policy when native inheritance is not r
   }]);
 });
 
-test('explicit strict acceptance keeps the exact scratch-only no-network policy', async (t) => {
+test('full-access agent checks revalidate managed policy before each command and never downgrade', async () => {
+  const dir = repo();
+  const resolutions = [];
+  const calls = [];
+  const appServer = {
+    async resolveExecutionPermissions(workspace, requested, options) {
+      resolutions.push({ workspace, requested, options });
+      return resolutions.length === 1
+        ? { mode: 'full-access', writerProfile: ':danger-full-access', approvalPolicy: 'never', approvalsReviewer: 'user' }
+        : { mode: 'denied', reason: 'full_access_profile_not_allowed' };
+    },
+    async execCommand(args) { calls.push(args); return { exitCode: 0, stdout: '', stderr: '' }; },
+  };
+  const result = await runAcceptance({
+    workspace: dir, runId: 'full-access-revalidation', attempt: 1,
+    contract: agentContract(
+      { id: 'first', argv: ['npm', 'test'] },
+      { id: 'second', argv: ['npm', 'run', 'lint'] }),
+    appServer, runCheckImpl: noHostRun, executionPermissions: 'full-access',
+  });
+
+  assert.deepEqual(resolutions, [1, 2].map(() => ({ workspace: dir, requested: 'full-access', options: { fresh: true } })));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].permissionProfile, ':danger-full-access');
+  assert.equal(Object.hasOwn(calls[0], 'sandboxPolicy'), false);
+  assert.equal(result.checks[0].result, 'passed');
+  assert.equal(result.checks[1].error, 'full_access_unavailable');
+  assert.equal(result.disposition, 'unverifiable');
+});
+
+test('explicit strict acceptance keeps the exact scratch-only filesystem policy with verifier IPC access', async (t) => {
   const dir = repo();
   const baseDir = fs.mkdtempSync(path.join(process.cwd(), '.test-accept-scratch-base-'));
   t.after(() => fs.rmSync(baseDir, { recursive: true, force: true }));
@@ -684,7 +714,7 @@ test('explicit strict acceptance keeps the exact scratch-only no-network policy'
   assert.deepEqual(call.command, ['npm', 'test']);
   assert.equal(call.cwd, dir);
   assert.equal(call.sandboxPolicy.type, 'workspaceWrite');
-  assert.equal(call.sandboxPolicy.networkAccess, false);
+  assert.equal(call.sandboxPolicy.networkAccess, true);
   assert.equal(call.sandboxPolicy.excludeTmpdirEnvVar, true);
   assert.equal(call.sandboxPolicy.excludeSlashTmp, true);
   assert.equal(call.sandboxPolicy.writableRoots.length, 1);
@@ -693,6 +723,36 @@ test('explicit strict acceptance keeps the exact scratch-only no-network policy'
   assert.equal(call.env.TEST_SCRATCH_ROOT, path.join(call.sandboxPolicy.writableRoots[0], 'scratch'));
   assert.equal(call.env.TMPDIR, path.join(call.sandboxPolicy.writableRoots[0], 'tmp'));
   assert.equal(fs.existsSync(call.sandboxPolicy.writableRoots[0]), false);
+});
+
+test('legacy inherited verifier checks add network access while preserving native workspace roots', async (t) => {
+  const dir = repo();
+  const exec = {
+    calls: [],
+    async resolveExecutionPermissions(workspace, requested) {
+      assert.equal(workspace, dir);
+      assert.equal(requested, 'inherit');
+      return {
+        mode: 'inherit', profileApi: false, sandboxMode: 'workspace-write',
+        sandboxWorkspaceWrite: {
+          writable_roots: ['/tmp/extra-writable'], network_access: false,
+          exclude_tmpdir_env_var: true, exclude_slash_tmp: true,
+        },
+      };
+    },
+    async execCommand(args) { this.calls.push(args); return { exitCode: 0, stdout: '', stderr: '' }; },
+  };
+  const result = await runAcceptance({
+    workspace: dir, runId: 'r', attempt: 1, contract: agentContract({ id: 'unit', argv: ['npm', 'test'] }),
+    appServer: exec, runCheckImpl: noHostRun,
+  });
+
+  assert.equal(result.disposition, 'accepted');
+  assert.equal(exec.calls.length, 1);
+  assert.deepEqual(exec.calls[0].sandboxPolicy, {
+    type: 'workspaceWrite', writableRoots: [dir, '/tmp/extra-writable'], networkAccess: true,
+    excludeTmpdirEnvVar: true, excludeSlashTmp: true,
+  });
 });
 
 test('a failing agent check is rejected with check_failed and its output', async () => {

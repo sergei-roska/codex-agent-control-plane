@@ -701,7 +701,7 @@ const SPECIALIST_ARRAY_KEYS = ['inputs', 'evidence', 'acceptanceCriteria', 'chec
  * direct call) for the endpoint role { id, name?, sandbox }. Returns a normalized copy or throws
  * BoundaryViolation. Does not check skill pins (the executor does).
  */
-function checkSpecialistRequest(request, role, { workspace } = {}) {
+function normalizeSpecialistRequestInternal(request, role, { workspace, allowEmptyFiles = false } = {}) {
   const label = String(role?.name || role?.id || 'specialist');
   if (!isPlainObject(request)) throw violation('assignment.shape', 'assignment_shape_invalid', 'Specialist request must be a JSON object');
   if (request.requireAcceptance) {
@@ -781,7 +781,7 @@ function checkSpecialistRequest(request, role, { workspace } = {}) {
     throw violation('dispatch.request_input', 'request_invalid', 'review.prerequisiteFor is allowed only on a gated verifier scope and its matching auditor request');
   }
   if (readOnly) out.allowedFiles = out.allowedFiles.filter((file) => file !== '.' && file !== './');
-  else if (out.allowedFiles.length === 0) {
+  else if (out.allowedFiles.length === 0 && !allowEmptyFiles) {
     throw violation('assignment.writer_scope', 'writer_scope_missing', `Writable role ${label} requires explicit allowedFiles`);
   }
   for (const file of out.allowedFiles) {
@@ -800,6 +800,17 @@ function checkSpecialistRequest(request, role, { workspace } = {}) {
   }
   if (request.continuation !== undefined) out.continuation = checkContinuation(request.continuation, label);
   return out;
+}
+
+function normalizeSpecialistRequest(request, role, { workspace } = {}) {
+  return normalizeSpecialistRequestInternal(request, role, { workspace, allowEmptyFiles: true });
+}
+
+function checkSpecialistRequest(request, role, { workspace, capability, requestDigest } = {}) {
+  const { isScopedVerifierCapability } = require('./delivery-role-capabilities');
+  const normalized = normalizeSpecialistRequestInternal(request, role, { workspace, allowEmptyFiles: true });
+  const trustedEmptyScope = isScopedVerifierCapability(capability, { requestDigest, request: normalized, objective: normalized.objective });
+  return trustedEmptyScope ? normalized : normalizeSpecialistRequestInternal(request, role, { workspace });
 }
 
 // Continuation of an earlier attempt: { ofAttemptId, threadId, laneId, codexHome } after a usage limit, or
@@ -1113,6 +1124,7 @@ module.exports = {
   findCodexErrorInfo,
   safeRelativePath,
   checkSpecialistRequest,
+  normalizeSpecialistRequest,
   pathsOutsideAllowed,
   ASSIGNMENT_FIELDS,
   DECISION_ASSIGNMENT_FIELDS,

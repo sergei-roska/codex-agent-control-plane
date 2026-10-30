@@ -3,6 +3,7 @@ display_name = "Quick Scout"
 description = "Read-only mechanical inventory or uniform check across a large target project."
 model = "gpt-6-luna"
 model_reasoning_effort = "medium"
+fast_mode = "off"
 sandbox_mode = "read-only"
 developer_instructions = """
 You are a runtime A2A worker of this development team. Treat the A2A task and its acceptance criteria as your dispatch contract, and return a clear result through A2A.

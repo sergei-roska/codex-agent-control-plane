@@ -87,7 +87,7 @@ function parseProfile(source, filePath) {
     const assignment = line.match(/^([a-z_]+)\s*=\s*("(?:\\.|[^"\\])*")\s*(?:#.*)?$/);
     if (!assignment) throw new Error(`${filePath}:${index + 1}: unsupported TOML syntax`);
     const [, key, literal] = assignment;
-    if (!STRING_FIELDS.has(key)) throw new Error(`${filePath}:${index + 1}: unknown field ${key}`);
+    if (!STRING_FIELDS.has(key) && key !== 'fast_mode') throw new Error(`${filePath}:${index + 1}: unknown field ${key}`);
     if (Object.hasOwn(values, key)) throw new Error(`${filePath}:${index + 1}: duplicate field ${key}`);
     try {
       values[key] = JSON.parse(literal);
@@ -113,6 +113,9 @@ function parseProfile(source, filePath) {
   if (!MODEL_PATTERN.test(values.model)) {
     throw new Error(`${filePath}: invalid model ${JSON.stringify(values.model)}`);
   }
+  if (values.fast_mode !== undefined && !['off', 'on', 'inherit'].includes(values.fast_mode)) {
+    throw new Error(`${filePath}: unsupported fast_mode ${JSON.stringify(values.fast_mode)}`);
+  }
   const name = canonicalRoleId(values.name);
   return {
     name,
@@ -121,6 +124,7 @@ function parseProfile(source, filePath) {
     description: values.description,
     model: values.model,
     effort: values.model_reasoning_effort,
+    fastMode: values.fast_mode || 'off',
     sandbox: values.sandbox_mode,
     instructions: values.developer_instructions,
     tools: {
@@ -189,6 +193,7 @@ function createLeadRole({ profilesDir = DEFAULT_PROFILES_DIR } = {}) {
     description: 'Read-only orchestrator lead that plans work and dispatches bounded tasks to A2A roles.',
     model: 'gpt-6.1-sol',
     effort: 'medium',
+    fastMode: 'off',
     sandbox: 'read-only',
     tools: { mcpServers: [], skills: false },
     instructions: [

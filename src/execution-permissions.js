@@ -5,6 +5,37 @@ const path = require('node:path');
 
 const READ_ONLY_PROFILE = ':read-only';
 const WORKSPACE_PROFILE = ':workspace';
+const DANGER_FULL_ACCESS_PROFILE = ':danger-full-access';
+
+function nativeSandboxPolicy(workspace, mode, settings = null) {
+  if (mode === 'read-only') return { type: 'readOnly', networkAccess: false };
+  if (mode === 'danger-full-access') return { type: 'dangerFullAccess' };
+  const writableRoots = [workspace, ...(Array.isArray(settings?.writable_roots) ? settings.writable_roots : [])]
+    .filter((root, index, roots) => typeof root === 'string' && path.isAbsolute(root) && roots.indexOf(root) === index);
+  return {
+    type: 'workspaceWrite',
+    writableRoots,
+    networkAccess: settings?.network_access === true,
+    excludeTmpdirEnvVar: settings?.exclude_tmpdir_env_var === true,
+    excludeSlashTmp: settings?.exclude_slash_tmp === true,
+  };
+}
+
+function withVerifierIpcNetworkAccess(policy) {
+  if (policy?.type !== 'workspaceWrite') return policy;
+  return { ...policy, networkAccess: true };
+}
+
+function scopedVerifierSandboxPolicy(scratchRoot) {
+  if (typeof scratchRoot !== 'string' || !path.isAbsolute(scratchRoot)) throw new TypeError('A canonical verifier scratch root is required');
+  return {
+    type: 'workspaceWrite',
+    writableRoots: [scratchRoot],
+    networkAccess: true,
+    excludeTmpdirEnvVar: true,
+    excludeSlashTmp: true,
+  };
+}
 
 function canonicalPath(value) {
   if (typeof value !== 'string' || !path.isAbsolute(value)) return null;
@@ -83,6 +114,19 @@ async function resolveExecutionPermissions(appServer, cwd, requested = 'inherit'
     };
   }
   const context = await readPermissionContext(appServer, cwd);
+  if (requested === 'full-access') {
+    if (!context?.trusted) {
+      return { mode: 'denied', profileApi: true, reason: 'full_access_permission_context_unavailable' };
+    }
+    if (context.profiles?.get(DANGER_FULL_ACCESS_PROFILE)?.allowed !== true) {
+      return { mode: 'denied', profileApi: true, reason: 'full_access_profile_not_allowed' };
+    }
+    return {
+      mode: 'full-access', profileApi: true, writerProfile: DANGER_FULL_ACCESS_PROFILE,
+      approvalPolicy: 'never', approvalsReviewer: 'user', sandboxMode: context.sandboxMode,
+      reason: null,
+    };
+  }
   if (!context?.available) {
     return {
       mode: 'strict',
@@ -106,7 +150,11 @@ async function resolveExecutionPermissions(appServer, cwd, requested = 'inherit'
 module.exports = {
   READ_ONLY_PROFILE,
   WORKSPACE_PROFILE,
+  DANGER_FULL_ACCESS_PROFILE,
   projectTrust,
   readPermissionContext,
   resolveExecutionPermissions,
+  nativeSandboxPolicy,
+  withVerifierIpcNetworkAccess,
+  scopedVerifierSandboxPolicy,
 };

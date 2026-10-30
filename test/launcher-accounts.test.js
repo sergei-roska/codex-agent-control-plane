@@ -17,6 +17,10 @@ let servers;
 let limitsByHome;
 let failHomes;
 let loginMode;
+let handshakeFailure;
+let handshakeGate;
+let limitsReadSequence;
+let limitsReadGate;
 
 class FakeAppServer {
   constructor(options) {
@@ -28,8 +32,25 @@ class FakeAppServer {
   }
 
   async readRateLimits() {
+    this.calls.push(['readRateLimits']);
     if (failHomes.has(this.options.codexHome)) return null;
-    return { rateLimits: limitsByHome.get(this.options.codexHome ?? null) };
+    const sequence = limitsReadSequence.get(this.options.codexHome ?? null);
+    const value = sequence && sequence.length > 1 ? sequence.shift()
+      : sequence?.length === 1 ? sequence[0]
+        : limitsByHome.get(this.options.codexHome ?? null);
+    if (limitsReadGate) await limitsReadGate(this.options.codexHome ?? null);
+    return { rateLimits: value };
+  }
+
+  async startAccountUsageWindow() {
+    this.calls.push(['startAccountUsageWindow']);
+    if (handshakeGate) await handshakeGate(this.options.codexHome);
+    if (handshakeFailure) throw new Error(handshakeFailure);
+    const previous = limitsByHome.get(this.options.codexHome ?? null);
+    if (previous) limitsByHome.set(this.options.codexHome ?? null, {
+      primary: windowOf(1, 1_950_000_000),
+      secondary: previous.secondary,
+    });
   }
 
   async getAccount() {
@@ -112,6 +133,10 @@ beforeEach(() => {
   limitsByHome = new Map();
   failHomes = new Set();
   loginMode = {};
+  handshakeFailure = null;
+  handshakeGate = null;
+  limitsReadSequence = new Map();
+  limitsReadGate = null;
 });
 
 afterEach(async () => {
@@ -144,6 +169,72 @@ describe('GET /api/accounts', () => {
     assert.equal(servers.length, 3, 'second call is served from the 30 s cache');
     await api('GET', '/api/accounts?force=1');
     assert.equal(servers.length, 6, 'force bypasses the cache');
+  });
+
+  it('keeps a later forced refresh cached when the older background read completes first', async () => {
+    seedProfiles();
+    limitsReadSequence.set(null, [
+      { primary: windowOf(10), secondary: windowOf(20) },
+      { primary: windowOf(20), secondary: windowOf(40) },
+    ]);
+    const releases = [];
+    const startedResolvers = [];
+    const started = [0, 1].map((index) => new Promise((resolve) => { startedResolvers[index] = resolve; }));
+    let systemReads = 0;
+    limitsReadGate = async (home) => {
+      if (home !== null || systemReads >= 2) return;
+      const index = systemReads++;
+      startedResolvers[index]();
+      await new Promise((resolve) => { releases[index] = resolve; });
+    };
+    await start();
+
+    const background = api('GET', '/api/accounts');
+    await started[0];
+    const forced = api('GET', '/api/accounts?force=1');
+    await started[1];
+    releases[0]();
+    await background;
+    releases[1]();
+    const forcedResponse = await forced;
+    assert.equal(forcedResponse.body.system.primary.usedPercent, 20);
+    const beforeCachedRead = systemReads;
+    const cached = await api('GET', '/api/accounts');
+    assert.equal(cached.body.system.primary.usedPercent, 20);
+    assert.equal(systemReads, beforeCachedRead, 'the follow-up GET uses the forced result from cache');
+  });
+
+  it('keeps a forced refresh cached when an older background read completes after it', async () => {
+    seedProfiles();
+    limitsReadSequence.set(null, [
+      { primary: windowOf(10), secondary: windowOf(20) },
+      { primary: windowOf(20), secondary: windowOf(40) },
+    ]);
+    const releases = [];
+    const startedResolvers = [];
+    const started = [0, 1].map((index) => new Promise((resolve) => { startedResolvers[index] = resolve; }));
+    let systemReads = 0;
+    limitsReadGate = async (home) => {
+      if (home !== null || systemReads >= 2) return;
+      const index = systemReads++;
+      startedResolvers[index]();
+      await new Promise((resolve) => { releases[index] = resolve; });
+    };
+    await start();
+
+    const background = api('GET', '/api/accounts');
+    await started[0];
+    const forced = api('GET', '/api/accounts?force=1');
+    await started[1];
+    releases[1]();
+    const forcedResponse = await forced;
+    assert.equal(forcedResponse.body.system.primary.usedPercent, 20);
+    releases[0]();
+    await background;
+    const beforeCachedRead = systemReads;
+    const cached = await api('GET', '/api/accounts');
+    assert.equal(cached.body.system.primary.usedPercent, 20);
+    assert.equal(systemReads, beforeCachedRead, 'the older background result cannot replace the forced cache entry');
   });
 
   it('reports an error for a failing profile without breaking the list', async () => {
@@ -304,5 +395,130 @@ describe('activate, auto-switch, delete and limits', () => {
     assert.equal(r.body.primary.usedPercent, 30);
     assert.equal(r.body.email, 'alpha@example.com');
     assert.equal(servers.at(-1).options.codexHome, a.home);
+  });
+});
+
+describe('account handshake', () => {
+  it('uses the system home while a named profile is active and rejects unknown accounts', async () => {
+    seedProfiles();
+    profiles.setActive('alpha');
+    await start();
+
+    const response = await api('POST', '/api/accounts/system/handshake');
+    assert.equal(response.status, 200);
+    assert.equal(servers.at(-1).options.codexHome, null);
+    const count = servers.length;
+    assert.equal((await api('POST', '/api/accounts/missing/handshake')).status, 404);
+    assert.equal(servers.length, count);
+  });
+
+  it('runs on the requested profile before reading and caching provider limits', async () => {
+    const { a } = seedProfiles();
+    profiles.setActive('beta');
+    await start();
+
+    const response = await api('POST', '/api/accounts/alpha/handshake');
+    assert.equal(response.status, 200);
+    assert.equal(response.body.turnStatus, 'completed');
+    assert.equal(response.body.limitsRead, true);
+    assert.equal(response.body.primary.usedPercent, 1);
+    assert.equal(response.body.primary.resetsAt, 1_950_000_000);
+    assert.equal(response.body.secondary.usedPercent, 40);
+    const handshakeServer = servers.at(-1);
+    assert.equal(handshakeServer.options.codexHome, a.home);
+    assert.deepEqual(handshakeServer.calls.slice(0, 2), [['startAccountUsageWindow'], ['readRateLimits']]);
+    assert.equal(handshakeServer.closed, true);
+    const cached = await api('GET', '/api/accounts');
+    assert.equal(cached.body.profiles.find((profile) => profile.name === 'alpha').primary.usedPercent, 1);
+  });
+
+  it('retries stale provider reset data briefly and returns the later provider value', async () => {
+    const { a } = seedProfiles();
+    const stale = { primary: windowOf(80, 1), secondary: windowOf(40) };
+    const fresh = { primary: windowOf(1, 1_950_000_000), secondary: windowOf(40) };
+    limitsReadSequence.set(a.home, [stale, fresh]);
+    await start();
+
+    const response = await api('POST', '/api/accounts/alpha/handshake');
+    assert.equal(response.status, 200);
+    assert.equal(response.body.primary.usedPercent, 1);
+    assert.equal(response.body.primary.resetsAt, 1_950_000_000);
+    assert.equal(servers.at(-1).calls.filter(([name]) => name === 'readRateLimits').length, 2);
+  });
+
+  it('does not let an older account refresh overwrite the fresh handshake cache', async () => {
+    const { a } = seedProfiles();
+    let markReadStarted;
+    let releaseRead;
+    const readStarted = new Promise((resolve) => { markReadStarted = resolve; });
+    const oldRead = new Promise((resolve) => { releaseRead = resolve; });
+    let gated = false;
+    limitsReadGate = async (home) => {
+      if (home === a.home && !gated) {
+        gated = true;
+        markReadStarted();
+        await oldRead;
+      }
+    };
+    await start();
+
+    const refresh = api('GET', '/api/accounts?force=1');
+    await readStarted;
+    const handshake = await api('POST', '/api/accounts/alpha/handshake');
+    assert.equal(handshake.status, 200);
+    releaseRead();
+    await refresh;
+    const cached = await api('GET', '/api/accounts');
+    assert.equal(cached.body.profiles[0].primary.usedPercent, 1);
+  });
+
+  it('deduplicates the same account while another account can handshake independently', async () => {
+    const { a, b } = seedProfiles();
+    profiles.setActive('beta');
+    let releaseAlpha;
+    const alphaGate = new Promise((resolve) => { releaseAlpha = resolve; });
+    handshakeGate = (home) => home === a.home ? alphaGate : Promise.resolve();
+    await start();
+
+    const first = api('POST', '/api/accounts/alpha/handshake');
+    await until(async () => servers.some((entry) => entry.options.codexHome === a.home && entry.calls.length));
+    const duplicate = api('POST', '/api/accounts/alpha/handshake');
+    const independent = api('POST', '/api/accounts/beta/handshake');
+    const betaResponse = await independent;
+    assert.equal(betaResponse.status, 200);
+    assert.equal(servers.filter((entry) => entry.options.codexHome === a.home).length, 1);
+    assert.equal(servers.filter((entry) => entry.options.codexHome === b.home).length, 1);
+    releaseAlpha();
+    const [firstResponse, duplicateResponse] = await Promise.all([first, duplicate]);
+    assert.equal(firstResponse.status, 200);
+    assert.equal(duplicateResponse.status, 200);
+    assert.equal(servers.filter((entry) => entry.options.codexHome === a.home).length, 1);
+    assert.ok(servers.filter((entry) => [a.home, b.home].includes(entry.options.codexHome)).every((entry) => entry.closed));
+  });
+
+  it('returns failure without inventing a reset or reading limits when the turn fails', async () => {
+    const { a } = seedProfiles();
+    const before = limitsByHome.get(a.home);
+    handshakeFailure = 'planned turn failure';
+    await start();
+
+    const response = await api('POST', '/api/accounts/alpha/handshake');
+    assert.equal(response.status, 502);
+    assert.match(response.body.error, /planned turn failure/);
+    assert.deepEqual(limitsByHome.get(a.home), before);
+    assert.deepEqual(servers.at(-1).calls, [['startAccountUsageWindow']]);
+    assert.equal(servers.at(-1).closed, true);
+  });
+
+  it('reports limits pending when provider limits remain unavailable after completion', async () => {
+    const { b } = seedProfiles();
+    failHomes.add(b.home);
+    await start();
+
+    const response = await api('POST', '/api/accounts/beta/handshake');
+    assert.equal(response.status, 502);
+    assert.match(response.body.error, /provider limits are not yet available/);
+    assert.equal(servers.at(-1).closed, true);
+    assert.equal((await api('GET', '/api/accounts')).body.profiles[1].primary, null);
   });
 });

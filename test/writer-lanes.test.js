@@ -359,6 +359,88 @@ test('trusted native full access selects cooperative lanes without claiming conf
   assert.match(input, /Git commits made in this worktree do not update the shared project branch/);
 });
 
+test('owner full-access selects cooperative lanes only after fresh allowed-profile resolution', async (t) => {
+  const repo = makeRepo();
+  const stateDir = tmp('owner-full-access-state-');
+  const db = new Database(':memory:');
+  const calls = [];
+  let allowed = true;
+  const appServer = {
+    getVersion: () => 'v-full-access',
+    async resolveExecutionPermissions(workspace, requested, options) {
+      calls.push({ workspace, requested, options });
+      return allowed
+        ? { mode: 'full-access', writerProfile: ':danger-full-access', approvalPolicy: 'never' }
+        : { mode: 'denied', writerProfile: null, approvalPolicy: null, reason: 'full_access_profile_not_allowed' };
+    },
+    async execCommand() { assert.fail('full-access cooperative mode must not run the confinement probe'); },
+  };
+  t.after(() => { fs.rmSync(repo, { recursive: true, force: true }); fs.rmSync(stateDir, { recursive: true, force: true }); db.close(); });
+  const isolation = await selectWriterIsolation({ env: {}, appServer, workspace: repo, db,
+    stateFile: path.join(stateDir, 'state.sqlite'), executionPermissions: 'full-access' });
+  assert.deepEqual(calls, [{ workspace: repo, requested: 'full-access', options: { fresh: true } }]);
+  assert.equal(isolation.mode, 'cooperative');
+  assert.equal(isolation.ownerFullAccess, true);
+  assert.equal(isolation.inherited, false);
+  assert.equal(isolation.profile, ':danger-full-access');
+
+  allowed = false;
+  await assert.rejects(selectWriterIsolation({ env: {}, appServer, workspace: repo, db,
+    stateFile: path.join(stateDir, 'state.sqlite'), executionPermissions: 'full-access' }), { code: 'full_access_unavailable' });
+});
+
+test('trusted inherited legacy workspace-write admits a cooperative lane capability only for a current lane', async (t) => {
+  const repo = makeRepo();
+  const lanesRoot = tmp('legacy-cooperative-lanes-');
+  const stateDir = tmp('legacy-cooperative-state-');
+  const db = new Database(':memory:');
+  t.after(() => {
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(lanesRoot, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    db.close();
+  });
+  const native = {
+    mode: 'inherit', profileApi: false, sandboxMode: 'workspace-write',
+    sandboxWorkspaceWrite: {
+      writable_roots: ['/tmp/extra-root', repo], network_access: true,
+      exclude_tmpdir_env_var: true, exclude_slash_tmp: true,
+    },
+    approvalPolicy: 'on-request', approvalsReviewer: 'user',
+  };
+  const isolation = await selectWriterIsolation({
+    env: {}, appServer: { getVersion: () => 'native-v1', async execCommand() {}, async resolveExecutionPermissions() { return native; } },
+    workspace: repo, db, stateFile: path.join(stateDir, 'state.sqlite'),
+  });
+  assert.equal(isolation.mode, 'cooperative');
+  assert.equal(isolation.reason, 'trusted_native_workspace_write_cooperative');
+  assert.equal(isolation.confinement, undefined);
+  assert.equal(isolation.lanePolicyBinding.sandboxPolicy.networkAccess, true);
+  assert.deepEqual(isolation.lanePolicyBinding.sandboxPolicy.writableRoots, [repo, '/tmp/extra-root']);
+  assert.deepEqual(isolation.lanePolicyBinding.explicitWritableRoots, ['/tmp/extra-root', repo]);
+
+  native.profileApi = true;
+  const modernWithoutWriterProfile = await selectWriterIsolation({
+    env: {}, appServer: { getVersion: () => 'native-v1', async execCommand() {}, async resolveExecutionPermissions() { return native; } },
+    workspace: repo, db, stateFile: path.join(stateDir, 'state.sqlite'),
+  });
+  assert.deepEqual([modernWithoutWriterProfile.mode, modernWithoutWriterProfile.reason], ['shared', 'native_permissions_use_shared_workspace']);
+  native.profileApi = false;
+
+  let fenced = false;
+  const manager = new LaneManager({ db, workspace: repo, admission: { isFenced: () => fenced }, ...isolation });
+  const prepared = await manager.prepare({ contextId: 'ctx', taskId: 'task' });
+  manager.markRunning(prepared.lane);
+  const capability = manager.sandboxPolicy(prepared.lane);
+  assert.equal(JSON.stringify(capability), '{}');
+  assert.throws(() => manager.sandboxPolicy({ ...prepared.lane, workspacePath: repo }), /current admitted native lane/);
+  fenced = true;
+  assert.throws(() => manager.sandboxPolicy(prepared.lane), /current admitted native lane/);
+  fenced = false;
+  manager.store.update(prepared.lane.id, { state: 'integrated' });
+  assert.throws(() => manager.sandboxPolicy(prepared.lane), /current admitted native lane/);
+});
+
 test('after a failed re-probe a version is not probed again within the process', async (t) => {
   let probes = 0;
   let version = 'v2';
@@ -612,7 +694,7 @@ test('a usage-limited lane writer reports a continuation with its thread, lane, 
   const task = await limitedFirstAttempt(env);
   const meta = task.status.message.metadata;
   assert.equal(meta.failureKind, 'usage_limit');
-  assert.deepEqual(meta.continuation, { threadId: 'thr-1', laneId: writerOf(task).lane.id, codexHome: '/homes/a' });
+  assert.deepEqual(meta.continuation, { threadId: 'thr-1', laneId: writerOf(task).lane.id, codexHome: '/homes/a', mcpToolPins: [] });
   assert.equal(writerOf(task).lane.state, 'not_integrated');
 });
 
@@ -798,7 +880,7 @@ test('a completed lane writer publishes thread, lane, and home as continuation m
   const env = setup(t, async () => ok(), { home: '/homes/a' });
   const task = await env.send('orch-writer-a', request(['a.txt']), { contextId: OLD_CONTEXT });
   assert.equal(task.status.state, 3);
-  assert.deepEqual(task.artifacts[0].metadata.continuation, { threadId: 't', laneId: writerOf(task).lane.id, codexHome: '/homes/a' });
+  assert.deepEqual(task.artifacts[0].metadata.continuation, { threadId: 't', laneId: writerOf(task).lane.id, codexHome: '/homes/a', mcpToolPins: [] });
 });
 
 test('a scope continuation resumes the thread with the scope note and a fresh lane after an integrated lane', async (t) => {

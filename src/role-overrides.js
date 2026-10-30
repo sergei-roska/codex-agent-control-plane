@@ -7,12 +7,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { canonicalRoleId } = require('./role-names');
-const { EFFORTS, MODEL_PATTERN, LEAD_ROLE_NAME } = require('./role-catalog');
+const { LEAD_ROLE_NAME } = require('./role-catalog');
 
 const OVERRIDES_VERSION = 1;
 const MAX_EXTRA_RULES = 4000;
 const RULES_HEADING = 'Project rules from the owner (apply in this project only):';
-const FIELDS = ['model', 'effort', 'extraRules'];
+const FIELDS = ['model', 'effort', 'extraRules', 'maxConcurrentAgents', 'fastMode'];
+const ROLE_CAPACITY_DEFAULTS = Object.freeze({ engineer: 4, explorer: 2, verifier: 2, auditor: 2, coordinator: 1, 'recovery-engineer': 1, 'senior-engineer': 1, architect: 1, scout: 2 });
 
 class RoleOverrideError extends Error {
   constructor(message) {
@@ -35,14 +36,24 @@ function normalizeOverride(input) {
   }
   const out = {};
   if (!isBlank(input.model)) {
-    if (typeof input.model !== 'string' || !MODEL_PATTERN.test(input.model.trim())) {
+    if (typeof input.model !== 'string' || !input.model.trim() || input.model.trim().length > 120 || /[\r\n\0]/.test(input.model)) {
       throw new RoleOverrideError(`Invalid model ${JSON.stringify(input.model)}`);
     }
     out.model = input.model.trim();
   }
+  if (input.maxConcurrentAgents !== undefined && input.maxConcurrentAgents !== null && input.maxConcurrentAgents !== '') {
+    if (!Number.isSafeInteger(input.maxConcurrentAgents) || input.maxConcurrentAgents < 1 || input.maxConcurrentAgents > 12) {
+      throw new RoleOverrideError('Number of agents must be an integer from 1 to 12');
+    }
+    out.maxConcurrentAgents = input.maxConcurrentAgents;
+  }
+  if (input.fastMode !== undefined && input.fastMode !== null && input.fastMode !== '') {
+    if (!['inherit', 'off', 'on'].includes(input.fastMode)) throw new RoleOverrideError('Fast mode must be inherit, off, or on');
+    out.fastMode = input.fastMode;
+  }
   if (!isBlank(input.effort)) {
-    if (typeof input.effort !== 'string' || !EFFORTS.has(input.effort.trim())) {
-      throw new RoleOverrideError(`Effort must be one of ${[...EFFORTS].join(', ')}`);
+    if (typeof input.effort !== 'string' || input.effort.trim().length > 40 || /[\r\n\0]/.test(input.effort)) {
+      throw new RoleOverrideError('Reasoning effort must be a short text value');
     }
     out.effort = input.effort.trim();
   }
@@ -123,10 +134,15 @@ function writeOverridesFile(file, roles) {
 
 /** The role the Codex calls use: override model/effort replace the profile ones; extra rules are appended. */
 function effectiveRole(baseRole, override) {
-  if (!override || Object.keys(override).length === 0) return baseRole;
+  const capacityDefault = ROLE_CAPACITY_DEFAULTS[canonicalRoleId(baseRole.name)] || 1;
+  if (!override || Object.keys(override).length === 0) return { ...baseRole, maxConcurrentAgents: capacityDefault, fastMode: baseRole.fastMode || 'off' };
   const role = { ...baseRole };
+  role.maxConcurrentAgents = override.maxConcurrentAgents || capacityDefault;
+  role.fastMode = override.fastMode || baseRole.fastMode || 'off';
   if (override.model) role.model = override.model;
   if (override.effort) role.effort = override.effort;
+  role.maxConcurrentAgents = override.maxConcurrentAgents || role.maxConcurrentAgents;
+  if (override.fastMode) role.fastMode = override.fastMode;
   if (override.extraRules) {
     role.instructions = `${baseRole.instructions || ''}\n\n${RULES_HEADING}\n${override.extraRules}`.trim();
   }
@@ -139,11 +155,14 @@ function effectiveRole(baseRole, override) {
  * one (a warning is passed to `warn`), the base roles are returned as they are.
  */
 function loadEffectiveRoles({ file = null, roles: baseRoles, leadRole: baseLead, warn = () => {} }) {
-  if (!file) return { roles: baseRoles, leadRole: baseLead, overrides: {} };
+  if (!file) return {
+    roles: new Map([...baseRoles].map(([name, role]) => [name, effectiveRole(role, null)])),
+    leadRole: effectiveRole(baseLead, null),
+    overrides: {},
+  };
   const result = readOverridesFile(file, [...baseRoles.keys()].map(canonicalRoleId));
   if (result.warning) warn(result.warning);
   const overrides = result.roles;
-  if (Object.keys(overrides).length === 0) return { roles: baseRoles, leadRole: baseLead, overrides };
   const roles = new Map();
   for (const [name, role] of baseRoles) roles.set(name, effectiveRole(role, overrides[canonicalRoleId(name)]));
   return { roles, leadRole: effectiveRole(baseLead, overrides[LEAD_ROLE_NAME]), overrides };
@@ -152,6 +171,7 @@ function loadEffectiveRoles({ file = null, roles: baseRoles, leadRole: baseLead,
 module.exports = {
   OVERRIDES_VERSION,
   MAX_EXTRA_RULES,
+  ROLE_CAPACITY_DEFAULTS,
   RULES_HEADING,
   RoleOverrideError,
   normalizeOverride,

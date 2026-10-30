@@ -19,6 +19,7 @@ Implementation, isolated verification, and live qualification are separate.
 
 | Date | Decision | ADR |
 |---|---|---|
+| 2026-10-28 | Explicit owner full local execution covers all roles and final checks, with persistent launcher default, managed denial and acceptance integrity retained; applied and live permission probes passed | docs/adr/owner-full-local-execution.md |
 | 2026-10-19 | External connectors (Confluence with Jira, Figma, GTM, Context7) are Harness-owned: one catalog, read-only default allowlists, browser OAuth through the app-server, credentials in the account home; backend and launcher sidebar implemented and independently reviewed; live sign-in and tool check pending | docs/adr/harness-managed-connectors.md |
 | 2026-10-14 | Chuck Norris system repair agent added, then removed the same day after its first live use (superseded) | docs/adr/chuck-norris-system-repair.md |
 | 2026-10-12 | Retain staging problems, attempted resolutions, and architectural decisions with evidence and statuses; durable runtime implementation qualified in isolation | docs/adr/staging-lessons-and-decision-log.md |
@@ -606,3 +607,93 @@ measured audit savings.
   allowed by any profile before this change.
 - Production: check the production orchestrator's `_toolPolicy` for the same gap
   before any external MCP server is allowed to a role.
+
+
+### P-40 Local verification permissions became an unnecessary owner blocker
+
+- Found: 2026-10-28. Run `5f4d2e30-5b7c-4bb7-a02f-d27b46dd2b09`,
+  checkpoint `e4c3c-installed-owner-dispatch`; decision suffix `:h1` requested
+  restoration of the supported verification route instead of continuing locally.
+- Symptoms: uv commands failed creating their default cache lock. A read-only
+  investigator reported read-only mounts, and a `local-verification/v1` preflight
+  fingerprint was treated as a missing callable tool. Selecting concurrent
+  delivery also initially caused an apparently silent server startup refusal.
+- Causes: inherited legacy workspace-write selected shared isolation, which
+  concurrent startup rejected; startup failure did not reach the UI reliably.
+  Inspection-role mount observations were generalized to verifier capability.
+  Native inheritance and hardcoded role/final-check restrictions did not express
+  the owner's requested full local execution across every role.
+- Attempts and corrections: first added cooperative host-owned native lane
+  mapping and truthful non-callable preflight metadata. Startup stderr redaction
+  initially leaked a secret suffix across chunks; independent review caught it,
+  and complete-record buffering/bounded omission fixed it. Guidance alone was
+  not represented as restored runtime access. After explicit owner authorization,
+  added validated `full-access`, original-project trust lookup for private
+  cwd/mirrors, exact scoped policy binding and persistent launcher defaults.
+  Review caught missing finalization allowlists and strict-capability fixture
+  mismatches; these were corrected without weakening candidate or mode binding.
+- Decision: [owner-full-local-execution.md](adr/owner-full-local-execution.md).
+  Full local execution uses allowed `:danger-full-access` and never model
+  approvals for lead and all workers; final checks use the same allowed profile.
+  Managed denial stays explicit. Required runtime checks, candidate integrity,
+  pending-command unknown effects and publication fences remain mandatory.
+- Verified offline: independent review APPROVE; affected1231/1231 and full1982
+  total /1981 passed /0 failures /1 prohibited skip, identical input maps with
+  no drift. Candidate mutation, managed denial and pending checks still reject
+  acceptance. Diagnostics/default/native-lane regressions also pass.
+- Verified live: real App Server0.165.0 accepted coordinator/explorer/engineer/
+  verifier full-profile thread preparation with approvalPolicy never. Its command
+  execution wrote and removed disposable /tmp and uv-cache files successfully.
+  Both registered projects now have the owner full-access setting; the launcher
+  default covers future projects without an explicit override. Launcher/project
+  restarts retained task state. The resumed lead's actual context shows
+  danger-full-access and never approvals.
+- Result: the original owner pause was cleared by the authorized
+  `restore_supported_route` response and the legacy run resumed. It subsequently
+  detected a review-base ancestry mismatch and continued internal investigation;
+  this is a separate technical condition, not evidence that the target passed.
+- Remaining limits: no promise of universal model autonomy or completed target
+  acceptance. Full access does not create credentials or waive requirements.
+  Launcher defaults are sticky after project materialization, and existing run
+  engine mappings do not migrate when the default engine changes.
+- Production action: carry the explicit owner-mode configuration, truthful
+  capability projection, original-workspace trust lookup, mode-bound scoped
+  execution and candidate/check/effect guards together. Prove actual cache/
+  scratch writes and role policy with the real runtime, not only mocked tests.
+- Evidence: durable [execution-permissions.md](execution-permissions.md),
+  [verification-summary.json](architecture/concurrent-harness/verification-summary.json),
+  and source/test regressions. Temporary ignored reports:
+  `.agents/teamwork/local-autonomy-20261028/{review.md,verification-full.json,runtime-applied.json,runtime-permissions-verified.json,runtime-progress.json}`.
+  No credentials or raw private conversations are copied into this record.
+
+### P-41 Explicit review replan can recover an unavailable auditor template
+
+- Found: 2026-10-28. A validated explicit verifier/auditor wave was blocked
+  after a fresh verifier receipt when recovery was marked
+  `validated_auditor_template_unavailable`.
+- Correction: permit that reason through the existing explicit-replan and
+  same-batch verifier gates. The matching review context, current target,
+  accepted same-batch verifier receipt, and normal auditor assignment checks
+  remain required; historical receipts alone do not satisfy the gate.
+- Evidence: focused lead-graph regressions cover successful explicit recovery
+  and denial when no validated auditor assignment is available.
+
+### P-42 Terminal legacy task states fenced engine switching
+
+- Found: 2026-10-29. A completed legacy run remained in the task store after
+  selecting concurrent delivery, so the router rejected new concurrent runs as
+  busy despite no active runs or writers.
+- Cause: the SDK exposes task-state enum values as numbers, while SQLite stores
+  their canonical names as strings. Both cross-engine legacy checks compared
+  those incompatible representations, making all stored states appear active.
+- Correction: recognize only the persisted completed, failed, and canceled
+  strings as terminal. Working, input-required, missing, and unknown states
+  remain fenced; writer, concurrent-run recovery, and unknown-effect gates are
+  unchanged.
+- Evidence: `test/server-delivery-engine.test.js` seeds durable task rows before
+  server startup and checks both mapped and startup-discovered legacy runs with
+  no model calls. The focused regression was red before the correction and
+  passed afterward.
+- Production: after independent review, apply the narrow correction to the
+  original server and verify restart/intake through its supported API without
+  changing stored task state.

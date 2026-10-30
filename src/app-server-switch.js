@@ -1,6 +1,14 @@
 'use strict';
 
 const { CodexAppServer } = require('./codex-app-server');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+function canonicalHome(home) {
+  try { return fs.realpathSync(home); }
+  catch (_) { return path.resolve(home); }
+}
 
 // Forwarding wrapper that moves the App Server to another CODEX_HOME without interrupting a turn.
 // The swap happens only when no run/execCommand is in flight, and is serialized.
@@ -12,13 +20,17 @@ function createSwitchingAppServer({
   if (!profiles || typeof profiles.activeHome !== 'function') throw new TypeError('profiles.activeHome is required');
   let current = null;
   let currentHome = null;
+  let currentIdentityHome = null;
   let inFlight = 0;
   let swapping = null;
   let closed = false;
+  const expectedHomePreflightErrors = new WeakSet();
 
   function instance() {
     if (!current) {
       currentHome = profiles.activeHome();
+      currentIdentityHome = canonicalHome(currentHome || baseOptions.codexHome
+        || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
       current = create(currentHome);
     }
     return current;
@@ -31,6 +43,8 @@ function createSwitchingAppServer({
   function swap() {
     const old = current;
     currentHome = profiles.activeHome();
+    currentIdentityHome = canonicalHome(currentHome || baseOptions.codexHome
+      || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
     current = create(currentHome);
     swapping = (async () => {
       try {
@@ -55,9 +69,28 @@ function createSwitchingAppServer({
   async function tracked(method, args) {
     await settle();
     const target = instance();
+    const identityHome = currentIdentityHome;
+    const options = args[0] && typeof args[0] === 'object' && !Array.isArray(args[0]) ? args[0] : null;
+    const expectedCodexHome = options?.expectedCodexHome;
+    if (expectedCodexHome !== undefined && expectedCodexHome !== identityHome) {
+      const cause = Object.assign(new Error('The active Codex home changed after the provider thread was prepared'), {
+        code: 'provider_home_changed', expectedCodexHome, actualCodexHome: identityHome,
+      });
+      expectedHomePreflightErrors.add(cause);
+      throw cause;
+    }
+    const captureCodexHome = method === 'prepareThread' && options?.captureCodexHome === true;
+    let targetArgs = args;
+    if (options && ('expectedCodexHome' in options || 'captureCodexHome' in options)) {
+      const { expectedCodexHome: _expectedCodexHome, captureCodexHome: _captureCodexHome, ...callOptions } = options;
+      targetArgs = [callOptions, ...args.slice(1)];
+    }
     inFlight += 1;
     try {
-      return await target[method](...args);
+      const result = await target[method](...targetArgs);
+      return captureCodexHome && result && typeof result === 'object' && !Array.isArray(result)
+        ? { ...result, codexHome: identityHome }
+        : result;
     } finally {
       inFlight -= 1;
     }
@@ -77,6 +110,7 @@ function createSwitchingAppServer({
 
   const wrapper = {
     run: (...args) => tracked('run', args),
+    prepareThread: (...args) => tracked('prepareThread', args),
     execCommand: (...args) => tracked('execCommand', args),
     resolveExecutionPermissions: (...args) => tracked('resolveExecutionPermissions', args),
     readConfig: (...args) => tracked('readConfig', args),
@@ -98,6 +132,7 @@ function createSwitchingAppServer({
   ]) {
     wrapper[method] = (...args) => instance()[method](...args);
   }
+  wrapper.isExpectedHomePreflightError = (cause) => Boolean(cause && typeof cause === 'object' && expectedHomePreflightErrors.has(cause));
   return wrapper;
 }
 

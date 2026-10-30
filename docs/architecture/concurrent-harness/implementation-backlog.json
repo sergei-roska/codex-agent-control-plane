@@ -1,0 +1,533 @@
+{
+  "schemaVersion": "harness-implementation-plan/v1",
+  "status": "offline_source_accepted_live_pending",
+  "scope": "single_project_first",
+  "excluded": [
+    "per_role_account_routing",
+    "claude_adapter",
+    "cross_project_capacity_broker",
+    "unlimited_execution"
+  ],
+  "defaultCapacity": {
+    "maxActiveTurns": 12,
+    "plannerReservedSlots": 1,
+    "roleMaxConcurrentAgents": {
+      "coordinator": 1,
+      "engineer": 4,
+      "explorer": 2,
+      "verifier": 2,
+      "auditor": 2,
+      "recovery-engineer": 1,
+      "senior-engineer": 1,
+      "architect": 1,
+      "scout": 2
+    }
+  },
+  "packages": [
+    {
+      "id": "CN-00",
+      "title": "Architecture and baseline",
+      "dependsOn": [],
+      "requirements": [
+        "HCR-01",
+        "HCR-11"
+      ],
+      "validationScenarios": [
+        "V01",
+        "V38"
+      ],
+      "status": "accepted_design",
+      "ownershipGroup": "planning",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-00",
+      "implementationClaim": false,
+      "localExitGate": "Source/graph/links and package DAG validate; architecture critic accepts the design without requiring successor code.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-01",
+      "title": "Concurrent contracts",
+      "dependsOn": [
+        "CN-00"
+      ],
+      "requirements": [
+        "HCR-01",
+        "HCR-04"
+      ],
+      "validationScenarios": [
+        "V01",
+        "V02",
+        "V05",
+        "V13",
+        "V14"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "contracts",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-01",
+      "implementationClaim": true,
+      "localExitGate": "Pure schema/ID/plan validators reject cycles, stale revisions, mutable active contracts and invalid capability claims; legacy schema fixtures still pass.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-02",
+      "title": "Role capacity configuration",
+      "dependsOn": [
+        "CN-00"
+      ],
+      "requirements": [
+        "HCR-02",
+        "HCR-08"
+      ],
+      "validationScenarios": [
+        "V30"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "role-settings",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-02",
+      "implementationClaim": true,
+      "localExitGate": "Override normalization/default projection and old-file roundtrips pass; invalid requests preserve saved fields; scheduler enforcement is not required yet.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-03",
+      "title": "Backlog claims and events",
+      "dependsOn": [
+        "CN-01"
+      ],
+      "requirements": [
+        "HCR-01",
+        "HCR-07"
+      ],
+      "validationScenarios": [
+        "V01",
+        "V02",
+        "V03",
+        "V04",
+        "V05",
+        "V24",
+        "V27",
+        "V29"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "storage",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-03",
+      "implementationClaim": true,
+      "localExitGate": "Two-connection SQLite fixtures prove atomic claims/capacity/event commit, CAS, dedupe, cursors and lease-recovery marking using injected remote-effect facts.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-04",
+      "title": "Immutable candidate snapshots",
+      "dependsOn": [
+        "CN-01"
+      ],
+      "requirements": [
+        "HCR-06",
+        "HCR-07"
+      ],
+      "validationScenarios": [
+        "V18",
+        "V19",
+        "V20",
+        "V21",
+        "V22",
+        "V23",
+        "V27"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "candidates",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-04",
+      "implementationClaim": true,
+      "localExitGate": "Disposable Git fixtures prove immutable snapshots, manifests, parent lineage, reference retention and apply-intent reconciliation without a real review consumer.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-05",
+      "title": "Per-attempt execution adapter",
+      "dependsOn": [
+        "CN-03"
+      ],
+      "requirements": [
+        "HCR-02",
+        "HCR-07"
+      ],
+      "validationScenarios": [
+        "V06",
+        "V24",
+        "V25",
+        "V26",
+        "V27",
+        "V28",
+        "V29"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "execution",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-05",
+      "implementationClaim": true,
+      "localExitGate": "Fake A2A fixtures prove intent-before-send, deterministic lookup, one terminal settlement, stale-fence rejection and truthful unknown effects with injected candidates.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-06",
+      "title": "Model effort and Fast",
+      "dependsOn": [
+        "CN-02"
+      ],
+      "requirements": [
+        "HCR-08"
+      ],
+      "validationScenarios": [
+        "V31",
+        "V32",
+        "V33"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "role-settings",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-06",
+      "implementationClaim": true,
+      "localExitGate": "Model metadata normalization, inherited/explicit effort and advertised canonical Fast mapping match fake thread/turn request captures; unknown capability stays explicit.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-07",
+      "title": "Roles page and UI repairs",
+      "dependsOn": [
+        "CN-06"
+      ],
+      "requirements": [
+        "HCR-08",
+        "HCR-09"
+      ],
+      "validationScenarios": [
+        "V30",
+        "V31",
+        "V32",
+        "V33",
+        "V34",
+        "V35"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "role-settings",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-07",
+      "implementationClaim": true,
+      "localExitGate": "Actual Roles/main browser fixtures plus race/refresh regressions pass; model/effort/capacity/Fast persist and display correctly; no successor scheduler is needed.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-08",
+      "title": "Dependency-aware scheduler",
+      "dependsOn": [
+        "CN-02",
+        "CN-05"
+      ],
+      "requirements": [
+        "HCR-01",
+        "HCR-02",
+        "HCR-03",
+        "HCR-05"
+      ],
+      "validationScenarios": [
+        "V06",
+        "V07",
+        "V08",
+        "V09",
+        "V10",
+        "V11",
+        "V12",
+        "V15",
+        "V16",
+        "V17",
+        "V30"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "scheduler",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-08",
+      "implementationClaim": true,
+      "localExitGate": "Fake-executor dependency/resource fixtures fill bounded slots, reserve planner capacity, advance fast-sibling dependents, and schedule independent reviewers without the real planner.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-09",
+      "title": "Available lead inbox and lookahead",
+      "dependsOn": [
+        "CN-08"
+      ],
+      "requirements": [
+        "HCR-03",
+        "HCR-04",
+        "HCR-05"
+      ],
+      "validationScenarios": [
+        "V10",
+        "V11",
+        "V12",
+        "V13",
+        "V14",
+        "V15",
+        "V16",
+        "V17",
+        "V34",
+        "V43"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "lead",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-09",
+      "implementationClaim": true,
+      "localExitGate": "Fake scheduler/worker fixtures prove durable steering receipt, versioned lead deltas, short serialized planning turns, coalescing and lookahead while workers remain active.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-10",
+      "title": "Candidate-bound review policy",
+      "dependsOn": [
+        "CN-04",
+        "CN-08"
+      ],
+      "requirements": [
+        "HCR-02",
+        "HCR-06"
+      ],
+      "validationScenarios": [
+        "V08",
+        "V09",
+        "V18",
+        "V19",
+        "V20",
+        "V21",
+        "V22",
+        "V23"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "review",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-10",
+      "implementationClaim": true,
+      "localExitGate": "Candidate/receipt fixtures prove immutable review inputs, exact verifier/auditor dependencies, scoped promotion/invalidation and unknown-closure conservative fallback.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-11",
+      "title": "Lifecycle and durable recovery",
+      "dependsOn": [
+        "CN-09",
+        "CN-10"
+      ],
+      "requirements": [
+        "HCR-05",
+        "HCR-07"
+      ],
+      "validationScenarios": [
+        "V15",
+        "V16",
+        "V17",
+        "V24",
+        "V25",
+        "V26",
+        "V27",
+        "V28",
+        "V29"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "recovery",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-11",
+      "implementationClaim": true,
+      "localExitGate": "Controlled process/A2A fixtures prove pause/cancel/budget/restart/reconciliation state transitions and capacity fences using injected final-acceptance outcomes.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-12",
+      "title": "Final acceptance join",
+      "dependsOn": [
+        "CN-11"
+      ],
+      "requirements": [
+        "HCR-06",
+        "HCR-05"
+      ],
+      "validationScenarios": [
+        "V18",
+        "V19",
+        "V20",
+        "V21",
+        "V22",
+        "V23",
+        "V29",
+        "V43"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "acceptance",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-12",
+      "implementationClaim": true,
+      "localExitGate": "Frozen candidate fixtures exercise the real acceptance adapter, final barrier, pinned checks, blocked/partial predicates and post-acceptance publication invalidation.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-13",
+      "title": "Backlog pool and planning visibility",
+      "dependsOn": [
+        "CN-07",
+        "CN-09",
+        "CN-10"
+      ],
+      "requirements": [
+        "HCR-09",
+        "HCR-10",
+        "HCR-12"
+      ],
+      "validationScenarios": [
+        "V34",
+        "V35",
+        "V36",
+        "V37",
+        "V41",
+        "V42"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "observability",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-13",
+      "implementationClaim": true,
+      "localExitGate": "API/browser fixtures prove additive paginated projections, stale-project guards, idle reasons and nullable metrics against both old and new schemas.",
+      "localGateMayUseSuccessorFakes": true
+    },
+    {
+      "id": "CN-14",
+      "title": "Engine migration and integration",
+      "dependsOn": [
+        "CN-12",
+        "CN-13"
+      ],
+      "requirements": [
+        "HCR-10",
+        "HCR-11"
+      ],
+      "validationScenarios": [
+        "V36",
+        "V37",
+        "V38",
+        "V39",
+        "V40"
+      ],
+      "status": "source_accepted",
+      "ownershipGroup": "integration",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-14",
+      "implementationClaim": true,
+      "localExitGate": "Composition/migration fixtures prove legacy preservation, engine exclusivity, project isolation, startup recovery and drain/reconcile rollback.",
+      "localGateMayUseSuccessorFakes": true,
+      "qualificationScope": "bounded_offline_L1_L5",
+      "runtimeApplied": false,
+      "evidenceRef": "qualification-matrix.md"
+    },
+    {
+      "id": "CN-15",
+      "title": "Adversarial and comparative qualification",
+      "dependsOn": [
+        "CN-14"
+      ],
+      "requirements": [
+        "HCR-12"
+      ],
+      "validationScenarios": [
+        "V01",
+        "V02",
+        "V03",
+        "V04",
+        "V05",
+        "V06",
+        "V07",
+        "V08",
+        "V09",
+        "V10",
+        "V11",
+        "V12",
+        "V13",
+        "V14",
+        "V15",
+        "V16",
+        "V17",
+        "V18",
+        "V19",
+        "V20",
+        "V21",
+        "V22",
+        "V23",
+        "V24",
+        "V25",
+        "V26",
+        "V27",
+        "V28",
+        "V29",
+        "V30",
+        "V31",
+        "V32",
+        "V33",
+        "V34",
+        "V35",
+        "V36",
+        "V37",
+        "V38",
+        "V39",
+        "V40",
+        "V41",
+        "V42",
+        "V43"
+      ],
+      "status": "offline_accepted_live_pending",
+      "ownershipGroup": "qualification",
+      "briefRef": "implementation-plan.md",
+      "sectionPrefix": "CN-15",
+      "implementationClaim": true,
+      "localExitGate": "Integrated scenario matrix is executed with attributable evidence; L6 remains separately unqualified until an authorized real trial succeeds.",
+      "localGateMayUseSuccessorFakes": false,
+      "qualificationScope": "bounded_offline_L1_L5",
+      "runtimeApplied": false,
+      "evidenceRef": "qualification-matrix.md",
+      "liveQualification": "unqualified_separate_authorization_required"
+    }
+  ],
+  "validationScenariosMeaning": "later integrated coverage, not package-local predecessor exit gates",
+  "followups": [
+    {
+      "id": "UI-TOKEN-01",
+      "status": "source_accepted",
+      "paths": [
+        "launcher-ui/performance.js",
+        "test/launcher-performance-ui.test.js"
+      ],
+      "nextAction": "Preserve the accepted correction. Final critic APPROVE and original adverse probe pass; see implementation-status.md."
+    },
+    {
+      "id": "SUCCESSOR-BASE-01",
+      "status": "unqualified",
+      "paths": [
+        "src/concurrent-delivery-engine.js",
+        "test/concurrent-engine-comparison.test.js"
+      ],
+      "nextAction": "Qualify pre-admitted requires_output successors against predecessor publication. The matched V41 fixture uses supported later planner admission; an initial full-DAG experiment kept the dependent pinned to the initial candidate and could not read the new predecessor file. Do not infer automatic rebasing from the passing comparison."
+    },
+    {
+      "id": "CN15-L6",
+      "status": "unqualified_separate_authorization_required",
+      "paths": [
+        "docs/architecture/concurrent-harness/activation.md",
+        "docs/architecture/concurrent-harness/validation.md"
+      ],
+      "nextAction": "After separate owner authorization, apply qualified source through the existing lifecycle and run a bounded live comparison with pinned inputs/model settings and cost allowance. Offline acceptance does not authorize activation or provider calls."
+    }
+  ],
+  "nextPackage": null,
+  "continuationBrief": "docs/architecture/concurrent-harness/activation.md",
+  "activePackages": []
+}

@@ -45,7 +45,7 @@ const MAX_PROMPT_OUTCOMES_CHARS = 60_000;
 const DEFAULT_LEAD_ROLLOVER_TOKENS = 150_000;
 const ROLLOVER_WINDOW_FRACTION = 0.6;
 const PATH_RULE = "allowedFiles entries are repository-relative paths or directory prefixes without '.', '..', globs, absolute paths, or a leading '/'; writable roles need 1-20 entries, read-only roles may use []. Each assignment list has at most 20 entries and each string is at most 3000 characters. Skills are limited to 5 IDs.";
-const ASSIGNMENT_SCOPE_RULE = 'Use exact role IDs shown in Available roles, not display labels. Every writable role, including orch-verifier, requires explicit allowedFiles even when it only inspects files or runs checks. allowedFiles grants write permission; it does not require edits. For a verifier, choose a bounded set of existing test/check files or the narrowest existing test/check directory supported by workspace evidence. Do not use [] or guess/expand paths; dispatch a read-only explorer first if those paths are unknown. The verifier may inspect the declared review paths but can only write within allowedFiles.';
+const ASSIGNMENT_SCOPE_RULE = 'Use exact role IDs shown in Available roles, not display labels. Every writable role, including orch-verifier, requires explicit allowedFiles even when it only inspects files or runs checks. allowedFiles grants write permission; it does not require edits. For a verifier, choose a bounded set of existing test/check files or the narrowest existing test/check directory supported by workspace evidence. Do not use [] or guess/expand paths; dispatch a read-only explorer first if those paths are unknown. Read-only investigator mounts do not establish the verifier execution policy or its writable scope. The verifier may inspect the declared review paths but can only write within allowedFiles. For dependency or cache failures, first try a supported disposable cache/scratch path already authorized by that verifier scope and the unchanged policy; do not change pinned commands, acceptance, or permissions to make it pass.';
 const DELTA_REMINDER = `The rules, roles, and output format from the start of this thread still apply. Return only one JSON object matching the supplied schema. ${ASSIGNMENT_SCOPE_RULE} ${PATH_RULE} Give workers exact paths with line ranges and established facts in inputs/evidence; do not read large files yourself, dispatch an explorer for broad reading.`;
 const TEXT_PROJECTION_HEAD = 6000;
 const TEXT_PROJECTION_TAIL = 2000;
@@ -1264,7 +1264,7 @@ function buildLeadGraph(deps) {
       const obligation = review && findObligation(review.checkpointId);
       if (!review || item.reviewRecovery || canonicalRoleId(item.role) !== 'verifier'
         || entry?.phase !== 'replan_required'
-        || !['fresh_verifier_not_accepted', 'fresh_auditor_not_accepted'].includes(entry.blockedReason)
+        || !['fresh_verifier_not_accepted', 'fresh_auditor_not_accepted', 'validated_auditor_template_unavailable'].includes(entry.blockedReason)
         || !obligation || !obligationMatches(obligation, review)
         || entry.contextHash !== reviewContextHash(review) || item.reviewSkipped || item.reviewReused) continue;
       const target = targetForReview({ ...state, reviewObligations: obligations }, obligation.review);
@@ -1328,16 +1328,7 @@ function buildLeadGraph(deps) {
       const staleReceipt = receipt?.status === 'stale' && receipt.reason === 'review_target_changed_during_review';
       const serviceReview = item.reviewSummary?.reviewResult || outcomeSummary(item).reviewResult;
       const serviceCoverage = item.reviewSummary?.reviewCoverage || outcomeSummary(item).reviewCoverage;
-      const trustedEndpointRejection = item.result?.failureKind === 'request_invalid'
-        && item.result?.effects === 'none'
-        && item.result?.serviceBoundary?.results?.some((entry) => entry.code === 'review_origin_stale')
-        && serviceReview?.policyId === POLICY_ID
-        && serviceReview.kind === review.kind
-        && serviceReview.checkpointId === review.checkpointId
-        && serviceReview.status === 'rejected'
-        && serviceReview.accepted === false
-        && serviceReview.valid === false
-        && serviceReview.reason === 'review_origin_stale';
+      const trustedStaleEndpointRejection = trustedEndpointRejection(item, review);
       const targetChangeReason = role === 'verifier' ? 'verifier_target_changed_during_review' : 'review_target_changed';
       const trustedUnstableReview = serviceReview?.policyId === POLICY_ID
         && serviceReview.kind === review.kind
@@ -1348,7 +1339,7 @@ function buildLeadGraph(deps) {
         && serviceCoverage?.targetKnown === true
         && serviceCoverage.identityPresent === true
         && serviceCoverage.stable === false;
-      if (!stalePreflight && !staleReceipt && !trustedEndpointRejection && !trustedUnstableReview) continue;
+      if (!stalePreflight && !staleReceipt && !trustedStaleEndpointRejection && !trustedUnstableReview) continue;
       const obligation = findObligation(review.checkpointId);
       const entry = findRecovery(review.checkpointId);
       if (!obligation || !obligationMatches(obligation, review) || !entry
@@ -1357,7 +1348,7 @@ function buildLeadGraph(deps) {
       if (trustedUnstableReview && role === 'verifier' && gate.verifier) continue;
       const captured = item.reviewTarget;
       const current = targetForReview({ ...state, reviewObligations: obligations }, obligation.review);
-      if (!captured?.known || !current.known || (!(trustedEndpointRejection || trustedUnstableReview) && captured.identity === current.identity)
+      if (!captured?.known || !current.known || (!(trustedStaleEndpointRejection || trustedUnstableReview) && captured.identity === current.identity)
         || (trustedUnstableReview && captured.identity === current.identity)) {
         blocked(entry, !captured?.known || !current.known ? 'origin_or_current_target_unknown' : 'stale_signal_without_target_change');
         continue;
@@ -1577,7 +1568,7 @@ function buildLeadGraph(deps) {
     const recoveryContextMismatch = Boolean(recoveryCheckpoint && recoveryCheckpoint.contextHash !== contextHash);
     const recovery = recoveryCheckpoint && !recoveryContextMismatch ? recoveryCheckpoint : null;
     const recoveryReplanAllowed = recovery?.phase === 'replan_required'
-      && ['fresh_verifier_not_accepted', 'fresh_auditor_not_accepted'].includes(recovery.blockedReason);
+      && ['fresh_verifier_not_accepted', 'fresh_auditor_not_accepted', 'validated_auditor_template_unavailable'].includes(recovery.blockedReason);
     const ordinaryHandoffAllowed = recoveryValid && !recoveryContextMismatch
       && (!recovery || !['verifier_pending', 'auditor_pending', 'replan_required'].includes(recovery.phase));
     if (!target?.known || !recoveryValid || recoveryContextMismatch
@@ -1632,6 +1623,13 @@ function buildLeadGraph(deps) {
     return entry.receipt;
   }
 
+  function qualifyingCurrentReceipt(obligation, role, target, state, batch) {
+    const entry = latestReceiptEntry(obligation, role, target);
+    if (!entry || entry.receipt.status !== 'accepted') return null;
+    if (role === 'verifier' && rejectedVerifierReceipt(obligation, target)) return null;
+    return receiptReuseAllowed(obligation, entry, role, state, batch) ? entry.receipt : null;
+  }
+
   function currentGateState(state, obligation) {
     const review = obligation?.review;
     if (!review) return { target: null, verifier: null, auditor: null };
@@ -1641,6 +1639,42 @@ function buildLeadGraph(deps) {
       verifier: matchingReceipt(obligation, 'verifier', target, state),
       auditor: matchingReceipt(obligation, 'auditor', target, state),
     };
+  }
+
+  function trustedEndpointRejection(item, review = item.assignment?.review) {
+    const serviceReview = item.reviewSummary?.reviewResult || outcomeSummary(item).reviewResult;
+    return item.result?.failureKind === 'request_invalid'
+      && item.result?.effects === 'none'
+      && item.result?.serviceBoundary?.results?.some((entry) => entry.code === 'review_origin_stale')
+      && serviceReview?.policyId === POLICY_ID
+      && serviceReview.kind === review?.kind
+      && serviceReview.checkpointId === review?.checkpointId
+      && serviceReview.status === 'rejected'
+      && serviceReview.accepted === false
+      && serviceReview.valid === false
+      && serviceReview.reason === 'review_origin_stale';
+  }
+
+  function newlyAcceptedReviewReceipt(item, state, integrated, batch) {
+    const role = canonicalRoleId(item.role);
+    const review = item.assignment?.review;
+    if (!['verifier', 'auditor'].includes(role) || !review) return false;
+    const previous = (state.reviewObligations || []).find((entry) => entry.checkpointId === review.checkpointId);
+    const current = (integrated.reviewObligations || []).find((entry) => entry.checkpointId === review.checkpointId);
+    if (!obligationMatches(current, review) || !obligationMatches(previous, review)) return false;
+    const target = targetForReview({ ...state, reviewObligations: integrated.reviewObligations }, review);
+    if (!target.known) return false;
+    const receipt = [...(current.receipts || [])].reverse().find((entry) => entry.role === role
+      && entry.assignmentId === item.assignmentId
+      && entry.attemptId === item.attemptId
+      && entry.targetIdentity === target.identity);
+    if (!receipt || receipt.status !== 'accepted') return false;
+    const qualifyingReceipt = qualifyingCurrentReceipt(current, role, target, state, batch);
+    if (qualifyingReceipt?.attemptId !== receipt.attemptId) return false;
+    const receiptIndex = current.receipts.indexOf(receipt);
+    const priorReceipts = receiptIndex >= 0 ? current.receipts.slice(0, receiptIndex) : [];
+    const priorQualifyingReceipt = qualifyingCurrentReceipt({ ...current, receipts: priorReceipts }, role, target, state);
+    return !priorQualifyingReceipt;
   }
 
   function unfinishedCheckpointWriter(batch, checkpointId) {
@@ -2624,7 +2658,11 @@ function buildLeadGraph(deps) {
   function stateNotes(state) {
     const sections = [];
     if (state.verificationPreflight) {
-      sections.push(`Local verification capability preflight (scope ${state.verificationPreflight.scope}; status ${state.verificationPreflight.status}; route ${state.verificationPreflight.route}):\n${JSON.stringify(state.verificationPreflight)}\nThis reports interface/executable availability only, never passing tests or complete evidence. Qualify or repair an unavailable local route before substantial implementation using the existing configured checks and execution policy; do not ask the owner to authorize their reuse again within this scope. A strict policy is a supported restricted sandbox route; do not request owner promotion or fall back from agent checks to host execution. Dependencies and test outcomes remain unverified; fresh candidate-bound acceptance and review evidence are still required. New spending, credentials/access, and external writes still require owner decisions.`);
+      const ownerFullAccess = state.verificationPreflight.policy?.ownerFullAccess === true;
+      const verificationPolicyGuidance = ownerFullAccess
+        ? 'The owner selected full-access for local project execution. The verifier uses the allowed :danger-full-access profile with never model approvals; local commands can reach files and network resources available to the process, so follow assignment scope and do not claim sandbox confinement. Threadless final checks use the same allowed permission profile and have no model approval interaction. A preflight is still only route/interface availability, never proof that checks ran or passed, dependencies resolved, or complete evidence. Routine local cache, scratch, and environment diagnosis is already authorized; do not ask again. Do not change pinned commands or acceptance requirements to pass. Fresh candidate-bound acceptance and review evidence are still required. New spending, credentials/access, and external writes still require owner decisions.'
+        : 'Qualify or repair an unavailable local route before substantial implementation using the existing configured checks and execution policy; do not ask the owner to authorize their reuse again within this scope. A strict policy is a supported restricted sandbox route; do not request owner promotion or fall back from agent checks to host execution. A read-only investigator\'s mounts do not establish the writable verifier\'s execution policy or its access to dependency caches. For a runtime dependency/cache failure, first try a supported disposable cache/scratch location already authorized by the verifier\'s existing scope under unchanged policy. Do not change pinned commands, acceptance requirements, or permissions to make it pass. Treat a requirement as infeasible only after evidence establishes the exact dependency or environment capability is absent. Fresh candidate-bound acceptance and review evidence are still required. New spending, credentials/access, and external writes still require owner decisions.';
+      sections.push(`Local verification capability preflight (scope ${state.verificationPreflight.scope}; status ${state.verificationPreflight.status}; route ${state.verificationPreflight.route}):\n${JSON.stringify(state.verificationPreflight)}\nThe route is a fingerprint only, not a callable model tool. This reports interface/executable availability only, never that checks ran or passed, dependencies resolved, or complete evidence. ${verificationPolicyGuidance}`);
     }
     if (state.acceptance?.disposition === 'rejected' && state.acceptanceAttempts > 0 && !state.status) {
       const issues = (state.acceptance.issues || []).map((issue) => `${issue.code}: ${issue.detail}`);
@@ -2682,12 +2720,15 @@ function buildLeadGraph(deps) {
   }
 
   function fullPrompt(state, extras) {
+    const ownerFullAccess = deps.executionPermissions === 'full-access';
     const reviewProjection = reviewObligationProjection(state);
     const goal = state.goalOverride
       ? [`Goal (changed by the owner during this run; authoritative, it replaces the original goal):\n${state.goalOverride}`, `Original goal (background only):\n${state.goal}`]
       : [`User goal:\n${state.goal}`];
     const sections = [
-      'Plan and coordinate the requested work as the read-only team lead. Return only JSON matching the supplied schema.',
+      ownerFullAccess
+        ? 'Plan and coordinate the requested work as the team lead. Owner-selected full-access local execution is enabled with never model approvals; keep all changes delegated and scoped. Return only JSON matching the supplied schema.'
+        : 'Plan and coordinate the requested work as the read-only team lead. Return only JSON matching the supplied schema.',
       'The lead must not edit files. Delegate all changes through the A2A role agents.',
       ...goal,
       roundsLine(state),
@@ -2715,7 +2756,9 @@ function buildLeadGraph(deps) {
       `${ASSIGNMENT_SCOPE_RULE} ${PATH_RULE}`,
       'Record durable semantic lessons in records (max 20): {id,kind,status,summary,evidenceIds,relatedIds,adrPath}. Use stable IDs for problems/decisions, relate remedies and verification records to problem IDs, and keep proposed, accepted, implemented, and tested states distinct. Architecture records require a safe workspace-relative Markdown ADR path; all other records use adrPath:null. Use records:[] when there is nothing material to record. Do not claim a fix or verification that the evidence does not establish.',
       'Briefing rules: in each assignment inputs and evidence, give exact file paths with line ranges and the facts already established, so workers do not re-explore; reuse explorer findings by quoting the relevant paths and ranges. Do not read large files yourself: read at most a few narrow ranges and dispatch an explorer for broad reading.',
-      deps.parallelWriters
+      deps.parallelWriters && ownerFullAccess
+        ? 'Waves: assignment.wave is an integer >= 1 or null. Consecutive assignments sharing the same wave run concurrently. Writers use cooperative private worktrees for coordination and patch integration, but owner-selected full access can still reach the shared workspace and other process-accessible files. Do not describe these lanes as confinement. Keep writers in one wave on disjoint allowedFiles and use a later wave when work depends on earlier results; reviewers follow writers they assess.'
+        : deps.parallelWriters
         ? 'Waves: assignment.wave is an integer >= 1 or null. Consecutive assignments sharing the same wave run concurrently. By default, put independent writers in the same wave when each has disjoint allowedFiles and neither needs the other\'s output or an earlier state change. Each writer works in an isolated copy of the workspace made from the same starting state and does not see other writers\' changes; their changes are integrated into the shared workspace as each finishes. Use a later wave when work depends on an earlier wave, and keep reviewers after the writers they assess. Writers in one wave must own disjoint allowedFiles. Use null for strictly sequential steps.'
         : 'Waves: assignment.wave may be used to group read-only work that runs concurrently. Parallel writers are unavailable for this run because safe isolated worktree execution is not enabled; writers use the shared workspace and always run one at a time in array order regardless of wave. Use null otherwise.',
       'The JSON must contain action (dispatch, finish, or request_human_input), assignments, final, resolutions, humanInput, goalAchieved, acceptanceChecks, records, and checkpoints. Use empty arrays, an empty string, or null for unused fields.',
@@ -2726,7 +2769,9 @@ function buildLeadGraph(deps) {
       'A blocker that persists needs its root cause located (an explorer first; use an auditor only for a concrete risk-boundary question, or scout/architect when appropriate). Once an investigation locates it outside what the team may change (a missing capability of a dependency or the environment, or the requirement itself), stop investigating that blocker and use request_human_input with the matching closed owner-only reason if an owner decision is needed.',
       `goalAchieved: on finish set it honestly, true only when the goal is met; false names the blockers in final. The first finish with false does not end the run: investigate the root cause of each blocker or fix it${Number.isInteger(maxRounds) ? ' within the caller-granted round allowance' : ' while dispatch rounds remain unlimited'}. A later finish with false must cite a read-only investigation finished since then. Without checkpoints it ends as an honest partial result; use a checkpoints ledger of {id, status, reason, evidence} when you can report per-checkpoint status. For a genuine owner-only decision, use request_human_input with a closed owner-only reason after the required investigation; do not make a free-text finish imply owner responsibility. Use null for dispatch and request_human_input.`,
       ...(Number.isInteger(maxRounds) ? [`Dispatch rounds are capped at ${maxRounds} per caller-granted allowance. Reaching the cap pauses for the owner; only owner continue or change_goal grants another allowance.`] : ['Dispatch rounds are unlimited by default. A round number is for ordering only, not a spending authorization.']),
-      `acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks derived from the project's PRD, release or gate documents and its test commands; the first valid proposal is pinned for the run and runs at finish in a sandbox with a read-only workspace and no network. ${CHECK_RULE} Otherwise use null. A check that cannot pass is a blocker to investigate; a genuine owner-only cause uses request_human_input after the investigation. A changed pinned check script is reviewed by a read-only auditor against the PRD: preserved requirements are re-pinned, weakened ones keep failing.`,
+      ownerFullAccess
+        ? `acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks derived from the project's PRD, release or gate documents and its test commands; the first valid proposal is pinned for the run and runs at finish through the owner-allowed :danger-full-access profile. Threadless command/exec has no model approval interaction. Checks can write outside the candidate, so preserve candidate identity, before/after workspace integrity, and mandatory acceptance. ${CHECK_RULE} Otherwise use null. A check that cannot pass is a blocker to investigate; a genuine owner-only cause uses request_human_input after the investigation. A changed pinned check script is reviewed by a read-only auditor against the PRD: preserved requirements are re-pinned, weakened ones keep failing.`
+        : `acceptanceChecks: while no checks are pinned, propose 1-10 deterministic checks derived from the project's PRD, release or gate documents and its test commands; the first valid proposal is pinned for the run and runs at finish in a sandbox with a read-only workspace and no network. ${CHECK_RULE} Otherwise use null. A check that cannot pass is a blocker to investigate; a genuine owner-only cause uses request_human_input after the investigation. A changed pinned check script is reviewed by a read-only auditor against the PRD: preserved requirements are re-pinned, weakened ones keep failing.`,
       ...(deps.parallelWriters ? ['A writer outcome can be not_integrated (the lane field gives the reason and the lane path, which is kept): its changes never reached the shared workspace. You may re-dispatch with corrected allowedFiles, or resolve a conflict with a follow-up assignment.'] : []),
       'Writer reconciliation is mechanical: before you decide, the server reconciles every writable outcome whose effects were unknown and lists the result as an outcome of kind reconciliation, with the attested changedPaths. attestedScopeViolations are changes the server observed outside allowedFiles; a report filesChanged list is self-reported and advisory. A writable dispatch is refused while any writer outcome is unresolved. For a read-only role, dispatch_error means the submission could not be matched to a task at lookup time; such a role cannot have workspace write effects.',
     ].join('\n'));
@@ -2813,7 +2858,8 @@ function buildLeadGraph(deps) {
     } catch (_) {
       currentPreflight = {
         schema: 'verification-preflight/v1', scope: 'local_route_capability_only', status: 'unknown',
-        route: 'local-verification/v1:unknown', policy: { mode: 'unknown', reason: 'inspection_failed' }, checks: [],
+        route: 'local-verification/v1:unknown', routeType: 'fingerprint', routeCallable: false,
+        policy: { mode: 'unknown', reason: 'inspection_failed' }, checks: [],
         evidence: 'Capability inspection failed; dependencies, runtime behavior, and test results are unverified.',
       };
     }
@@ -3849,6 +3895,7 @@ function buildLeadGraph(deps) {
       && batch.items.every((item) => item.state === 'finished')
       && batch.items.every((item) => item.sandbox === 'read-only' || isSettledWriter(item.result));
     let loopGuard = state.loopGuard || null;
+    let acceptedReviewProgress = false;
     if (batchSettled && !limited && state.status !== 'canceled') {
       const observations = batch.items.map((item) => {
         const outcome = item.reviewSummary || outcomeSummary(item);
@@ -3874,7 +3921,10 @@ function buildLeadGraph(deps) {
           });
           if (target.known) contentIdentity = target.identity;
         }
-        return makeObservation({ item, outcome, contentIdentity, implemented: integratedChange(outcome) });
+        const resolvedRecurrence = newlyAcceptedReviewReceipt(item, state, integrated, batch);
+        acceptedReviewProgress ||= resolvedRecurrence;
+        return makeObservation({ item, outcome, contentIdentity, implemented: integratedChange(outcome),
+          resolvedRecurrence, ignoreRecurrence: trustedEndpointRejection(item) });
       });
       loopGuard = observeLoopGuard(state.loopGuard, batch.round, observations);
     }
@@ -3888,7 +3938,7 @@ function buildLeadGraph(deps) {
     };
     const stopForNoProgress = Boolean(loopPause && batchSettled && unresolvedWriters.length === 0
       && state.status !== 'canceled' && !limited && !state.budget
-      && !state.humanRequest && !ownerPauseRequested(config));
+      && !state.humanRequest && !ownerPauseRequested(config) && !acceptedReviewProgress);
     const partialLedger = stopForNoProgress ? technicalPartialLedger(settledSnapshot, loopPause) : null;
     const stopReferences = (loopPause?.references || []).slice(-10)
       .map((entry) => String(entry?.attemptId || entry?.assignmentId || '').slice(0, 120))
@@ -3903,7 +3953,9 @@ function buildLeadGraph(deps) {
       const { pause: _pause, ...persistedGuard } = loopGuard;
       loopGuard = persistedGuard;
     }
-    const recoveryPlan = planAutomaticReviewRecovery(state, batch, integrated.reviewObligations, unresolvedWriters, runtime, config);
+    const recoveryPlan = stopForNoProgress
+      ? { recovery: state.reviewRecovery, pendingAssignments: null }
+      : planAutomaticReviewRecovery(state, batch, integrated.reviewObligations, unresolvedWriters, runtime, config);
     const changes = summaries.filter((outcome) => integratedChange(outcome));
     return {
       outcomes: [...state.outcomes, ...summaries.map(({ loopEvidenceIdentity: _identity, ...outcome }) => outcome)],

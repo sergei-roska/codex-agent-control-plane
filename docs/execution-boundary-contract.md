@@ -134,6 +134,14 @@ review gate themselves. Worker decision requests with a
 recommendation outside the option ids, and over-long report strings, are normalized
 (`report.normalizations`) instead of invalidating the report.
 
+Technical recurrence excludes a trusted stale-origin endpoint rejection only when
+the service proves that no worker turn or effects occurred. Its separate recovery
+limits still apply. A newly qualifying accepted receipt for the current target
+resolves only its own recurrence. Such progress permits the next planning turn
+without clearing unrelated repetition counters. A terminal no-progress stop does
+not queue further recovery work. These rules preserve receipt freshness and do
+not make an incomplete checkpoint accepted.
+
 Path rules: `allowedFiles` entries are repository-relative paths or directory
 prefixes. Scope matching supports only exact paths and directory prefixes
 (`src/lead-graph.js:219-226`), so entries containing `*`, `?`, or `[` fail with

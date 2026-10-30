@@ -63,7 +63,7 @@ function boundedPolicyRead(read, signal) {
 }
 
 async function resolvedPolicy(appServer, cwd, requested, signal) {
-  if (requested === 'strict') return { mode: 'strict', reason: 'strict_setting' };
+  if (requested === 'strict') return { mode: 'strict', reason: 'strict_setting', verifierIpcNetworkAccess: true };
   if (!appServer || (typeof appServer.resolveExecutionPermissions !== 'function'
     && (typeof appServer.readConfig !== 'function' || typeof appServer._request !== 'function'))) {
     return { mode: 'unknown', reason: 'policy_api_unavailable' };
@@ -94,7 +94,7 @@ async function resolvedPolicy(appServer, cwd, requested, signal) {
     cache.set(key, cached);
   }
   const policy = await boundedPolicyRead(() => cached.pending, signal);
-  if (policy?.mode === 'inherit' || policy?.mode === 'strict') {
+  if (policy?.mode === 'inherit' || policy?.mode === 'strict' || policy?.mode === 'full-access') {
     return {
       mode: policy.mode,
       reason: policy.reason || null,
@@ -104,6 +104,10 @@ async function resolvedPolicy(appServer, cwd, requested, signal) {
       sandboxMode: typeof policy.sandboxMode === 'string' ? policy.sandboxMode : null,
       approvalPolicy: typeof policy.approvalPolicy === 'string' ? policy.approvalPolicy : null,
       approvalsReviewer: typeof policy.approvalsReviewer === 'string' ? policy.approvalsReviewer : null,
+      verifierIpcNetworkAccess: policy.mode === 'full-access' || policy.mode === 'strict'
+        || (policy.mode === 'inherit' && policy.profileApi !== true
+          && ['workspace-write', 'danger-full-access'].includes(policy.sandboxMode))
+        || (policy.mode === 'inherit' && policy.profileApi === true && policy.writerProfile === ':danger-full-access'),
     };
   }
   if (policy?.reason === 'policy_lookup_timeout' || policy?.reason === 'policy_resolution_unverified') cache.delete(key);
@@ -123,6 +127,7 @@ function routeIdentity({ project, contract, policy, policySetting }) {
       setting: policySetting || 'inherit', resolved: policy.mode, profileApi: policy.profileApi,
       readOnlyProfile: policy.readOnlyProfile, writerProfile: policy.writerProfile,
       sandboxMode: policy.sandboxMode, approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalsReviewer,
+      verifierIpcNetworkAccess: policy.verifierIpcNetworkAccess === true,
     },
     checks,
   };
@@ -137,9 +142,12 @@ async function preflightVerification({ appServer, workspace, contract, execution
   const checkResults = checks.map((check) => {
     const command = Array.isArray(check?.argv) ? check.argv[0] : null;
     if (contract?.source === 'agent') {
-      const status = !execAvailable ? 'unavailable' : policy.mode === 'unknown' ? 'unknown' : 'available';
+      const networkUnknown = policy.mode === 'inherit' && policy.verifierIpcNetworkAccess !== true;
+      const status = !execAvailable ? 'unavailable' : policy.mode === 'unknown' || networkUnknown ? 'unknown' : 'available';
       return { id: String(check?.id || '').slice(0, 64), status,
-        reason: !execAvailable ? 'exec_command_unavailable' : policy.mode !== 'inherit' ? policy.reason || 'sandbox_policy_unavailable' : null,
+        reason: !execAvailable ? 'exec_command_unavailable'
+          : networkUnknown ? policy.profileApi === true ? 'managed_profile_network_unverified' : 'verifier_ipc_network_unverified'
+            : policy.mode !== 'inherit' ? policy.reason || 'sandbox_policy_unavailable' : null,
         dependencies: 'unverified' };
     }
     const executable = findExecutable(command, workspace, env);
@@ -155,10 +163,18 @@ async function preflightVerification({ appServer, workspace, contract, execution
     scope: 'local_route_capability_only',
     status,
     route,
-    policy: { mode: policy.mode, reason: policy.reason },
+    routeType: 'fingerprint',
+    routeCallable: false,
+    policy: {
+      mode: policy.mode, reason: policy.reason,
+      verifierIpcNetworkAccess: policy.verifierIpcNetworkAccess === true,
+      ...(policy.mode === 'full-access' ? {
+        ownerFullAccess: true, profile: policy.writerProfile, approvalPolicy: policy.approvalPolicy,
+      } : {}),
+    },
     checks: checkResults,
     evidence: 'Capability presence only. Dependencies, sockets, runtime behavior, test results, review receipts, and external CI are unverified.',
   };
 }
 
-module.exports = { findExecutable, preflightVerification };
+module.exports = { findExecutable, preflightVerification, routeIdentity };

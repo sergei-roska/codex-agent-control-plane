@@ -7,6 +7,7 @@ const { spawn, execFileSync } = require('node:child_process');
 const { takeSnapshot } = require('./workspace-snapshot');
 const { readProcessIdentity } = require('./process-quiescence');
 const { provisionScratch } = require('./acceptance-scratch');
+const { nativeSandboxPolicy, withVerifierIpcNetworkAccess } = require('./execution-permissions');
 
 const MAX_CHECKS = 10;
 const MAX_ID = 64;
@@ -24,9 +25,9 @@ const EXEC_GRACE_MS = 2000;
 const CONTRACT_ID = 'acceptance-contract/v1';
 // Contract source of checks proposed by the lead agent (LL-4); owner contracts carry no source.
 const AGENT_SOURCE = 'agent';
-// Agent checks run through the App Server sandbox: the cwd is not writable, /tmp stays writable, no network.
+// Agent checks run through the App Server sandbox: the cwd is not writable and /tmp stays writable.
 const AGENT_CHECK_SANDBOX_POLICY = Object.freeze({
-  type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false,
+  type: 'workspaceWrite', writableRoots: [], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false,
 });
 const AGENT_CHECK_TOOLS = ['python', 'python3', 'pytest', 'node', 'npm', 'npx', 'pnpm', 'yarn', 'make', 'bash', 'sh', 'uv', 'cargo', 'go'];
 const VACUOUS_COMMANDS = new Set(['echo', 'true', 'false', 'test', '[', 'yes']);
@@ -241,11 +242,11 @@ function repinChecks(contract, reviewed) {
 
 const DIFF_MAX_CHARS = 8000;
 
-function readGit(workspace, args) {
+function readGit(workspace, args, gitEnvironment) {
   return execFileSync('git', ['-C', workspace, ...args], {
     stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 * MiB, timeout: 10000,
     // Read-only: no optional index refresh or lock.
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+    env: gitEnvironment || { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
   });
 }
 
@@ -254,7 +255,7 @@ function readGit(workspace, args) {
  * currentSha256, diff, note }. The diff comes read-only from git when the committed HEAD version is
  * exactly the pinned content; otherwise only the current content is given (the pinned bytes are not kept).
  */
-function describePinChanges(check, workspace) {
+function describePinChanges(check, workspace, gitEnvironment) {
   const clip = (text) => (text.length > DIFF_MAX_CHARS ? `${text.slice(0, DIFF_MAX_CHARS)}\n[... ${text.length - DIFF_MAX_CHARS} chars omitted]` : text);
   return (check.pins || []).flatMap((pin) => {
     const current = hashWorkspaceFile(pin.path, workspace);
@@ -262,12 +263,12 @@ function describePinChanges(check, workspace) {
     const entry = { path: pin.path, pinnedSha256: pin.sha256, currentSha256: current, diff: '', note: '' };
     let headMatches = false;
     try {
-      const head = readGit(workspace, ['show', `HEAD:./${pin.path}`]);
+      const head = readGit(workspace, ['show', `HEAD:./${pin.path}`], gitEnvironment);
       headMatches = crypto.createHash('sha256').update(head).digest('hex') === pin.sha256;
     } catch { headMatches = false; }
     if (headMatches) {
       try {
-        entry.diff = clip(readGit(workspace, ['diff', '--no-color', '--no-ext-diff', 'HEAD', '--', `./${pin.path}`]).toString('utf8'));
+        entry.diff = clip(readGit(workspace, ['diff', '--no-color', '--no-ext-diff', 'HEAD', '--', `./${pin.path}`], gitEnvironment).toString('utf8'));
         entry.note = 'Diff of the pinned content (committed at HEAD) against the current file.';
         return [entry];
       } catch { /* fall back to the current content */ }
@@ -339,7 +340,7 @@ class StreamCapture {
 }
 
 function runCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
-  cwd, onSpawn, signal, closeGraceMs = CLOSE_GRACE_MS, onCapture,
+  cwd, onSpawn, signal, closeGraceMs = CLOSE_GRACE_MS, onCapture, env,
 } = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
@@ -381,7 +382,8 @@ function runCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
     };
     let child;
     try {
-      child = spawn(argv[0], argv.slice(1), { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+      child = spawn(argv[0], argv.slice(1), { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false,
+        ...(env ? { env } : {}) });
     } catch (spawnError) {
       error = spawnError.code || 'SPAWN_ERROR';
       finish(null, null);
@@ -420,12 +422,13 @@ function runCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
 }
 
 /**
- * Runs one agent-proposed check through appServer.execCommand in the read-only-workspace sandbox and
+ * Runs one agent-proposed check through appServer.execCommand with the selected execution policy and
  * returns the runCheck result shape. An unavailable or failing execCommand is result 'error' (never a
  * pass); a check that outlives its timeoutMs is a timed-out failure, as with runCheck.
  */
 async function runSandboxedCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
   appServer, cwd, signal, onCapture, graceMs = EXEC_GRACE_MS, scratch = null, executionMode = 'strict', permissionProfile = null,
+  sandboxPolicy = null,
 } = {}) {
   const started = Date.now();
   const stdout = new StreamCapture();
@@ -464,7 +467,7 @@ async function runSandboxedCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
       signal.addEventListener('abort', onAbort, { once: true });
     }
     Promise.resolve()
-      .then(() => appServer.execCommand(executionMode === 'inherit'
+      .then(() => appServer.execCommand(executionMode === 'inherit' && !sandboxPolicy
         ? {
           command: [...argv], cwd, ...(scratch ? { env: { ...scratch.env } } : {}), timeoutMs,
         }
@@ -473,9 +476,11 @@ async function runSandboxedCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
           : scratch
         // Owner opt-in (src/acceptance-scratch.js): the run's scratch directory is the only writable root.
         ? {
-          command: [...argv], cwd, sandboxPolicy: { ...scratch.policy, writableRoots: [...scratch.policy.writableRoots] }, env: { ...scratch.env }, timeoutMs,
+          command: [...argv], cwd, sandboxPolicy: {
+            ...withVerifierIpcNetworkAccess(scratch.policy), writableRoots: [...scratch.policy.writableRoots],
+          }, env: { ...scratch.env }, timeoutMs,
         }
-        : { command: [...argv], cwd, sandboxPolicy: { ...AGENT_CHECK_SANDBOX_POLICY }, timeoutMs }))
+        : { command: [...argv], cwd, sandboxPolicy: { ...(sandboxPolicy || AGENT_CHECK_SANDBOX_POLICY) }, timeoutMs }))
       .then((value) => resolve({ value }), (error) => resolve({ error }));
   });
   clearTimeout(timer);
@@ -498,7 +503,7 @@ async function runSandboxedCheck({ id, argv, timeoutMs = DEFAULT_TIMEOUT_MS }, {
 const ISSUE_META = {
   check_missing: ['accept.checks', 'FAIL', false],
   check_failed: ['accept.checks', 'FAIL', false],
-  // A sandboxed agent check that could not be run: unverified, never a pass.
+  // An App Server agent check that could not be run: unverified, never a pass.
   check_error: ['accept.checks', 'UNKNOWN', false],
   snapshot_unavailable: ['accept.snapshot', 'UNKNOWN', false],
   candidate_changed: ['accept.candidate_stable', 'FAIL', false],
@@ -538,7 +543,7 @@ function computeDisposition({
     if (!result) add('check_missing', `Required check "${check.id}" has no result.`);
     else if (result.result === 'error' && result.error === 'check_changed') add('check_changed', result.detail);
     else if (result.result === 'failed' && result.error === 'check_weakened') add('check_weakened', result.detail);
-    else if (result.result === 'error') add('check_error', `Required check "${check.id}" could not run in the sandbox (${result.error || 'error'}); it is unverified.`);
+    else if (result.result === 'error') add('check_error', `Required check "${check.id}" could not run through the configured App Server execution route (${result.error || 'error'}); it is unverified.`);
     else if (result.result !== 'passed') {
       const ids = [result.stdoutEvidence?.id, result.stderrEvidence?.id].filter(Boolean);
       const evidence = ids.length > 0 ? ` Evidence: ${ids.join(', ')}.` : '';
@@ -650,19 +655,30 @@ function storeCheckStream(evidenceStore, runId, attemptId, check, result, stream
 }
 
 async function runAcceptance({
-  workspace, runId, attempt, contract, writers = [], unresolvedWriterCount = 0, admission, signal,
+  workspace, permissionWorkspace = workspace, runId, attempt, contract, writers = [], unresolvedWriterCount = 0, admission, signal,
   snapshot = takeSnapshot, runCheckImpl = runCheck, evidenceStore = null, appServer = null, weakened = [],
   acceptanceScratch = null, scratchForbiddenRoots,
-  executionPermissions = 'inherit',
+  executionPermissions = 'inherit', gitEnvironment = null,
 }) {
   const validated = validateAcceptanceContract(contract);
   const { requiredChecks } = validated;
   // Agent-proposed checks never run on the host: only through the App Server sandbox.
   const sandboxed = validated.source === AGENT_SOURCE;
-  let checkPolicy = { mode: 'strict', profileApi: false };
-  if (sandboxed && executionPermissions === 'inherit' && typeof appServer?.resolveExecutionPermissions === 'function') {
-    try { checkPolicy = await appServer.resolveExecutionPermissions(workspace, executionPermissions); } catch (_) { /* strict fallback */ }
+  let checkPolicy = executionPermissions === 'full-access'
+    ? { mode: 'denied', reason: 'full_access_policy_unavailable' }
+    : { mode: 'strict', profileApi: false };
+  if (sandboxed && executionPermissions === 'inherit'
+    && typeof appServer?.resolveExecutionPermissions === 'function') {
+    try {
+      checkPolicy = await appServer.resolveExecutionPermissions(permissionWorkspace, executionPermissions);
+    } catch (_) {
+      checkPolicy = { mode: 'strict', profileApi: false };
+    }
   }
+  const inheritedCheckPolicy = checkPolicy.mode === 'inherit' && checkPolicy.profileApi !== true
+    && checkPolicy.sandboxMode === 'workspace-write'
+    ? withVerifierIpcNetworkAccess(nativeSandboxPolicy(workspace, checkPolicy.sandboxMode, checkPolicy.sandboxWorkspaceWrite))
+    : null;
   let held = null;
   if (admission) {
     const id = `${runId}:accept:${attempt}`;
@@ -694,15 +710,28 @@ async function runAcceptance({
     if (sandboxed && acceptanceScratch) {
       scratch = provisionScratch(acceptanceScratch, { workspace, ...(scratchForbiddenRoots ? { forbiddenRoots: scratchForbiddenRoots } : {}) });
     }
-    const snapshotBefore = snapshot(workspace);
+    const captureSnapshot = (directory) => gitEnvironment
+      ? snapshot(directory, { gitEnv: gitEnvironment })
+      : snapshot(directory);
+    const snapshotBefore = captureSnapshot(workspace);
     const checks = [];
     const onSpawn = held
       ? (pid) => admission.recordTurnStart(held.executionId, { processIdentity: readProcessIdentity(pid), threadId: null })
       : undefined;
     for (const check of requiredChecks) {
       if (signal?.aborted) return closeScratch(canceledAcceptance(requiredChecks, checks, Boolean(held)));
-      // Crash window: a turn start without a proven identity keeps quiescence unproven until the real one is recorded.
-      // A sandboxed check has no host process and cannot write the workspace, so it records none.
+      if (sandboxed && executionPermissions === 'full-access') {
+        try {
+          checkPolicy = typeof appServer?.resolveExecutionPermissions === 'function'
+            ? await appServer.resolveExecutionPermissions(permissionWorkspace, executionPermissions, { fresh: true })
+            : { mode: 'denied', reason: 'permission_api_unavailable' };
+        } catch (_) {
+          checkPolicy = { mode: 'denied', reason: 'full_access_resolution_failed' };
+        }
+      }
+      // Host checks record a pending process identity until spawn reports it. App Server commands
+      // have no model-thread or host-process receipt; delivery acceptance separately tracks their
+      // pending RPCs and preserves the mirror if an outcome is still unknown.
       if (held && !sandboxed) admission.recordTurnStart(held.executionId, { processIdentity: null, pending: true, threadId: null });
       let captured = null;
       const onCapture = (value) => { captured = value; };
@@ -721,13 +750,22 @@ async function runAcceptance({
           id: check.id, argv: check.argv, result: 'error', error: 'check_changed', exitCode: null, sandboxed: true,
           detail: `Pinned acceptance check "${check.id}" was not run: ${changed.join(', ')} changed since it was pinned. The changed check needs an independent integrity review before it can run.`,
         }
+        : sandboxed && executionPermissions === 'full-access' && checkPolicy.mode !== 'full-access'
+        ? {
+          id: check.id, argv: check.argv, result: 'error', error: 'full_access_unavailable', exitCode: null, sandboxed: true,
+          detail: `Owner full-access execution is unavailable (${checkPolicy.reason || 'full_access_policy_unavailable'}); this check was not run.`,
+        }
         : sandboxed
         ? await runSandboxedCheck(check, {
           appServer, cwd: workspace, signal, onCapture, scratch,
           executionMode: checkPolicy.mode,
-          permissionProfile: checkPolicy.mode === 'strict' && checkPolicy.profileApi ? ':workspace' : null,
+          permissionProfile: checkPolicy.mode === 'full-access'
+            ? ':danger-full-access'
+            : checkPolicy.mode === 'strict' && checkPolicy.profileApi ? ':workspace' : null,
+          sandboxPolicy: inheritedCheckPolicy,
         })
-        : await runCheckImpl(check, { cwd: workspace, onSpawn, signal, onCapture });
+        : await runCheckImpl(check, { cwd: workspace, onSpawn, signal, onCapture,
+          ...(gitEnvironment ? { env: gitEnvironment } : {}) });
       if (captured && result && typeof result === 'object') {
         const out = evidenceStore ? storeCheckStream(evidenceStore, runId, `${runId}:acceptance:${attempt}`, check, result, 'stdout', captured.stdout) : { ref: null, error: null };
         const err = evidenceStore ? storeCheckStream(evidenceStore, runId, `${runId}:acceptance:${attempt}`, check, result, 'stderr', captured.stderr) : { ref: null, error: null };
@@ -739,7 +777,7 @@ async function runAcceptance({
       checks.push(result);
       if (signal?.aborted || result?.canceled) return closeScratch(canceledAcceptance(requiredChecks, checks, Boolean(held)));
     }
-    const snapshotAfter = snapshot(workspace);
+    const snapshotAfter = captureSnapshot(workspace);
     const { disposition, reasons, issues } = computeDisposition({
       requiredChecks, checkResults: checks, snapshotBefore, snapshotAfter, writers, unresolvedWriterCount,
     });

@@ -1,0 +1,1834 @@
+{
+  "schemaVersion": "harness-qualification-summary/v1",
+  "capturedAt": "2026-10-28T18:36:02.111718+00:00",
+  "scope": "Bounded offline harness qualification with owner-authorized full local execution applied and live permission probes; comparative L6 unqualified",
+  "runtimeApplied": true,
+  "affectedTests": {
+    "tests": 1231,
+    "suites": 32,
+    "pass": 1231,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0,
+    "exitCode": 0,
+    "timedOut": false,
+    "inputsUnchanged": true,
+    "temporaryLog": ".agents/teamwork/local-autonomy-20261028/verification-affected.tap"
+  },
+  "fullSuiteRun": true,
+  "fullSuite": {
+    "tests": 1982,
+    "suites": 54,
+    "pass": 1981,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 1,
+    "todo": 0,
+    "exitCode": 0,
+    "timedOut": false,
+    "inputsUnchanged": true,
+    "temporaryLog": ".agents/teamwork/local-autonomy-20261028/verification-full.tap"
+  },
+  "excludedTest": {
+    "name": "candidate attributes and inherited Git configuration cannot execute filters while mirroring",
+    "reason": "Explicit inherited prohibition; not executed"
+  },
+  "independentReviews": {
+    "v14Protocol": "APPROVE; independent20/20",
+    "v14OrderingRepair": "APPROVE; independent20/20 + correction7/7",
+    "v14BoundaryChallenge": "HOLDS;3/3 store probes",
+    "v16": "APPROVE;20/20 bounded failed-verdict retry",
+    "v42": "APPROVE;17/17 including4 challenger cases",
+    "terminalShutdown": "APPROVE; challenge HOLDS",
+    "v41ComparisonMigration": "APPROVE; bounded causal comparison, preservation and exclusion",
+    "v43Recovery": "APPROVE; offline composed recovery/repair/acceptance",
+    "matrix": "APPROVE; all V01-V43 PASS within documented offline bounds",
+    "startupDiagnostics": "APPROVE",
+    "nativeWorkspaceWriteLane": "APPROVE"
+  },
+  "matrixRef": "qualification-matrix.md",
+  "historicalFinalGateFailures": [
+    {
+      "kind": "full_timeout",
+      "timeoutSeconds": 300,
+      "accepted": false,
+      "temporaryReport": ".agents/teamwork/integration-closeout-20261028/verification-full-checkpoint-timeout.json"
+    },
+    {
+      "kind": "planner_capacity_premature_review",
+      "tests": 1961,
+      "pass": 1959,
+      "fail": 1,
+      "skipped": 1,
+      "accepted": false,
+      "temporaryReport": ".agents/teamwork/integration-closeout-20261028/verification-full-v14-race.json",
+      "resolution": "Deterministically reproduced before edit. Engine now waits for durable planner wake consumption before review-plan mutation; current full passes."
+    }
+  ],
+  "limits": [
+    "No live providers or L6 model speed/cost/quality claims",
+    "No runtime activation or existing service restart",
+    "Whole-objective owner-decision gate, not selective obligation deferral",
+    "No pre-admitted successor rebasing claim",
+    "No product-writing scoped verifier claim",
+    "No rejected-provider-close eventual recovery claim",
+    "Additive committed DDL preservation, not transactional rollback",
+    "Wait categories are overlapping processing intervals; missing telemetry remains null"
+  ],
+  "sourceFiles": [
+    {
+      "path": "launcher-ui/app.js",
+      "sha256": "1b966a53fc617d91472a9c1e08c404136a123efb94f4bb900af9cfa62d1b621b"
+    },
+    {
+      "path": "launcher-ui/backlog.css",
+      "sha256": "4fab200a6d6f094f1eed69943069c4b374f2853f8ab898ecc7f8a41ffdd16560"
+    },
+    {
+      "path": "launcher-ui/backlog.html",
+      "sha256": "2e88eed8a44cee247b8c63309d91cb7133ea722580ece41908e18dbdbe14a7c7"
+    },
+    {
+      "path": "launcher-ui/backlog.js",
+      "sha256": "1f241b4a502c5d111d9bea6027875955fc094c333a9587f736f21de5aa9dae7d"
+    },
+    {
+      "path": "launcher-ui/index.html",
+      "sha256": "0e7c99e8d766ac9d95a635177a5dbbb31f66df8df9d003f92f3e54ed8d773dae"
+    },
+    {
+      "path": "launcher-ui/performance.css",
+      "sha256": "19a9e944fc8d4c6f1d71131db8fefcc5d06cfbe843d9cc38babf0924f98c219e"
+    },
+    {
+      "path": "launcher-ui/performance.html",
+      "sha256": "1101e88c417d1271dc2793d499c567e10d46d70e55bbfd4efe06159061935777"
+    },
+    {
+      "path": "launcher-ui/performance.js",
+      "sha256": "e3209f5f6b435a7dc17af33afd056b339f4ba459211383aa64547089dc392814"
+    },
+    {
+      "path": "launcher-ui/roles.css",
+      "sha256": "e49179061d0c9d214dec54a6815e86291fdb9d741d21d60aa5588e4f5bd308ae"
+    },
+    {
+      "path": "launcher-ui/roles.html",
+      "sha256": "381e8d784441cebfd4d665bec7114710e7b54258f42934a71740aa9973f9d27d"
+    },
+    {
+      "path": "launcher-ui/roles.js",
+      "sha256": "2b83f49023a1cb3764a04492cb6e31e3723c6a25b58c6ec4fe5a37d8fbfa84e5"
+    },
+    {
+      "path": "launcher-ui/styles.css",
+      "sha256": "7c193b4ccf1905e3256326ab2c0228e1364713026d7317811ce4e418810b69d5"
+    },
+    {
+      "path": "launcher.js",
+      "sha256": "8f3dc670daa4446a894ea64b5b255b7f44bef525bef83552bb0c0a90ff3458dc"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "5eb972114295361537d7672f000f3f94e95193dc86bc46a7bbcd3380cc6bab60"
+    },
+    {
+      "path": "package.json",
+      "sha256": "91fe8e775ca23ca8ff2e2f69c2250b19a7a278faa4aef22f5d826739d8bc99db"
+    },
+    {
+      "path": "profiles/EVALUATION.md",
+      "sha256": "6129dd0615beff5ed05bf40da874898a7d1c30f3976d65b573ec7568f4c109ef"
+    },
+    {
+      "path": "profiles/REFERENCE.md",
+      "sha256": "0baa786b9db57258b6e460293f8355606535adebd2a7c3c5942d3e6ac9120547"
+    },
+    {
+      "path": "profiles/TEAM.md",
+      "sha256": "bcaf73948f2e803bba94654aeea14ddb1c792fe214bd778e4a721926dc5ea43f"
+    },
+    {
+      "path": "profiles/agents/architect.toml",
+      "sha256": "56430998303f345965cab5beb77b1adbe950caf3f9774563a2fff6b5c24ab63e"
+    },
+    {
+      "path": "profiles/agents/auditor.toml",
+      "sha256": "471596fbe70b3edbb0dc3ae478feb2d5789863d55a5dbc71d24f32f5257fb8ac"
+    },
+    {
+      "path": "profiles/agents/engineer.toml",
+      "sha256": "781e5c98e76462482a9fc1cda51b4614ec695f3b9959e15c3efd4b88e30d5c07"
+    },
+    {
+      "path": "profiles/agents/explorer.toml",
+      "sha256": "23cbc94b242b640656310a242a998bc52dcd7aae022d1b0587a6893cb6485b94"
+    },
+    {
+      "path": "profiles/agents/recovery-engineer.toml",
+      "sha256": "b6024993419761465e319fe5cc03096eb32d58fa0b8b95f449de643340738174"
+    },
+    {
+      "path": "profiles/agents/scout.toml",
+      "sha256": "de4183abb07ce22cab60febfb1e669d4bc8004d7e02b83d74d4009b201c8cf14"
+    },
+    {
+      "path": "profiles/agents/senior-engineer.toml",
+      "sha256": "b2293b426e05a85c5e906738834b3325e585a0d314f53fc3c879815a62ee38dd"
+    },
+    {
+      "path": "profiles/agents/verifier.toml",
+      "sha256": "d2f6e6375edb0844e784056e3ae59017f49b8f1abfdb42236c69294812cd11ec"
+    },
+    {
+      "path": "profiles/connectors/catalog.json",
+      "sha256": "19c043369c2bb0351e7edd1fe32153c479baa5695de3dc4ceb4809995335cb20"
+    },
+    {
+      "path": "profiles/mcp/catalog.json",
+      "sha256": "debb308471c32157ff56ee1e45ff3875c8bc4b2db393ea90ff42f2d2a5882a20"
+    },
+    {
+      "path": "profiles/skills/library/a11y-frontend-twig/SKILL.md",
+      "sha256": "517aecd1958a9212941de950edb73e2da53915d9ce43cbd699b0d8ada64cc58c"
+    },
+    {
+      "path": "profiles/skills/library/a11y-frontend-twig/agents/openai.yaml",
+      "sha256": "4493a20d8f9948d00a2984430b5e98d674d728d8a7c5b31bb05bb5263ae313e4"
+    },
+    {
+      "path": "profiles/skills/library/actor-model/SKILL.md",
+      "sha256": "5bb6424d25c652d88841bac0410176a61c41b878e045884a2c4b4098e0b77cea"
+    },
+    {
+      "path": "profiles/skills/library/actor-model/evals.json",
+      "sha256": "6236946afaf55c8416ad274b796cb649bf90dad79d17a8c7c91e044c45987aae"
+    },
+    {
+      "path": "profiles/skills/library/agent-factory/SKILL.md",
+      "sha256": "08e0fcddf154cf13fe064d5a0d4ce4f1900e8319acc4540f5910e6063dc6502b"
+    },
+    {
+      "path": "profiles/skills/library/agent-factory/evals.json",
+      "sha256": "02b8b3565fa09eaed9ddee93c62b7ca87bf62cfca598cb7fba4d9435fb4fa21e"
+    },
+    {
+      "path": "profiles/skills/library/agent-factory/references/archetypes.md",
+      "sha256": "ba2a2c1d26905cf98fed7a662bf5e6f28c623418cd3f6fdc7a9ddb5a521ec3b7"
+    },
+    {
+      "path": "profiles/skills/library/agent-factory/references/blackboard.md",
+      "sha256": "71152dc1f518852ede9f27abf29c6ee87525ad983ea91007cfd7e68c76cdd291"
+    },
+    {
+      "path": "profiles/skills/library/agent-factory/references/model_policy.md",
+      "sha256": "ce1acde05f29afa36b93c5588a65a5052f47ff106b9d68535c04790d856ca080"
+    },
+    {
+      "path": "profiles/skills/library/agent-factory/references/pipelines.md",
+      "sha256": "376eb0a6762980ce85bb22ea42dfc7845070ae939ca64b4bb84e731f7c59b682"
+    },
+    {
+      "path": "profiles/skills/library/agent-factory/references/roles.md",
+      "sha256": "317058a709b9625bd6c842d75436f49cca3b1b0141d2c8b1b1951bcc7fa08458"
+    },
+    {
+      "path": "profiles/skills/library/aut-03-lead-decomposition-v1/SKILL.md",
+      "sha256": "e0f10756e0486cdb827519edd8adfef866d84be449d6a10b1320412648e650ba"
+    },
+    {
+      "path": "profiles/skills/library/blast-radius-analyzer/SKILL.md",
+      "sha256": "cc80bcc70bbcd30a1087be93d8dc6b76dc5023305dd0640a7e817975bce74fa9"
+    },
+    {
+      "path": "profiles/skills/library/circuit-breaker/SKILL.md",
+      "sha256": "3d2a0a49393cb64fe8d52b5cbd439d46ba1bc5da6d0022ac9a2f99f76443409e"
+    },
+    {
+      "path": "profiles/skills/library/circuit-breaker/evals.json",
+      "sha256": "37afb7fd811b8b9518bb621a22e7202a28d561f7321382de0ad4ceef4b1143fc"
+    },
+    {
+      "path": "profiles/skills/library/codebase-indexing/SKILL.md",
+      "sha256": "2dd647491aa052d39ed5d80a1c339cd8c4ea1bf74ff4f36d74b3a50cafd3814c"
+    },
+    {
+      "path": "profiles/skills/library/codebase-indexing/evals.json",
+      "sha256": "6196ab5d9157473a25df67fcba39e10b60671d15fbe6adc55d475867182df5f2"
+    },
+    {
+      "path": "profiles/skills/library/codebase-search/SKILL.md",
+      "sha256": "ef345b76b8e050416c5b131e216c8856590e2ffaa8aede756f0136752b056a9a"
+    },
+    {
+      "path": "profiles/skills/library/codebase-search/evals.json",
+      "sha256": "8f9649b0752c842478d1b98c58294d453e6284fdeb01a91512b5ec9f0f690a31"
+    },
+    {
+      "path": "profiles/skills/library/copy-on-write/SKILL.md",
+      "sha256": "611a9467f3fd3ee98587636a5a1d7c173b37f863e8ba802a6729387abfd99a68"
+    },
+    {
+      "path": "profiles/skills/library/copy-on-write/evals.json",
+      "sha256": "4d10766d6f1e0409293adadd3339aee8ef6a5d27e0d4c830fe0619a30eefe0bd"
+    },
+    {
+      "path": "profiles/skills/library/dead-letter-queue/SKILL.md",
+      "sha256": "e711742d8a351fe54f3aafee901d2d492a8dcc600f00ced153feb6904b709321"
+    },
+    {
+      "path": "profiles/skills/library/dead-letter-queue/evals.json",
+      "sha256": "c80b0cf90985ffcedd2f347a81b363c0e1565d1282752cc0e9e16fbb4e8d14aa"
+    },
+    {
+      "path": "profiles/skills/library/design-by-contract/SKILL.md",
+      "sha256": "1aee73521adca73997e961aef0be45ccf4de47b04e9c0a131c3424fc47a338ea"
+    },
+    {
+      "path": "profiles/skills/library/design-by-contract/evals.json",
+      "sha256": "bff1ee6c1984e3737ece218fb86162ba9c243c6ff9ab4701bcc83cd2e6d13f1a"
+    },
+    {
+      "path": "profiles/skills/library/divide-and-conquer/SKILL.md",
+      "sha256": "8c053c113f06be5bd6c230eaed186cb49752b6b25bc91afcf324e36d1b040d05"
+    },
+    {
+      "path": "profiles/skills/library/divide-and-conquer/evals.json",
+      "sha256": "47009bd362a66aca805405e4b042b20a9685507a49c26ab6acbe82d5f5d9e73a"
+    },
+    {
+      "path": "profiles/skills/library/drupal-views-safe-edit/SKILL.md",
+      "sha256": "280b63b8830f84b6511a22e390a27e619b65050804c867a15657d54f9c07cefe"
+    },
+    {
+      "path": "profiles/skills/library/drupal-views-safe-edit/inheritance.md",
+      "sha256": "604ca7013ccd9c1e9addd84c0d351aad5abe174e7bff100d5cc27ac476cd9f02"
+    },
+    {
+      "path": "profiles/skills/library/entity-query-analyzer/SKILL.md",
+      "sha256": "35b463f7c1d85970fc38c86082598ec64e79c78a93ede713e402efbc38f9b9b9"
+    },
+    {
+      "path": "profiles/skills/library/entity-query-analyzer/agents/openai.yaml",
+      "sha256": "ccd124a68b2083615342cb8db97d34796cfa2d8926e39f104d16a38ab12b2ff4"
+    },
+    {
+      "path": "profiles/skills/library/event-sourcing/SKILL.md",
+      "sha256": "1b9f363e76a0ff531abe59904bd711d5dc3381b816b4783274540a149c99cd70"
+    },
+    {
+      "path": "profiles/skills/library/event-sourcing/evals.json",
+      "sha256": "ec5a88f90f65240aa7275ad7a158e44701fef699893f72786a7062d970e82c33"
+    },
+    {
+      "path": "profiles/skills/library/finite-state-machine/SKILL.md",
+      "sha256": "5e03940a95f8de9df7b78116c88979a89623dbc75b9100759a13978ccbdeef67"
+    },
+    {
+      "path": "profiles/skills/library/finite-state-machine/evals.json",
+      "sha256": "2f80e5f5d2c9ea6ef1e13a7ebd3784bd91937670d768870f63dcd0b87a70f060"
+    },
+    {
+      "path": "profiles/skills/library/fork-join/SKILL.md",
+      "sha256": "afa6a0c3d9c7df66116ec11c812b2f25e4be4d0b578e4cf39c0e9e5692f6bebb"
+    },
+    {
+      "path": "profiles/skills/library/fork-join/evals.json",
+      "sha256": "1f443e3b3f1ca91b3cea72a03b2a0a988c39522518a0038e20bd571d92dade6c"
+    },
+    {
+      "path": "profiles/skills/library/hierarchical-work-decomposition/SKILL.md",
+      "sha256": "dd4668cca45bc9e8f392fceade1666fdb36f7850294c1e45afd7c81a9d9e5525"
+    },
+    {
+      "path": "profiles/skills/library/idempotency-key-filter/SKILL.md",
+      "sha256": "0e921d4a320751521cec50e9814f77d8e6e741d3ed8125adea702f70b827a730"
+    },
+    {
+      "path": "profiles/skills/library/idempotency-key-filter/evals.json",
+      "sha256": "e7659157b7562d3c8bf836f2d1e4cc821147ff92c1e24258a325aa447ac248c1"
+    },
+    {
+      "path": "profiles/skills/library/investigate-before-asking/SKILL.md",
+      "sha256": "48762adb6583b1e0027393999052f341e7d446b8f261196281d687041fea06ca"
+    },
+    {
+      "path": "profiles/skills/library/lru-context-pruner/SKILL.md",
+      "sha256": "a7f275733e4ca91135a4641fa71266560f4f2682c699fa2f7d284fedf979e1e1"
+    },
+    {
+      "path": "profiles/skills/library/lru-context-pruner/evals.json",
+      "sha256": "2c22b81d1a47d54c6fc796dcb78b5f6a71ec7216e00ff0cb0606d04161d073c1"
+    },
+    {
+      "path": "profiles/skills/library/mockup-to-spec/SKILL.md",
+      "sha256": "02bfc36efde25e88a9a07cadd6d07a695731037a12ba1d9a20f7f268fe958a67"
+    },
+    {
+      "path": "profiles/skills/library/mockup-to-spec/scripts/coverage.py",
+      "sha256": "7411e1a65b129b5be9240b977b9cbcc68fd9768138699ef1787f99c57622662b"
+    },
+    {
+      "path": "profiles/skills/library/mockup-to-spec/scripts/inventory.py",
+      "sha256": "9402e0033e13896bc47a3a866366452f03351b001bc527b8ac6e78f07a7422fd"
+    },
+    {
+      "path": "profiles/skills/library/mockup-to-spec/templates/screen-pass.md",
+      "sha256": "619f342f8e34d9b3ed788fa1d7fc9241d82bae7e30506f1fe1282e3415cfed91"
+    },
+    {
+      "path": "profiles/skills/library/performance-maintainability-drupal/SKILL.md",
+      "sha256": "5027e3bdffa05fa4fde902889234806b9a32b78897cd00c3c828e0c15a7f0597"
+    },
+    {
+      "path": "profiles/skills/library/performance-maintainability-drupal/agents/openai.yaml",
+      "sha256": "11bd851d2770e937fd41ac88818805517bea066f0775b4fdfc38803e576387c8"
+    },
+    {
+      "path": "profiles/skills/library/performance-maintainability-drupal/references/dry-run.md",
+      "sha256": "e027bc990c89fa9de89cffd5fd627f5b5c3c0120332545523c1b7ad02d5579c2"
+    },
+    {
+      "path": "profiles/skills/library/performance-maintainability-drupal/references/performance-maintainability-playbook.md",
+      "sha256": "e1c2b01d7862f7965d49c1cf1dfb65853f2f1abef8458c4db4e01c91da4162b5"
+    },
+    {
+      "path": "profiles/skills/library/php84-systems-design/SKILL.md",
+      "sha256": "3eb2f7f15d4a7af5bad62c283243e4cae84dc9a9d4b242e9a290eb5302aa0b4d"
+    },
+    {
+      "path": "profiles/skills/library/php84-systems-design/evaluation.md",
+      "sha256": "7942bb6d6f20ec32c422e585620feb33721df56e3a8aff18425dac98e366a818"
+    },
+    {
+      "path": "profiles/skills/library/php84-systems-design/references/dry-run.md",
+      "sha256": "4b3f1cdb1909897bc05d44851c20244e8723d592fd55543400b73f5094c6eb45"
+    },
+    {
+      "path": "profiles/skills/library/pipes-and-filters/SKILL.md",
+      "sha256": "382506480a9d41beab102f76020cf777321a7aa2d1c28ed66fce6958ba04025a"
+    },
+    {
+      "path": "profiles/skills/library/pipes-and-filters/evals.json",
+      "sha256": "bd7e288d44e15484f3a8dba6afb12ff700c2e72e197ba11afce160c807a53597"
+    },
+    {
+      "path": "profiles/skills/library/provision-ddev/SKILL.md",
+      "sha256": "e536a4077c8d9a395636092768f0c44595bc94e40ddf9c0072b7363145aa258b"
+    },
+    {
+      "path": "profiles/skills/library/provision-ddev/references/ddev-provision-guide.md",
+      "sha256": "fe6acce44defbbe9330224ce8318c2c3b317e055e1ba66fb01bd4fafe0d36965"
+    },
+    {
+      "path": "profiles/skills/library/provision-lando/SKILL.md",
+      "sha256": "317a33931259e42e25f6d361f5947b30a95d1623bf37fd037c44c4f52a5cc179"
+    },
+    {
+      "path": "profiles/skills/library/provision-lando/references/lando-provision-guide.md",
+      "sha256": "096ff0657970950a6fec85a2d35d12ab18578dbea52a5bf4bc835c82563892c4"
+    },
+    {
+      "path": "profiles/skills/library/provision-local-platform/SKILL.md",
+      "sha256": "3fd2146abbd9c9243e0563beba84cebf335cdd2cf21c3617abb2ef28d40a6c95"
+    },
+    {
+      "path": "profiles/skills/library/provision-local-platform/references/local-platform-preflight.md",
+      "sha256": "e55596c816d8b9119633c52e43e2a2a98cdeba30647573238710905e05a04eee"
+    },
+    {
+      "path": "profiles/skills/library/raft-quorum-consensus/SKILL.md",
+      "sha256": "f392c8da2919de62c138806e954747ee0693e89c30864146fa8af0a5e11bb667"
+    },
+    {
+      "path": "profiles/skills/library/raft-quorum-consensus/evals.json",
+      "sha256": "e3e6a58e3874998f367918b77a02c6bfc7cb17b563eb83e63da7dd6161c21642"
+    },
+    {
+      "path": "profiles/skills/library/rate-limiter-throttler/SKILL.md",
+      "sha256": "2e6b158f0539b1c1accd72a88b3f2c368711b35edebc0ee0273bed4ca5b21006"
+    },
+    {
+      "path": "profiles/skills/library/rate-limiter-throttler/evals.json",
+      "sha256": "3ebcaeff8dc49f66b06a32c611258b8a899d72b06b166b6b5e466d200723142a"
+    },
+    {
+      "path": "profiles/skills/library/saga-transaction-manager/SKILL.md",
+      "sha256": "dd047a6296534b6df589d9ae2a4719faa7f7ebb283f0197e05e53ac5ceda65aa"
+    },
+    {
+      "path": "profiles/skills/library/saga-transaction-manager/evals.json",
+      "sha256": "b609a464ecc20405ce343e854e87d44f5d0b133bd3154eced3d13c2db282100b"
+    },
+    {
+      "path": "profiles/skills/library/serial-item-processor/SKILL.md",
+      "sha256": "a6e38d3f28c5e5c5ad4cb93f415b5b97c5a337ee4132baac6682d6d121810a4d"
+    },
+    {
+      "path": "profiles/skills/library/serial-item-processor/evals.json",
+      "sha256": "8c968cf6f70439c56f4cf278fa73deb34d297e6e1a1e1c40af6834108552eee3"
+    },
+    {
+      "path": "profiles/skills/library/supervisor-tree/SKILL.md",
+      "sha256": "2b3251af2d93b8097db0cef33d4c1996b8f7800446d429eeb024bfac03cae34a"
+    },
+    {
+      "path": "profiles/skills/library/supervisor-tree/evals.json",
+      "sha256": "384a03392d99fb5ddbb549091190af66c4576448d2970bb0308ebd9ab8547ac0"
+    },
+    {
+      "path": "profiles/skills/library/two-phase-commit/SKILL.md",
+      "sha256": "0d53704ab27ed4337dcb358c25bbb2c58d723802233b546f70a0c26a4768abf1"
+    },
+    {
+      "path": "profiles/skills/library/two-phase-commit/evals.json",
+      "sha256": "17b20c3bbcc6b0abe21dc586a3bf72409670f78d57a1f8ba3823a8cbd8155dc0"
+    },
+    {
+      "path": "profiles/skills/orch-contracts/SKILL.md",
+      "sha256": "0fc23e14840c1084b12d17764b41f65f4e6d537f258ac760638507a6a9ac4a85"
+    },
+    {
+      "path": "profiles/skills/orch-recovery-review/SKILL.md",
+      "sha256": "b2ce994eaa3b1c3188449065f334c3b7accb57c5627781557239dee66a5b355d"
+    },
+    {
+      "path": "profiles/skills/orch-specify/SKILL.md",
+      "sha256": "42a6213f230f073fe5054761c7359a5222a9bea6af3422d59c28e8549481eb84"
+    },
+    {
+      "path": "profiles/skills/routing-policy.json",
+      "sha256": "3051bb342f8a8c5c8cfc1e9043cf1380a32c62fef22cf163e7c3cfb8cd1ce575"
+    },
+    {
+      "path": "schemas/autonomy-baseline-v1.schema.json",
+      "sha256": "8e15702790402c9f7da958f877f0237d71920c97ea30944daf37274a5f3ec585"
+    },
+    {
+      "path": "schemas/autonomy-corpus-v1.schema.json",
+      "sha256": "4c72298b526c7761f61d1e06954c56617f30da82df0754df4212ffb955f0d066"
+    },
+    {
+      "path": "schemas/autonomy-observation-v1.schema.json",
+      "sha256": "f182466df9b682441c71a2167b536d7936327e8f0ff0ea8c2a236b685d8a455b"
+    },
+    {
+      "path": "schemas/delivery-v1.schema.json",
+      "sha256": "43899694ae52871f25e5e773beae6ec61fd54961a951a53757671209f2922f43"
+    },
+    {
+      "path": "schemas/spec-context-v1.schema.json",
+      "sha256": "2a6874520d3f0013c9aff95660bec3aa3bde41321e50a5cea7dffb2972678e0f"
+    },
+    {
+      "path": "schemas/spec-traceability-v1.schema.json",
+      "sha256": "b1b1de5edc96662529e3726a1e5d663be27ca10184cb5b905e4409ecec778976"
+    },
+    {
+      "path": "server-bootstrap.js",
+      "sha256": "225753737f3278895c5394bbadcfba1ff7eeccb593d977eaa81d0f7b7a00b863"
+    },
+    {
+      "path": "src/a2a-role-service.js",
+      "sha256": "cb26164350feab88c6689c255afe88918437adb0d873c4eb20c6ad7a73ce2fb2"
+    },
+    {
+      "path": "src/acceptance-scratch.js",
+      "sha256": "176040b2e44b765aa7fc508ef7f63146195909c97e1a252c3a4b03cda1663714"
+    },
+    {
+      "path": "src/acceptance.js",
+      "sha256": "ba03fd0473b32317fb6eddc4b3ff283d5f5512f5990bc61aacc8d0e5fd84c768"
+    },
+    {
+      "path": "src/account-profiles.js",
+      "sha256": "ae048330dc548c11ed8d2c73ce55effe49d39a0a73e57dbec705efd2b638d78f"
+    },
+    {
+      "path": "src/activity-store.js",
+      "sha256": "afbeb5ef3e2a77e4b79d9199375e1b715b89b4fbc55daaedf075c7a21528ad5d"
+    },
+    {
+      "path": "src/app-server-switch.js",
+      "sha256": "10e82155a7e8cf09c977d3089d14ea0f3690452d9f7145dcdb984dd92db1be88"
+    },
+    {
+      "path": "src/aut03-lead-skill.js",
+      "sha256": "15864e6b113799a5da527e0121e06a5fcaab6299ad24dac08bc73cc6504d4e07"
+    },
+    {
+      "path": "src/autonomy-evaluation.js",
+      "sha256": "829ad5dc365404712a9382964ffd5dc91387a1eb2d1d35785919c62438982f25"
+    },
+    {
+      "path": "src/backlog-store.js",
+      "sha256": "9b828e3c47687c28c54c644a730249df8d08aba6056836d88e086ec59640e4cb"
+    },
+    {
+      "path": "src/budget-watcher.js",
+      "sha256": "60314c4bcde214b398dfb24cbfc835d8cfbcd6f8a41fb3c7ad5a334faf28512f"
+    },
+    {
+      "path": "src/candidate-review.js",
+      "sha256": "d849d11112be7188380316d316b4e92a84804a279e8798173d0777b6bfd4d615"
+    },
+    {
+      "path": "src/candidate-store.js",
+      "sha256": "ebc9b0704624665f8fba636b968019cd945a3638058115c6706dacd43b41fcd6"
+    },
+    {
+      "path": "src/cli.js",
+      "sha256": "e5235b28f2b89b37505ef422f57a302160afc3963d17b8751755fbf1a96113fc"
+    },
+    {
+      "path": "src/codex-app-server.js",
+      "sha256": "67ce0c32b2e37816f79dc5bd1ad3b587292af8030d56278e72cb545005d699c1"
+    },
+    {
+      "path": "src/concurrent-delivery-engine.js",
+      "sha256": "4de277782459c45c387148893d7d5a111a25636656ed1f04b4e0864f4198e6ff"
+    },
+    {
+      "path": "src/connector-catalog.js",
+      "sha256": "708899138e72d8574071f9ccc391879881a1da511c057e6d364a02b7a70a5532"
+    },
+    {
+      "path": "src/connector-status.js",
+      "sha256": "d7ef440f0adc69624d932dcf20544d7b035ddbb628b50695b18361851d709383"
+    },
+    {
+      "path": "src/contracts.js",
+      "sha256": "ad2d19b49255136c7c9d4be1ed566c7c088f22b3074a8a60a635dc87375610eb"
+    },
+    {
+      "path": "src/delivery-acceptance.js",
+      "sha256": "09f0ce7f6fb720a70b58e794f1e763edebc7b5210cedf976516ecd57d1b6a166"
+    },
+    {
+      "path": "src/delivery-contracts.js",
+      "sha256": "20987a6b745d3a7c96205260cdeb2bd666b4b2c8e4027cfeb8e7dc9a456ad2be"
+    },
+    {
+      "path": "src/delivery-engine-router.js",
+      "sha256": "04c7b14355e0d62b8306592aedbdffbf220e804cf10c158fb3f8c4d7499c4274"
+    },
+    {
+      "path": "src/delivery-events.js",
+      "sha256": "6a02d5b42e35694592473700982726a3576ee621fe02efcd65b09d1e2dc4a878"
+    },
+    {
+      "path": "src/delivery-host-controls.js",
+      "sha256": "7b93cd502f522d3fb2e24e2e338edbb81c505d660b684717819ddd25da135df3"
+    },
+    {
+      "path": "src/delivery-inbox.js",
+      "sha256": "811a28a628106fd86ec242f1dab5ef5c85b535ff1bdba5df3fb34704dcd96af5"
+    },
+    {
+      "path": "src/delivery-lifecycle.js",
+      "sha256": "f3dbc6dd5a25e068752159e01fd7339511727132dcbb42f5e54c3b68dbc1dd4e"
+    },
+    {
+      "path": "src/delivery-output-artifacts.js",
+      "sha256": "3fa96d643632ba7f932d034bbb0a58bf1f6965eb7ce5243ed1d56228aa4ab648"
+    },
+    {
+      "path": "src/delivery-provider-identity.js",
+      "sha256": "fbcc2a7f84b741b13e359caebe848c3271d4f9a93f60166a00f0ffe77c810277"
+    },
+    {
+      "path": "src/delivery-review-policy.js",
+      "sha256": "e03a69a4cdd3df873f3ae09972ec8984c3c7b0a510687e7a3edb953c1a58e993"
+    },
+    {
+      "path": "src/delivery-role-capabilities.js",
+      "sha256": "be50198950858ed59287f5c33563ed33a36141b4aee434bac3e1e30051409ca9"
+    },
+    {
+      "path": "src/delivery-role-service.js",
+      "sha256": "76e5aacdcbc453e8c188e3272f8cc19af313b046043281d134fdf81e00f36df0"
+    },
+    {
+      "path": "src/delivery-visibility.js",
+      "sha256": "eaa189645baf502f1ad8b4eaee30852f6c665c7901ef190cabc182d81c5e59b4"
+    },
+    {
+      "path": "src/durable-store.js",
+      "sha256": "aa656899122422ca40e3b95eb62a436c5f041a8368f1ae9009a5b4e4114ab326"
+    },
+    {
+      "path": "src/evidence-store.js",
+      "sha256": "5c52c4a23bf0825003c6b624534f362802ba77aa42c738b64ea1771715ffa36f"
+    },
+    {
+      "path": "src/execution-permissions.js",
+      "sha256": "54a40ddd1c4bdeedbddaff2b5b9aefdc1450c966ae256251130c99b91d780349"
+    },
+    {
+      "path": "src/lane-execution-policy.js",
+      "sha256": "5d9182e7c0899b529c0b492e84dffa70d02cf971917ca66f1fa2f95bc9c2483a"
+    },
+    {
+      "path": "src/lane-probe.js",
+      "sha256": "2a92b69ca4344730fc95d87e77ae569a3a97a410ae44d85892dbc6dffaac0df7"
+    },
+    {
+      "path": "src/launcher-app.js",
+      "sha256": "a0beff68eb4e53f653b426db661e3eb4010cb3ce1f52ad5378e4c3ac172458a6"
+    },
+    {
+      "path": "src/launcher-ask.js",
+      "sha256": "6ed66e4845d5fe84dfa94106a4c8b265f7c4e0c5d16a58f85d69f025fd409a7a"
+    },
+    {
+      "path": "src/launcher-project-settings.js",
+      "sha256": "289dfafc74f1cb8f0c81e91ebc343a02e50c442a4305230c45d930e86f7091dd"
+    },
+    {
+      "path": "src/launcher-projects.js",
+      "sha256": "5ff099bc033ddf4348b68330f0573151050e0a81c3eaf6ae4defcb123a9f394d"
+    },
+    {
+      "path": "src/launcher-sessions.js",
+      "sha256": "eaf3f88ee7bd6525433548ae1e4568f0e85f828b06dfb2bf6a6b1d10d069c2bf"
+    },
+    {
+      "path": "src/lead-graph.js",
+      "sha256": "5c3156c8dcaf6068fe33e301eefbda81082eb88c049a487dad1b9c8915ca291e"
+    },
+    {
+      "path": "src/lead-orchestrator.js",
+      "sha256": "2a7ca50c597d5bf1bc38b7ad83d42a1262c4d2abb802c558d67893215edc8388"
+    },
+    {
+      "path": "src/lead-planner.js",
+      "sha256": "d02839dfbebe00eb108e42085cbfa80228c5d70a8d221701001102efbd3211a0"
+    },
+    {
+      "path": "src/local-auth.js",
+      "sha256": "2064f33e132c1efc0da90ad46eedefb9e62a77a3f1acd7e3194fa8eaeb430e68"
+    },
+    {
+      "path": "src/loop-guard.js",
+      "sha256": "a0ce0eeca32e5373a7e010022bc4940faff749486d08f629976c7efee189e519"
+    },
+    {
+      "path": "src/mcp-catalog.js",
+      "sha256": "ebc7406dd81dd0b54c7e14e5172aeb9066dc59b756016299dce30496b4387901"
+    },
+    {
+      "path": "src/model-capabilities.js",
+      "sha256": "2cb12a41ccd45c0f1787a3274906f6557be28c083357ba4a2ed58fbc4ca80b22"
+    },
+    {
+      "path": "src/partial-ledger.js",
+      "sha256": "e50a69db2e76937bc86db584313c046a000e0a24730b43288c492e8c1e3a10c6"
+    },
+    {
+      "path": "src/performance-store.js",
+      "sha256": "c93683b152cced2107d31647660bc631b3359ed64b6d372e208273dc05b5a24f"
+    },
+    {
+      "path": "src/process-quiescence.js",
+      "sha256": "a1d2f4bb5bb886acf899e51b413b62e0d98e61a581f049cb8fedb7a316a8858a"
+    },
+    {
+      "path": "src/project-delivery-controller.js",
+      "sha256": "9608ec482ee582628b81bf1dcdb3dc0749a49df4c8ba310148be56d57292988a"
+    },
+    {
+      "path": "src/project-settings.js",
+      "sha256": "8c7724d4b82f2698a0fafcbd95b0123120aa9b672bcd581b399e9c5f0f0c2d9d"
+    },
+    {
+      "path": "src/review-policy.js",
+      "sha256": "84768475e7dad93dd4813efe7f644f03df2875efb1d7e4162f26b5ef8eb74c1f"
+    },
+    {
+      "path": "src/role-catalog.js",
+      "sha256": "35176279cec5e4759e463d79d82fd830f9c32ff05603d0b61f76c646112f00e6"
+    },
+    {
+      "path": "src/role-names.js",
+      "sha256": "f02c438f0c4928c02088265c6ee61c08ff316a8619b0fe71f3f27eafd59f9cf4"
+    },
+    {
+      "path": "src/role-overrides.js",
+      "sha256": "1d14937ce8c72c480fffe83ad9643a630b52c6b131377def92f0ffc2dd3c4df4"
+    },
+    {
+      "path": "src/runtime-identity.js",
+      "sha256": "426ea616d4a6eb3a0a25f0d82b1d5809cdac9e031208d66fc1c5ad58fe90308f"
+    },
+    {
+      "path": "src/server.js",
+      "sha256": "931777ea1ee27fc1286cc2db1798f80328dca4c42096d0e97aba25cc59ad3062"
+    },
+    {
+      "path": "src/session-performance.js",
+      "sha256": "6a373e1a6c45388538331c0b667750bc22a45972fc7d17ab2245f57d5adc341b"
+    },
+    {
+      "path": "src/session-situation.js",
+      "sha256": "362cac1fbdb78d9faf313011a6a81ba7441c36b37b69749580e67559ce5c2de5"
+    },
+    {
+      "path": "src/session-threads.js",
+      "sha256": "e5300f8b63251c758abd65028757012c833c631b7da7597eb8fbe5d5ca3c1c10"
+    },
+    {
+      "path": "src/skill-catalog.js",
+      "sha256": "9dc9f76059a1833e82690421e2559e5afe7eb40718d9ae76bb48affab5f028d4"
+    },
+    {
+      "path": "src/spec-analyzer.js",
+      "sha256": "1cd0a87793ac61d891145d9c7b905438ecb6ac89de2210b70bb940f94802912c"
+    },
+    {
+      "path": "src/spec-assignment-adapter.js",
+      "sha256": "723600b0a5b76e03d44a8dbbd26d5f38325d17e36a3f6050808cd8475225c585"
+    },
+    {
+      "path": "src/spec-context.js",
+      "sha256": "054c6a90cf298d8f7b6ffff8cee72ffbd415a98c95abe87adc95fc6398e56228"
+    },
+    {
+      "path": "src/staging-log.js",
+      "sha256": "554595dde7bb1a80ea5ac51f7a9ba8c383a7616a213fa9a7a2b5abd0122a7f56"
+    },
+    {
+      "path": "src/staging-report.js",
+      "sha256": "f4f5fe5608692f794139ead40ae208daee21d311409c6b9341214b66aae401fa"
+    },
+    {
+      "path": "src/task-executor.js",
+      "sha256": "96e8c7fd09e693a22b8b81a143a7217621b34d847848e61beaaffdea7c5d9b91"
+    },
+    {
+      "path": "src/task-resource-policy.js",
+      "sha256": "05bcb30561c25ad8b31c8e294ed025c1b2a006cf32e06de762921213215b4ca7"
+    },
+    {
+      "path": "src/task-scheduler.js",
+      "sha256": "423c7f7f42b476bb44160debf8b93c292ba028583e7ddf8a71e3c9d77c7bd113"
+    },
+    {
+      "path": "src/transient-recovery.js",
+      "sha256": "0162bffaad1bd99c85c4367fb5d69046c2cbb5f70c38dc97a0b8644f41c3e4ca"
+    },
+    {
+      "path": "src/usage-ledger.js",
+      "sha256": "fac4bf9b5c2128c0e8b21be803be95c16483da02d66a2a45c5eae4187b5c2113"
+    },
+    {
+      "path": "src/usage-report.js",
+      "sha256": "22410ead045e3ea16eb8f6a3154f16157f6bb3553f4e00aea04c1f2d5d503535"
+    },
+    {
+      "path": "src/verification-preflight.js",
+      "sha256": "d1fd4baf7593484082bc3ac08ca97f6b83d6d069563850f0ddf7ce66d69400eb"
+    },
+    {
+      "path": "src/workspace-snapshot.js",
+      "sha256": "b5b395177af41480174f55d4c463ba128cabdb7f9b0bd6311e8b1dbad5262956"
+    },
+    {
+      "path": "src/writer-admission.js",
+      "sha256": "e73fb98648ff7865d29576e69e083ca4fc9b9226830f2b1a2ca0cad3868db6dc"
+    },
+    {
+      "path": "src/writer-lanes.js",
+      "sha256": "3c8409a8815c51dc64c5bd31e1fd3f85199871ac336e64ad3cfce63c47bc93b2"
+    },
+    {
+      "path": "src/writer-worktree.js",
+      "sha256": "2725543536e6a6e8e67ce7d57d73eaf8a41da042a500f781c51c996b65ba180c"
+    },
+    {
+      "path": "test/a2a-role-service.test.js",
+      "sha256": "2d797a526b6aa3d50c417e34ce5ca2f4ade3abf9d33d1be155f1ea3f0389fb81"
+    },
+    {
+      "path": "test/acceptance-scratch.test.js",
+      "sha256": "afd7edb10c16782d45547f5b84d26667b390e81809bd5823f43ae92a9ab9a6e6"
+    },
+    {
+      "path": "test/acceptance.test.js",
+      "sha256": "9e7b1fd46953a0f5357b42385ce142e50d34bcef25e57fafe5edf6e7d7432b01"
+    },
+    {
+      "path": "test/account-profiles.test.js",
+      "sha256": "2a7e40f5f0fb73d91ee5670cf530e708f34321202c85d9f478f867ce60724408"
+    },
+    {
+      "path": "test/activity-store.test.js",
+      "sha256": "ce2ff63c28698cf3291d0cc0dd6c8c8a92f0a2304616267f137233590e2e504b"
+    },
+    {
+      "path": "test/app-server-switch.test.js",
+      "sha256": "e6fe74d2cf481aa72b21b5f12f0a1e40c534c9fdea57099b4213abe3380f59f7"
+    },
+    {
+      "path": "test/autonomy-evaluation-cli.test.js",
+      "sha256": "3b9ea1c7b53c75944f50ef86936a1c5b3c69de6cf2ed260a7c04a55025358c4f"
+    },
+    {
+      "path": "test/autonomy-evaluation.test.js",
+      "sha256": "94e13c7a1074ec81ef917957d0889bd89ba67c06ac70f9fed360f98d2e836c8d"
+    },
+    {
+      "path": "test/autonomy-schemas.test.js",
+      "sha256": "6445099301633bb272e3af52f0d005259f73abc7be7f650e15339147e8ab8a70"
+    },
+    {
+      "path": "test/backlog-store.test.js",
+      "sha256": "b7fa40b23876a144f714afc24ef2266d929dd3415a68306c04e50bf987682656"
+    },
+    {
+      "path": "test/bench-fixtures.test.js",
+      "sha256": "c85bb97fdd5f04a379d6aa51c0e37b2041db8d32919cde7a2ca33fa089198a5a"
+    },
+    {
+      "path": "test/budget-watcher.test.js",
+      "sha256": "6d4cbc106b737b40ecc129d5def9560a98415b381cefd37eccd45d70b2092c47"
+    },
+    {
+      "path": "test/candidate-review.test.js",
+      "sha256": "001c2f11a1c4be35f655d1d6b041cfdb48c7b92f81a5d13f809d3483fa3d80b6"
+    },
+    {
+      "path": "test/candidate-store.test.js",
+      "sha256": "49012561019e1bd3d4ea6f12945b7faa26a1cf11fd9f3afc228bd130ecd53eca"
+    },
+    {
+      "path": "test/cli.test.js",
+      "sha256": "a6f358ae2fe18bd1d3743f61f4fe71f2abe0f71c34be204e8c8af8ef221ea7ff"
+    },
+    {
+      "path": "test/codex-app-server.test.js",
+      "sha256": "74b3337a56f5fff1ae0b9aeb1e7ae2be970c03df7b617615ee0891a2d4a30c0e"
+    },
+    {
+      "path": "test/concurrent-delivery-engine.test.js",
+      "sha256": "21fce45d5d81789a45548a1914a5b1d01cc8cb5b91f4cd43ce06406173f96957"
+    },
+    {
+      "path": "test/concurrent-engine-comparison.test.js",
+      "sha256": "2206b648b63feb2fddefc366f7543ec9ec3b6f754b70ab9a11451e16227d6e61"
+    },
+    {
+      "path": "test/concurrent-recovery-acceptance.test.js",
+      "sha256": "a467ec0a8d70c8f924ca2593fb6df89c8e4bc4079292c95dd17c3650ea5dd137"
+    },
+    {
+      "path": "test/connector-catalog.test.js",
+      "sha256": "5c3c38860261450b9db97daa7f0615044975ceddb280bd310d9fcdd76128bc61"
+    },
+    {
+      "path": "test/connector-status.test.js",
+      "sha256": "fa3d1157ef7653164a32526665a94237cc4638491a07463ff55da145dbcb1e55"
+    },
+    {
+      "path": "test/contracts.test.js",
+      "sha256": "470a3937d2fd3d153f64ca65857e5470ad152ed437291869cc681aba2aa93989"
+    },
+    {
+      "path": "test/deepagents-compatibility.test.js",
+      "sha256": "e4041964a86b37b98a29729b9d6f26dc9637888d8bd197c2bdc517e17338dd9c"
+    },
+    {
+      "path": "test/delivery-acceptance-join.test.js",
+      "sha256": "94cabfe0d62a76d3ed7921aa6f9929d620da92b0c86476937d2a1b348302723e"
+    },
+    {
+      "path": "test/delivery-acceptance.test.js",
+      "sha256": "08a6588055d460955f83d5f0574bcce71084e4eda5ed12aebd33d342de43dcd1"
+    },
+    {
+      "path": "test/delivery-contracts.test.js",
+      "sha256": "c945fccc1518f07e5ac4ad5747be1e58e8888965fbb87a5382edab03fb61faa1"
+    },
+    {
+      "path": "test/delivery-engine-router.test.js",
+      "sha256": "c8a7947f996fb27b21bc3297168d8e702039445278e6d017674c299de96445fe"
+    },
+    {
+      "path": "test/delivery-events.test.js",
+      "sha256": "a71a75f6643f546a521c5cd6d4191b7ba100665ea6f99c9b24363b478fbf3ea8"
+    },
+    {
+      "path": "test/delivery-host-controls.test.js",
+      "sha256": "6adf140180cfe038368951cff993679c000f6943093f6cea61bae115669a1201"
+    },
+    {
+      "path": "test/delivery-inbox.test.js",
+      "sha256": "4155a05f7d78bac6928d66a7b2699d804ff197aa60b7fef423fcc9a940a2ad21"
+    },
+    {
+      "path": "test/delivery-lifecycle.test.js",
+      "sha256": "49f2d22bca37b5e178dabc7d66a2ce66d5b67098ed21c6fad6aabe11b6ce0806"
+    },
+    {
+      "path": "test/delivery-migration-qualification.test.js",
+      "sha256": "494858a4ed636c1b9c2f567e280d2d7f8eeb9fdb3d4256eb7718fdeee6d8b4ef"
+    },
+    {
+      "path": "test/delivery-output-artifacts.test.js",
+      "sha256": "fb6b653c05e8caaac882ae19ae5cfd459346f4a55bcb36f232e11a2320453d73"
+    },
+    {
+      "path": "test/delivery-provider-identity.test.js",
+      "sha256": "55aa4df2e740a64a15fab8d8438b23a37d3d7a03154c74f1a7c1af0fc05fa55d"
+    },
+    {
+      "path": "test/delivery-review-policy.test.js",
+      "sha256": "f7c502949bd6eb9e9ee9c8a222f67080925c6a2310b58644a13b15c5acc957b1"
+    },
+    {
+      "path": "test/delivery-role-capabilities.test.js",
+      "sha256": "761b64fe154ae148d20f8e602fb8d7f8430c997f1cb566667dcf9eecdfa09028"
+    },
+    {
+      "path": "test/delivery-role-service.test.js",
+      "sha256": "32756537883f13ba8012a791a7209439a5869ddca44724df13a03274753ccbf7"
+    },
+    {
+      "path": "test/delivery-verifier-integration.test.js",
+      "sha256": "6a352a36be4c700504148f1d28f1423230e82f744ed3db5f8d8ab3aed8e30ad8"
+    },
+    {
+      "path": "test/delivery-visibility.test.js",
+      "sha256": "b413bfe2b82fee7fbeb3d45ce064d404d1039c5578c7ed2582f7a76f4f0839eb"
+    },
+    {
+      "path": "test/durable-store.test.js",
+      "sha256": "deb768f67d212ca76de1c7fc5ece7e6193efae718ef63ace53add4052c3201df"
+    },
+    {
+      "path": "test/e2e.test.js",
+      "sha256": "c87b2f5c046ee945dd67b2afafdf34a78040091e10b1abb78a6ac0caeb2f2556"
+    },
+    {
+      "path": "test/evidence-pipeline.test.js",
+      "sha256": "f439e408decb81da3151d6082ce63d3354926b92132ad33265b7d9b19c57e83e"
+    },
+    {
+      "path": "test/evidence-store.test.js",
+      "sha256": "d8b609eb630661fd1442b0a59dc45725c05c2febc675a7e23a04fb6e4ac4ce77"
+    },
+    {
+      "path": "test/execution-permissions.test.js",
+      "sha256": "2fb727aa8fe26130627e0b96fc371e935b38555def0a2d95d24b89606474c09a"
+    },
+    {
+      "path": "test/fixtures/autonomy/aut-02/changed-candidate.json",
+      "sha256": "dd573afec0a8e74ddfb315f5a18aa04f2828fce0eeb35aaa5bfe7060484e3f00"
+    },
+    {
+      "path": "test/fixtures/autonomy/aut-03/cases/bounded-dependencies/input.md",
+      "sha256": "4d269d915263551f82fbe962b01f711cddc99ff6335fa8d838114b1ab9df619c"
+    },
+    {
+      "path": "test/fixtures/autonomy/aut-03/cases/bounded-dependencies/oracle.json",
+      "sha256": "4811593346459aff20d9de29e3ac0a2cce689ebccfc07cf04971bc4fa397f7c7"
+    },
+    {
+      "path": "test/fixtures/autonomy/aut-03/cases/contradictory-source-blocker/input.md",
+      "sha256": "c00f21f35af0f607652cbd5d50dc0114ca67f3064eebbe59aa02cf04140e82db"
+    },
+    {
+      "path": "test/fixtures/autonomy/aut-03/cases/contradictory-source-blocker/oracle.json",
+      "sha256": "6b501e890570d6950eb84dacb8a9ee2a272b097f78fdfa18356b3425699cb0bd"
+    },
+    {
+      "path": "test/fixtures/autonomy/aut-03/cases/contradictory-source-blocker/product-report-requirements.md",
+      "sha256": "8660bc95ef3336162b774aa8453602bade7f5e753901b0b4844157f77b7361e8"
+    },
+    {
+      "path": "test/fixtures/autonomy/aut-03/cases/contradictory-source-blocker/product-security-policy.md",
+      "sha256": "d493c058f8cceb0b94487a5c2bd3aef8445161b9d5115f32d2e94f81c1d1a3d9"
+    },
+    {
+      "path": "test/fixtures/autonomy/aut-03/cases/manifest.json",
+      "sha256": "62965a3048628359227bf762891a1bd2988f3cfa77588c0c579a3e5624b1a756"
+    },
+    {
+      "path": "test/fixtures/autonomy/aut-03/cases/owner-decision-required/input.md",
+      "sha256": "5c6e4e96e81299ba0c53d2184cddb89c3e1cabb3e6d4179fa4147f4cd4b9234b"
+    },
+    {
+      "path": "test/fixtures/autonomy/aut-03/cases/owner-decision-required/oracle.json",
+      "sha256": "d4589e5fd2acc9363d977f8a7476c046205b019e8d6cce1b615ff8ce2ee588c0"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v1/README.md",
+      "sha256": "21974dff68e78417e444b03287232c220f625574d3b68c1059b7b6ce3afb4ddd"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v1/baseline.json",
+      "sha256": "6a9f015f2707658fc516c3c63e5226ae8f95a9bbbe17b2cdf278f11761389cea"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v1/corpus.json",
+      "sha256": "87b3f2bc9292e92d71607096a932f9090069dc45a27453943728d8d1ac0f8e7b"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v1/observations.json",
+      "sha256": "a1ed7344cad8f4fece77436ac3022fd25194999ab1d4255ca9e93f7881431417"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v1/submitted-planning/canonical-input.md",
+      "sha256": "594578f4353bf7c49fcb362c88597cf5ea8cc86a262a8c671abd445186a6fe46"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v1/submitted-planning/current-workflow-output.md",
+      "sha256": "834990df2afaddc89450900bb73688a019e5311662ba2290d53e8dec788ec932"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v1/submitted-planning/requirements.md",
+      "sha256": "e52c265402041d9076dd4cb3e435c7eac8758373277504c28e2d0ce05bb07bf1"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v2/README.md",
+      "sha256": "c138e30236b75e1b9f525e6d33e14621ab364b93ecc761a1a6b76b68d4619d27"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v2/baseline.json",
+      "sha256": "fd255588d184b97b7c07e1e7d9ce8cd464dfda501c3d560fc1b055873a2b992c"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v2/corpus.json",
+      "sha256": "ee4becac07508507ed601cf016e21416135dcec413ae0c568ddafaf502e8b98b"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v2/historical-source-evidence.md",
+      "sha256": "a8c4b9a416a678a6972a771216c4995da702ca9dbaeb33b9337d6a7ee62be250"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v2/observations.json",
+      "sha256": "5b055df47bf60162f3da66360cd27057635fceb043d7e08fd85ed07d69163a0e"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/baseline.json",
+      "sha256": "4fe46b3cc7d7a67e5bc1df2c5347f5bcd007fccb808a8294671d0a0ee0183786"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/corpus.json",
+      "sha256": "bf180584c4ee3620b2c676f42e0c09be8d977dec2d82cbd39e3fd90cf60485fc"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/failed-incomplete-usage-evidence.json",
+      "sha256": "24a1f47bc94051775ebb988a3d56a56581c8de56a176348f818a084f1d834c88"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/historical-source-evidence.md",
+      "sha256": "01b51661485c7a4bbe1bc650f7df58bef7471eaf283134a052d90ae5ea17c260"
+    },
+    {
+      "path": "test/fixtures/autonomy/corpus-v3/observations.json",
+      "sha256": "99b50d7b5c2983ca3d380507120d08ac3caf4965ab3daede3832d263fe24defa"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/canonical-input.md",
+      "sha256": "7e20c26ccaa8ce95c1725707b7b6325c7098730ef9c6d823f7583b05c0c98e4c"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/capture-provenance.json",
+      "sha256": "81bdd8a20a32f2b228efa87a3acd395df85938c42f1c7a967e866ef45532880b"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/current-lead-planning-output.md",
+      "sha256": "e95219d7a2bf375cd2e04a3f392f92220839f13704d6ec72b5a89d463e90d5a6"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/current-workflow-output.md",
+      "sha256": "dff862ea7e4ab8db6f1add9c41fca83b4f475bca75bb3bc531753ee461923380"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/requirements.md",
+      "sha256": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0"
+    },
+    {
+      "path": "test/fixtures/autonomy/planning-baseline/reviewer-assessment.json",
+      "sha256": "f4951651dc47ab836b8452b593e2c0d8cd3bc5e3992187dd69d5d54105a4caa2"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/canonical/CHECKS.json",
+      "sha256": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/canonical/FIXTURE.md",
+      "sha256": "83aaa2fa7bf0b8c899c487c4589195295c8884b091faeb882ca7e83ce64d44f4"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/canonical/GOAL.txt",
+      "sha256": "666a1d5f055274475714f1e6fe8510079dc3bd787bdf079251525a5d39968bf7"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/canonical/canonical-input.md",
+      "sha256": "7e20c26ccaa8ce95c1725707b7b6325c7098730ef9c6d823f7583b05c0c98e4c"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/canonical/requirements.md",
+      "sha256": "9aca8c36c63887620f51a03793f49406a01a57cdbc89198e1cadf0930615afd0"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/context/accepted-context.json",
+      "sha256": "026bc8e85e8c5edc4ef232e008eede4995ef16c36cb914cb8d4dab914b72a581"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/context/pilot-context.json",
+      "sha256": "44530cd6fa7c8ef51ef771163b8d6ddbb8eb8c98b81e4cc13990412fc482d0bf"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/product/CHECKS.json",
+      "sha256": "df3aff1a7c0f972282e8b976d0cd05089eb06dff00793bd6f113941b31011860"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/product/package.json",
+      "sha256": "54f5009c7b5705040063e83e6d6b20a5110b3e56c668cc6c85369de31195aadf"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/product/src/price.js",
+      "sha256": "775708a5693f857c2493b6e662e1e3ebbb6da9050d05123222f9c817fff5acc0"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/product/test/price.test.js",
+      "sha256": "f0532faca004df9074aed1f3094ee087851e689f3050e0389e26d8d03e0ef0b6"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/specs/pilot-price/plan.md",
+      "sha256": "dad1df7d19a6ef67b27432bedb9bd6500e3c575e2a0889417a7e2a5e4588a5a7"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/specs/pilot-price/spec.md",
+      "sha256": "857ba273c9e5a5dea3ad8133a48c24d4507ff3d3fd24a4f593fe9c568d6e098c"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/specs/pilot-price/tasks.md",
+      "sha256": "e1cc5e831cae34abace5aa719f35db11645f4f92138642bd9e15868b27ea12f7"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/specs/pilot-price/traceability.json",
+      "sha256": "212f256587a672c4c6de818a67a52e8a0463663258f39756d9409a6e53be3ec8"
+    },
+    {
+      "path": "test/fixtures/spec-kit/pilot-price/verification/checks/SCOPE.txt",
+      "sha256": "998e025700d4ba44a8a6991d0812880d48947d217a2eb252bd1be7b6fbd49d48"
+    },
+    {
+      "path": "test/helpers/lane-fixtures.js",
+      "sha256": "aa34d854ccceb0fc88e870656f5108e2ca019a7bc3ed6f8e3b9be49e05dc7b0f"
+    },
+    {
+      "path": "test/helpers/runtime-stack.js",
+      "sha256": "eb947e69c925b502d384fa512c2132c669b8e152756bf43d87b6a8555f5bc9dc"
+    },
+    {
+      "path": "test/helpers/supervisor-stack.js",
+      "sha256": "d2b5a0901c599502e68dda0fc5baf4e846fb6e57cfde2a629649f5d02af75cef"
+    },
+    {
+      "path": "test/lane-probe.live.test.js",
+      "sha256": "446d59807a23962a71cfdcc1bdf77a0e9621e905430a978524b0ea4c7716ca15"
+    },
+    {
+      "path": "test/lane-probe.test.js",
+      "sha256": "858beaa09db15dabff3e8c49d1efd3f7b0f470c166ee0792cba9675af7e6cf71"
+    },
+    {
+      "path": "test/launcher-accounts-refresh-ui.test.js",
+      "sha256": "9895b23319b0f4e31d87e6c4ec56ef0020a82e58a402535df60265bc21472585"
+    },
+    {
+      "path": "test/launcher-accounts.test.js",
+      "sha256": "96d8f12267acc996bd63c1011770665d9934c32f0bbac96b8def94f41bfce864"
+    },
+    {
+      "path": "test/launcher-app.test.js",
+      "sha256": "0e583d0263494819100b33f31012723babb3b53c0bb8db44b582e295825e6590"
+    },
+    {
+      "path": "test/launcher-ask.test.js",
+      "sha256": "a934fa5cbe9f7d8ecb56493683f305711c2f7f310bda654c8da707cf0a80e61f"
+    },
+    {
+      "path": "test/launcher-backlog-ui.test.js",
+      "sha256": "541a878d7ab261dca83a13f415beb427bf47e191e76b8f8473aae78b845254bc"
+    },
+    {
+      "path": "test/launcher-handshake-ui.test.js",
+      "sha256": "777b72cc0ccef851d47c5a6c27f097d9d2f72b054797ff5cf931663f5760ea6d"
+    },
+    {
+      "path": "test/launcher-leds.test.js",
+      "sha256": "5e71b8f1833c6ffc58f1f05dcffa0d14ab9ce9d284dca73e8bed73f30c5df951"
+    },
+    {
+      "path": "test/launcher-owner-delivery.test.js",
+      "sha256": "9b0053ce4e0cc1395d28a0b8ffdf8d5f299bbcd7dc1221bf1bd9988a68a1844c"
+    },
+    {
+      "path": "test/launcher-owner-ui.test.js",
+      "sha256": "ba75644d64174284b6899917444439030f91e424458cf5a3c136c6d8352d9d38"
+    },
+    {
+      "path": "test/launcher-pause.test.js",
+      "sha256": "cd20e1a399554400e144304b7ce4bd26003feceab34ccd57370faebb689259c9"
+    },
+    {
+      "path": "test/launcher-performance-ui.test.js",
+      "sha256": "cb0e87c283efc211341f3fee5811d1ceb66a56e5405d0f6a00d6121d4f6e27b4"
+    },
+    {
+      "path": "test/launcher-performance.test.js",
+      "sha256": "350100a3d483849de813524e69120bd5922cfbdf3e0bcd2a7379ab4a530b02a7"
+    },
+    {
+      "path": "test/launcher-projects.test.js",
+      "sha256": "67807f8b7624b7482e6370b8acd072febc58f5c97b2017675ee01d698b3590ac"
+    },
+    {
+      "path": "test/launcher-role-page.test.js",
+      "sha256": "56be54ad1ac5557a99b130a4a24609b098eb0ce9143687115a3b4d617a851a40"
+    },
+    {
+      "path": "test/launcher-session-controls.test.js",
+      "sha256": "b17c9bd7593fc25a65e0b81074102dfe1f6dcf889d25a2b55be378d78ab51693"
+    },
+    {
+      "path": "test/launcher-sessions.test.js",
+      "sha256": "72dab20003f42548aa949a9d504847305431a0cfc31b30dd83fb640ce4e4b16c"
+    },
+    {
+      "path": "test/launcher-startup.test.js",
+      "sha256": "2ae5cdb638361f5665e9e0cf8a66c61b6e0f24fd67dca3ae0fbaa3e63b47e02c"
+    },
+    {
+      "path": "test/lead-graph.test.js",
+      "sha256": "802150c5ee409eeb3eba897312ead527a0a7c724f1a0f52a9a2486a53e4fbe14"
+    },
+    {
+      "path": "test/lead-orchestrator.test.js",
+      "sha256": "e2c284bf9cfd1450b838c5e835dd52d49e20c547a010f3392181fbfbbc6a5b83"
+    },
+    {
+      "path": "test/lead-planner.test.js",
+      "sha256": "ae002f981747577010ff0c9fb49662c316efbff4eb48d3e32d8e89369578c50f"
+    },
+    {
+      "path": "test/local-auth.test.js",
+      "sha256": "86d4fde5b4da3f2b3091057324a91f0013af985e4ce2c8a147247c13534ffa26"
+    },
+    {
+      "path": "test/loop-guard.test.js",
+      "sha256": "104829304b5bb699ad5096731f29fe25a470ea8f9e34170bef17957aa5298eae"
+    },
+    {
+      "path": "test/owner-decision-restart.test.js",
+      "sha256": "a6b83625173e10556ef8657f4efd903d3f8371570658f00854ba15c78243bb1d"
+    },
+    {
+      "path": "test/owner-decision.test.js",
+      "sha256": "8faee50eeb64814c9046f57f207ba2ffdaa8313db5b2672407d632193d4b2420"
+    },
+    {
+      "path": "test/parallel-writers.e2e.test.js",
+      "sha256": "3c6414d3ed985f85169b0b99e82cfc6743c1df7fd60077c60a4b9a77ecb8f7bf"
+    },
+    {
+      "path": "test/partial-ledger.test.js",
+      "sha256": "c931972f4c88aa49ab0dbc10f0bf3ee125cb4deae6a25463c9634b9cc56fe26a"
+    },
+    {
+      "path": "test/performance-store.test.js",
+      "sha256": "0a3fe3cd4d74eee3a4c55639ad03ee7db6bb239b28949e49d341439a41a69f97"
+    },
+    {
+      "path": "test/process-quiescence.test.js",
+      "sha256": "1d5a88fadb373372cb6f25882c4876fdb062d016c782836c95e29ccb1641e38a"
+    },
+    {
+      "path": "test/project-delivery-controller.test.js",
+      "sha256": "f2bf88c8749f68f578ab4a6a2e5108bd126da8f76bdefb634420bcfc1ea1a834"
+    },
+    {
+      "path": "test/project-settings.test.js",
+      "sha256": "29ae8bf2146840a9d214567241cc69bbd2fbd5a8e7c2cc5a88b9163dc6113f82"
+    },
+    {
+      "path": "test/review-policy.test.js",
+      "sha256": "e771a2190fae2fdd592dd5cfed28cade887ec36d843aa41dd01c4fe31da8383e"
+    },
+    {
+      "path": "test/role-catalog.test.js",
+      "sha256": "b4d5fec67a5bfb01a9fe71327e9c1f2cf7803fe6b827d99e2087f755d6dfa94b"
+    },
+    {
+      "path": "test/role-model-capabilities.test.js",
+      "sha256": "0a05bc32d9ccb70b55926c34048827b248621745e6815e1b57aeb1e54a9172c7"
+    },
+    {
+      "path": "test/role-names.test.js",
+      "sha256": "f499806a04a0303e1ddb7d6bd70570048de8bb80b234462e855d46d563bd5323"
+    },
+    {
+      "path": "test/role-overrides.test.js",
+      "sha256": "950babb27f0fe92bebcae00eb0812adf84188c67aa3797427c840d60822b6c37"
+    },
+    {
+      "path": "test/runtime-contracts.test.js",
+      "sha256": "2eff2966d9b2eed73451692eeacb203ef30010f8c9ebb92346a5b377ac628f3f"
+    },
+    {
+      "path": "test/server-delivery-engine.test.js",
+      "sha256": "f72bec701363fc440de6ff55c67bed12eb39c70b84029fb5d8915c5ad8ab7bb1"
+    },
+    {
+      "path": "test/server.test.js",
+      "sha256": "24efdeb8041d53ae4fd57309911a81c12a2bcf71009db6a8136e8d909976bbae"
+    },
+    {
+      "path": "test/session-situation.test.js",
+      "sha256": "4694a277e579712a07d476bd15c6680484e2672f13d4699585441d4b9a04a99d"
+    },
+    {
+      "path": "test/session-threads.test.js",
+      "sha256": "a57ec9fbf0b322b311f965410c746bbd75d09cfca41210345ae6e39c1880ba7f"
+    },
+    {
+      "path": "test/skill-catalog.test.js",
+      "sha256": "8433c14edd63a2e84b3269429b6680e51fbb6ca5b0bf02423778a7d8d69571b1"
+    },
+    {
+      "path": "test/skill-routing.test.js",
+      "sha256": "c99890abbb09d028c9f5ea969a25bcb9829366ddc40c642944ed5214640bbcba"
+    },
+    {
+      "path": "test/spec-analyzer-cli.test.js",
+      "sha256": "b1e4acf255f3482e7c07d7165809cb98778b993b426bcdbc567f1362afd4da89"
+    },
+    {
+      "path": "test/spec-analyzer.test.js",
+      "sha256": "3931a9959aa992e50533dbdc2cf15a3dee5469c25943f25549c0b4da848c682f"
+    },
+    {
+      "path": "test/spec-assignment-adapter.test.js",
+      "sha256": "aa09ec132c9bdc24ecb363fd0307f4c35e6bcfeb178a3074dc16af50215b80e5"
+    },
+    {
+      "path": "test/spec-context.test.js",
+      "sha256": "8529da89cb0860d88fce6af17e618405d53970cd3580fa9942ce9ecadb4de48d"
+    },
+    {
+      "path": "test/staging-log.test.js",
+      "sha256": "f3129dfe041d2e3d1288c0007907a629c02094c1dec0422549575bf0b344cc20"
+    },
+    {
+      "path": "test/supervisor-integration.test.js",
+      "sha256": "f62d5b4cf4fb488c6ab2992b9583bd7506eec2fcb4a06cfb09ab2e107087fddc"
+    },
+    {
+      "path": "test/task-executor.test.js",
+      "sha256": "11afe44fcd3511818338a0a6d4963394aebefec96254f327ae7ee3cba07ed345"
+    },
+    {
+      "path": "test/task-resource-policy.test.js",
+      "sha256": "736e415f1c37d99a976fa325b51b0df553ae34f1e8182ef8cccda34604308a65"
+    },
+    {
+      "path": "test/task-scheduler.test.js",
+      "sha256": "1b478cb5692cca24766062e35993cd8b6978b844962fe6c0db7975bb684c9be1"
+    },
+    {
+      "path": "test/transient-recovery.test.js",
+      "sha256": "af2c5d1dee864538e5dde64c1484dcb584438171b1ca3e17f1737707e9b2b9e9"
+    },
+    {
+      "path": "test/usage-ledger.test.js",
+      "sha256": "556803a901251cc076bdca8d45b28d1235a6a4bb64b488197e6fc85a3c375f05"
+    },
+    {
+      "path": "test/usage-report.test.js",
+      "sha256": "785980a2f199879c2d2f30c00daa2e2c43f13bcac1789b1a66b61c74e087ec83"
+    },
+    {
+      "path": "test/verification-preflight.test.js",
+      "sha256": "0ce812f952a4a1eefd9e06b9a7c809d809407d089586cf036d40bbb00c5aa2e1"
+    },
+    {
+      "path": "test/workspace-snapshot.test.js",
+      "sha256": "8c29c834390a6a0aaf1b37c56b096da6fc7810fd9ff03077d7fa268d8c202aa3"
+    },
+    {
+      "path": "test/writer-admission.test.js",
+      "sha256": "a745ce60c233657f257796183071abe738ae27078ee19d2ed2773f0bdd690cf0"
+    },
+    {
+      "path": "test/writer-lanes.test.js",
+      "sha256": "5ba0593353c5ca51315e08bee669d942b3dda49555f6359bf26aba5a3266fd71"
+    },
+    {
+      "path": "test/writer-worktree.test.js",
+      "sha256": "ef7fe4eefd957e0ce04a77a76a6af3fb5e9b65acfd43f82a50e9d648d05336b1"
+    }
+  ],
+  "historicalCheckpoint": {
+    "schemaVersion": "harness-qualification-summary/v1",
+    "capturedAt": "2026-10-27T13:35:16.852800+00:00",
+    "scope": "Local source through CN13 and scoped CN14 prerequisites; concurrent engine not activated",
+    "affectedTests": {
+      "pass": 368,
+      "fail": 0,
+      "temporaryLog": ".agents/teamwork/engine-integration-20261027/verification-affected.tap",
+      "inputsUnchanged": true
+    },
+    "appServerFocusedTests": {
+      "pass": 4,
+      "fail": 0,
+      "reusedAfterUnchangedInputs": true
+    },
+    "fullSuiteRun": true,
+    "roleUiSourceReview": "APPROVE including final forced-refresh cache race",
+    "designReview": "APPROVE",
+    "deliveryContractsReview": "APPROVE; targeted challenge HOLDS after identity/reference/path corrections",
+    "performanceFinalCorrection": "APPROVE after coherent session token/count correction; exact adverse probe passes",
+    "runtimeApplied": false,
+    "backlogStoreReview": "core/scheduler hook accepted; owner-correction/checkpoint inventory extension APPROVE after replay authorization repair, related55/55",
+    "candidateStoreReview": "APPROVE/challenge HOLDS; candidate17/17+contracts16/16; GC/reopen and injected blob fsync-failure/retry probes pass; no hardware power-loss test",
+    "sourceQualifiedPackages": [
+      "CN-01",
+      "CN-02",
+      "CN-03",
+      "CN-04",
+      "CN-05",
+      "CN-06",
+      "CN-07",
+      "CN-08",
+      "CN-09",
+      "CN-10",
+      "CN-13",
+      "CN-11",
+      "CN-12"
+    ],
+    "inProgressPackages": [
+      "CN-14"
+    ],
+    "priorAcceptedFoundationAffectedTests": {
+      "pass": 171,
+      "fail": 0,
+      "suites": 22,
+      "temporaryLog": "/tmp/concurrent-harness-foundation-affected-20261026.log"
+    },
+    "knownFailures": [
+      {
+        "testName": "direct review continuations bind thread lane and codex home to their origin attempt",
+        "classification": "matches prior legacy failure; affected input unchanged in this continuation"
+      },
+      {
+        "testName": "direct verifier continuation requires its originating target and preserves same-target control",
+        "classification": "matches prior legacy failure; affected input unchanged in this continuation"
+      },
+      {
+        "testName": "enumeration failure still sends apps/plugins/skills overrides and marks enforced false",
+        "classification": "matches prior legacy failure; affected input unchanged in this continuation"
+      },
+      {
+        "testName": "selected skills are explicit turn inputs with scoped boundary and hash provenance",
+        "classification": "matches prior legacy failure; affected input unchanged in this continuation"
+      },
+      {
+        "testName": "launcher becomes ready on a free port and shuts down cleanly",
+        "classification": "full-suite launcher shutdown failure; isolated rerun2/2, flake unresolved"
+      },
+      {
+        "testName": "every shipped role and the lead have an empty MCP allowlist and skills off",
+        "classification": "matches prior legacy failure; affected input unchanged in this continuation"
+      },
+      {
+        "testName": "rejects malformed a2a_tools tables",
+        "classification": "matches prior legacy failure; affected input unchanged in this continuation"
+      },
+      {
+        "testName": "a usage-limited lane writer reports a continuation with its thread, lane, and home",
+        "classification": "matches prior legacy failure; affected input unchanged in this continuation"
+      },
+      {
+        "testName": "a completed lane writer publishes thread, lane, and home as continuation metadata",
+        "classification": "matches prior legacy failure; affected input unchanged in this continuation"
+      }
+    ],
+    "partialUnreviewedPackages": [],
+    "pendingSharedExtension": null,
+    "taskExecutorReview": "APPROVE/challenge HOLDS; related65/65; natural thread pin, task IDs, paused settlement, project-shared transport grouping",
+    "taskSchedulerReview": "APPROVE/challenge HOLDS; related81/81; reduced ceiling race, frozen writer and verifier barriers, pagination and pause probes",
+    "controllerTests": {
+      "relatedPass": 92,
+      "fail": 0,
+      "scenarioFile": "test/project-delivery-controller.test.js",
+      "independentReview": "APPROVE",
+      "targetedChallenge": "HOLDS"
+    },
+    "candidateReviewTests": {
+      "pass": 18,
+      "fail": 0,
+      "adjacentPass": 60,
+      "independentReview": "APPROVE",
+      "targetedChallenge": "HOLDS, seven API probes",
+      "providerRoutingQualified": false
+    },
+    "fullSuite": {
+      "tests": 1751,
+      "suites": 54,
+      "pass": 1742,
+      "fail": 8,
+      "cancelled": 0,
+      "skipped": 1,
+      "todo": 0,
+      "temporaryLog": ".agents/teamwork/engine-integration-20261027/verification-full.tap",
+      "failureNames": [
+        "direct review continuations bind thread lane and codex home to their origin attempt",
+        "direct verifier continuation requires its originating target and preserves same-target control",
+        "enumeration failure still sends apps/plugins/skills overrides and marks enforced false",
+        "selected skills are explicit turn inputs with scoped boundary and hash provenance",
+        "every shipped role and the lead have an empty MCP allowlist and skills off",
+        "rejects malformed a2a_tools tables",
+        "a usage-limited lane writer reports a continuation with its thread, lane, and home",
+        "a completed lane writer publishes thread, lane, and home as continuation metadata"
+      ],
+      "inputsUnchanged": true
+    },
+    "cn09Review": "APPROVE",
+    "cn09Challenge": "HOLDS",
+    "cn10Review": "APPROVE",
+    "cn10Challenge": "HOLDS, seven API probes",
+    "objectiveExtensionReview": "APPROVE",
+    "nextPackage": "CN-14",
+    "plannedPackages": [
+      "CN-15"
+    ],
+    "sourceSnapshotIncludesUnreviewedConcurrentFiles": true,
+    "currentContinuation": {
+      "date": "2026-10-27",
+      "cn13": {
+        "review": "APPROVE",
+        "focused": {
+          "passed": 50,
+          "failed": 0
+        },
+        "browser": {
+          "desktopViewport": 1440,
+          "mobileViewport": 390,
+          "javascriptErrors": 0,
+          "documentOverflow": false
+        },
+        "runtimeAdmission": "unknown_until_composed",
+        "uiPageLimit": 10
+      },
+      "cn11": {
+        "review": "APPROVE",
+        "challenge": "HOLDS",
+        "focused": {
+          "passed": 98,
+          "failed": 0
+        },
+        "challengeSqliteProbes": 3,
+        "challengeFocusedTests": 7
+      },
+      "cn12": {
+        "review": "APPROVE",
+        "focused": {
+          "passed": 81,
+          "failed": 0
+        },
+        "challenge": "HOLDS",
+        "challengeRealSqliteProbes": 3,
+        "excludedTest": "candidate attributes and inherited Git configuration cannot execute filters while mirroring",
+        "exclusionReason": "Predecessor blocked adversarial probe; existing independent defensive runner review reused",
+        "runtimeComposed": false
+      },
+      "fullSuite": {
+        "tests": 1723,
+        "suites": 54,
+        "pass": 1714,
+        "fail": 8,
+        "cancelled": 0,
+        "skipped": 1,
+        "todo": 0,
+        "temporaryLog": ".agents/teamwork/acceptance-continuation-20261027/verification-full.tap",
+        "failureNames": [
+          "direct review continuations bind thread lane and codex home to their origin attempt",
+          "direct verifier continuation requires its originating target and preserves same-target control",
+          "enumeration failure still sends apps/plugins/skills overrides and marks enforced false",
+          "selected skills are explicit turn inputs with scoped boundary and hash provenance",
+          "every shipped role and the lead have an empty MCP allowlist and skills off",
+          "rejects malformed a2a_tools tables",
+          "a usage-limited lane writer reports a continuation with its thread, lane, and home",
+          "a completed lane writer publishes thread, lane, and home as continuation metadata"
+        ],
+        "knownLegacyFailures": 8,
+        "startupFlake": "Not observed in this run; unresolved",
+        "inputsUnchanged": true
+      },
+      "recoveredPredecessorFullSuite": {
+        "total": 1691,
+        "pass": 1681,
+        "fail": 9,
+        "skip": 1,
+        "temporaryLog": "/tmp/lifecycle-continuation-full-20261027.tap",
+        "failuresMatchKnownBaseline": true
+      },
+      "cn14": {
+        "status": "prerequisites_source_qualified_core_pending",
+        "capabilityReview": "APPROVE",
+        "artifactReview": "APPROVE",
+        "focusedCapability": 22,
+        "focusedArtifacts": 8,
+        "targetedArtifactProbes": 2,
+        "verifierPauseProbe": "PASS after actual send-boundary correction",
+        "standaloneSandbox": "PASS installed Codex0.164.0 command/exec; no model turn",
+        "turnStartConfinement": "UNVERIFIED",
+        "runtimeComposed": false
+      },
+      "coreIntegration": {
+        "roleServiceReview": "APPROVE15/15+3/3",
+        "supersessionReview": "APPROVE19/19",
+        "coreSeamsFocused": "32/32",
+        "routerReview": "REJECT: omitted newRequest clears original intake",
+        "routerTests": "3/3, missing review regression",
+        "enginePrototype": "PARTIAL: unknown planner turn; archived, unwired",
+        "startupWired": false,
+        "fullSuite": {
+          "tests": 1751,
+          "suites": 54,
+          "pass": 1742,
+          "fail": 8,
+          "cancelled": 0,
+          "skipped": 1,
+          "todo": 0,
+          "temporaryLog": ".agents/teamwork/engine-integration-20261027/verification-full.tap",
+          "failureNames": [
+            "direct review continuations bind thread lane and codex home to their origin attempt",
+            "direct verifier continuation requires its originating target and preserves same-target control",
+            "enumeration failure still sends apps/plugins/skills overrides and marks enforced false",
+            "selected skills are explicit turn inputs with scoped boundary and hash provenance",
+            "every shipped role and the lead have an empty MCP allowlist and skills off",
+            "rejects malformed a2a_tools tables",
+            "a usage-limited lane writer reports a continuation with its thread, lane, and home",
+            "a completed lane writer publishes thread, lane, and home as continuation metadata"
+          ],
+          "inputsUnchanged": true
+        }
+      }
+    }
+  },
+  "finalMatrixTemporaryReport": ".agents/teamwork/integration-closeout-20261028/matrix-review/final.md",
+  "offlineAccepted": true,
+  "previousAcceptedIntegration": {
+    "capturedAt": "2026-10-28T16:08:28.819101+00:00",
+    "scope": "CN14/CN15 accepted bounded offline L1-L5 source qualification; L6/live unqualified",
+    "affectedTests": {
+      "tests": 923,
+      "suites": 32,
+      "pass": 923,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "exitCode": 0,
+      "timedOut": false,
+      "inputsUnchanged": true,
+      "temporaryLog": ".agents/teamwork/integration-closeout-20261028/verification-affected.tap"
+    },
+    "fullSuite": {
+      "tests": 1961,
+      "suites": 54,
+      "pass": 1960,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 1,
+      "todo": 0,
+      "exitCode": 0,
+      "timedOut": false,
+      "inputsUnchanged": true,
+      "temporaryLog": ".agents/teamwork/integration-closeout-20261028/verification-full.tap"
+    }
+  },
+  "concurrentStartupFollowup": {
+    "status": "accepted_offline",
+    "diagnosticsReview": "APPROVE; independent46/46 and split-chunk leak probe",
+    "laneReview": "APPROVE; independent162/162 plus2/2 startup, final discriminator delta7/7",
+    "reviewRefs": [
+      ".agents/teamwork/concurrent-startup-20261028/review-final.md",
+      ".agents/teamwork/concurrent-startup-20261028/lane-review.md"
+    ],
+    "supportedPolicy": "Inherited legacy workspace-write with explicit profileApi=false; host-owned actual admitted-lane capability",
+    "nativePolicyPreserved": "Explicit roots/provenance, approvals/reviewer, temp flags, ordinary writer network; established canonical verifier IPC exception retained",
+    "managedProfiles": "Unsupported without separate qualification; missing/modern profile cannot use legacy mapping",
+    "verificationRoute": "Non-callable capability fingerprint, not a model tool",
+    "modelAutonomyVerified": false,
+    "runtimeApplied": false,
+    "pausedLegacyRunResumed": false,
+    "limitations": [
+      "Offline disposable/fake-provider qualification only",
+      "Guidance does not guarantee future model recovery or remove legitimate owner decisions",
+      "Apply launcher/project source through their lifecycle; old mapped runs keep their engine"
+    ]
+  },
+  "previousAcceptedStartupFollowup": {
+    "capturedAt": "2026-10-28T17:58:01.528168+00:00",
+    "affectedTests": {
+      "tests": 1218,
+      "suites": 32,
+      "pass": 1218,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "exitCode": 0,
+      "timedOut": false,
+      "inputsUnchanged": true,
+      "temporaryLog": ".agents/teamwork/concurrent-startup-20261028/verification-affected.tap"
+    },
+    "fullSuite": {
+      "tests": 1968,
+      "suites": 54,
+      "pass": 1967,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 1,
+      "todo": 0,
+      "exitCode": 0,
+      "timedOut": false,
+      "inputsUnchanged": true,
+      "temporaryLog": ".agents/teamwork/concurrent-startup-20261028/verification-full.tap"
+    }
+  },
+  "ownerFullLocalAutonomy": {
+    "sourceReview": "APPROVE; independent57 focused checks and actual fake-RPC wire probe",
+    "executionPermissions": "full-access",
+    "modelApprovalPolicy": "never",
+    "allRegisteredProjectsConfigured": 2,
+    "launcherDefault": "full-access",
+    "defaultSemantics": "Materialized only if omitted; explicit project modes win; sticky after application",
+    "actualAppServerVersion": "0.165.0",
+    "livePreparedRoles": [
+      "coordinator",
+      "explorer",
+      "engineer",
+      "verifier"
+    ],
+    "liveTmpAndUvCacheWrite": true,
+    "actualResumedLeadPolicy": {
+      "sandboxMode": "danger-full-access",
+      "approvalPolicy": "never"
+    },
+    "originalPauseCleared": true,
+    "lastObservedTaskState": "TASK_STATE_WORKING",
+    "targetAcceptanceEstablished": false,
+    "generalAutonomousCompletionEstablished": false,
+    "incidentRef": "../../production-transfer.md#p-40-local-verification-permissions-became-an-unnecessary-owner-blocker",
+    "temporaryEvidenceRoot": ".agents/teamwork/local-autonomy-20261028"
+  }
+}

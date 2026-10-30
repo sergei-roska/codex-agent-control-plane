@@ -19,6 +19,7 @@ const {
   readOverridesFile,
   writeOverridesFile,
   effectiveRole,
+  ROLE_CAPACITY_DEFAULTS,
 } = require('./role-overrides');
 const { ProjectError } = require('./launcher-projects');
 const {
@@ -36,6 +37,8 @@ const { summarize } = require('./usage-report');
 const { sessionPerformance } = require('./session-performance');
 const { buildSituation, buildReviewContexts, ownerPausedLead, gitStatus } = require('./session-situation');
 const { createAskService, AskError } = require('./launcher-ask');
+const { projectDeliveryObjectives, projectDeliveryVisibility, MAX_PAGE_SIZE } = require('./delivery-visibility');
+const { readOwnerSettings, writeDeliveryEngine } = require('./launcher-project-settings');
 
 const UI_DIR = path.join(__dirname, '..', 'launcher-ui');
 const PROJECT_ID = /^[0-9a-f]{10}$/;
@@ -118,7 +121,10 @@ function createLauncherApp({
 }) {
   const app = express();
   const limitsCache = new Map();
+  const limitsCacheEpochs = new Map();
+  const limitsForcePending = new Map();
   const logins = new Map();
+  const handshakes = new Map();
 
   app.use(express.json());
 
@@ -186,8 +192,16 @@ function createLauncherApp({
 
   app.get('/api/projects/:id/status', (req, res) => {
     try {
-      const { logs, ...project } = projects.status(req.params.id);
-      res.json({ project, status: project.status, logs });
+      const { logs, startupDiagnostic, ...project } = projects.status(req.params.id);
+      res.json({
+        project,
+        status: project.status,
+        readiness: project.readiness,
+        readinessReason: project.readinessReason,
+        taskReady: project.taskReady,
+        logs,
+        startupDiagnostic: startupDiagnostic || null
+      });
     } catch (err) {
       sendProjectError(res, err);
     }
@@ -197,8 +211,18 @@ function createLauncherApp({
   app.post('/api/projects/:id/task/send', async (req, res) => {
     try {
       const id = req.params.id;
-      if (projects.get(id).status !== 'running') {
+      const project = projects.get(id);
+      if (project.status !== 'running') {
         return res.status(400).json({ success: false, error: 'Orchestrator server is not running!' });
+      }
+      if (project.taskReady !== true) {
+        return res.status(503).json({
+          success: false,
+          code: 'project_not_task_ready',
+          readiness: project.readiness || 'unknown',
+          reason: project.readinessReason || null,
+          error: 'Project server is not ready to accept tasks.'
+        });
       }
 
       const { goal, checks, taskId, continueFrom, decision, choice, contextId: newContextId } = req.body;
@@ -285,6 +309,140 @@ function createLauncherApp({
       res.json({ sessions: sessions || [] });
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Additive read-only projection. It intentionally reads optional delivery tables
+  // directly: constructing a store here would create schema during a GET.
+  app.get('/api/projects/:id/delivery/objectives', (req, res) => {
+    const { sessionId } = req.query;
+    if (sessionId !== undefined && (typeof sessionId !== 'string' || !sessionId || sessionId.length > 128)) {
+      return res.status(400).json({ error: 'Invalid delivery objective query' });
+    }
+    try {
+      const projection = withTasksDb(req.params.id, { readonly: true, fileMustExist: true }, db => projectDeliveryObjectives(db, { projectId: req.params.id, sessionId }));
+      res.json(projection || { available: false, objectives: [], truncated: false });
+    } catch (err) {
+      res.status(500).json({ error: 'Delivery objectives unavailable', code: err.code || 'visibility_error' });
+    }
+  });
+
+  app.get('/api/projects/:id/delivery/backlog', (req, res) => {
+    const { objectiveId, sessionId, afterCursor = '' } = req.query;
+    const limitText = req.query.limit === undefined ? '25' : req.query.limit;
+    if (typeof objectiveId !== 'string' || !objectiveId || objectiveId.length > 128
+      || (sessionId !== undefined && (typeof sessionId !== 'string' || !sessionId || sessionId.length > 128))
+      || typeof afterCursor !== 'string' || afterCursor.length > 2048
+      || typeof limitText !== 'string' || !/^\d{1,3}$/.test(limitText)) {
+      return res.status(400).json({ error: 'Invalid delivery backlog query' });
+    }
+    const limit = Number(limitText);
+    if (limit < 1 || limit > MAX_PAGE_SIZE) return res.status(400).json({ error: 'Invalid delivery backlog limit' });
+    try {
+      const projection = withTasksDb(req.params.id, { readonly: true, fileMustExist: true }, db =>
+        projectDeliveryVisibility(db, { projectId: req.params.id, objectiveId, sessionId, afterCursor, limit }));
+      res.json(projection || { schema: 'delivery-visibility/v1', projectId: req.params.id, objectiveId, sessionId: sessionId || null,
+        available: false, objective: null, counts: { ready: null, blocked: null, active: null }, tasks: [], nextCursor: null,
+        capacity: null, planner: { available: false, state: 'unknown' }, inbox: { available: false, state: 'unknown' }, unavailableReason: 'state_database_unavailable' });
+    } catch (err) {
+      if (err instanceof TypeError) return res.status(400).json({ error: 'Invalid delivery backlog cursor or scope' });
+      res.status(500).json({ error: 'Delivery visibility unavailable', code: err.code || 'visibility_error' });
+    }
+  });
+
+  function deliveryRunMapping(projectId, objectiveId, sessionId) {
+    return withTasksDb(projectId, { readonly: true, fileMustExist: true }, (db) => {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='concurrent_delivery_runs'").get();
+      if (!table) return null;
+      return db.prepare('SELECT run_id FROM concurrent_delivery_runs WHERE project_id=? AND objective_id=? AND session_id=?')
+        .get(projectId, objectiveId, sessionId) || null;
+    });
+  }
+
+  function validScopeId(value) {
+    return typeof value === 'string' && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value);
+  }
+
+  function controlScopeMatches(status, projectId, sessionId, objectiveId, runId) {
+    return status && status.engine === 'concurrent-v1' && status.projectId === projectId
+      && status.sessionId === sessionId && status.objectiveId === objectiveId && status.runId === runId;
+  }
+
+  app.get('/api/projects/:id/delivery/control', async (req, res) => {
+    const { objectiveId, sessionId } = req.query;
+    if (!validScopeId(objectiveId) || !validScopeId(sessionId)) return res.status(400).json({ error: 'Invalid delivery control scope' });
+    try {
+      if (projects.get(req.params.id).status !== 'running') return res.json({ available: false, reason: 'project_stopped' });
+      const mapping = deliveryRunMapping(req.params.id, objectiveId, sessionId);
+      if (!mapping) return res.json({ available: false, reason: 'concurrent_run_unavailable' });
+      let control;
+      try { control = await controlCall(req.params.id, 'GET', `/control/delivery/${encodeURIComponent(mapping.run_id)}`); }
+      catch (_) { return res.json({ available: false, reason: 'owner_control_unavailable' }); }
+      if (!controlScopeMatches(control, req.params.id, sessionId, objectiveId, mapping.run_id)) {
+        return res.status(502).json({ error: 'Delivery control scope could not be verified' });
+      }
+      res.json(control);
+    } catch (_) {
+      res.status(503).json({ available: false, reason: 'delivery_control_unavailable' });
+    }
+  });
+
+  const STEER_FIELDS = ['runId', 'projectId', 'sessionId', 'objectiveId', 'messageId', 'text', 'expectedPlanRevision', 'expectedGoalRevision', 'expectedControlRevision'];
+  app.post('/api/projects/:id/delivery/steer', async (req, res) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== STEER_FIELDS.length
+      || Object.keys(body).some((key) => !STEER_FIELDS.includes(key))
+      || STEER_FIELDS.some((key) => !Object.hasOwn(body, key))
+      || !validScopeId(body.runId) || body.projectId !== req.params.id || !validScopeId(body.sessionId)
+      || !validScopeId(body.objectiveId) || !validScopeId(body.messageId)
+      || typeof body.text !== 'string' || !body.text.trim() || body.text.length > 2000
+      || ['expectedPlanRevision', 'expectedGoalRevision', 'expectedControlRevision'].some((key) => !Number.isSafeInteger(body[key]) || body[key] < 0)) {
+      return res.status(400).json({ error: 'Invalid delivery steering request' });
+    }
+    try {
+      if (projects.get(req.params.id).status !== 'running') return res.status(409).json({ error: 'Project server is stopped' });
+      const mapping = deliveryRunMapping(req.params.id, body.objectiveId, body.sessionId);
+      if (!mapping || mapping.run_id !== body.runId) return res.status(409).json({ error: 'Delivery run scope is no longer current' });
+      let current;
+      try { current = await controlCall(req.params.id, 'GET', `/control/delivery/${encodeURIComponent(mapping.run_id)}`); }
+      catch (_) { return res.status(503).json({ error: 'Owner steering is unavailable' }); }
+      if (!controlScopeMatches(current, req.params.id, body.sessionId, body.objectiveId, mapping.run_id)) return res.status(409).json({ error: 'Delivery run scope is no longer current' });
+      try {
+        const acknowledgement = await controlCall(req.params.id, 'POST', `/control/delivery/${encodeURIComponent(mapping.run_id)}/steer`, body);
+        const validAck = controlScopeMatches(acknowledgement, req.params.id, body.sessionId, body.objectiveId, mapping.run_id)
+          && acknowledgement.messageId === body.messageId && acknowledgement.acknowledged === true
+          && ['received', 'applied', 'blocked'].includes(acknowledgement.state);
+        if (!validAck) return res.status(502).json({ error: 'Steering acknowledgement could not be verified' });
+        res.json(acknowledgement);
+      } catch (error) {
+        const status = /answered 409/.test(error.message) ? 409 : /answered 404/.test(error.message) ? 503 : 502;
+        res.status(status).json({ error: status === 409 ? 'Delivery state changed; refresh before sending' : 'Owner steering is unavailable' });
+      }
+    } catch (_) {
+      res.status(503).json({ error: 'Owner steering is unavailable' });
+    }
+  });
+
+  app.get('/api/projects/:id/delivery-engine', (req, res) => {
+    try {
+      const stopped = projects.get(req.params.id).status === 'stopped';
+      const settings = readOwnerSettings(projects.projectSettingsPath(req.params.id));
+      res.json({ deliveryEngine: settings.deliveryEngine || 'legacy', running: !stopped, stopped });
+    } catch (error) {
+      res.status(409).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/projects/:id/delivery-engine', (req, res) => {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)
+      || Object.keys(req.body).length !== 1 || !Object.hasOwn(req.body, 'deliveryEngine')
+      || !['legacy', 'concurrent-v1'].includes(req.body.deliveryEngine)) return res.status(400).json({ error: 'Invalid delivery engine' });
+    if (projects.get(req.params.id).status !== 'stopped') return res.status(409).json({ error: 'Stop the project server before changing its delivery engine' });
+    try {
+      const settings = writeDeliveryEngine(projects.projectSettingsPath(req.params.id), req.body.deliveryEngine);
+      res.json({ deliveryEngine: settings.deliveryEngine, running: false });
+    } catch (error) {
+      res.status(409).json({ error: error.message });
     }
   });
 
@@ -556,6 +714,8 @@ function createLauncherApp({
     description: r.description,
     model: r.model,
     effort: r.effort,
+    maxConcurrentAgents: r.maxConcurrentAgents,
+    fastMode: r.fastMode,
     sandbox: r.sandbox,
     tools: { mcpServers: r.tools.mcpServers, skills: r.tools.skills },
   });
@@ -583,8 +743,8 @@ function createLauncherApp({
       const override = overrides[canonicalRoleId(base.name)] || null;
       return {
         ...pickRole(effectiveRole(base, override)),
-        defaults: { model: base.model, effort: base.effort },
-        override: override ? { model: override.model ?? null, effort: override.effort ?? null, extraRules: override.extraRules ?? null } : null,
+        defaults: { model: base.model, effort: base.effort, maxConcurrentAgents: ROLE_CAPACITY_DEFAULTS[canonicalRoleId(base.name)] || 1, fastMode: base.fastMode || 'off' },
+        override: override ? { model: override.model ?? null, effort: override.effort ?? null, maxConcurrentAgents: override.maxConcurrentAgents ?? null, fastMode: override.fastMode ?? null, extraRules: override.extraRules ?? null } : null,
       };
     };
     const all = [baseLead, ...baseRoles.values()];
@@ -602,6 +762,17 @@ function createLauncherApp({
       res.json(projectTeam(projects.roleOverridesPath(req.params.id), req.params.id));
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/models/capabilities', async (_req, res) => {
+    const server = createAppServer({ cwd: process.cwd(), requestTimeoutMs: 15000 });
+    try {
+      res.json({ available: true, models: await server.listModels() });
+    } catch (_) {
+      res.json({ available: false, models: [], message: 'Model capabilities are unknown. Existing settings remain available.' });
+    } finally {
+      await server.close().catch(() => {});
     }
   });
 
@@ -660,9 +831,32 @@ function createLauncherApp({
     const hit = limitsCache.get(key);
     const now = Date.now();
     if (!force && hit && now - hit.at < limitsTtlMs) return hit.value;
-    const value = await readLimits(home);
-    limitsCache.set(key, { at: now, value });
-    return value;
+    let epoch = limitsCacheEpochs.get(key) || 0;
+    if (force) {
+      epoch += 1;
+      limitsCacheEpochs.set(key, epoch);
+      limitsForcePending.set(key, (limitsForcePending.get(key) || 0) + 1);
+    }
+    try {
+      const value = await readLimits(home);
+      if ((limitsCacheEpochs.get(key) || 0) === epoch && (force || !limitsForcePending.get(key))) {
+        limitsCacheEpochs.set(key, epoch + 1);
+        limitsCache.set(key, { at: Date.now(), value });
+      }
+      return value;
+    } finally {
+      if (force) {
+        const pending = (limitsForcePending.get(key) || 1) - 1;
+        if (pending > 0) limitsForcePending.set(key, pending);
+        else limitsForcePending.delete(key);
+      }
+    }
+  }
+
+  function storeLimits(key, value) {
+    const epoch = limitsCacheEpochs.get(key) || 0;
+    limitsCacheEpochs.set(key, epoch + 1);
+    limitsCache.set(key, { at: Date.now(), value });
   }
 
   function activeKeyAndHome() {
@@ -718,6 +912,68 @@ function createLauncherApp({
       });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message || String(err) });
+    }
+  });
+
+  app.post('/api/accounts/:name/handshake', async (req, res) => {
+    const name = req.params.name;
+    let key = name;
+    let home = null;
+    let fallback = {};
+
+    if (name === 'system') {
+      key = SYSTEM_KEY;
+    } else {
+      const profile = accountProfiles.read().profiles.find((entry) => entry.name === name);
+      if (!profile) return res.status(404).json({ success: false, error: 'Unknown account: ' + name });
+      home = profile.home;
+      fallback = profile;
+    }
+
+    let pending = handshakes.get(key);
+    if (!pending) {
+      pending = (async () => {
+        const server = createAppServer({
+          cwd: process.cwd(),
+          codexHome: home,
+          requestTimeoutMs: 15_000,
+          turnTimeoutMs: 90_000,
+        });
+        try {
+          await server.startAccountUsageWindow();
+          let data = null;
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            data = await server.readRateLimits();
+            const resetsAt = data?.rateLimits?.primary?.resetsAt;
+            if (data?.rateLimits && Number.isFinite(resetsAt) && resetsAt > Date.now() / 1000) break;
+            if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+          const accountData = await server.getAccount().catch(() => null);
+          const r = data?.rateLimits;
+          if (!r) throw new Error('Handshake completed but provider limits are not yet available');
+          const value = {
+            email: accountData?.account?.email || fallback.email || null,
+            planType: accountData?.account?.planType || r.planType || fallback.planType || null,
+            primary: r.primary || null,
+            secondary: r.secondary || null,
+          };
+          storeLimits(key, value);
+          return value;
+        } finally {
+          await server.close().catch(() => {});
+        }
+      })();
+      handshakes.set(key, pending);
+      pending.finally(() => {
+        if (handshakes.get(key) === pending) handshakes.delete(key);
+      }).catch(() => {});
+    }
+
+    try {
+      const result = await pending;
+      res.json({ success: true, turnStatus: 'completed', limitsRead: true, ...result });
+    } catch (err) {
+      res.status(502).json({ success: false, error: err.message || String(err) });
     }
   });
 

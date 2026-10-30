@@ -1,0 +1,1341 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "delivery-v1.schema.json",
+  "title": "Concurrent Harness delivery contracts v1",
+  "description": "Versioned pure delivery record contract. Cross-record references, cycles and compare-and-swap revisions are additionally enforced by delivery-contracts.js.",
+  "oneOf": [
+    {
+      "$ref": "#/definitions/objective"
+    },
+    {
+      "$ref": "#/definitions/task"
+    },
+    {
+      "$ref": "#/definitions/dependency"
+    },
+    {
+      "$ref": "#/definitions/attempt"
+    },
+    {
+      "$ref": "#/definitions/claim"
+    },
+    {
+      "$ref": "#/definitions/event"
+    },
+    {
+      "$ref": "#/definitions/candidate"
+    },
+    {
+      "$ref": "#/definitions/receipt"
+    },
+    {
+      "$ref": "#/definitions/planDelta"
+    }
+  ],
+  "definitions": {
+    "jsonValue": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/definitions/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 1000,
+          "additionalProperties": {
+            "$ref": "#/definitions/jsonValue"
+          }
+        }
+      ]
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)(?!.*\\/$)[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "objectiveId",
+        "predecessorType",
+        "predecessorId",
+        "successorTaskId",
+        "kind"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "delivery/v1"
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "objectiveId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "predecessorType": {
+          "enum": [
+            "task",
+            "checkpoint"
+          ]
+        },
+        "predecessorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "successorTaskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "kind": {
+          "enum": [
+            "requires_output",
+            "requires_acceptance",
+            "integration_after"
+          ]
+        },
+        "expectedOutput": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "publicationAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "granted",
+            "denied",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "authorityRevision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "readScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "paths"
+          ],
+          "properties": {
+            "kind": {
+              "const": "known"
+            },
+            "paths": {
+              "type": "array",
+              "maxItems": 500,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/definitions/path"
+              }
+            },
+            "reason": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "paths",
+            "reason"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unknown"
+            },
+            "paths": {
+              "type": "null"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+            }
+          }
+        }
+      ]
+    },
+    "plannerPublicationAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "denied",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "authorityRevision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "plannerTask": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/task"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "draft",
+                "queued",
+                "blocked"
+              ]
+            },
+            "publicationAuthority": {
+              "$ref": "#/definitions/plannerPublicationAuthority"
+            }
+          }
+        }
+      ]
+    },
+    "objective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "objectiveId",
+        "sessionId",
+        "engineVersion",
+        "goalRevision",
+        "requirementDigest",
+        "checksDigest",
+        "authorityRevision",
+        "controlRevision",
+        "disposition"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "delivery/v1"
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "objectiveId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "engineVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "goalRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "requirementDigest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?:sha256:)?[a-f0-9]{64}$"
+        },
+        "checksDigest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?:sha256:)?[a-f0-9]{64}$"
+        },
+        "authorityRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "controlRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "disposition": {
+          "enum": [
+            "planning",
+            "executing",
+            "draining",
+            "paused_owner",
+            "waiting_budget",
+            "waiting_owner",
+            "recovering",
+            "blocked_technical",
+            "validating",
+            "accepted",
+            "partial",
+            "canceled"
+          ]
+        },
+        "legacyRunId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "updatedAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "objectiveId",
+        "taskId",
+        "revision",
+        "role",
+        "kind",
+        "objective",
+        "priority",
+        "dependencies",
+        "productWritePaths",
+        "readScope",
+        "scratchWriteRoots",
+        "resourceClaims",
+        "publicationAuthority",
+        "state"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "delivery/v1"
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "objectiveId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "dependencies": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/definitions/dependency"
+          }
+        },
+        "productWritePaths": {
+          "type": "array",
+          "maxItems": 500,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/path"
+          }
+        },
+        "readScope": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "paths"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "known"
+                },
+                "paths": {
+                  "type": "array",
+                  "maxItems": 500,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/definitions/path"
+                  }
+                },
+                "reason": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "paths",
+                "reason"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "unknown"
+                },
+                "paths": {
+                  "type": "null"
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+                }
+              }
+            }
+          ]
+        },
+        "scratchWriteRoots": {
+          "type": "array",
+          "maxItems": 500,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/path"
+          }
+        },
+        "resourceClaims": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "publicationAuthority": {
+          "$ref": "#/definitions/publicationAuthority"
+        },
+        "state": {
+          "enum": [
+            "draft",
+            "queued",
+            "ready",
+            "claimed",
+            "running",
+            "settling",
+            "succeeded",
+            "blocked",
+            "failed",
+            "canceled",
+            "superseded"
+          ]
+        },
+        "checkpointId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\x21-\\x7e]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseCandidateId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\x21-\\x7e]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "supersedesTaskId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\x21-\\x7e]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acceptance": {
+          "$ref": "#/definitions/jsonValue"
+        },
+        "checks": {
+          "$ref": "#/definitions/jsonValue"
+        },
+        "skillPins": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "toolPins": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "profilePins": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "evidenceRefs": {
+          "$ref": "#/definitions/jsonValue"
+        },
+        "retryPolicy": {
+          "$ref": "#/definitions/jsonValue"
+        },
+        "blockedReason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "idempotencyKey": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "outputContract": {
+          "$ref": "#/definitions/jsonValue"
+        }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "objectiveId",
+        "attemptId",
+        "taskId",
+        "taskRevision",
+        "attemptNo",
+        "executionGeneration",
+        "fencingToken",
+        "contractDigest",
+        "selectedSettingsDigest",
+        "state"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "delivery/v1"
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "objectiveId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "attemptId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "taskRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "attemptNo": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "executionGeneration": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "fencingToken": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "contractDigest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?:sha256:)?[a-f0-9]{64}$"
+        },
+        "selectedSettingsDigest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?:sha256:)?[a-f0-9]{64}$"
+        },
+        "state": {
+          "enum": [
+            "claimed",
+            "running",
+            "settling",
+            "succeeded",
+            "failed",
+            "canceled",
+            "unknown"
+          ]
+        },
+        "providerContextId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "externalTaskId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "laneId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "capturedControls": {
+          "$ref": "#/definitions/jsonValue"
+        },
+        "outcome": {
+          "$ref": "#/definitions/jsonValue"
+        },
+        "effect": {
+          "$ref": "#/definitions/jsonValue"
+        },
+        "evidenceRefs": {
+          "$ref": "#/definitions/jsonValue"
+        },
+        "startedAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "settledAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "objectiveId",
+        "claimId",
+        "taskId",
+        "attemptId",
+        "ownerGeneration",
+        "fencingToken",
+        "role",
+        "capacityClass",
+        "leaseUntil",
+        "heartbeatAt",
+        "state"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "delivery/v1"
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "objectiveId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "claimId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "attemptId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "ownerGeneration": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "fencingToken": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "capacityClass": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "leaseUntil": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "heartbeatAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "enum": [
+            "active",
+            "released",
+            "expired",
+            "fenced"
+          ]
+        },
+        "startedAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "releasedAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "sequence",
+        "eventId",
+        "eventType",
+        "objectRevision",
+        "payload",
+        "dedupeKey"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "delivery/v1"
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "eventType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "objectRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "payload": {
+          "$ref": "#/definitions/jsonValue"
+        },
+        "dedupeKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "taskId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\x21-\\x7e]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attemptId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\x21-\\x7e]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidateId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\x21-\\x7e]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "evidenceRef": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "objectiveId",
+        "candidateId",
+        "integrationGeneration",
+        "snapshotRef",
+        "contentManifestDigest",
+        "status"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "delivery/v1"
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "objectiveId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "candidateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "integrationGeneration": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "snapshotRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "contentManifestDigest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?:sha256:)?[a-f0-9]{64}$"
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "parentCandidateId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\x21-\\x7e]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceAttemptId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\x21-\\x7e]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attestedDeltaRef": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 16000,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "environmentDigest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?:sha256:)?[a-f0-9]{64}$"
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "objectiveId",
+        "receiptId",
+        "checkpointId",
+        "candidateId",
+        "contextDigest",
+        "inputManifestDigest",
+        "checkPins",
+        "toolPins",
+        "profilePins",
+        "role",
+        "attemptId",
+        "outcome",
+        "evidenceRefs"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "delivery/v1"
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "objectiveId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "receiptId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "checkpointId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "candidateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "contextDigest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?:sha256:)?[a-f0-9]{64}$"
+        },
+        "inputManifestDigest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?:sha256:)?[a-f0-9]{64}$"
+        },
+        "checkPins": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "toolPins": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "profilePins": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "attemptId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x21-\\x7e]+$"
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed",
+            "inconclusive",
+            "blocked"
+          ]
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "planDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "expectedPlanRevision",
+        "expectedGoalRevision",
+        "expectedAuthorityRevision",
+        "expectedControlRevision",
+        "nextPlanRevision",
+        "tasks",
+        "dependencies"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "delivery/v1"
+        },
+        "expectedPlanRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expectedGoalRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expectedAuthorityRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expectedControlRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "nextPlanRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tasks": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task"
+            ],
+            "properties": {
+              "task": {
+                "$ref": "#/definitions/plannerTask"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "maxItems": 2000,
+          "items": {
+            "$ref": "#/definitions/dependency"
+          }
+        }
+      }
+    }
+  }
+}

@@ -10,9 +10,12 @@ const Database = require('better-sqlite3');
 const { TaskState } = require('@a2a-js/sdk');
 const { ServerCallContext } = require('@a2a-js/sdk/server');
 const { createLauncherApp } = require('../src/launcher-app');
+const { CodexAppServer } = require('../src/codex-app-server');
 const { ProjectError } = require('../src/launcher-projects');
 const { createTaskStore, openStateDatabase } = require('../src/durable-store');
 const { UsageLedger } = require('../src/usage-ledger');
+const { BacklogStore } = require('../src/backlog-store');
+const { VERSION } = require('../src/delivery-contracts');
 
 const ID_A = 'aaaaaaaaaa';
 const ID_B = 'bbbbbbbbbb';
@@ -27,10 +30,13 @@ let server;
 let base;
 let calls;
 let fakeStatus;
+let fakeReadiness;
 let nextError;
 let sent;
 let dbFiles;
 let projectPaths = {};
+let modelListFailure = false;
+let modelCapabilityCloseCount = 0;
 
 function fakeProjects() {
   const maybeFail = (name) => {
@@ -40,7 +46,15 @@ function fakeProjects() {
       throw error;
     }
   };
-  const view = (id) => ({ id, name: id, path: projectPaths[id] || '/w/' + id, port: id === ID_A ? 4001 : 4002, status: fakeStatus[id] });
+  const view = (id) => {
+    const status = fakeStatus[id];
+    const readiness = fakeReadiness[id] || (status === 'running' ? 'ready' : status === 'starting' ? 'starting' : 'stopped');
+    return {
+      id, name: id, path: projectPaths[id] || '/w/' + id, port: id === ID_A ? 4001 : 4002,
+      status, readiness, readinessReason: readiness === 'quarantined' ? 'concurrent_startup_recovery_unsafe' : null,
+      taskReady: status === 'running' && readiness === 'ready'
+    };
+  };
   return {
     list: () => [ID_A, ID_B].map(view),
     get: (id) => (fakeStatus[id] ? view(id) : null),
@@ -52,7 +66,7 @@ function fakeProjects() {
     remove: async (id) => { maybeFail('remove'); calls.push(['remove', id]); return view(id); },
     start: async (id) => { maybeFail('start'); calls.push(['start', id]); return view(id); },
     stop: async (id) => { maybeFail('stop'); calls.push(['stop', id]); return view(id); },
-    status: (id) => ({ ...view(id), logs: ['one\n', 'two\n'] }),
+    status: (id) => ({ ...view(id), logs: ['one\n', 'two\n'], startupDiagnostic: { outcome: 'failed', stage: 'server_startup', message: 'Concurrent delivery requires supported lane isolation.', stderr: 'OPENAI_API_KEY=[REDACTED]\n' } }),
   };
 }
 
@@ -119,8 +133,11 @@ after(() => {
 beforeEach(async () => {
   calls = [];
   nextError = null;
+  modelListFailure = false;
+  modelCapabilityCloseCount = 0;
   sent = [];
   fakeStatus = { [ID_A]: 'running', [ID_B]: 'stopped', [ID_MISSING]: 'stopped', [ID_USAGE]: 'stopped', [ID_NOLEDGER]: 'stopped', [ID_GIT]: 'stopped', [ID_NOREPO]: 'stopped' };
+  fakeReadiness = {};
   if (server) server.close();
   const fakeClient = {
     getTask: async ({ id }) => ({ id, contextId: 'ctx-' + id }),
@@ -131,12 +148,49 @@ beforeEach(async () => {
     readAuthToken: () => 'tok',
     createClient: async (url) => { sent.push({ url }); return fakeClient; },
     openTasksDb: (file, options) => new Database(file, options),
+    createAppServer: (options) => {
+      if (options.turnTimeoutMs !== undefined || options.requestTimeoutMs !== 15000) return new CodexAppServer(options);
+      return {
+        listModels: async () => {
+          if (modelListFailure) throw new Error('private account detail');
+          return [{ id: 'model-z', supportedReasoningEfforts: ['low'], serviceTiers: [], defaultServiceTier: 'standard' }];
+        },
+        close: async () => { modelCapabilityCloseCount += 1; },
+      };
+    },
   });
   await new Promise((resolve) => { server = app.listen(0, '127.0.0.1', resolve); });
   base = 'http://127.0.0.1:' + server.address().port;
 });
 
 describe('project routes', () => {
+  it('serves additive delivery visibility read-only and validates its bounded query', async () => {
+    const db = new Database(dbFiles[ID_A]);
+    try {
+      const store = new BacklogStore(db);
+      store.createObjective({ projectId: ID_A, objectiveId: 'objective-api', sessionId: 'session-api', engineVersion: 'delivery-v1', goalRevision: 1,
+        requirementDigest: `sha256:${'a'.repeat(64)}`, checksDigest: `sha256:${'b'.repeat(64)}`, authorityRevision: 1, controlRevision: 1, disposition: 'executing' });
+      store.applyPlan(ID_A, 'objective-api', { schemaVersion: VERSION, expectedPlanRevision: 0, expectedGoalRevision: 1, expectedAuthorityRevision: 1, expectedControlRevision: 1, nextPlanRevision: 1,
+        tasks: [{ task: { schemaVersion: VERSION, projectId: ID_A, objectiveId: 'objective-api', taskId: 'task-api', revision: 1, role: 'engineer', kind: 'implementation', objective: 'API projection', priority: 0, dependencies: [], productWritePaths: ['src/a.js'], readScope: { kind: 'unknown', paths: null, reason: 'Unknown' }, scratchWriteRoots: ['.scratch'], resourceClaims: [], publicationAuthority: { state: 'unknown' }, state: 'queued' } }], dependencies: [] });
+    } finally { db.close(); }
+    const before = new Database(dbFiles[ID_A], { readonly: true });
+    const schemaBefore = before.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name").all();
+    before.close();
+    const r = await api('GET', `/api/projects/${ID_A}/delivery/backlog?objectiveId=objective-api&sessionId=session-api&limit=1`);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.available, true);
+    assert.equal(r.body.tasks[0].taskId, 'task-api');
+    const objectives = await api('GET', `/api/projects/${ID_A}/delivery/objectives?sessionId=session-api`);
+    assert.equal(objectives.status, 200);
+    assert.deepEqual(objectives.body.objectives.map(item => item.objectiveId), ['objective-api']);
+    const foreignCursor = Buffer.from(JSON.stringify({ v: 1, projectId: ID_B, objectiveId: 'objective-api', sessionId: 'session-api', taskId: 'task-a' })).toString('base64url');
+    assert.equal((await api('GET', `/api/projects/${ID_A}/delivery/backlog?objectiveId=objective-api&sessionId=session-api&afterCursor=${foreignCursor}`)).status, 400);
+    assert.equal((await api('GET', `/api/projects/${ID_A}/delivery/backlog?objectiveId=objective-api&limit=101`)).status, 400);
+    const after = new Database(dbFiles[ID_A], { readonly: true });
+    assert.deepEqual(after.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name").all(), schemaBefore);
+    after.close();
+  });
+
   it('lists projects', async () => {
     const r = await api('GET', '/api/projects');
     assert.equal(r.status, 200);
@@ -183,6 +237,10 @@ describe('project routes', () => {
     assert.equal(r.body.project.id, ID_A);
     assert.equal(r.body.project.logs, undefined);
     assert.deepEqual(r.body.logs, ['one\n', 'two\n']);
+    assert.equal(r.body.readiness, 'ready');
+    assert.equal(r.body.taskReady, true);
+    assert.deepEqual(r.body.startupDiagnostic, { outcome: 'failed', stage: 'server_startup', message: 'Concurrent delivery requires supported lane isolation.', stderr: 'OPENAI_API_KEY=[REDACTED]\n' });
+    assert.doesNotMatch(JSON.stringify(r.body), /first-half|second-half-private/);
   });
 });
 
@@ -195,6 +253,21 @@ describe('task send', () => {
     assert.equal(r.status, 400);
     assert.equal(r.body.success, false);
     assert.deepEqual(sent, []);
+  });
+
+  it('blocks task submission while the process is quarantined', async () => {
+    fakeReadiness[ID_A] = 'quarantined';
+    const r = await api('POST', `/api/projects/${ID_A}/task/send`, { goal: 'continue the paused task', taskId: 'task-a2' });
+    assert.equal(r.status, 503);
+    assert.deepEqual(r.body, {
+      success: false,
+      code: 'project_not_task_ready',
+      readiness: 'quarantined',
+      reason: 'concurrent_startup_recovery_unsafe',
+      error: 'Project server is not ready to accept tasks.'
+    });
+    assert.deepEqual(sent, []);
+    assert.deepEqual(calls, []);
   });
 
   it('uses the project base url, touches and sends', async () => {
@@ -328,12 +401,33 @@ describe('role overrides', () => {
     fakeStatus[ID_A] = 'stopped';
   });
 
+  it('returns model capability metadata and recovers cleanly when discovery fails', async () => {
+    modelListFailure = true;
+    const unavailable = await api('GET', '/api/models/capabilities');
+    assert.deepEqual(unavailable.body, {
+      available: false,
+      models: [],
+      message: 'Model capabilities are unknown. Existing settings remain available.',
+    });
+    assert.equal(JSON.stringify(unavailable.body).includes('private account detail'), false);
+    modelListFailure = false;
+    const available = await api('GET', '/api/models/capabilities');
+    assert.equal(available.body.available, true);
+    assert.equal(available.body.models[0].id, 'model-z');
+    assert.equal(modelCapabilityCloseCount, 2);
+  });
+
   it('serves the team of a project with defaults, override, and the models list', async () => {
     const r = await api('GET', `/api/projects/${ID_A}/team`);
     assert.equal(r.status, 200);
     assert.equal(r.body.lead.name, 'coordinator');
     assert.equal(r.body.lead.override, null);
-    assert.deepEqual(r.body.lead.defaults, { model: r.body.lead.model, effort: r.body.lead.effort });
+    assert.deepEqual(r.body.lead.defaults, { model: r.body.lead.model, effort: r.body.lead.effort, maxConcurrentAgents: 1, fastMode: 'off' });
+    for (const [name, count] of [['engineer', 4], ['explorer', 2], ['verifier', 2], ['auditor', 2]]) {
+      assert.equal(find(r.body, name).maxConcurrentAgents, count);
+      assert.equal(find(r.body, name).defaults.maxConcurrentAgents, count);
+      assert.equal(find(r.body, name).defaults.fastMode, 'off');
+    }
     assert.ok(r.body.models.includes(r.body.lead.model));
     assert.deepEqual(r.body.models, [...r.body.models].sort());
     assert.equal(new Set(r.body.models).size, r.body.models.length);
@@ -372,8 +466,8 @@ describe('role overrides', () => {
     const architect = find(r.body, 'architect');
     assert.equal(architect.model, 'gpt-6-luna');
     assert.equal(architect.effort, 'low');
-    assert.deepEqual(architect.defaults, { model: base.model, effort: base.effort });
-    assert.deepEqual(architect.override, { model: 'gpt-6-luna', effort: 'low', extraRules: 'Prefer small modules.' });
+    assert.deepEqual(architect.defaults, { model: base.model, effort: base.effort, maxConcurrentAgents: 1, fastMode: 'off' });
+    assert.deepEqual(architect.override, { model: 'gpt-6-luna', effort: 'low', maxConcurrentAgents: null, fastMode: null, extraRules: 'Prefer small modules.' });
     const file = JSON.parse(fs.readFileSync(overridesFile(ID_A), 'utf8'));
     assert.equal(file.version, 1);
     assert.deepEqual(file.roles, { architect: { model: 'gpt-6-luna', effort: 'low', extraRules: 'Prefer small modules.' } });
@@ -390,7 +484,7 @@ describe('role overrides', () => {
     assert.equal(r.status, 200);
     assert.equal(r.body.lead.effort, 'high');
     assert.equal(r.body.lead.model, r.body.lead.defaults.model);
-    assert.deepEqual(r.body.lead.override, { model: null, effort: 'high', extraRules: null });
+    assert.deepEqual(r.body.lead.override, { model: null, effort: 'high', maxConcurrentAgents: null, fastMode: null, extraRules: null });
     // A legacy name resolves to the same role.
     const legacy = await api('PUT', `/api/projects/${ID_A}/roles/orch-lead/override`, { effort: 'low' });
     assert.equal(legacy.body.lead.effort, 'low');
@@ -400,7 +494,7 @@ describe('role overrides', () => {
   it('empty fields clear; an all-empty PUT and DELETE reset the role', async () => {
     await api('PUT', `/api/projects/${ID_A}/roles/engineer/override`, { model: 'gpt-6-luna', effort: 'low', extraRules: 'x' });
     const partial = await api('PUT', `/api/projects/${ID_A}/roles/engineer/override`, { model: '', effort: 'high', extraRules: null });
-    assert.deepEqual(find(partial.body, 'engineer').override, { model: null, effort: 'high', extraRules: null });
+    assert.deepEqual(find(partial.body, 'engineer').override, { model: null, effort: 'high', maxConcurrentAgents: null, fastMode: null, extraRules: null });
     const cleared = await api('PUT', `/api/projects/${ID_A}/roles/engineer/override`, { model: null, effort: '', extraRules: '   ' });
     assert.equal(find(cleared.body, 'engineer').override, null);
     await api('PUT', `/api/projects/${ID_A}/roles/auditor/override`, { effort: 'low' });
@@ -413,8 +507,8 @@ describe('role overrides', () => {
   it('rejects invalid input with 400 and a message, and writes nothing', async () => {
     const put = (role, body) => api('PUT', `/api/projects/${ID_A}/roles/${role}/override`, body);
     for (const [role, body, message] of [
-      ['architect', { model: 'claude-x' }, /Invalid model/],
-      ['architect', { effort: 'extreme' }, /Effort must be one of/],
+      ['architect', { model: 'bad\nmodel' }, /Invalid model/],
+      ['architect', { effort: 2 }, /short text value/],
       ['architect', { extraRules: 'a {{TEAM_RULES}} b' }, /must not contain/],
       ['architect', { extraRules: 'a }} b' }, /must not contain/],
       ['architect', { extraRules: 'x'.repeat(4001) }, /limited to 4000/],
@@ -429,6 +523,10 @@ describe('role overrides', () => {
       assert.match(r.body.error, message);
     }
     assert.equal((await put('architect', { extraRules: 'x'.repeat(4000) })).status, 200);
+    const kept = await put('architect', { model: 'gpt-6-luna', effort: 'low', extraRules: 'Keep this', maxConcurrentAgents: 0 });
+    assert.equal(kept.status, 400);
+    assert.deepEqual(find((await api('GET', `/api/projects/${ID_A}/team`)).body, 'architect').override,
+      { model: null, effort: null, maxConcurrentAgents: null, fastMode: null, extraRules: 'x'.repeat(4000) });
     fs.rmSync(overridesFile(ID_A), { force: true });
     assert.equal((await api('DELETE', `/api/projects/${ID_A}/roles/nobody/override`)).status, 400);
     assert.equal(fs.existsSync(overridesFile(ID_A)), false);

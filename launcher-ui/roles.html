@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Roles | Codex Control Plane</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+  <link rel="stylesheet" href="/ui/performance.css">
+  <link rel="stylesheet" href="/ui/roles.css">
+</head>
+<body>
+  <header class="navbar">
+    <div class="brand"><div class="brand-icon">C</div><div class="brand-text"><span class="brand-name">Codex Control Plane</span><span class="brand-subtitle">Role settings</span></div></div>
+    <nav class="page-nav" aria-label="Main navigation"><a class="page-nav-link" href="/">Control plane</a><a class="page-nav-link is-current" href="/ui/roles.html">Roles</a></nav>
+  </header>
+  <main class="roles-page">
+    <a class="roles-back" id="backLink" href="/">&larr; Back to control plane</a>
+    <h1>Roles</h1>
+    <p class="roles-intro">Configure each role for the selected project. Agent counts are configured capacity ceilings; they do not start agents or change the current scheduler.</p>
+    <label class="roles-project-label" for="projectSelect">Project</label>
+    <select id="projectSelect"></select>
+    <section class="delivery-engine-setting" aria-labelledby="deliveryEngineHeading">
+      <h2 id="deliveryEngineHeading">Delivery engine for new runs</h2>
+      <label for="deliveryEngineSelect">Engine</label>
+      <select id="deliveryEngineSelect"><option value="legacy">Legacy</option><option value="concurrent-v1">Concurrent delivery</option></select>
+      <button id="deliveryEngineSave" class="btn btn-primary btn-sm" type="button">Save engine</button>
+      <p id="deliveryEngineNote" class="roles-note" role="status" aria-live="polite">Loading delivery engine...</p>
+    </section>
+    <p id="pageNote" class="roles-note"></p>
+    <div id="capabilityNote" class="roles-note"></div>
+    <div id="error" class="roles-error" role="alert"></div>
+    <div id="roleList" class="roles-grid"></div>
+  </main>
+  <script src="/ui/roles.js"></script>
+</body>
+</html>

@@ -3,8 +3,13 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const Database = require('better-sqlite3');
 const { CodexAppServer, laneSandboxPolicy } = require('../src/codex-app-server');
+const { LaneManager, selectWriterIsolation } = require('../src/writer-lanes');
+const { nativeWorkspaceWriteBinding } = require('../src/lane-execution-policy');
+const { makeRepo, tmp } = require('./helpers/lane-fixtures');
 const { loadMcpCatalog } = require('../src/mcp-catalog');
 const { withConnectors } = require('../src/connector-catalog');
 const { loadSkillCatalog, resolveSkillSelection } = require('../src/skill-catalog');
@@ -130,6 +135,72 @@ test('performs initialize handshake and completes a turn', async (t) => {
   assert.equal(turnStart.params.approvalsReviewer, 'user');
 });
 
+test('resolves Fast on from advertised metadata and sends the actual tier id', async (t) => {
+  const handler = baseHandler();
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'model/list') return send({ id: request.id, result: { data: [{ id: role.model, supportedReasoningEfforts: [{ reasoningEffort: 'high', description: 'High' }], serviceTiers: [{ id: 'fast', name: 'Fast', description: 'Accelerated service' }] }] } });
+    return handler(request, send);
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const result = await client.run({ role: { ...role, fastMode: 'on' }, cwd: '/tmp/project', input: 'hello' });
+  assert.equal(fake.getChild().sent.find(({ method }) => method === 'turn/start').params.serviceTierForTurn, 'fast');
+  assert.equal(result.usage.serviceTierForTurn, 'fast');
+  assert.equal(result.usage.fastMode, 'on');
+});
+
+test('Fast off explicitly selects the standard turn tier', async (t) => {
+  const handler = baseHandler();
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'model/list') return send({ id: request.id, result: { data: [{ id: role.model, supportedReasoningEfforts: [], serviceTiers: [] }] } });
+    return handler(request, send);
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const result = await client.run({ role: { ...role, fastMode: 'off' }, cwd: '/tmp/project', input: 'hello' });
+  assert.equal(fake.getChild().sent.find(({ method }) => method === 'turn/start').params.serviceTierForTurn, 'default');
+  assert.equal(fake.getChild().sent.some(({ method }) => method === 'model/list'), false);
+  assert.equal(result.usage.serviceTierForTurn, 'default');
+});
+
+test('Fast on with unknown capability metadata fails before creating a turn', async (t) => {
+  const handler = baseHandler();
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'model/list') return send({ id: request.id, result: { data: [] } });
+    return handler(request, send);
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  await assert.rejects(client.run({ role: { ...role, fastMode: 'on' }, cwd: '/tmp/project', input: 'hello' }), /Service tier capability is unknown/);
+  assert.equal(fake.getChild().sent.some(({ method }) => method === 'turn/start'), false);
+});
+
+test('account usage handshake uses one ephemeral read-only low-effort turn in a disposable cwd', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 15_000, turnTimeoutMs: 90_000 });
+  t.after(() => client.close());
+
+  const result = await client.startAccountUsageWindow();
+  assert.equal(result.status, 'completed');
+  const sent = fake.getChild().sent;
+  const threadStart = sent.find(({ method }) => method === 'thread/start');
+  const turnStart = sent.find(({ method }) => method === 'turn/start');
+  assert.equal(threadStart.params.ephemeral, true);
+  assert.equal(threadStart.params.model, 'gpt-6.1-sol');
+  assert.ok(fs.statSync(path.dirname(threadStart.params.cwd)).isDirectory());
+  assert.equal(fs.existsSync(threadStart.params.cwd), false, 'scratch cwd is removed after the completed turn');
+  assert.equal(threadStart.params.config['features.apps'], false);
+  assert.equal(threadStart.params.config['features.plugins'], false);
+  assert.equal(threadStart.params.config['skills.bundled.enabled'], false);
+  assert.equal(threadStart.params.config['mcp_servers.alpha.enabled'], false);
+  assert.equal(threadStart.params.config['mcp_servers.gamma.enabled'], false);
+  assert.equal(threadStart.params.config['mcp_servers.beta.enabled'], false);
+  assert.equal(turnStart.params.model, 'gpt-6.1-sol');
+  assert.equal(turnStart.params.effort, 'low');
+  assert.deepEqual(turnStart.params.input, [{ type: 'text', text: 'Reply OK.' }]);
+  assert.deepEqual(turnStart.params.sandboxPolicy, { type: 'readOnly', networkAccess: false });
+});
+
 test('waits for thread-scoped background terminal cleanup before resolving', async (t) => {
   let cleanupRequest;
   const handler = (request, send) => {
@@ -142,8 +213,8 @@ test('waits for thread-scoped background terminal cleanup before resolving', asy
     if (request.method === 'thread/backgroundTerminals/clean') cleanupRequest = request;
   };
   handler.ownsBackgroundTerminalCleanup = true;
-  const fake = fakeSpawn(handler);
-  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  const fake = fakeSpawn(handler, { pidBase: 4000 });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: identityOf });
   t.after(() => client.close());
 
   let settled = false;
@@ -153,7 +224,12 @@ test('waits for thread-scoped background terminal cleanup before resolving', asy
   assert.equal(settled, false);
   await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'overlap', threadId: 'thread-clean' }), /already active/);
   fake.getChild().stdout.write(`${JSON.stringify({ id: cleanupRequest.id, result: {} })}\n`);
-  assert.equal((await pending).status, 'completed');
+  const result = await pending;
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(result.execution.cleanupReceipt, {
+    version: 1, method: 'thread/backgroundTerminals/clean', scope: 'provider-managed-background-terminals',
+    completion: 'confirmed', generation: 1, processIdentity: identityOf(4000), threadId: 'thread-clean', turnId: 'turn-clean',
+  });
 });
 
 test('reports cleanup RPC failure with the confirmed model outcome preserved', async (t) => {
@@ -174,6 +250,7 @@ test('reports cleanup RPC failure with the confirmed model outcome preserved', a
 
   await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'fail' }), (error) => {
     assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
+    assert.equal(error.execution.cleanupReceipt, undefined);
     assert.equal(error.outcomeUnknown, true);
     assert.deepEqual(error.originalTurnOutcome, { status: 'failed', terminal: true, failureClass: 'domain_failure', message: 'model failed' });
     assert.equal(error.originalError.message, 'model failed');
@@ -283,6 +360,7 @@ test('rechecks quarantine after awaited setup before admitting a turn', async (t
 
   await assert.rejects(client.run({ role, cwd: '/tmp/first', input: 'first' }), (error) => {
     assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
+    assert.equal(error.execution.cleanupReceipt, undefined);
     assert.equal(error.outcomeUnknown, true);
     return true;
   });
@@ -316,8 +394,8 @@ test('cleanup ignores an abort signal but reports it after acknowledgement', asy
     if (request.method === 'thread/backgroundTerminals/clean') cleanupRequest = request;
   };
   handler.ownsBackgroundTerminalCleanup = true;
-  const fake = fakeSpawn(handler);
-  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  const fake = fakeSpawn(handler, { pidBase: 4000 });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: identityOf });
   t.after(() => client.close());
   const controller = new AbortController();
   let settled = false;
@@ -331,8 +409,24 @@ test('cleanup ignores an abort signal but reports it after acknowledgement', asy
   controller.abort();
   assert.equal(settled, false);
   fake.getChild().stdout.write(`${JSON.stringify({ id: cleanupRequest.id, result: {} })}\n`);
-  await assert.rejects(pending, { name: 'AbortError' });
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.name, 'AbortError');
+    assert.equal(error.execution.cleanupReceipt?.completion, 'confirmed');
+    return true;
+  });
   assert.equal(settled, true);
+});
+
+test('failed terminal carries confirmed cleanup receipt', async (t) => {
+  const fake = fakeSpawn(baseHandler(), { pidBase: 4000 });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: identityOf });
+  t.after(() => client.close());
+  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'fail' }), (error) => {
+    assert.equal(error.failureClass, 'domain_failure');
+    assert.equal(error.execution.cleanupReceipt?.completion, 'confirmed');
+    assert.equal(error.execution.cleanupReceipt?.turnId, error.execution.turnId);
+    return true;
+  });
 });
 
 test('bounds cleanup RPC time and preserves the terminal outcome', async (t) => {
@@ -378,6 +472,51 @@ test('does not send cleanup after the run generation has changed', async (t) => 
     return true;
   });
   assert.equal(fake.getChild().sent.some(({ method }) => method === 'thread/backgroundTerminals/clean'), false);
+});
+
+
+test('cleanup receipt rejects malformed responses and generation or process replacement', async (t) => {
+  for (const mode of ['malformed', 'generation', 'process', 'missing']) {
+    await t.test(mode, async (t) => {
+      let request;
+      let observed = identityOf(4000);
+      const handler = (message, send) => {
+        if (message.method === 'initialize') send({ id: message.id, result: {} });
+        if (message.method === 'thread/start') send({ id: message.id, result: { thread: { id: 'receipt-thread' } } });
+        if (message.method === 'turn/start') {
+          send({ id: message.id, result: { turn: { id: 'receipt-turn' } } });
+          send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: { id: 'receipt-turn', status: 'completed' } } });
+        }
+        if (message.method === 'thread/backgroundTerminals/clean') request = message;
+      };
+      handler.ownsBackgroundTerminalCleanup = true;
+      const fake = fakeSpawn(handler, { pidBase: 4000 });
+      const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: () => observed });
+      t.after(() => client.close());
+      if (mode === 'generation') {
+        const originalRequest = client._request.bind(client);
+        client._request = async (method, ...args) => {
+          const result = await originalRequest(method, ...args);
+          if (method === 'thread/backgroundTerminals/clean') client.generation += 1;
+          return result;
+        };
+      }
+      const pending = client.run({ role, cwd: '/tmp/project', input: 'receipt' });
+      await waitForRequest(() => fake.getChild(), 'thread/backgroundTerminals/clean');
+      if (mode === 'process') observed = { ...observed, startTime: '456' };
+      if (mode === 'missing') observed = null;
+      fake.getChild().stdout.write(`${JSON.stringify({ id: request.id, result: mode === 'malformed' ? [] : {} })}\n`);
+      if (mode === 'missing') {
+        assert.equal((await pending).execution.cleanupReceipt, undefined);
+      } else {
+        await assert.rejects(pending, (error) => {
+          assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
+          assert.equal(error.execution.cleanupReceipt, undefined);
+          return true;
+        });
+      }
+    });
+  }
 });
 
 test('routes concurrent turns to their owning run', async (t) => {
@@ -687,7 +826,13 @@ test('surfaces failed turns with the server error', async (t) => {
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
 
-  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'fail' }), /planned failure/);
+  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'fail' }), (error) => {
+    assert.match(error.message, /planned failure/);
+    assert.equal(error.execution.turnTerminal, true);
+    assert.deepEqual(error.terminalTurn, { id: 'turn-1', status: 'failed',
+      error: { message: 'planned failure', code: null, type: null, param: null }, itemTypes: [] });
+    return true;
+  });
 });
 
 test('keeps codexErrorInfo on a failed turn error', async (t) => {
@@ -860,6 +1005,7 @@ test('onTurnStart runs before turn/start is written and receives the identity', 
   assert.deepEqual(seen, { processIdentity: identityOf(4000), threadId: 'thread-1' });
   assert.deepEqual(result.execution, {
     processIdentity: identityOf(4000), generation: 1, threadId: 'thread-1', turnId: 'turn-1', turnStartSent: true, turnStartRejected: false, turnTerminal: true,
+    cleanupReceipt: { version: 1, method: 'thread/backgroundTerminals/clean', scope: 'provider-managed-background-terminals', completion: 'confirmed', generation: 1, processIdentity: identityOf(4000), threadId: 'thread-1', turnId: 'turn-1' },
   });
   assert.equal(client.processIdentity().pid, 4000);
 });
@@ -1402,7 +1548,10 @@ test('inherits trusted native writer and inspector profiles on new and resumed t
 
   await client.run({ role, cwd: '/tmp/project', input: 'writer', executionPermissions: 'inherit' });
   await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/tmp/project', input: 'inspector', executionPermissions: 'inherit' });
-  await client.run({ role, cwd: '/tmp/project', input: 'resumed', threadId: 'old-native-thread', executionPermissions: 'inherit' });
+  const verifier = await client.run({
+    role: { ...role, id: 'verifier', name: 'verifier' }, cwd: '/tmp/project', input: 'resumed',
+    threadId: 'old-native-thread', executionPermissions: 'inherit',
+  });
 
   const sent = fake.getChild().sent;
   const writerStart = sent.find(({ method }) => method === 'thread/start');
@@ -1419,6 +1568,254 @@ test('inherits trusted native writer and inspector profiles on new and resumed t
   assert.deepEqual(turnStarts.map(({ params }) => params.permissions), [':danger-full-access', ':read-only', ':danger-full-access']);
   assert.ok(turnStarts.every(({ params }) => !Object.hasOwn(params, 'sandboxPolicy')));
   assert.ok(turnStarts.every(({ params }) => params.approvalPolicy === 'never'));
+  assert.equal(verifier.permissionConfig.verifierIpcNetworkAccess, true);
+});
+
+test('legacy workspace-write grants verifier network access while preserving native roots and other roles', async (t) => {
+  const handler = baseHandler();
+  const inherited = (request, send) => {
+    if (request.method === 'config/read') {
+      return send({ id: request.id, result: { config: {
+        projects: { '/tmp/project': { trust_level: 'trusted' } },
+        sandbox_mode: 'workspace-write',
+        sandbox_workspace_write: {
+          writable_roots: ['/tmp/extra'], network_access: false,
+          exclude_tmpdir_env_var: true, exclude_slash_tmp: true,
+        },
+        approval_policy: 'on-request', mcp_servers: {},
+      } } });
+    }
+    if (request.method === 'permissionProfile/list') {
+      return send({ id: request.id, result: { data: [{ id: ':read-only', allowed: true }] } });
+    }
+    return handler(request, send);
+  };
+  inherited.ownsConfigRead = true;
+  const fake = fakeSpawn(inherited);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const verifier = await client.run({ role: { ...role, id: 'orch-verifier', name: 'verifier' }, cwd: '/tmp/project', input: 'verify', executionPermissions: 'inherit' });
+  await client.run({ role: { ...role, id: 'engineer' }, cwd: '/tmp/project', input: 'write', executionPermissions: 'inherit' });
+  await client.run({ role: { ...role, id: 'verifier', name: 'verifier', sandbox: 'read-only' }, cwd: '/tmp/project', input: 'inspect', executionPermissions: 'inherit' });
+
+  const sent = fake.getChild().sent;
+  const turns = sent.filter(({ method }) => method === 'turn/start');
+  assert.deepEqual(turns.map(({ params }) => params.sandboxPolicy), [
+    {
+      type: 'workspaceWrite', writableRoots: ['/tmp/project', '/tmp/extra'], networkAccess: true,
+      excludeTmpdirEnvVar: true, excludeSlashTmp: true,
+    },
+    {
+      type: 'workspaceWrite', writableRoots: ['/tmp/project', '/tmp/extra'], networkAccess: false,
+      excludeTmpdirEnvVar: true, excludeSlashTmp: true,
+    },
+    { type: 'readOnly', networkAccess: false },
+  ]);
+  assert.equal(verifier.permissionConfig.verifierIpcNetworkAccess, true);
+});
+
+test('native lane capability remaps only the implicit root and preserves fresh and resumed legacy policy', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'native-lane-app-server-'));
+  const workspace = path.join(root, 'workspace');
+  const lanePath = path.join(root, 'lanes', 'lane-current');
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.mkdirSync(lanePath, { recursive: true });
+  const db = new Database(':memory:');
+  t.after(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const permissionMode = {
+    mode: 'inherit', profileApi: false, sandboxMode: 'workspace-write',
+    sandboxWorkspaceWrite: {
+      writable_roots: [path.join(root, 'extra'), workspace], network_access: false,
+      exclude_tmpdir_env_var: true, exclude_slash_tmp: true,
+    },
+    approvalPolicy: 'on-request', approvalsReviewer: 'user',
+  };
+  const manager = new LaneManager({
+    db, workspace, admission: { isFenced: () => false }, mode: 'cooperative', lanesRoot: path.join(root, 'lanes'),
+    lanePolicyBinding: nativeWorkspaceWriteBinding(permissionMode, workspace),
+  });
+  manager.store.insert({ laneId: 'lane-current', contextId: 'ctx', workspace, path: lanePath });
+  manager.store.update('lane-current', { state: 'prepared' });
+  const lane = { id: 'lane-current', path: lanePath, workspacePath: lanePath };
+  const capability = manager.sandboxPolicy(lane);
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  client.resolveExecutionPermissions = async () => permissionMode;
+  t.after(() => client.close());
+
+  const args = { role, cwd: lanePath, permissionWorkspace: workspace, input: 'native lane', executionPermissions: 'inherit', sandboxPolicy: capability };
+  const prepared = await client.prepareThread({ role, cwd: lanePath, permissionWorkspace: workspace,
+    executionPermissions: 'inherit', sandboxPolicy: capability });
+  const preparedPolicy = JSON.parse(client.threadExecutionPolicies.get(prepared.threadId));
+  assert.deepEqual(preparedPolicy.turnPermissions.sandboxPolicy, {
+    type: 'workspaceWrite', writableRoots: [lanePath, path.join(root, 'extra'), workspace], networkAccess: false,
+    excludeTmpdirEnvVar: true, excludeSlashTmp: true,
+  });
+  const first = await client.run({ ...args, threadId: prepared.threadId });
+  const firstTurn = fake.getChild().sent.find(({ method }) => method === 'turn/start');
+  assert.deepEqual(firstTurn.params.sandboxPolicy, {
+    type: 'workspaceWrite', writableRoots: [lanePath, path.join(root, 'extra'), workspace], networkAccess: false,
+    excludeTmpdirEnvVar: true, excludeSlashTmp: true,
+  });
+  assert.equal(firstTurn.params.approvalPolicy, 'on-request');
+  assert.equal(firstTurn.params.approvalsReviewer, 'user');
+
+  client.loadedThreads.delete(first.threadId);
+  const resumed = await client.run({ ...args, threadId: first.threadId, sandboxPolicy: manager.sandboxPolicy(lane) });
+  const resume = fake.getChild().sent.find(({ method }) => method === 'thread/resume');
+  const turns = fake.getChild().sent.filter(({ method }) => method === 'turn/start');
+  assert.equal(resume.params.cwd, lanePath);
+  assert.equal(resume.params.approvalPolicy, 'on-request');
+  assert.equal(resumed.threadId, first.threadId);
+  assert.deepEqual(turns[1].params.sandboxPolicy, firstTurn.params.sandboxPolicy);
+  assert.equal(turns[1].params.approvalsReviewer, 'user');
+
+  const verifierRole = { ...role, id: 'verifier', name: 'verifier' };
+  const verifierCapability = manager.sandboxPolicy(lane);
+  const verifierPrepared = await client.prepareThread({ role: verifierRole, cwd: lanePath, permissionWorkspace: workspace,
+    executionPermissions: 'inherit', sandboxPolicy: verifierCapability });
+  const verifierPreparedPolicy = JSON.parse(client.threadExecutionPolicies.get(verifierPrepared.threadId));
+  assert.equal(verifierPreparedPolicy.turnPermissions.sandboxPolicy.networkAccess, true);
+  assert.deepEqual(verifierPreparedPolicy.turnPermissions.sandboxPolicy.writableRoots, [lanePath, path.join(root, 'extra'), workspace]);
+  assert.equal(verifierPreparedPolicy.turnPermissions.sandboxPolicy.excludeTmpdirEnvVar, true);
+  const verifier = await client.run({ ...args, role: verifierRole, threadId: verifierPrepared.threadId, input: 'verify', sandboxPolicy: manager.sandboxPolicy(lane) });
+  const verifierTurn = fake.getChild().sent.filter(({ method }) => method === 'turn/start')[2];
+  assert.equal(verifierTurn.params.sandboxPolicy.networkAccess, true);
+  assert.equal(verifier.permissionConfig.verifierIpcNetworkAccess, true);
+});
+
+test('native lane capability rejects stale policy, mismatched identity, forged JSON and a fenced lane at send', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'native-lane-reject-'));
+  const workspace = path.join(root, 'workspace');
+  const otherWorkspace = path.join(root, 'other-workspace');
+  const lanePath = path.join(root, 'lanes', 'lane-current');
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.mkdirSync(otherWorkspace, { recursive: true });
+  fs.mkdirSync(lanePath, { recursive: true });
+  const db = new Database(':memory:');
+  t.after(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const permissionMode = {
+    mode: 'inherit', profileApi: false, sandboxMode: 'workspace-write', sandboxWorkspaceWrite: {},
+    approvalPolicy: 'on-request', approvalsReviewer: 'user',
+  };
+  let fenced = false;
+  const manager = new LaneManager({ db, workspace, admission: { isFenced: () => fenced }, mode: 'cooperative', lanesRoot: path.join(root, 'lanes'),
+    lanePolicyBinding: nativeWorkspaceWriteBinding(permissionMode, workspace) });
+  manager.store.insert({ laneId: 'lane-current', contextId: 'ctx', workspace, path: lanePath });
+  manager.store.update('lane-current', { state: 'prepared' });
+  const capability = manager.sandboxPolicy({ id: 'lane-current', path: lanePath, workspacePath: lanePath });
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  client.resolveExecutionPermissions = async () => permissionMode;
+  t.after(() => client.close());
+  const args = { role, cwd: lanePath, permissionWorkspace: workspace, input: 'must deny', executionPermissions: 'inherit', sandboxPolicy: capability };
+  await assert.rejects(client.run({ ...args, cwd: otherWorkspace }), /identity is no longer current/);
+  await assert.rejects(client.run({ ...args, permissionWorkspace: otherWorkspace }), /identity is no longer current/);
+  await assert.rejects(client.run({ ...args, sandboxPolicy: JSON.parse(JSON.stringify(capability)) }), /host-owned capability/);
+  permissionMode.sandboxWorkspaceWrite = { network_access: true };
+  await assert.rejects(client.run(args), /policy changed after lane admission/);
+  assert.equal(fake.getChildren().length, 0);
+  permissionMode.sandboxWorkspaceWrite = {};
+  const freshCapability = manager.sandboxPolicy({ id: 'lane-current', path: lanePath, workspacePath: lanePath });
+  await assert.rejects(client.run({ ...args, sandboxPolicy: freshCapability, onTurnStart() { fenced = true; } }), /identity is no longer current/);
+  assert.equal(fake.getChild().sent.some(({ method }) => method === 'turn/start'), false);
+});
+
+test('actual legacy config selection binds fresh native settings and rejects a change after thread start', async (t) => {
+  const workspace = makeRepo();
+  const stateDir = tmp('native-lane-resolved-state-');
+  const db = new Database(':memory:');
+  t.after(() => { db.close(); fs.rmSync(workspace, { recursive: true, force: true }); fs.rmSync(stateDir, { recursive: true, force: true }); });
+  let nativeConfig = {
+    projects: { [workspace]: { trust_level: 'trusted' } },
+    sandbox_mode: 'workspace-write',
+    sandbox_workspace_write: { writable_roots: [], network_access: false, exclude_tmpdir_env_var: true, exclude_slash_tmp: true },
+    approval_policy: 'on-request', approvals_reviewer: 'user', mcp_servers: {},
+  };
+  let threadStarted = false;
+  let configReads = 0;
+  const handler = baseHandler();
+  const legacy = (request, send) => {
+    if (request.method === 'config/read') {
+      configReads += 1;
+      return send({ id: request.id, result: { config: nativeConfig } });
+    }
+    if (request.method === 'permissionProfile/list') {
+      return send({ id: request.id, result: { data: [{ id: ':read-only', allowed: true }] } });
+    }
+    handler(request, send);
+    if (request.method === 'thread/start') {
+      threadStarted = true;
+      nativeConfig = { ...nativeConfig, approval_policy: 'never', sandbox_workspace_write: { ...nativeConfig.sandbox_workspace_write, network_access: true } };
+    }
+  };
+  legacy.ownsConfigRead = true;
+  const fake = fakeSpawn(legacy);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+  const isolation = await selectWriterIsolation({
+    env: {}, appServer: client, workspace, db, stateFile: path.join(stateDir, 'state.sqlite'),
+  });
+  assert.equal(isolation.mode, 'cooperative');
+  assert.equal(isolation.reason, 'trusted_native_workspace_write_cooperative');
+  const manager = new LaneManager({ db, workspace, admission: { isFenced: () => false }, ...isolation });
+  const prepared = await manager.prepare({ contextId: 'legacy-context', taskId: 'legacy-task' });
+  manager.markRunning(prepared.lane);
+  const capability = manager.sandboxPolicy(prepared.lane);
+
+  await assert.rejects(client.run({
+    role, cwd: prepared.lane.workspacePath, permissionWorkspace: workspace, input: 'policy drift',
+    executionPermissions: 'inherit', sandboxPolicy: capability,
+  }), /policy changed after lane admission/);
+  assert.equal(threadStarted, true);
+  assert.ok(configReads >= 2, 'lane send validation must refresh cached config');
+  assert.equal(fake.getChild().sent.some(({ method }) => method === 'turn/start'), false);
+});
+
+test('legacy danger-full-access verifier policy remains full-access without a synthetic workspace policy', async (t) => {
+  const handler = baseHandler();
+  const inherited = (request, send) => {
+    if (request.method === 'config/read') return send({ id: request.id, result: { config: {
+      projects: { '/tmp/project': { trust_level: 'trusted' } }, sandbox_mode: 'danger-full-access', mcp_servers: {},
+    } } });
+    if (request.method === 'permissionProfile/list') return send({ id: request.id, result: { data: [{ id: ':read-only', allowed: true }] } });
+    return handler(request, send);
+  };
+  inherited.ownsConfigRead = true;
+  const fake = fakeSpawn(inherited);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const result = await client.run({
+    role: { ...role, id: 'verifier', name: 'verifier' }, cwd: '/tmp/project', input: 'verify', executionPermissions: 'inherit',
+  });
+
+  const turnStart = fake.getChild().sent.find(({ method }) => method === 'turn/start');
+  assert.deepEqual(turnStart.params.sandboxPolicy, { type: 'dangerFullAccess' });
+  assert.equal(result.permissionConfig.verifierIpcNetworkAccess, true);
+});
+
+test('a continued strict verifier thread updates its policy to network access without widening roots', async (t) => {
+  const fake = fakeSpawn(baseHandler());
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const initial = await client.run({ role: { ...role, id: 'engineer' }, cwd: '/tmp/project', input: 'initial' });
+  const verifier = await client.run({
+    role: { ...role, name: 'verifier' }, cwd: '/tmp/project', input: 'verify', threadId: initial.threadId,
+    sandboxPolicy: laneSandboxPolicy({ workspacePath: '/tmp/project/lane' }), executionPermissions: 'strict',
+  });
+
+  const sent = fake.getChild().sent;
+  const update = sent.find(({ method, params }) => method === 'thread/settings/update' && params.sandboxPolicy?.networkAccess === true);
+  assert.deepEqual(update.params.sandboxPolicy, {
+    type: 'workspaceWrite', writableRoots: ['/tmp/project/lane'], networkAccess: true,
+    excludeTmpdirEnvVar: false, excludeSlashTmp: false,
+  });
+  const verifierTurn = sent.filter(({ method }) => method === 'turn/start')[1];
+  assert.deepEqual(verifierTurn.params.sandboxPolicy, update.params.sandboxPolicy);
+  assert.equal(verifier.permissionConfig.verifierIpcNetworkAccess, true);
 });
 
 test('updates a loaded strict thread before using inherited native permissions', async (t) => {
@@ -1459,6 +1856,56 @@ test('updates a loaded strict thread before using inherited native permissions',
   const inheritedTurn = sent.filter(({ method }) => method === 'turn/start')[1];
   assert.equal(inheritedTurn.params.permissions, ':danger-full-access');
   assert.equal(inheritedTurn.params.approvalPolicy, 'never');
+});
+
+test('owner full-access upgrades loaded read-only threads and revalidates the allowed profile before each turn', async (t) => {
+  const handler = baseHandler();
+  let dangerAllowed = true;
+  const configured = (request, send) => {
+    if (request.method === 'config/read') {
+      return send({ id: request.id, result: { config: {
+        projects: { '/tmp/project': { trust_level: 'trusted' } },
+        default_permissions: ':workspace',
+        approval_policy: 'on-request',
+        mcp_servers: {},
+      } } });
+    }
+    if (request.method === 'permissionProfile/list') {
+      return send({ id: request.id, result: { data: [
+        { id: ':read-only', allowed: true },
+        { id: ':workspace', allowed: true },
+        { id: ':danger-full-access', allowed: dangerAllowed },
+      ] } });
+    }
+    return handler(request, send);
+  };
+  configured.ownsConfigRead = true;
+  const fake = fakeSpawn(configured);
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+  t.after(() => client.close());
+
+  const strict = await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/tmp/project', input: 'strict', executionPermissions: 'strict' });
+  await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/tmp/project', input: 'full', threadId: strict.threadId, executionPermissions: 'full-access' });
+
+  const sent = fake.getChild().sent;
+  const updateIndex = sent.findIndex(({ method, params }) => method === 'thread/settings/update' && params.permissions === ':danger-full-access');
+  assert.ok(updateIndex > 0);
+  assert.deepEqual(sent[updateIndex - 1].params, { threadId: strict.threadId, sandboxPolicy: null });
+  assert.deepEqual(sent[updateIndex].params, {
+    threadId: strict.threadId, permissions: ':danger-full-access',
+    approvalPolicy: 'never', approvalsReviewer: 'user',
+  });
+  const fullTurn = sent.filter(({ method }) => method === 'turn/start')[1];
+  assert.equal(fullTurn.params.permissions, ':danger-full-access');
+  assert.equal(fullTurn.params.approvalPolicy, 'never');
+  assert.equal(fullTurn.params.approvalsReviewer, 'user');
+
+  const sendMethodsBeforeDenied = sent.filter(({ method }) => ['thread/start', 'thread/resume', 'thread/settings/update', 'turn/start'].includes(method)).length;
+  dangerAllowed = false;
+  await assert.rejects(client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/tmp/project', input: 'deny',
+    threadId: strict.threadId, executionPermissions: 'full-access' }), { code: 'full_access_unavailable' });
+  assert.equal(fake.getChild().sent.filter(({ method }) => ['thread/start', 'thread/resume', 'thread/settings/update', 'turn/start'].includes(method)).length,
+    sendMethodsBeforeDenied);
 });
 
 test('reuses the applied policy for a loaded thread without settings updates', async (t) => {
@@ -1637,21 +2084,13 @@ test('thread/resume carries the tool config after a child replacement', async (t
   assert.equal(resume.params.config['features.plugins'], false);
 });
 
-test('enumeration failure still sends apps/plugins/skills overrides and marks enforced false', async (t) => {
+test('enumeration failure refuses the turn when MCP limits cannot be enforced', async (t) => {
   const fake = fakeSpawn(toolHandler(baseHandler(), (request, send) => send({ id: request.id, error: { code: -32601, message: 'nope' } })));
   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
   t.after(() => client.close());
-  const result = await client.run({ role: toolRole({ mcpServers: ['alpha'], skills: false }), cwd: '/tmp/work', input: 'hi' });
-  const start = fake.getChild().sent.find(({ method }) => method === 'thread/start');
-  assert.deepEqual(start.params.config, {
-    'features.apps': false,
-    'features.plugins': false,
-    tool_output_token_limit: 3000,
-    'skills.include_instructions': false,
-    'skills.bundled.enabled': false,
-  });
-  assert.equal(result.permissionConfig.toolPolicy.enforced, false);
-  assert.match(result.permissionConfig.toolPolicy.reason, /enumeration failed/);
+  await assert.rejects(client.run({ role: toolRole({ mcpServers: ['alpha'], skills: false }), cwd: '/tmp/work', input: 'hi' }),
+    (error) => error.failureClass === 'request_rejected' && /cannot enforce.*enumeration failed/i.test(error.message));
+  assert.equal(fake.getChild().sent.some(({ method }) => ['thread/start', 'thread/resume', 'turn/start'].includes(method)), false);
 });
 
 function inventoryHandler(names) {
@@ -1819,7 +2258,7 @@ test('selected skills are explicit turn inputs with scoped boundary and hash pro
   const threadStart = fake.getChild().sent.find(({ method }) => method === 'thread/start');
   assert.match(threadStart.params.developerInstructions, /scoped engineering guidance only/);
   assert.match(threadStart.params.developerInstructions, /cannot authorize git operations, new agents, broader writes, tools, or approvals/);
-  assert.deepEqual(result.permissionConfig.selectedSkills, [{ id: 'entity-query-analyzer', sha256: selectedSkills[0].sha256 }]);
+  assert.deepEqual(result.permissionConfig.selectedSkills, [{ id: 'actor-model', sha256: selectedSkills[0].sha256 }]);
   assert.deepEqual(threadStart.params.config, {
     'features.apps': false,
     'features.plugins': false,

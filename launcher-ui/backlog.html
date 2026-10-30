@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backlog and team - Codex Control Plane</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+  <link rel="stylesheet" href="/ui/backlog.css">
+</head>
+<body>
+  <main class="backlog-page">
+    <header class="backlog-header">
+      <div><a href="/" id="backlogHome">Control plane</a><h1>Backlog and team</h1></div>
+      <label for="backlogObjective">Delivery objective</label>
+      <select id="backlogObjective" aria-label="Delivery objective" disabled><option>Loading objectives...</option></select>
+      <button id="backlogRefresh" class="btn btn-secondary btn-sm" type="button">Refresh</button>
+    </header>
+    <p id="backlogStatus" role="status" aria-live="polite">Loading read-only delivery state...</p>
+    <section class="backlog-steering" aria-labelledby="steeringHeading">
+      <h2 id="steeringHeading">Message the lead</h2>
+      <p id="steeringStatus" role="status" aria-live="polite">Owner steering is available for an active concurrent objective.</p>
+      <form id="steeringForm">
+        <label for="steeringText">Message</label>
+        <textarea id="steeringText" maxlength="2000" rows="3" placeholder="Add a short instruction for the lead..."></textarea>
+        <button id="steeringSend" class="btn btn-primary btn-sm" type="submit" disabled>Send to lead</button>
+      </form>
+      <p id="steeringReply"></p>
+    </section>
+    <section class="backlog-summary" aria-label="Delivery summary">
+      <div><span>Ready</span><strong id="readyCount">-</strong></div>
+      <div><span>Blocked</span><strong id="blockedCount">-</strong></div>
+      <div><span>Unknown readiness</span><strong id="unknownCount">-</strong></div>
+      <div><span>Active in objective</span><strong id="activeCount">-</strong></div>
+      <div><span>Project claims</span><strong id="projectActiveCount">-</strong></div>
+      <div><span>Configured worker ceiling</span><strong id="configuredCapacity">Unknown</strong></div>
+      <div><span>Effective runtime capacity</span><strong id="effectiveCapacity">Unknown</strong></div>
+      <div><span>Planner activity (session)</span><strong id="plannerSummary">Unknown</strong></div>
+      <div><span>Inbox (objective)</span><strong id="inboxSummary">Unknown</strong></div>
+    </section>
+    <section aria-labelledby="roleHeading">
+      <h2 id="roleHeading">Role occupancy across the project</h2>
+      <div id="roleOccupancy" aria-live="polite">Unknown</div>
+    </section>
+    <section aria-labelledby="idleHeading">
+      <h2 id="idleHeading">Why slots may be idle</h2>
+      <div id="idleKnown"><h3>Known</h3><p>Unknown until delivery state is available.</p></div>
+      <div id="idleUnknown"><h3>Unknown</h3><p>Unknown until delivery state is available.</p></div>
+    </section>
+    <section aria-labelledby="tasksHeading">
+      <h2 id="tasksHeading">Tasks</h2>
+      <div class="backlog-table-wrap"><table class="backlog-table">
+        <thead><tr><th>Task</th><th>State</th><th>Readiness</th><th>Role</th><th>Why waiting</th><th>Attempts and provenance</th></tr></thead>
+        <tbody id="backlogRows"><tr><td colspan="6">No delivery backlog loaded.</td></tr></tbody>
+      </table></div>
+      <button id="backlogNext" class="btn btn-secondary btn-sm" type="button" disabled>Load more</button>
+    </section>
+  </main>
+  <script src="/ui/backlog.js"></script>
+</body>
+</html>

@@ -340,7 +340,7 @@ test('the prior checkpoint state is not mutated while applying a new observation
 
 const REVIEW = { kind: 'risk_change', checkpointId: 'cp-1', reason: 'r', paths: ['src/a.js'], evidenceIds: [] };
 
-function reviewObservation({ role = 'verifier', round, review = REVIEW, target = 'tree-A', summary, implemented = false } = {}) {
+function reviewObservation({ role = 'verifier', round, review = REVIEW, target = 'tree-A', summary, implemented = false, resolvedRecurrence = false, ignoreRecurrence = false, serviceAccepted = false } = {}) {
   const item = {
     assignmentId: `run:r${round}:a0`,
     attemptId: `attempt-${round}`,
@@ -357,8 +357,11 @@ function reviewObservation({ role = 'verifier', round, review = REVIEW, target =
       attemptId: item.attemptId,
       objective: item.assignment.objective,
       report: { outcome: 'completed', summary: summary || `Round ${round} found different detail ${round}`, filesInspected: [`src/n${round}.js`], checks: [], risks: [`risk ${round}`] },
+      ...(serviceAccepted ? { reviewResult: { status: 'accepted', accepted: true, valid: true } } : {}),
     }),
     implemented,
+    resolvedRecurrence,
+    ignoreRecurrence,
   });
 }
 
@@ -376,6 +379,46 @@ test('the same checkpoint, role class, and target pauses on the third round even
   assert.equal(state.pause.roleClass, 'verify');
   assert.deepEqual(state.pause.rounds, [1, 2, 3]);
   assert.deepEqual(state.pause.references.map((entry) => entry.attemptId), ['attempt-1', 'attempt-2', 'attempt-3']);
+});
+
+test('a newly accepted receipt clears its failure recurrence but later repeated failures still pause', () => {
+  let state = observeLoopGuard(null, 1, [reviewObservation({ round: 1 })]);
+  state = observeLoopGuard(state, 2, [reviewObservation({ round: 2 })]);
+  assert.equal(state.recurrence[0].count, 2);
+
+  state = observeLoopGuard(state, 3, [reviewObservation({ round: 3, resolvedRecurrence: true })]);
+  assert.equal(state.pause, undefined);
+  assert.equal(state.recurrence.some((entry) => entry.checkpoint === REVIEW.checkpointId), false);
+
+  state = observeLoopGuard(state, 4, [reviewObservation({ round: 4 })]);
+  state = observeLoopGuard(state, 5, [reviewObservation({ round: 5 })]);
+  assert.equal(state.pause, undefined);
+  state = observeLoopGuard(state, 6, [reviewObservation({ round: 6 })]);
+  assert.equal(state.pause.recurrence, true);
+  assert.equal(state.pause.attempts, 3);
+  assert.deepEqual(state.pause.rounds, [4, 5, 6]);
+});
+
+test('a service acceptance claim alone does not clear recurrence history', () => {
+  let state = observeLoopGuard(null, 1, [reviewObservation({ round: 1 })]);
+  state = observeLoopGuard(state, 2, [reviewObservation({ round: 2 })]);
+  state = observeLoopGuard(state, 3, [reviewObservation({ round: 3, serviceAccepted: true })]);
+  assert.equal(state.pause.recurrence, true);
+  assert.equal(state.pause.attempts, 3);
+});
+
+test('a pre-turn stale endpoint rejection can omit recurrence without clearing prior history', () => {
+  let state = observeLoopGuard(null, 1, [reviewObservation({ round: 1 })]);
+  const recurrenceKey = state.recurrence[0].key;
+  state = observeLoopGuard(state, 2, [reviewObservation({ round: 2, ignoreRecurrence: true })]);
+  assert.equal(state.pause, undefined);
+  assert.equal(state.recurrence.find((entry) => entry.key === recurrenceKey).count, 1);
+
+  state = observeLoopGuard(state, 3, [reviewObservation({ round: 3 })]);
+  assert.equal(state.pause, undefined);
+  state = observeLoopGuard(state, 4, [reviewObservation({ round: 4 })]);
+  assert.equal(state.pause.recurrence, true);
+  assert.deepEqual(state.pause.rounds, [1, 3, 4]);
 });
 
 test('an unrelated implementation preserves recurrence history across a serialized restart', () => {

@@ -123,7 +123,9 @@
 
     <nav class="page-nav" aria-label="Main navigation">
       <a class="page-nav-link is-current" href="/">Control plane</a>
+      <a class="page-nav-link" id="rolesNavLink" href="/ui/roles.html">Roles</a>
       <a class="page-nav-link" id="performanceNavLink" href="/ui/performance.html">Performance</a>
+      <a class="page-nav-link" id="backlogNavLink" href="/ui/backlog.html">Backlog</a>
     </nav>
 
     <!-- Server status and controls in the navbar -->
@@ -192,6 +194,7 @@
           <button class="icon-btn" id="accountsRefreshBtn" aria-label="Refresh accounts & rate limits" data-tooltip="Refresh accounts & rate limits">
             <svg class="icon"><use href="#i-refresh-cw"/></svg>
           </button>
+          <span class="accounts-refresh-status" id="accountsRefreshStatus" aria-live="polite"></span>
         </div>
         <div id="accountsList" class="accounts-list">Loading...</div>
         <div class="limit-reset hidden" id="accountsError"></div>
@@ -203,6 +206,28 @@
           <span class="toggle-track" aria-hidden="true"></span>
           <span>Auto-switch when limit reached</span>
         </label>
+      </section>
+
+      <section class="card sidebar-section" id="connectorsCard" aria-label="Connectors">
+        <div class="card-header">
+          <h2 class="card-title"><svg class="icon"><use href="#i-plug"/></svg> Connectors</h2>
+        </div>
+        <div class="connectors-slot" id="connectorsSlot">
+          <p class="connectors-empty">Loading connectors...</p>
+        </div>
+        <div class="limit-reset hidden" id="connectorsError"></div>
+      </section>
+
+      <section class="card sidebar-section team-activity-card" id="teamBand" aria-labelledby="aboutTeamLabel">
+        <div class="team-band-header">
+          <h2 class="card-title"><svg class="icon"><use href="#i-bot"/></svg> <span id="aboutTeamLabel">Team activity</span></h2>
+        </div>
+        <div class="team-band-tokens hidden" id="teamTokens">
+          <span>Session tokens: <strong id="teamTokenTotal">-</strong></span>
+          <span class="team-band-split" id="teamTokenSplit"></span>
+        </div>
+        <div class="limit-reset hidden" id="aboutTeamError"></div>
+        <div class="about-list" id="aboutTeamList"></div>
       </section>
 
 
@@ -293,10 +318,10 @@
           <input type="hidden" id="decisionId">
           <div id="decisionIdRow" class="decision-id-row hidden">Decision ID: <code id="decisionIdText"></code></div>
 
-          <label class="field-label" for="decisionAnswer">Optional comment:</label>
-          <textarea id="decisionAnswer" rows="2" placeholder="Optional comment for the lead..." aria-label="Optional comment"></textarea>
+          <label class="field-label" for="decisionAnswer">Your response:</label>
+          <textarea id="decisionAnswer" rows="2" oninput="updateDecisionControls()" placeholder="Describe your response..." aria-label="Your response"></textarea>
 
-          <button id="decisionSubmit" class="btn btn-primary" onclick="submitDecision()">
+          <button id="decisionSubmit" class="btn btn-primary" onclick="submitDecision()" disabled>
             Submit answer and continue
           </button>
         </div>
@@ -352,39 +377,6 @@
 
     </section>
 
-    <!-- Right Sidebar: Connectors (live list of Harness connectors with sign-in state and Connect) -->
-    <aside class="sidebar sidebar-right" id="connectorsSidebar" aria-label="Connectors">
-
-      <section class="card sidebar-section">
-        <div class="card-header">
-          <h2 class="card-title"><svg class="icon"><use href="#i-plug"/></svg> Connectors</h2>
-        </div>
-        <div class="connectors-slot" id="connectorsSlot">
-          <p class="connectors-empty">Loading connectors...</p>
-        </div>
-        <div class="limit-reset hidden" id="connectorsError"></div>
-      </section>
-
-    </aside>
-
-    <!-- Team band: roles of the selected project with the token usage of the open session -->
-    <section class="card team-band" id="teamBand" aria-labelledby="aboutTeamLabel">
-      <div class="team-band-header">
-        <h2 class="card-title">
-          <svg class="icon"><use href="#i-bot"/></svg> <span id="aboutTeamLabel">Team & Roles</span>
-        </h2>
-        <div class="team-band-meta">
-          <div class="limit-reset hidden" id="aboutTeamNote">Stop the project server to change roles</div>
-          <div class="team-band-tokens hidden" id="teamTokens">
-            <span>Session tokens: <strong id="teamTokenTotal">-</strong></span>
-            <span class="team-band-split" id="teamTokenSplit"></span>
-          </div>
-        </div>
-      </div>
-      <div class="limit-reset hidden" id="aboutTeamError"></div>
-      <div class="about-list" id="aboutTeamList"></div>
-    </section>
-
   </main>
 
   <!-- Task history modal -->
@@ -400,38 +392,6 @@
       <div class="modal-body" id="historyListContainer">
         <div style="text-align: center; color: var(--text-dim); padding: 20px;">Loading sessions...</div>
       </div>
-    </div>
-  </div>
-
-  <!-- Role override modal (per project) -->
-  <div id="roleModal" class="modal-overlay hidden" onclick="if(event.target === this) closeRoleModal()">
-    <div class="modal-card role-modal-card" role="dialog" aria-modal="true" aria-labelledby="roleModalTitle">
-      <div class="modal-header">
-        <h3 class="modal-title" id="roleModalTitle">Role</h3>
-        <button type="button" class="modal-close-btn" onclick="closeRoleModal()" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
-      </div>
-      <form id="roleForm" class="modal-body" onsubmit="event.preventDefault(); saveRoleOverride()">
-        <div class="role-field">
-          <label for="roleModel">Model</label>
-          <select id="roleModel"></select>
-        </div>
-        <div class="role-field">
-          <label for="roleEffort">Reasoning effort</label>
-          <select id="roleEffort"></select>
-        </div>
-        <div class="role-field">
-          <label for="roleRules">Extra rules</label>
-          <textarea id="roleRules" rows="6" maxlength="4000" oninput="updateRoleRulesCounter()"></textarea>
-          <div class="role-rules-counter" id="roleRulesCounter">0 / 4000</div>
-        </div>
-        <div class="role-modal-note">Applies when the project server starts.</div>
-        <div id="roleModalError" class="inline-notice hidden" role="alert"></div>
-        <div class="role-modal-actions">
-          <button type="submit" class="btn btn-primary btn-sm" id="roleSaveBtn">Save</button>
-          <button type="button" class="btn btn-secondary btn-sm" id="roleResetBtn" onclick="resetRoleOverride()">Reset to defaults</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="closeRoleModal()">Cancel</button>
-        </div>
-      </form>
     </div>
   </div>
 

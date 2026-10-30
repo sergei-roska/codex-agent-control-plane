@@ -3,8 +3,12 @@
 const { createRuntimeIdentity } = require('./runtime-identity');
 const runtimeIdentity = globalThis[Symbol.for('codex.server.runtimeIdentity')] || createRuntimeIdentity();
 const express = require('express');
+const Database = require('better-sqlite3');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { isDeepStrictEqual } = require('node:util');
 const { AgentEvent, InMemoryTaskStore, DefaultRequestHandler } = require('@a2a-js/sdk/server');
 const { AgentCard, Message, TaskState } = require('@a2a-js/sdk');
 const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/server/express');
@@ -17,7 +21,7 @@ const { loadEffectiveRoles } = require('./role-overrides');
 const { readSettingsFile, resolveAcceptanceScratch } = require('./project-settings');
 const { registerRoleAgents } = require('./a2a-role-service');
 const { LeadOrchestrator, ResumeInputError, renderRunDigest } = require('./lead-orchestrator');
-const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock } = require('./durable-store');
+const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock, stateDbPath } = require('./durable-store');
 const { createBudgetWatcher } = require('./budget-watcher');
 const { classifyTransientFailure, createTransientRecoveryStore, createTransientRecovery } = require('./transient-recovery');
 const { WriterAdmission } = require('./writer-admission');
@@ -34,6 +38,11 @@ const { loadSkillCatalog } = require('./skill-catalog');
 const { loadMcpCatalog } = require('./mcp-catalog');
 const { parseTrialRunIds } = require('./aut03-lead-skill');
 const { canonicalRoleId, roleDisplayName } = require('./role-names');
+const { ConcurrentDeliveryEngine } = require('./concurrent-delivery-engine');
+const { DeliveryEngineRouter } = require('./delivery-engine-router');
+const { registerDeliveryHostControls } = require('./delivery-host-controls');
+const { createProviderIdentityPin } = require('./delivery-provider-identity');
+const { isProcessGroupGone } = require('./process-quiescence');
 runtimeIdentity.seal();
 
 const HOST = '127.0.0.1';
@@ -42,6 +51,414 @@ const SHUTDOWN_TIMEOUT_MS = 5_000;
 // close() waits up to SHUTDOWN_TIMEOUT_MS for the runs to settle, then up to the same for the app server and HTTP close.
 const SHUTDOWN_TOTAL_MS = 2 * SHUTDOWN_TIMEOUT_MS;
 const AUTO_RESUME_TEXT = 'Automatic resume: Codex usage budget is available again.';
+const TERMINAL_STORED_TASK_STATES = new Set(['TASK_STATE_COMPLETED', 'TASK_STATE_FAILED', 'TASK_STATE_CANCELED']);
+
+function projectIdForWorkspace(workspace) {
+  const realWorkspace = fs.realpathSync(workspace);
+  return crypto.createHash('sha1').update(realWorkspace).digest('hex').slice(0, 10);
+}
+
+function storedDeliveryMappings(db, projectId) {
+  const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='delivery_run_engines'").get();
+  if (!exists) return { hasConcurrent: false, projectIds: [], legacyRunIds: [], concurrentRunIds: [] };
+  const rows = db.prepare('SELECT project_id, engine, run_id FROM delivery_run_engines').all();
+  if (rows.some((row) => !['legacy', 'concurrent-v1'].includes(row.engine))) {
+    throw Object.assign(new Error('State database contains an unknown delivery engine selection'), { code: 'delivery_engine_selection_unsafe' });
+  }
+  const projectIds = [...new Set(rows.map((row) => row.project_id))];
+  if (projectIds.some((id) => id !== projectId)) {
+    throw Object.assign(new Error('State database delivery mappings belong to a different project identity'), { code: 'delivery_project_identity_conflict' });
+  }
+  return { hasConcurrent: rows.some((row) => row.engine === 'concurrent-v1'),
+    legacyRunIds: rows.filter((row) => row.engine === 'legacy').map((row) => row.run_id),
+    concurrentRunIds: rows.filter((row) => row.engine === 'concurrent-v1').map((row) => row.run_id), projectIds };
+}
+
+function hasTable(db, name) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+}
+
+function validQuiescentIdentity(identity) {
+  return Boolean(identity && Number.isSafeInteger(identity.pid) && identity.pid > 1
+    && Number.isSafeInteger(identity.pgid) && identity.pgid > 1
+    && typeof identity.startTime === 'string' && identity.startTime.length > 0);
+}
+
+function isRecord(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype);
+}
+
+function storedOrchestratorTask(db, runId, { allowInputRequired = false } = {}) {
+  if (typeof runId !== 'string' || !/^[\x21-\x7e]{1,128}$/.test(runId)) return null;
+  const rows = db.prepare("SELECT tenant,status,status_state FROM tasks WHERE owner='orchestrator' AND id=?").all(runId);
+  if (rows.length !== 1 || rows[0].tenant !== '') return null;
+  const taskStatus = JSON.parse(rows[0].status);
+  const allowed = allowInputRequired
+    ? new Set(['TASK_STATE_INPUT_REQUIRED', ...TERMINAL_STORED_TASK_STATES])
+    : TERMINAL_STORED_TASK_STATES;
+  if (!isRecord(taskStatus) || taskStatus.state !== rows[0].status_state || !allowed.has(taskStatus.state)) return null;
+  return { state: taskStatus.state };
+}
+
+function plannerSessionSettled(db, projectId, sessionId, { requireTurn = false } = {}) {
+  const turns = db.prepare('SELECT status FROM delivery_planner_turns WHERE project_id=? AND session_id=?').all(projectId, sessionId);
+  return (!requireTurn || turns.length > 0)
+    && turns.every((turn) => ['complete', 'stale', 'reconciled_no_effect'].includes(turn.status));
+}
+
+function deterministicConcurrentIds(projectId, runId, request) {
+  if (!isRecord(request) || (Object.hasOwn(request, 'contextId')
+    && request.contextId != null && typeof request.contextId !== 'string')) return null;
+  const digest = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  return {
+    objectiveId: `delivery-${digest([projectId, runId]).slice(0, 32)}`,
+    sessionId: `session-${digest([projectId, request.contextId || runId]).slice(0, 32)}`,
+  };
+}
+
+function orphanConcurrentMappingSettled(db, projectId, mapping) {
+  const ids = deterministicConcurrentIds(projectId, mapping.run_id, JSON.parse(mapping.request_json));
+  if (!ids || ids.objectiveId !== mapping.objective_id || ids.sessionId !== mapping.session_id) return false;
+  if (db.prepare('SELECT 1 FROM concurrent_delivery_runs WHERE run_id=? LIMIT 1').get(mapping.run_id)
+    || db.prepare('SELECT 1 FROM backlog_objectives WHERE objective_id=? LIMIT 1').get(mapping.objective_id)) return false;
+  const task = storedOrchestratorTask(db, mapping.run_id);
+  if (!task) return false;
+  const turns = db.prepare('SELECT * FROM delivery_planner_turns WHERE project_id=? AND session_id=?').all(projectId, mapping.session_id);
+  if (turns.length !== 1 || turns[0].status !== 'reconciled_no_effect') return false;
+  const turn = turns[0];
+  const pins = JSON.parse(turn.pins_json);
+  const result = JSON.parse(turn.result_json);
+  if (!isRecord(pins) || Object.hasOwn(pins, 'projectId') || Object.hasOwn(pins, 'sessionId') || Object.hasOwn(pins, 'turnId')
+    || !Number.isSafeInteger(pins.ownerGeneration) || pins.ownerGeneration < 0
+    || !isRecord(result) || Object.keys(result).sort().join(',') !== 'oldProviderGroupsGone,originalResult,ownerGeneration,projectId,providerDispatchStarted,providerScope,providerThreadId,sessionId,source,state,terminalProof,turnId'
+    || result.state !== 'reconciled_no_effect' || result.source !== 'codex_app_server.thread_read'
+    || result.projectId !== projectId || result.sessionId !== mapping.session_id || result.turnId !== turn.turn_id
+    || result.providerScope !== turn.provider_scope || result.providerThreadId !== turn.provider_thread_id
+    || result.ownerGeneration !== pins.ownerGeneration || result.oldProviderGroupsGone !== true
+    || result.providerDispatchStarted !== true) return false;
+  const original = result.originalResult;
+  if (!isRecord(original) || !Object.hasOwn(original, 'errorCode') || original.errorCode !== 'turn_error'
+    || !Object.hasOwn(original, 'preDispatchSource') || original.preDispatchSource !== null
+    || Object.keys(original).some((key) => !['errorCode', 'preDispatchSource', 'providerFailure'].includes(key))) return false;
+  const identities = db.prepare(`SELECT identity_json,start_json,terminal_json FROM concurrent_planner_execution_facts
+    WHERE project_id=? AND session_id=? AND turn_id=?`).all(projectId, mapping.session_id, turn.turn_id);
+  if (identities.length !== 1) return false;
+  const fact = identities[0];
+  const identity = JSON.parse(fact.identity_json);
+  const start = JSON.parse(fact.start_json);
+  const terminal = JSON.parse(fact.terminal_json);
+  const processIdentity = start.processIdentity;
+  if (!isRecord(identity) || Object.keys(identity).sort().join(',') !== 'ownerGeneration,projectId,providerScope,providerThreadId,sessionId,turnId'
+    || identity.projectId !== projectId || identity.sessionId !== mapping.session_id || identity.turnId !== turn.turn_id
+    || identity.providerScope !== turn.provider_scope || identity.providerThreadId !== turn.provider_thread_id
+    || identity.ownerGeneration !== pins.ownerGeneration || !isRecord(start)
+    || Object.keys(start).sort().join(',') !== 'processIdentity,threadId' || start.threadId !== turn.provider_thread_id
+    || !validQuiescentIdentity(processIdentity) || !isProcessGroupGone(processIdentity)) return false;
+  const proof = result.terminalProof;
+  if (!isRecord(proof) || Object.keys(proof).sort().join(',') !== 'error,items,source,status,threadId,turnId'
+    || proof.source !== 'thread/read' || proof.threadId !== turn.provider_thread_id
+    || typeof proof.turnId !== 'string' || !proof.turnId || proof.status !== 'failed'
+    || !isRecord(proof.error) || Object.keys(proof.error).sort().join(',') !== 'code,message,param,type'
+    || proof.error.code !== 'invalid_json_schema' || proof.error.type !== 'invalid_request_error'
+    || proof.error.param !== 'text.format.schema'
+    || proof.error.message !== "Invalid schema for response_format 'codex_output_schema': 'schema.properties.expected.properties' is required for object schemas."
+    || !Array.isArray(proof.items) || proof.items.length !== 1 || !isRecord(proof.items[0])
+    || Object.keys(proof.items[0]).sort().join(',') !== 'id,type' || proof.items[0].type !== 'userMessage'
+    || typeof proof.items[0].id !== 'string' || !proof.items[0].id
+    || !isRecord(terminal) || !isDeepStrictEqual(terminal, proof)) return false;
+  const noObjectiveEffects = [
+    ['backlog_attempts', 'objective_id'], ['backlog_claims', 'objective_id'],
+    ['delivery_role_executions', 'objective_id'], ['candidate_intents', 'objective_id'],
+    ['delivery_output_bindings', 'objective_id'], ['concurrent_controller_fences', 'objective_id'],
+    ['task_executor_attempts', 'objective_id'],
+  ];
+  for (const [table, column] of noObjectiveEffects) {
+    if (db.prepare(`SELECT 1 FROM ${table} WHERE ${column}=? LIMIT 1`).get(mapping.objective_id)) return false;
+  }
+  return db.prepare('SELECT 1 FROM dispatch_journal WHERE run_id=? LIMIT 1').get(mapping.run_id) == null;
+}
+
+function inspectConcurrentStartupQuarantine(db, workspace, projectId) {
+  const unsafe = { state: 'unsafe' };
+  try {
+    if (!db || typeof db.prepare !== 'function' || typeof workspace !== 'string' || typeof projectId !== 'string'
+      ) return unsafe;
+    if (!hasTable(db, 'concurrent_shutdown_phases')) return { state: 'none' };
+    const phaseColumns = new Set(db.prepare('PRAGMA table_info(concurrent_shutdown_phases)').all().map((item) => item.name));
+    if (!phaseColumns.has('project_id') || !phaseColumns.has('phase_json')) return unsafe;
+    const phases = db.prepare('SELECT phase_json FROM concurrent_shutdown_phases WHERE project_id=?').all(projectId);
+    if (!phases.length) return { state: 'none' };
+    if (phases.length !== 1) return unsafe;
+    const phase = JSON.parse(phases[0].phase_json);
+    if (!phase || Array.isArray(phase) || typeof phase !== 'object') return unsafe;
+    const keys = Object.keys(phase).sort().join(',');
+    if (keys !== 'attempts,identities,phase') return unsafe;
+    if (phase.phase === 'released' && Array.isArray(phase.attempts) && Array.isArray(phase.identities)) return { state: 'released' };
+    const attemptIds = new Set();
+    if (phase.phase === 'provider_closing' && Array.isArray(phase.attempts) && Array.isArray(phase.identities)
+      && phase.attempts.every((entry) => entry && !Array.isArray(entry) && typeof entry === 'object'
+        && Object.keys(entry).sort().join(',') === 'attemptId,fencingToken,objectiveId,projectId,recoveryGeneration,taskId'
+        && ['projectId','objectiveId','taskId','attemptId'].every((key) => typeof entry[key] === 'string' && entry[key].length > 0)
+        && entry.projectId === projectId && Number.isSafeInteger(entry.fencingToken) && entry.fencingToken > 0
+        && Number.isSafeInteger(entry.recoveryGeneration) && entry.recoveryGeneration >= 0
+        && !attemptIds.has(entry.attemptId) && Boolean(attemptIds.add(entry.attemptId)))
+      && phase.identities.length > 0 && phase.identities.every((identity) => validQuiescentIdentity(identity) && isProcessGroupGone(identity))) {
+      return { state: 'provider_closing' };
+    }
+    if (phase.phase !== 'draining' || !Array.isArray(phase.attempts) || phase.attempts.length
+      || !Array.isArray(phase.identities) || phase.identities.length) return unsafe;
+    const needed = ['delivery_planner_turns','concurrent_planner_execution_facts','delivery_run_engines','concurrent_delivery_runs','backlog_objectives','backlog_attempts','backlog_claims','delivery_role_executions','candidate_intents','delivery_output_publications','delivery_output_bindings','concurrent_controller_fences','writer_executions','tasks','dispatch_journal','task_executor_attempts','task_executor_evidence','task_executor_thread_reservations'];
+    if (needed.some((table) => !hasTable(db, table))) return unsafe;
+    const col = (table) => new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((item) => item.name));
+    for (const [table, names] of Object.entries({
+      delivery_planner_turns:['project_id','session_id','provider_scope','provider_thread_id','turn_id','status','pins_json','result_json'],
+      concurrent_planner_execution_facts:['project_id','session_id','turn_id','identity_json','start_json','terminal_json'],
+      delivery_run_engines:['project_id','run_id','engine','objective_id','session_id','request_json'],
+      concurrent_delivery_runs:['project_id','run_id','objective_id','session_id'],
+      backlog_objectives:['project_id','objective_id','record_json','owner_generation'], backlog_attempts:['project_id','objective_id','terminal_digest','record_json'],
+      backlog_claims:['project_id','objective_id','record_json'], delivery_role_executions:['project_id','objective_id','attempt_id','state','record_json'],
+      candidate_intents:['project_id','objective_id','intent_id','state'], delivery_output_publications:['intent_id','artifact_id','state'],
+      delivery_output_bindings:['project_id','objective_id','artifact_id'], concurrent_controller_fences:['project_id','objective_id','projection_json'],
+      writer_executions:['workspace','state'], tasks:['tenant','owner','id','status','status_state'],dispatch_journal:['run_id','state'],
+      task_executor_attempts:['attempt_id','project_id','objective_id','task_id','state','record_json'],
+      task_executor_evidence:['attempt_id'],
+      task_executor_thread_reservations:['attempt_id','transport_key','thread_id'],
+    })) if (names.some((name) => !col(table).has(name))) return unsafe;
+    const runMappings = db.prepare('SELECT project_id,run_id,engine,objective_id,session_id,request_json FROM delivery_run_engines').all();
+    if (runMappings.some((item) => item.project_id !== projectId || !['legacy','concurrent-v1'].includes(item.engine))) return unsafe;
+    const allTurns = db.prepare('SELECT * FROM delivery_planner_turns WHERE project_id=?').all(projectId);
+    const active = allTurns.filter((item) => ['active','unknown'].includes(item.status));
+    if (allTurns.some((item) => !['active','unknown','complete','stale','reconciled_no_effect'].includes(item.status))) return unsafe;
+    if (active.length !== 1 || active[0].status !== 'active') return unsafe;
+    const turn = active[0], pins = JSON.parse(turn.pins_json);
+    if (turn.result_json != null || Object.hasOwn(pins,'projectId') || Object.hasOwn(pins,'sessionId') || Object.hasOwn(pins,'turnId')
+      || !Number.isSafeInteger(pins.ownerGeneration) || pins.ownerGeneration < 0) return unsafe;
+    const facts = db.prepare('SELECT * FROM concurrent_planner_execution_facts WHERE project_id=? AND session_id=? AND turn_id=?').all(projectId,turn.session_id,turn.turn_id);
+    if (facts.length !== 1) return unsafe;
+    const fact=facts[0], identity=JSON.parse(fact.identity_json), start=JSON.parse(fact.start_json);
+    const processIdentity=start.processIdentity;
+    if (fact.terminal_json != null || identity.projectId!==projectId || identity.sessionId!==turn.session_id || identity.turnId!==turn.turn_id
+      || identity.providerThreadId!==turn.provider_thread_id || identity.providerScope!==turn.provider_scope
+      || !Number.isSafeInteger(identity.ownerGeneration) || identity.ownerGeneration<0 || identity.ownerGeneration!==pins.ownerGeneration
+      || start.threadId!==turn.provider_thread_id || !Number.isSafeInteger(processIdentity?.pid) || processIdentity.pid<=1
+      || !Number.isSafeInteger(processIdentity?.pgid) || processIdentity.pgid<=1 || typeof processIdentity.startTime!=='string'
+      || !processIdentity.startTime || !isProcessGroupGone(processIdentity)) return unsafe;
+    const allMappings=runMappings.filter((item)=>item.engine==='concurrent-v1');
+    const mappings=allMappings.filter((item)=>item.session_id===turn.session_id);
+    if(mappings.length!==1) return unsafe;
+    const mapping=mappings[0];
+    if(runMappings.filter((item)=>item.run_id===mapping.run_id).length!==1) return unsafe;
+    if(typeof mapping.run_id!=='string'||!/^[\x21-\x7e]{1,128}$/.test(mapping.run_id)) return unsafe;
+    if (!storedOrchestratorTask(db, mapping.run_id, { allowInputRequired: true })) return unsafe;
+    for (const task of db.prepare('SELECT status,status_state FROM tasks').all()) {
+      const taskStatus = JSON.parse(task.status);
+      if (!isRecord(taskStatus) || taskStatus.state !== task.status_state
+        || ['TASK_STATE_SUBMITTED','TASK_STATE_WORKING'].includes(taskStatus.state)) return unsafe;
+    }
+    const runRows=db.prepare('SELECT project_id,run_id,objective_id,session_id FROM concurrent_delivery_runs WHERE project_id=? AND run_id=?').all(projectId,mapping.run_id);
+    if(runRows.length!==1) return unsafe;
+    const run=runRows[0];
+    const objectiveRows=db.prepare('SELECT project_id,objective_id,record_json,owner_generation FROM backlog_objectives WHERE project_id=? AND objective_id=?').all(projectId,mapping.objective_id);
+    if(objectiveRows.length!==1) return unsafe;
+    const objectiveRow=objectiveRows[0];
+    const objective=objectiveRow&&JSON.parse(objectiveRow.record_json);
+    if(!run||run.project_id!==projectId||run.run_id!==mapping.run_id||run.objective_id!==mapping.objective_id||mapping.session_id!==turn.session_id||run.session_id!==turn.session_id||!objective||objective.projectId!==projectId
+      ||objective.objectiveId!==mapping.objective_id||objective.sessionId!==turn.session_id||objective.disposition!=='canceled'
+      ||objectiveRow.owner_generation!==identity.ownerGeneration
+      ||(Object.hasOwn(objective,'ownerGeneration')&&objective.ownerGeneration!==identity.ownerGeneration)
+      ||concurrentRunSettled(db,projectId,mapping,{ allowedPlannerTurn: turn, strictQuarantine: true })!==true) return unsafe;
+    const real=fs.realpathSync(workspace);
+    if(db.prepare("SELECT 1 FROM writer_executions WHERE workspace=? AND state IN ('active','unresolved') LIMIT 1").get(real)) return unsafe;
+    for (const legacy of runMappings.filter((item)=>item.engine==='legacy')) {
+      if (!storedOrchestratorTask(db, legacy.run_id)) return unsafe;
+    }
+    for (const other of allMappings.filter((item)=>item.run_id!==mapping.run_id)) {
+      if (other.engine !== 'concurrent-v1' || typeof other.run_id !== 'string'
+        || !/^[\x21-\x7e]{1,128}$/.test(other.run_id)
+        || typeof other.objective_id !== 'string' || !/^[\x21-\x7e]{1,128}$/.test(other.objective_id)
+        || typeof other.session_id !== 'string' || !/^[\x21-\x7e]{1,128}$/.test(other.session_id)
+        || runMappings.filter((item)=>item.run_id===other.run_id).length!==1
+        || !storedOrchestratorTask(db, other.run_id, { allowInputRequired: true })) return unsafe;
+      const runRows = db.prepare('SELECT project_id,run_id,objective_id,session_id,status FROM concurrent_delivery_runs WHERE run_id=?').all(other.run_id);
+      const objectiveRows = db.prepare('SELECT project_id,objective_id,record_json FROM backlog_objectives WHERE objective_id=?').all(other.objective_id);
+      if (!runRows.length && !objectiveRows.length) {
+        if (!orphanConcurrentMappingSettled(db, projectId, other)) return unsafe;
+        continue;
+      }
+      if (runRows.length!==1 || objectiveRows.length!==1 || runRows[0].project_id!==projectId
+        || runRows[0].run_id!==other.run_id || runRows[0].objective_id!==other.objective_id
+        || runRows[0].session_id!==other.session_id || objectiveRows[0].project_id!==projectId) return unsafe;
+      const objective = JSON.parse(objectiveRows[0].record_json);
+      const allowPausedOwner = objective?.disposition === 'paused_owner';
+      if (allowPausedOwner && (runRows[0].status !== 'paused'
+        || !plannerSessionSettled(db, projectId, other.session_id, { requireTurn: true }))) return unsafe;
+      if (concurrentRunSettled(db, projectId, other, { strictQuarantine: true, allowPausedOwner }) !== true) return unsafe;
+    }
+    if (!projectEffectsSettled(db, projectId, real, runMappings)) return unsafe;
+    return {state:'quarantine',runId:mapping.run_id,objectiveId:mapping.objective_id,sessionId:turn.session_id};
+  } catch (_) { return unsafe; }
+}
+
+function projectEffectsSettled(db, projectId, workspace, runMappings = []) {
+  try {
+    const attempts=db.prepare('SELECT project_id,objective_id,terminal_digest,record_json FROM backlog_attempts WHERE project_id=?').all(projectId);
+    if(attempts.some((item)=>!item.objective_id||typeof item.terminal_digest!=='string'||!item.terminal_digest
+      ||!['succeeded','failed','canceled'].includes(JSON.parse(item.record_json)?.state))) return false;
+    const claims=db.prepare('SELECT project_id,objective_id,record_json FROM backlog_claims WHERE project_id=?').all(projectId);
+    if(claims.some((item)=>JSON.parse(item.record_json)?.state!=='released')) return false;
+    const executions=db.prepare('SELECT project_id,objective_id,attempt_id,state,record_json FROM delivery_role_executions WHERE project_id=?').all(projectId);
+    for(const item of executions) {
+      const record=JSON.parse(item.record_json);
+      if(!['terminal','settled'].includes(item.state)||record.state!==item.state
+        ||record.projectId!==projectId||record.objectiveId!==item.objective_id||record.attemptId!==item.attempt_id||record.effectsSettled!==true) return false;
+    }
+    const taskExecutorAttempts=db.prepare('SELECT attempt_id,project_id,objective_id,task_id,state,record_json FROM task_executor_attempts').all();
+    for(const item of taskExecutorAttempts) {
+      const record=JSON.parse(item.record_json);
+      if(item.project_id!==projectId||item.state!=='settled'||!isRecord(record)||record.attemptId!==item.attempt_id
+        ||record.projectId!==projectId||record.objectiveId!==item.objective_id||record.taskId!==item.task_id) return false;
+    }
+    if(db.prepare(`SELECT 1 FROM task_executor_evidence e LEFT JOIN task_executor_attempts a ON a.attempt_id=e.attempt_id
+      WHERE a.attempt_id IS NULL LIMIT 1`).get()) return false;
+    if(db.prepare('SELECT 1 FROM task_executor_thread_reservations LIMIT 1').get()) return false;
+    const intents=db.prepare('SELECT project_id,objective_id,intent_id,state FROM candidate_intents WHERE project_id=?').all(projectId);
+    if(intents.some((item)=>!['applied','refused','not_applied'].includes(item.state))) return false;
+    const publications=db.prepare(`SELECT p.intent_id,p.artifact_id,p.state,b.project_id,b.objective_id
+      FROM delivery_output_publications p LEFT JOIN delivery_output_bindings b ON b.artifact_id=p.artifact_id`).all();
+    for(const item of publications) {
+      if(!item.project_id) return false;
+      if(item.project_id!==projectId) continue;
+      if(!['applied','refused'].includes(item.state)||!item.objective_id) return false;
+      const intent=db.prepare('SELECT project_id,objective_id,state FROM candidate_intents WHERE intent_id=?').get(item.intent_id);
+      if(!intent||intent.project_id!==projectId||intent.objective_id!==item.objective_id||intent.state!==item.state) return false;
+    }
+    const fences=db.prepare('SELECT project_id,objective_id,projection_json FROM concurrent_controller_fences WHERE project_id=?').all(projectId);
+    for(const item of fences) if(JSON.parse(item.projection_json)?.safeToRelease!==true) return false;
+    const writerRows=db.prepare('SELECT state FROM writer_executions WHERE workspace=?').all(workspace);
+    if(writerRows.some((item)=>!['released','reconciled'].includes(item.state))) return false;
+    for(const mapping of runMappings) {
+      const journal=db.prepare('SELECT state FROM dispatch_journal WHERE run_id=?').all(mapping.run_id);
+      if(journal.some((item)=>item.state!=='finished')) return false;
+    }
+    return true;
+  } catch (_) { return false; }
+}
+
+function concurrentRunSettled(db, projectId, mapping, { allowedPlannerTurn = null, strictQuarantine = false, allowPausedOwner = false } = {}) {
+  if (mapping.project_id !== projectId || ![mapping.objective_id, mapping.session_id]
+    .every((id) => typeof id === 'string' && /^[\x21-\x7e]{1,128}$/.test(id))) return 'unsafe';
+  if (!hasTable(db, 'concurrent_delivery_runs')) return 'unsafe';
+  const run = db.prepare('SELECT status,objective_id,session_id FROM concurrent_delivery_runs WHERE project_id=? AND run_id=?').get(projectId, mapping.run_id);
+  if (!run || run.objective_id !== mapping.objective_id || run.session_id !== mapping.session_id) return 'unsafe';
+  if (!['prepared', 'running', 'paused', 'recovering', 'accepted', 'partial', 'canceled'].includes(run.status)) return 'unsafe';
+  if (!hasTable(db, 'backlog_objectives') || !hasTable(db, 'backlog_attempts') || !hasTable(db, 'backlog_claims')) return 'unsafe';
+  const objectiveRow = db.prepare('SELECT record_json FROM backlog_objectives WHERE project_id=? AND objective_id=?').get(projectId, mapping.objective_id);
+  if (!objectiveRow) return 'unsafe';
+  let objective;
+  try { objective = JSON.parse(objectiveRow.record_json); } catch (_) { return 'unsafe'; }
+  if (objective?.projectId !== projectId || objective.objectiveId !== mapping.objective_id
+    || objective.sessionId !== mapping.session_id) return 'unsafe';
+    if (hasTable(db, 'delivery_planner_turns')) {
+      const turns = db.prepare('SELECT * FROM delivery_planner_turns WHERE project_id=? AND session_id=?')
+        .all(projectId, mapping.session_id);
+      const allowed = allowedPlannerTurn;
+      if (turns.some((turn) => !['complete', 'stale', 'reconciled_no_effect'].includes(turn.status)
+        && !(allowed && turn.project_id === allowed.project_id && turn.session_id === allowed.session_id
+          && turn.provider_thread_id === allowed.provider_thread_id && turn.provider_scope === allowed.provider_scope
+          && turn.turn_id === allowed.turn_id && turn.status === allowed.status && turn.status === 'active'))) return 'unsafe';
+  }
+  const pausedOwnerQuarantine = allowPausedOwner === true && run.status === 'paused' && objective.disposition === 'paused_owner';
+  if (!['accepted', 'partial', 'canceled'].includes(objective.disposition) && !pausedOwnerQuarantine) {
+    return ['planning', 'executing', 'paused_owner', 'waiting_owner', 'waiting_budget'].includes(objective.disposition) ? 'busy' : 'unsafe';
+  }
+  if (pausedOwnerQuarantine) {
+    const columns = new Set(db.prepare('PRAGMA table_info(backlog_objectives)').all().map((item) => item.name));
+    if (!columns.has('owner_generation')) return 'unsafe';
+    const generation = db.prepare('SELECT owner_generation FROM backlog_objectives WHERE project_id=? AND objective_id=?').get(projectId, mapping.objective_id)?.owner_generation;
+    if (!Number.isSafeInteger(generation) || generation < 0
+      || (Object.hasOwn(objective, 'ownerGeneration') && objective.ownerGeneration !== generation)) return 'unsafe';
+  }
+  const attempts = db.prepare('SELECT terminal_digest,record_json FROM backlog_attempts WHERE project_id=? AND objective_id=?').all(projectId, mapping.objective_id);
+  if (attempts.some((attempt) => typeof attempt.terminal_digest !== 'string' || !attempt.terminal_digest
+    || (strictQuarantine && !['succeeded','failed','canceled'].includes(JSON.parse(attempt.record_json)?.state)))) return 'unsafe';
+  for (const row of db.prepare('SELECT record_json FROM backlog_claims WHERE project_id=? AND objective_id=?').all(projectId, mapping.objective_id)) {
+    let claim;
+    try { claim = JSON.parse(row.record_json); } catch (_) { return 'unsafe'; }
+    if (claim.state !== 'released') return 'unsafe';
+  }
+  if (hasTable(db, 'candidate_intents')) {
+    const intents = db.prepare('SELECT state FROM candidate_intents WHERE project_id=? AND objective_id=?')
+      .all(projectId, mapping.objective_id);
+    if (intents.some((intent) => !['applied', 'refused', 'not_applied'].includes(intent.state))) return 'unsafe';
+  }
+  if (hasTable(db, 'delivery_role_executions')) {
+    const executions = db.prepare('SELECT attempt_id,state,record_json FROM delivery_role_executions WHERE project_id=? AND objective_id=?')
+      .all(projectId, mapping.objective_id);
+    for (const execution of executions) {
+      let record;
+      try { record = JSON.parse(execution.record_json); } catch (_) { return 'unsafe'; }
+      if (!['terminal', 'settled'].includes(execution.state) || record?.state !== execution.state
+        || record.projectId !== projectId || record.objectiveId !== mapping.objective_id
+        || record.attemptId !== execution.attempt_id || record.effectsSettled !== true) return 'unsafe';
+    }
+  }
+  if (hasTable(db, 'concurrent_controller_fences')) {
+    const fence = db.prepare('SELECT projection_json FROM concurrent_controller_fences WHERE project_id=? AND objective_id=?').get(projectId, mapping.objective_id);
+    if (fence) {
+      try { if (JSON.parse(fence.projection_json)?.safeToRelease !== true) return 'unsafe'; }
+      catch (_) { return 'unsafe'; }
+    }
+  }
+  if (hasTable(db, 'delivery_output_publications') && hasTable(db, 'delivery_output_bindings')) {
+    const publications = db.prepare(`SELECT p.intent_id,p.state FROM delivery_output_publications p
+      JOIN delivery_output_bindings b ON b.artifact_id=p.artifact_id WHERE b.project_id=? AND b.objective_id=?`)
+      .all(projectId, mapping.objective_id);
+    for (const publication of publications) {
+      if (!(strictQuarantine ? ['applied', 'refused'] : ['applied', 'refused', 'not_applied']).includes(publication.state)) return 'unsafe';
+      const intent = hasTable(db, 'candidate_intents')
+        ? db.prepare('SELECT project_id,objective_id,state FROM candidate_intents WHERE intent_id=?').get(publication.intent_id)
+        : null;
+      if (!intent) {
+        if (publication.state !== 'refused') return 'unsafe';
+      } else if (intent.project_id !== projectId || intent.objective_id !== mapping.objective_id
+        || !['applied', 'refused', 'not_applied'].includes(intent.state)
+        || (strictQuarantine && intent.state !== publication.state)) return 'unsafe';
+    }
+  }
+  return true;
+}
+
+function deliveryEngineFence({ db, workspace, projectId, engine, runId, legacyTaskIds, concurrentRecoveryUnsafe = false }) {
+  if (engine === 'concurrent-v1' && concurrentRecoveryUnsafe) return 'unsafe';
+  if (hasTable(db, 'delivery_run_engines')) {
+    const mappings = db.prepare('SELECT project_id,run_id,engine,objective_id,session_id FROM delivery_run_engines WHERE project_id=? AND run_id<>?')
+      .all(projectId, runId || '');
+    for (const mapping of mappings) {
+      if (mapping.engine === engine) continue;
+      if (mapping.engine === 'concurrent-v1') {
+        const settled = concurrentRunSettled(db, projectId, mapping);
+        if (settled !== true) return settled;
+        continue;
+      }
+      const tasks = db.prepare('SELECT status_state FROM tasks WHERE owner=? AND id=?').all('orchestrator', mapping.run_id);
+      if (!tasks.length) return 'unsafe';
+      if (tasks.some((task) => !TERMINAL_STORED_TASK_STATES.has(task.status_state))) return 'busy';
+    }
+  }
+  if (engine === 'concurrent-v1') {
+    for (const taskId of legacyTaskIds || []) {
+      if (taskId === runId) continue;
+      const tasks = db.prepare('SELECT status_state FROM tasks WHERE owner=? AND id=?').all('orchestrator', taskId);
+      if (tasks.some((task) => !TERMINAL_STORED_TASK_STATES.has(task.status_state))) return 'busy';
+    }
+  }
+  if (hasTable(db, 'writer_executions')) {
+    const executions = db.prepare("SELECT state FROM writer_executions WHERE workspace=? AND state IN ('active','unresolved')").all(fs.realpathSync(workspace));
+    if (executions.some((execution) => execution.state === 'unresolved')) return 'unsafe';
+    if (executions.length) return 'busy';
+  }
+  return true;
+}
 
 /** CODEX_A2A_AUTO_RESUME: on by default; '0' or 'false' disables. */
 function autoResumeEnabled(env = process.env) {
@@ -314,7 +731,7 @@ function ownerStopReason() {
 
 // `ownerChecks` (project setting, see src/project-settings.js): command strings pinned as an owner contract for a
 // new run whose message carries no acceptance contract. Explicit checks replace them; a resume never repins.
-function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, budgetWatcher = null, transientRecovery = null, autoResume = true, ownerChecks = null }) {
+function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, budgetWatcher = null, transientRecovery = null, autoResume = true, ownerChecks = null, legacyTaskIds = new Set() }) {
   const controllers = new Map();
   const reservations = new Set();
   const inflight = new Set();
@@ -549,7 +966,10 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
           result = await orchestrator.run({ goal: original, runId: taskId, contract: originalContract, signal: controller.signal, onEvent, contextId, ...(originalRefIds.length > 0 ? { newRequest: originalRequest } : {}) });
         }
       } else {
-        result = await orchestrator.run({ goal, runId: taskId, contract, signal: controller.signal, onEvent, contextId, ...(newRequest ? { newRequest } : {}) });
+        const runInput = { goal, runId: taskId, contract, signal: controller.signal, onEvent, contextId, ...(newRequest ? { newRequest } : {}) };
+        const runMethod = legacyTaskIds.has(taskId) && typeof orchestrator.runLegacy === 'function'
+          ? orchestrator.runLegacy.bind(orchestrator) : orchestrator.run.bind(orchestrator);
+        result = await runMethod(runInput);
       }
       const stoppedByOwner = controller.signal.aborted && controller.signal.reason?.ownerStop === true;
       if (stoppedByOwner && (result?.status === 'canceled' || (result?.status === 'input_required' && result.pause?.kind === 'stopped'))) {
@@ -738,10 +1158,10 @@ function rejectOverlappingLeadTask(executor) {
   };
 }
 
-function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), budgetWatcher = null, transientRecovery = null, autoResume = true, ownerChecks = null }) {
+function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), budgetWatcher = null, transientRecovery = null, autoResume = true, ownerChecks = null, legacyTaskIds = new Set() }) {
   const endpoint = new URL('/orchestrator', `${baseUrl}/`).toString();
   const card = makeLeadCard({ leadRole, endpoint });
-  const executor = makeLeadExecutor({ orchestrator, loadTask: (id) => taskStore.load(id, {}), budgetWatcher, transientRecovery, autoResume, ownerChecks });
+  const executor = makeLeadExecutor({ orchestrator, loadTask: (id) => taskStore.load(id, {}), budgetWatcher, transientRecovery, autoResume, ownerChecks, legacyTaskIds });
   const requestHandler = new DefaultRequestHandler(card, taskStore, executor);
   app.use('/orchestrator/agent-card.json', agentCardHandler({ agentCardProvider: async () => AgentCard.toJSON(card) }));
   app.use('/orchestrator', authMiddleware, express.json(), rejectOverlappingLeadTask(executor), jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));
@@ -820,6 +1240,10 @@ async function startServer({
   stateFile,
   state: providedState,
   workspaceLockDir,
+  projectId: configuredProjectId = process.env.CODEX_A2A_PROJECT_ID,
+  deliveryStorageRoot = process.env.CODEX_A2A_DELIVERY_STORAGE_ROOT,
+  providerIdentityPinFactory = createProviderIdentityPin,
+  concurrentEngineFactory = (options) => new ConcurrentDeliveryEngine(options),
   autoResume = autoResumeEnabled(),
   budgetWatcherOptions = {},
   transientRecoveryFactory = createTransientRecovery,
@@ -828,6 +1252,10 @@ async function startServer({
   const aut03TrialRunIds = parseTrialRunIds(process.env.CODEX_A2A_AUT03_TRIAL_RUN_IDS ?? '');
   if (typeof workspace !== 'string' || !workspace || !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`workspace must be an existing directory: ${workspace}`);
+  }
+  const normalizedProjectId = projectIdForWorkspace(workspace);
+  if (configuredProjectId !== undefined && configuredProjectId !== normalizedProjectId) {
+    throw Object.assign(new Error('Configured project ID does not match the workspace identity'), { code: 'delivery_project_identity_invalid' });
   }
   // An injected App Server is used as is; otherwise the switching wrapper follows the active account profile.
   const accountProfiles = createAccountProfiles(accountsDir ? { accountsDir } : {});
@@ -839,17 +1267,84 @@ async function startServer({
   let httpServer = null;
   let state = providedState || null;
   const ownsState = !providedState;
+  let startupConcurrentEngine = null;
+  let concurrentShutdownPromise = null;
+  let providerShutdownPromise = null;
+  let shuttingDown = false;
   let releaseLock = () => {};
   let releaseWorkspaceLock = () => {};
+  let stateLockAcquired = false;
+  let workspaceLockAcquired = false;
+  let quarantineDb = null;
+  let providerStarted = false;
   try {
+    // Inspect the durable shutdown fence before touching the provider or opening the
+    // migratory/writable state connection.
+    if (!providedState && stateFile !== ':memory:') {
+      const filePath = stateDbPath(stateFile);
+      if (fs.existsSync(filePath)) {
+        releaseLock = acquireStateLock(filePath); stateLockAcquired = true;
+        releaseWorkspaceLock = acquireWorkspaceLock(workspace, workspaceLockDir ? { lockDir: workspaceLockDir } : undefined); workspaceLockAcquired = true;
+        quarantineDb = new Database(filePath, { readonly: true, fileMustExist: true });
+        const inspection = inspectConcurrentStartupQuarantine(quarantineDb, workspace, normalizedProjectId);
+        if (inspection.state === 'unsafe') throw Object.assign(new Error('Concurrent startup recovery is unsafe'), { code: 'concurrent_startup_recovery_unsafe' });
+        if (inspection.state === 'quarantine') {
+          const tokenPath = require('./local-auth').tokenPath(tokenFile);
+          const fd = fs.openSync(tokenPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+          let token;
+          try {
+            const tokenStat = fs.fstatSync(fd);
+            if (!tokenStat.isFile() || (tokenStat.mode & 0o777) !== 0o600) throw new Error('Unsafe local authentication token');
+            token = fs.readFileSync(fd, 'utf8');
+          } finally { fs.closeSync(fd); }
+          if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('Unsafe local authentication token');
+          const app = express();
+          app.use((req, res, next) => {
+            if (!['GET', 'HEAD'].includes(req.method)) return res.status(503).json({ error: 'concurrent_startup_quarantined' });
+            next();
+          });
+          app.use(createAuthMiddleware(token));
+          app.get('/control/runtime', (req, res) => res.json(runtimeIdentity.snapshot));
+          app.get('/control/quarantine', (req, res) => res.json({ state: 'quarantined', reason: 'concurrent_startup_recovery_unsafe', projectId: normalizedProjectId }));
+          const server = listen ? await new Promise((resolve, reject) => {
+            const listening = listenImpl(app, port, HOST, (error) => error ? reject(error) : resolve(listening));
+            listening.once('error', reject);
+          }) : null;
+          const actualPort = server?.address()?.port ?? port;
+          let closed = false;
+          return { app, host: HOST, port: actualPort, projectId: normalizedProjectId, quarantined: true,
+            async close() {
+              if (closed) return;
+              if (server) await closeHttpServer(server);
+              if (quarantineDb?.open) quarantineDb.close();
+              quarantineDb = null;
+              releaseLock(); releaseWorkspaceLock(); stateLockAcquired = false; workspaceLockAcquired = false; closed = true;
+            } };
+        }
+        quarantineDb.close(); quarantineDb = null;
+      }
+    } else if (providedState && providedState.filePath && providedState.filePath !== ':memory:' && fs.existsSync(providedState.filePath)) {
+      const filePath = providedState.filePath;
+      releaseLock = acquireStateLock(filePath); stateLockAcquired = true;
+      releaseWorkspaceLock = acquireWorkspaceLock(workspace, workspaceLockDir ? { lockDir: workspaceLockDir } : undefined); workspaceLockAcquired = true;
+      quarantineDb = new Database(filePath, { readonly: true, fileMustExist: true });
+      const inspection = inspectConcurrentStartupQuarantine(quarantineDb, workspace, normalizedProjectId);
+      quarantineDb.close(); quarantineDb = null;
+      if (!['none','released'].includes(inspection.state)) {
+        throw Object.assign(new Error('Concurrent startup phase requires owned-file preflight'), { code: 'concurrent_startup_recovery_unsafe' });
+      }
+    }
     await appServer.start?.();
+    providerStarted = true;
     const accountResult = await appServer.getAccount();
     const account = accountResult?.account || accountResult;
     if (account?.type !== 'chatgpt') throw new Error('Codex Universal requires an authenticated ChatGPT account via Codex OAuth.');
 
     if (!state) state = await openStateDatabase(stateFile ? { filePath: stateFile } : undefined);
-    if (ownsState) releaseLock = acquireStateLock(state.filePath);
-    releaseWorkspaceLock = acquireWorkspaceLock(workspace, workspaceLockDir ? { lockDir: workspaceLockDir } : undefined);
+    if (ownsState && !stateLockAcquired && state.filePath !== ':memory:') { releaseLock = acquireStateLock(state.filePath); stateLockAcquired = true; }
+    if (!workspaceLockAcquired) { releaseWorkspaceLock = acquireWorkspaceLock(workspace, workspaceLockDir ? { lockDir: workspaceLockDir } : undefined); workspaceLockAcquired = true; }
+    const startupLeadTaskIds = new Set(state.db.prepare('SELECT id FROM tasks WHERE owner=?').all('orchestrator').map((row) => row.id));
+    const storedMappings = storedDeliveryMappings(state.db, normalizedProjectId);
 
     const authToken = loadOrCreateAuthToken(tokenFile ? { filePath: tokenFile } : undefined);
     const authMiddleware = createAuthMiddleware(authToken);
@@ -863,6 +1358,7 @@ async function startServer({
     // Until startup reconciliation and route registration finish, JSON-RPC calls get a retryable 503 (not 404).
     let ready = false;
     app.use((req, res, next) => {
+      if (shuttingDown) return res.status(503).json({ error: 'shutting_down' });
       if (ready || req.method === 'GET' || req.method === 'HEAD') return next();
       res.set('Retry-After', '1');
       return res.status(503).json({ error: 'starting', message: 'The server is starting; startup reconciliation is not complete. Retry shortly.' });
@@ -883,13 +1379,14 @@ async function startServer({
     let aut03LeadSkillEnabled = false;
     let ownerChecks = null;
     let executionPermissions = 'inherit';
+    let projectSettings = { deliveryEngine: 'legacy' };
     if (projectSettingsFile) {
-      const settings = readSettingsFile(projectSettingsFile);
-      if (settings.warning) console.warn(`[settings] ${settings.warning}`);
-      acceptanceScratch = resolveAcceptanceScratch(settings, projectSettingsFile);
-      ownerChecks = settings.ownerChecks;
-      executionPermissions = settings.executionPermissions;
-      aut03LeadSkillEnabled = settings.aut03LeadSkillEnabled === true;
+      projectSettings = readSettingsFile(projectSettingsFile);
+      if (projectSettings.warning) console.warn(`[settings] ${projectSettings.warning}`);
+      acceptanceScratch = resolveAcceptanceScratch(projectSettings, projectSettingsFile);
+      ownerChecks = projectSettings.ownerChecks;
+      executionPermissions = projectSettings.executionPermissions;
+      aut03LeadSkillEnabled = projectSettings.aut03LeadSkillEnabled === true;
     }
     // Writer isolation uses the resolved owner policy; inherited full access is cooperative, not confined.
     const isolation = await selectWriterIsolation({ env: process.env, appServer, workspace, db: state.db, stateFile: state.filePath, executionPermissions });
@@ -910,7 +1407,7 @@ async function startServer({
     const evidenceStore = createEvidenceStore(state.db);
     const activityStore = createActivityStore(state.db);
     const sessionThreads = new SessionThreads({ db: state.db });
-    const orchestrator = orchestratorFactory({
+    const legacyOrchestrator = orchestratorFactory({
       appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog, mcpCatalog,
       aut03TrialRunIds,
       aut03LeadSkillEnabled,
@@ -919,6 +1416,14 @@ async function startServer({
       ...(acceptanceScratch ? { acceptanceScratch } : {}),
       executionPermissions,
     });
+    if (!legacyOrchestrator || typeof legacyOrchestrator !== 'object') throw new TypeError('Legacy orchestrator must be an object');
+    const legacyEngine = Object.create(legacyOrchestrator);
+    legacyEngine.run = typeof legacyOrchestrator.run === 'function'
+      ? legacyOrchestrator.run.bind(legacyOrchestrator)
+      : async () => { throw new TypeError('Legacy orchestrator does not implement run'); };
+    legacyEngine.resume = typeof legacyOrchestrator.resume === 'function'
+      ? legacyOrchestrator.resume.bind(legacyOrchestrator)
+      : async () => { throw Object.assign(new Error('No stored legacy run'), { name: 'RunNotFoundError' }); };
     const protectedRoleApp = protectRoleRpcMounts(app, authMiddleware);
     const specialistAgents = registerRoleAgents(protectedRoleApp, {
       roles, appServer, workspace, baseUrl, admission, usageLedger, activityStore, skillCatalog, mcpCatalog,
@@ -926,6 +1431,51 @@ async function startServer({
       stagingLog,
       lanes: worktreeMode ? lanes : null,
       taskStoreFactory: (roleId) => createTaskStore(state, roleId),
+    });
+    const deliveryEngine = projectSettings.deliveryEngine || 'legacy';
+    const needsConcurrentEngine = deliveryEngine === 'concurrent-v1' || storedMappings.hasConcurrent;
+    let concurrentEngine = null;
+    let concurrentRecoveryResults = [];
+    if (needsConcurrentEngine) {
+      if (!['worktree', 'cooperative'].includes(isolation.mode)) {
+        throw Object.assign(new Error(`Concurrent delivery requires a supported lane isolation mode (${isolation.reason || isolation.mode})`), {
+          code: 'concurrent_lane_isolation_required',
+        });
+      }
+      const settledHome = (typeof appServer.getCodexHome === 'function' ? appServer.getCodexHome() : null)
+        || accountProfiles.activeHome() || accountProfiles.codexDefaultHome;
+      const identityPin = providerIdentityPinFactory(settledHome);
+      if (!identityPin?.providerIdentity || typeof identityPin.providerIdentityFor !== 'function') {
+        throw new TypeError('Provider identity pin factory must return a pinned identity and fresh synchronous getter');
+      }
+      const storageRoot = deliveryStorageRoot
+        ? path.resolve(deliveryStorageRoot)
+        : path.join(os.homedir(), '.codex-agent-control-plane', 'projects', normalizedProjectId);
+      concurrentEngine = concurrentEngineFactory({
+        db: state.db, workspace, projectId: normalizedProjectId, stateFile: state.filePath, storageRoot,
+        baseUrl, authMiddleware, authToken, appServer,
+        providerIdentity: identityPin.providerIdentity, providerIdentityFor: identityPin.providerIdentityFor,
+        roles, leadRole, admission, lanes, writerIsolation: isolation, executionPermissions,
+        acceptanceScratch, evidenceStore,
+      });
+      startupConcurrentEngine = concurrentEngine;
+      concurrentEngine.register(protectedRoleApp);
+      if (typeof concurrentEngine.recoverInterruptedShutdown === 'function') {
+        await concurrentEngine.recoverInterruptedShutdown();
+      }
+      concurrentRecoveryResults = await concurrentEngine.recoverStoredRuns();
+    }
+    const mappedConcurrentTaskIds = new Set(storedMappings.concurrentRunIds);
+    const legacyTaskIds = new Set([
+      ...[...startupLeadTaskIds].filter((taskId) => !mappedConcurrentTaskIds.has(taskId)),
+      ...storedMappings.legacyRunIds,
+    ]);
+    const canRunEngine = ({ engine, runId }) => deliveryEngineFence({ db: state.db, workspace,
+      projectId: normalizedProjectId, engine, runId, legacyTaskIds,
+      concurrentRecoveryUnsafe: concurrentRecoveryResults.some((item) => item.state === 'unknown') });
+    let orchestrator = new DeliveryEngineRouter({
+      db: state.db, projectId: normalizedProjectId, defaultEngine: deliveryEngine,
+      legacyEngine, concurrentEngine, canRunEngine,
     });
     const leadTaskStore = createTaskStore(state, 'orchestrator');
     const transientRecoveryStore = createTransientRecoveryStore(state.db);
@@ -949,6 +1499,8 @@ async function startServer({
       }),
     });
     let budgetWatcher = null;
+    let closeCompleted = false;
+    let closeInProgress = null;
     const loopback = { client: null };
     if (autoResume) {
       const models = new Set([...roles.values()].map((role) => role.model).filter(Boolean));
@@ -974,9 +1526,10 @@ async function startServer({
     }
     const leadAgent = registerLead(app, {
       leadRole, orchestrator, baseUrl, authMiddleware, taskStore: leadTaskStore, budgetWatcher,
-      transientRecovery, autoResume, ownerChecks,
+      transientRecovery, autoResume, ownerChecks, legacyTaskIds,
     });
     registerControl(app, { authMiddleware, orchestrator, runtimeIdentity, transientRecovery });
+    registerDeliveryHostControls(app, { authMiddleware, router: orchestrator });
     ready = true;
     budgetWatcher?.start();
     if (autoResume) transientRecovery.start();
@@ -986,6 +1539,10 @@ async function startServer({
       appServer,
       accountProfiles,
       switchingAppServer: switching,
+      projectId: normalizedProjectId,
+      deliveryEngine,
+      orchestrator,
+      concurrentEngine,
       state,
       roles,
       specialistAgents,
@@ -997,39 +1554,85 @@ async function startServer({
       host: HOST,
       port: actualPort,
       async close() {
-        budgetWatcher?.stop();
-        transientRecovery.stop();
-        leadAgent.executor.cancelAll();
-        // Let canceled runs confirm downstream and recovery projections drain within one shutdown window.
-        await waitForShutdownWork(leadAgent.executor, transientRecovery, SHUTDOWN_TIMEOUT_MS);
-        // The SDK persists the executor's last events on its own consumer loop, which only awaits
-        // microtask-based SQLite calls; one macrotask turn lets it finish before the db closes.
-        await new Promise((resolve) => setImmediate(resolve));
-        let appServerShutdown;
-        try {
-          appServerShutdown = bounded(appServer.close?.(), SHUTDOWN_TIMEOUT_MS);
-        } catch (error) {
-          appServerShutdown = Promise.reject(error);
-        }
-        if (httpServer) await closeHttpServer(httpServer);
-        try {
-          await appServerShutdown;
-        } finally {
-          try {
-            if (ownsState) await state.close();
-          } finally {
-            releaseLock();
-            releaseWorkspaceLock();
+        if (closeCompleted) return;
+        if (closeInProgress) return closeInProgress;
+        closeInProgress = (async () => {
+          shuttingDown = true;
+          concurrentEngine?.fenceShutdown();
+          ready = false;
+          budgetWatcher?.stop();
+          transientRecovery.stop();
+          leadAgent.executor.cancelAll();
+          if (concurrentEngine) {
+            const drain = Promise.allSettled([leadAgent.executor.settled(), transientRecovery.drain()]).then(() => true);
+            if (await bounded(drain, SHUTDOWN_TIMEOUT_MS) !== true) {
+              throw Object.assign(new Error('Server work did not drain safely; state and workspace locks remain held'), { code: 'server_shutdown_drain_unsafe' });
+            }
+          } else {
+            await waitForShutdownWork(leadAgent.executor, transientRecovery, SHUTDOWN_TIMEOUT_MS);
           }
-        }
+          await new Promise((resolve) => setImmediate(resolve));
+          if (concurrentEngine) {
+            if (!concurrentShutdownPromise) {
+              const operation = (async () => {
+                await orchestrator.prepareShutdown();
+                concurrentEngine.beginProviderShutdown();
+                if (!providerShutdownPromise) providerShutdownPromise = Promise.resolve().then(() => appServer.close?.());
+                await providerShutdownPromise;
+                const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
+                for (;;) {
+                  try { return await concurrentEngine.finishShutdown(); }
+                  catch (error) {
+                    if (!['concurrent_shutdown_process_alive', 'delivery_role_shutdown_process_alive'].includes(error.code)
+                      || Date.now() >= deadline) throw error;
+                    await new Promise((resolve) => setTimeout(resolve, 20));
+                  }
+                }
+              })();
+              concurrentShutdownPromise = operation;
+              operation.catch(() => { if (concurrentShutdownPromise === operation) concurrentShutdownPromise = null; });
+            }
+            if ((await bounded(concurrentShutdownPromise, SHUTDOWN_TIMEOUT_MS))?.safeToRelease !== true) {
+              throw Object.assign(new Error('Concurrent engine shutdown is still draining; state and workspace locks remain held'), { code: 'concurrent_shutdown_unsafe' });
+            }
+          } else {
+            await orchestrator.shutdown();
+            if (await bounded(Promise.resolve().then(() => appServer.close?.()).then(() => true), SHUTDOWN_TIMEOUT_MS) !== true) {
+              throw Object.assign(new Error('App Server shutdown did not settle; state and workspace locks remain held'), { code: 'app_server_shutdown_unsafe' });
+            }
+          }
+          if (httpServer) await closeHttpServer(httpServer);
+          if (ownsState) await state.close();
+          releaseLock();
+          releaseWorkspaceLock();
+          closeCompleted = true;
+        })();
+        try { await closeInProgress; } finally { closeInProgress = null; }
       },
     };
   } catch (error) {
-    try { await bounded(appServer.close?.(), SHUTDOWN_TIMEOUT_MS); } catch (_) { /* Preserve the startup failure. */ }
-    if (httpServer) await closeHttpServer(httpServer);
-    if (state && ownsState) { try { await state.close(); } catch (_) { /* Preserve the startup failure. */ } }
-    releaseLock();
-    releaseWorkspaceLock();
+    if (quarantineDb?.open) { try { quarantineDb.close(); } catch (_) {} }
+    let cleanupSafe = true;
+    const startupRecoveryRefused = error?.code === 'concurrent_startup_recovery_unsafe';
+    if (startupConcurrentEngine && !startupRecoveryRefused) {
+      try { cleanupSafe = (await startupConcurrentEngine.shutdown())?.safeToRelease === true; }
+      catch (_) { cleanupSafe = false; }
+    }
+    if (cleanupSafe) {
+      try {
+        cleanupSafe = !providerStarted || await bounded(Promise.resolve().then(() => appServer.close?.()).then(() => true), SHUTDOWN_TIMEOUT_MS) === true;
+      } catch (_) { cleanupSafe = false; }
+    }
+    if (cleanupSafe) {
+      if (httpServer) await closeHttpServer(httpServer);
+      if (state && ownsState) { try { await state.close(); } catch (_) { cleanupSafe = false; } }
+    }
+    if (cleanupSafe) {
+      releaseLock(); stateLockAcquired = false;
+      releaseWorkspaceLock(); workspaceLockAcquired = false;
+    } else {
+      shuttingDown = true;
+    }
     throw error;
   }
 }
@@ -1167,4 +1770,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { SHUTDOWN_TIMEOUT_MS, SHUTDOWN_TOTAL_MS, startServer, describePause, persistTransientRecoveryStatus, waitForShutdownWork, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts };
+module.exports = { SHUTDOWN_TIMEOUT_MS, SHUTDOWN_TOTAL_MS, startServer, projectIdForWorkspace, inspectConcurrentStartupQuarantine, describePause, persistTransientRecoveryStatus, waitForShutdownWork, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts };

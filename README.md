@@ -22,6 +22,9 @@ The server checks App Server's active account on startup and rejects API-key mod
 
 ## Run
 
+For the browser launcher, run `node launcher` or `npm run launcher`, then open
+`http://127.0.0.1:8081/`. Set `LAUNCHER_PORT` to override the default port.
+
 ```bash
 npm ci
 npm start
@@ -92,6 +95,8 @@ Skill instructions remain subordinate to the task, project and role rules, permi
 ## Writer admission
 
 Every writable Codex turn passes through the role executor, which admits at most one writer per workspace (canonical path) using the state database.
+
+Cross-engine admission treats persisted `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, and `TASK_STATE_CANCELED` legacy tasks as terminal; active and unknown states remain fenced. See [P-42](docs/production-transfer.md#p-42-terminal-legacy-task-states-fenced-engine-switching).
 
 - Waits: a second writer stays `SUBMITTED` (FIFO) while the holder is `active`; canceling while waiting ends `CANCELED` with no effects. Read-only roles never take admission and run alongside a writer.
 - Blocks: while the holder is `unresolved` (its outcome is unknown), one reconciliation is attempted; if the process group cannot be proven gone, the new writer fails with `failureKind: "admission_blocked"` and no effects.
@@ -246,6 +251,9 @@ Changed pinned acceptance scripts retain their separate read-only integrity
 review. A round ending alone does not trigger either review. Declared review
 checkpoints bind their evidence to scoped content, including uncommitted files;
 model risk classification remains a lead responsibility.
+During an explicit review replan, a matching auditor may use a fresh accepted
+verifier from an earlier wave even when the stored auditor template is
+unavailable; historical receipts alone remain gated.
 
 Acceptance audit reports use an exact standalone first summary line, such as
 `VERDICT: pass`. `checks` records required executions or explicit validation

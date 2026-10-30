@@ -128,3 +128,38 @@ test('an explicit strict request does not inherit a permitted writable profile o
   assert.equal(resolved.approvalPolicy, undefined);
   assert.equal(resolved.approvalsReviewer, undefined);
 });
+
+test('explicit full-access requires a trusted project and the allowed built-in full-access profile', async (t) => {
+  const { project } = makeTempTree(t);
+  const trusted = makeConfigServer({
+    projects: { [project]: { trust_level: 'trusted' } },
+    default_permissions: ':workspace',
+    approval_policy: 'on-request',
+  }, { profiles: [
+    { id: ':read-only', allowed: true },
+    { id: ':workspace', allowed: true },
+    { id: ':danger-full-access', allowed: true },
+  ] });
+  const resolved = await resolveExecutionPermissions(trusted, project, 'full-access');
+  assert.deepEqual({ mode: resolved.mode, profileApi: resolved.profileApi, writerProfile: resolved.writerProfile,
+    approvalPolicy: resolved.approvalPolicy, approvalsReviewer: resolved.approvalsReviewer }, {
+    mode: 'full-access', profileApi: true, writerProfile: ':danger-full-access',
+    approvalPolicy: 'never', approvalsReviewer: 'user',
+  });
+
+  const denied = makeConfigServer({ projects: { [project]: { trust_level: 'trusted' } } }, { profiles: [
+    { id: ':read-only', allowed: true }, { id: ':danger-full-access', allowed: false },
+  ] });
+  const untrusted = makeConfigServer({ projects: { [project]: { trust_level: 'untrusted' } } }, { profiles: [
+    { id: ':read-only', allowed: true }, { id: ':danger-full-access', allowed: true },
+  ] });
+  const unavailable = makeConfigServer({}, { readError: new Error('config unavailable'), profiles: [
+    { id: ':read-only', allowed: true }, { id: ':danger-full-access', allowed: true },
+  ] });
+  for (const server of [denied, untrusted, unavailable]) {
+    const rejected = await resolveExecutionPermissions(server, project, 'full-access');
+    assert.equal(rejected.mode, 'denied');
+    assert.notEqual(rejected.approvalPolicy, 'never');
+    assert.notEqual(rejected.writerProfile, ':danger-full-access');
+  }
+});

@@ -12,12 +12,16 @@
     });
 
     let serverRunning = false;
+    let serverReadiness = 'stopped';
+    let serverReadinessReason = null;
 
     // ---- Session state: a session is one A2A contextId; the open one is bound to the tab (?session=<contextId>)
     let currentSessionId = null;
     let sessionData = null;       // last transcript received from the launcher
     let pendingTurn = null;       // { goal, baseTurns } until the sent message shows up as a turn
     let sending = false;
+    let sendingRequest = null;
+    let a2aRequestEpoch = 0;
     let autoOpenLatest = false;
     let renderSignature = '';
     let initialSessionParam = new URLSearchParams(window.location.search).get('session');
@@ -167,6 +171,11 @@
     }
 
     function statusMarker(status) {
+      if (status && typeof status === 'object') {
+        if (status.readiness === 'quarantined') return '[quarantined]';
+        if (status.status === 'running' && status.readiness !== 'ready') return '[not ready]';
+        status = status.status;
+      }
       if (status === 'running') return '[running]';
       if (status === 'starting') return '[starting]';
       return '[stopped]';
@@ -189,10 +198,13 @@
       projectList.forEach(p => {
         const opt = document.createElement('option');
         opt.value = p.id;
-        opt.textContent = p.name + ' ' + statusMarker(p.status);
+        opt.textContent = p.name + ' ' + statusMarker(p);
         select.appendChild(opt);
       });
       const cur = currentProject();
+      const rolesLink = document.getElementById('rolesNavLink');
+      if (rolesLink) rolesLink.href = '/ui/roles.html' + (currentProjectId ? '?project=' + encodeURIComponent(currentProjectId) : '');
+      syncBacklogNavLink();
       if (cur) {
         select.value = cur.id;
         meta.textContent = cur.path + ' | port ' + cur.port;
@@ -250,9 +262,31 @@
         if (value) url.searchParams.set(key, value);
       });
       link.href = url.pathname + url.search;
+      syncBacklogNavLink();
+    }
+
+    function syncBacklogNavLink() {
+      const link = document.getElementById('backlogNavLink');
+      if (!link) return;
+      const url = new URL('/ui/backlog.html', window.location.origin);
+      const current = new URLSearchParams(window.location.search);
+      ['project', 'session'].forEach(function (key) {
+        const value = current.get(key);
+        if (value) url.searchParams.set(key, value);
+      });
+      link.href = url.pathname + url.search;
     }
 
     function setSession(id) {
+      if (id !== currentSessionId) {
+        if (typeof a2aRequestEpoch !== 'undefined') a2aRequestEpoch += 1;
+        sending = false;
+        sendingRequest = null;
+        if (typeof decisionSubmitting !== 'undefined') {
+          decisionSubmitting = false;
+          decisionSubmitOwner = null;
+        }
+      }
       currentSessionId = id;
       sessionData = null;
       pendingTurn = null;
@@ -267,7 +301,11 @@
     }
 
     function resetSessionView() {
+      a2aRequestEpoch += 1;
       sending = false;
+      sendingRequest = null;
+      decisionSubmitting = false;
+      decisionSubmitOwner = null;
       document.getElementById('sendError').classList.add('hidden');
       document.getElementById('decisionOptionsList').textContent = '';
       document.getElementById('decisionId').value = '';
@@ -287,6 +325,9 @@
         history.replaceState(null, '', url);
       } catch (_) {}
       if (changed) {
+        serverRunning = false;
+        serverReadiness = id ? 'checking' : 'stopped';
+        serverReadinessReason = null;
         resetSessionView();
         if (initialSessionParam) setSession(initialSessionParam);
         initialSessionParam = null;
@@ -308,10 +349,8 @@
           selectProject(pickInitialProject());
         } else {
           renderProjectBar();
+          if (teamData && (currentProject().status !== 'stopped') !== teamData.running) loadTeam();
         }
-        // The team card is editable only while the project server is stopped: follow its status.
-        const cur = currentProject();
-        if (cur && teamData && (cur.status !== 'stopped') !== teamData.running) loadTeam();
       } catch (_) {}
     }
 
@@ -395,9 +434,12 @@
         document.getElementById('serverDot').className = 'status-dot';
         document.getElementById('serverStatusText').textContent = 'No project selected';
         document.getElementById('serverPill').style.borderColor = 'var(--border-hairline)';
+        document.getElementById('serverPill').title = '';
         document.getElementById('startBtn').disabled = true;
         document.getElementById('stopBtn').disabled = true;
         serverRunning = false;
+        serverReadiness = 'stopped';
+        serverReadinessReason = null;
         updateComposer();
         return;
       }
@@ -412,41 +454,78 @@
         const pill = document.getElementById('serverPill');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
+        const startupDiagnostic = data.startupDiagnostic;
 
         dot.className = 'status-dot';
-        serverRunning = data.status === 'running';
+        serverReadiness = data.readiness || 'unavailable';
+        serverReadinessReason = data.readinessReason || null;
+        serverRunning = data.status === 'running' && data.taskReady === true && serverReadiness === 'ready';
 
         if (data.status === 'running') {
-          dot.classList.add('active');
-          text.innerText = 'Orchestrator active';
-          pill.style.borderColor = 'var(--success-border)';
           startBtn.disabled = true;
           stopBtn.disabled = false;
+          if (serverRunning) {
+            dot.classList.add('active');
+            text.innerText = 'Orchestrator ready';
+            pill.style.borderColor = 'var(--success-border)';
+          } else if (serverReadiness === 'quarantined') {
+            dot.classList.add('warning');
+            text.innerText = 'Quarantined — tasks blocked';
+            pill.style.borderColor = 'var(--warning-border)';
+            pill.title = serverReadinessReason || 'Task service is quarantined.';
+          } else {
+            dot.classList.add('warning');
+            text.innerText = serverReadiness === 'checking' || serverReadiness === 'starting'
+              ? 'Checking task readiness...'
+              : 'Server not task-ready';
+            pill.style.borderColor = 'var(--warning-border)';
+            pill.title = serverReadinessReason || 'The A2A task endpoint is not available.';
+          }
         } else if (data.status === 'starting') {
           dot.classList.add('starting');
           text.innerText = 'Starting process...';
           pill.style.borderColor = 'var(--warning-border)';
+          pill.title = 'Waiting for the A2A task endpoint.';
           startBtn.disabled = true;
           stopBtn.disabled = false;
         } else {
-          text.innerText = 'Server stopped';
+          text.innerText = startupDiagnostic && startupDiagnostic.outcome === 'failed'
+            ? 'Startup failed (' + startupDiagnostic.stage + ')'
+            : 'Server stopped';
           pill.style.borderColor = 'var(--border-hairline)';
+          pill.title = '';
           startBtn.disabled = false;
           stopBtn.disabled = true;
         }
         updateComposer();
 
         const logsBody = document.getElementById('serverLogsBody');
-        if (data.logs && data.logs.length) {
-          logsBody.innerText = data.logs.join('');
+        let logs = Array.isArray(data.logs) ? data.logs.join('') : '';
+        if (startupDiagnostic && startupDiagnostic.outcome === 'failed' && startupDiagnostic.message
+          && !logs.includes(startupDiagnostic.message)) {
+          logs += '[ERROR] ' + startupDiagnostic.message + '\n';
+        }
+        if (logs.length || (startupDiagnostic && startupDiagnostic.outcome === 'failed')) {
+          logsBody.innerText = logs;
           logsBody.scrollTop = logsBody.scrollHeight;
         }
 
         await pollSession();
         pollAsks();
         const known = currentProject();
-        if (known && known.status !== data.status) refreshProjects();
-      } catch (_) {}
+        if (known && (known.status !== data.status || known.readiness !== data.readiness)) refreshProjects();
+      } catch (_) {
+        if (pid === currentProjectId) {
+          serverRunning = false;
+          serverReadiness = 'unavailable';
+          serverReadinessReason = 'Launcher status could not be verified.';
+          document.getElementById('serverDot').className = 'status-dot warning';
+          document.getElementById('serverStatusText').textContent = 'Readiness unavailable';
+          document.getElementById('serverPill').style.borderColor = 'var(--warning-border)';
+          document.getElementById('serverPill').title = serverReadinessReason;
+          updateComposer();
+        }
+      }
     }
 
     function isTerminalState(state) {
@@ -510,7 +589,14 @@
       let hintText = '';
       let locked = false;
       if (!currentProjectId) { hintText = 'Add or select a project first.'; locked = true; }
-      else if (!serverRunning) { hintText = 'Start the orchestrator to send messages.'; locked = true; }
+      else if (!serverRunning) {
+        hintText = serverReadiness === 'quarantined'
+          ? 'Project is quarantined; task submissions are blocked (' + (serverReadinessReason || 'unsafe startup recovery') + ').'
+          : (serverReadiness === 'checking' || serverReadiness === 'starting'
+            ? 'Checking that the project can accept A2A tasks.'
+            : 'Project server is not ready to accept tasks.');
+        locked = true;
+      }
       else if (scoutMode) {
         if (askSending) { hintText = 'Sending to the scout...'; locked = true; }
         else if (active) hintText = 'Lead is working: your questions go to the scout.';
@@ -884,6 +970,8 @@
     let decisionCardKey = '';
     let decisionOptionIds = [];
     let selectedDecisionOption = '';
+    let decisionSubmitting = false;
+    let decisionSubmitOwner = null;
 
     function decisionLabel(key) {
       return Object.prototype.hasOwnProperty.call(DECISION_LABELS, key) ? DECISION_LABELS[key] : key;
@@ -950,20 +1038,33 @@
         input.checked = input.value === selectedDecisionOption;
         label.classList.toggle('selected', input.checked);
       });
-      document.getElementById('decisionSubmit').disabled = decisionOptionIds.length > 0 && !selectedDecisionOption;
+      const answer = document.getElementById('decisionAnswer').value.trim();
+      document.getElementById('decisionSubmit').disabled = decisionSubmitting || sending || !serverRunning
+        || (decisionOptionIds.length > 0 ? !selectedDecisionOption : !answer);
     }
 
     function updateDecisionCard() {
       const card = document.getElementById('decisionCard');
       const last = lastTurn();
-      if (!last || !isPausedState(last.state) || sending) {
+      const pause = last?.metadata?.pause || {};
+      if (!last || !isPausedState(last.state) || pause.kind === 'stopped') {
         card.classList.add('hidden');
-        decisionCardKey = '';
+        if (!decisionSubmitting) {
+          decisionCardKey = '';
+          selectedDecisionOption = '';
+        }
         return;
       }
-      const pause = last.metadata?.pause || {};
-      card.classList.remove('hidden');
+      if (sending) {
+        card.classList.add('hidden');
+        return;
+      }
       const key = JSON.stringify([last.id, pause.kind || '', pause.decisionId || '', pause.question || '', pause.message || '']);
+      if (decisionSubmitting && key !== decisionCardKey) {
+        card.classList.add('hidden');
+        return;
+      }
+      card.classList.remove('hidden');
       if (key !== decisionCardKey) {
         decisionCardKey = key;
         selectedDecisionOption = '';
@@ -1357,36 +1458,80 @@
     }
 
     async function submitDecision() {
+      if (decisionSubmitting || sending) return;
       const last = lastTurn();
       if (!last) return;
+      const pause = last.metadata?.pause || {};
+      if (!isPausedState(last.state) || pause.kind === 'stopped') return;
+      if (!serverRunning) {
+        const message = 'Project server is not ready to accept tasks.';
+        showNotice('sendError', message);
+        return { ok: false, error: message };
+      }
       const choice = selectedDecisionOption;
       if (decisionOptionIds.length > 0 && !choice) return;
       const decisionId = document.getElementById('decisionId').value;
-      const answer = document.getElementById('decisionAnswer').value.trim();
-
-      document.getElementById('decisionAnswer').value = '';
-      selectedDecisionOption = '';
-      decisionCardKey = '';
-      await executeA2A({
-        goal: answer || choice || 'Approved',
-        taskId: last.id,
-        decision: decisionId,
-        choice: choice || undefined
-      });
+      const answerEl = document.getElementById('decisionAnswer');
+      const answerDraft = answerEl.value;
+      if (!choice && !answerDraft.trim()) {
+        const message = 'Enter a response or select an option before continuing.';
+        showNotice('sendError', message);
+        return { ok: false, error: message };
+      }
+      const scope = { projectId: currentProjectId, sessionId: currentSessionId, taskId: last.id };
+      const submitOwner = {};
+      decisionSubmitOwner = submitOwner;
+      decisionSubmitting = true;
+      try {
+        updateDecisionControls();
+        const outcome = await executeA2A({
+          goal: answerDraft.trim() || choice,
+          taskId: last.id,
+          decision: decisionId,
+          choice: choice || undefined
+        });
+        if (submitOwner === decisionSubmitOwner && outcome?.ok && decisionScopeMatches(scope)) {
+          if (answerEl.value === answerDraft) answerEl.value = '';
+          if (selectedDecisionOption === choice) selectedDecisionOption = '';
+        }
+        return outcome;
+      } finally {
+        if (submitOwner === decisionSubmitOwner) {
+          decisionSubmitOwner = null;
+          decisionSubmitting = false;
+          if (decisionScopeMatches(scope)) updateDecisionCard();
+          updateDecisionControls();
+        }
+      }
     }
 
-    function selectOption(id) {
-      selectedDecisionOption = id;
-      updateDecisionControls();
+    function decisionScopeMatches(scope) {
+      const last = lastTurn();
+      return scope.projectId === currentProjectId && scope.sessionId === currentSessionId
+        && last && last.id === scope.taskId;
+    }
+
+    function isErrorPausedTask(task) {
+      if (!task) return null;
+      const state = task.status?.state ?? task.state;
+      const pause = task.metadata?.pause || task.status?.metadata?.pause || task.status?.message?.metadata?.pause;
+      return isPausedState(state) && pause?.kind === 'error' ? pause : null;
     }
 
     // The request returns when the lead run ends; the transcript is driven by polling meanwhile.
     async function executeA2A(payload) {
-      if (!currentProjectId) return showNotice('sendError', 'Add or select a project first!');
+      if (!currentProjectId) {
+        const message = 'Add or select a project first!';
+        showNotice('sendError', message);
+        return { ok: false, error: message };
+      }
       const pid = currentProjectId;
       const sid = currentSessionId;
+      const requestEpoch = ++a2aRequestEpoch;
+      const requestOwner = {};
       const errorEl = document.getElementById('sendError');
       errorEl.classList.add('hidden');
+      sendingRequest = requestOwner;
       sending = true;
       renderTranscript();
 
@@ -1396,32 +1541,65 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const data = await res.json();
-        if (pid !== currentProjectId) return;
-        if (!data.success) throw new Error(data.error);
+        let data;
+        try {
+          data = await res.json();
+        } catch (err) {
+          if (!res.ok) throw new Error(res.statusText || 'HTTP ' + res.status);
+          throw err;
+        }
+        if (requestOwner !== sendingRequest || requestEpoch !== a2aRequestEpoch
+          || pid !== currentProjectId || sid !== currentSessionId) return { ok: false, stale: true };
+        if (!res.ok) throw new Error((typeof data?.error === 'string' && data.error) || res.statusText || 'HTTP ' + res.status);
+        if (data?.success !== true) {
+          throw new Error((typeof data?.error === 'string' && data.error) || 'The server did not accept the answer.');
+        }
+        const errorPause = isErrorPausedTask(data.result);
+        if (errorPause) {
+          const statusMessage = data.result.status?.message;
+          const message = errorPause.message || errorPause.error || extractParts(statusMessage?.parts) || statusMessage?.text;
+          throw new Error(message || 'The lead remains paused after an error.');
+        }
+        return { ok: true, data };
       } catch (err) {
-        if (pid === currentProjectId) {
+        if (requestOwner === sendingRequest && requestEpoch === a2aRequestEpoch
+          && pid === currentProjectId && sid === currentSessionId) {
           errorEl.textContent = 'Send failed: ' + err.message;
           errorEl.classList.remove('hidden');
           if (payload.taskId === undefined) {
-            document.getElementById('taskGoal').value = payload.goal;
+            const goalEl = document.getElementById('taskGoal');
+            if (goalEl && !goalEl.value) goalEl.value = payload.goal;
             const checksEl = document.getElementById('taskChecks');
-            if (checksEl && payload.checks) checksEl.value = payload.checks.join('\n');
+            if (checksEl && payload.checks && !checksEl.value) checksEl.value = payload.checks.join('\n');
           }
         }
+        return { ok: false, error: err.message };
       } finally {
-        if (pid === currentProjectId) {
+        const ownsRequest = requestOwner === sendingRequest && requestEpoch === a2aRequestEpoch;
+        if (ownsRequest) {
+          sendingRequest = null;
           sending = false;
-          if (sid === currentSessionId) {
+        }
+        if (ownsRequest && pid === currentProjectId) {
+          let scopeStillCurrent = requestEpoch === a2aRequestEpoch
+            && pid === currentProjectId && sid === currentSessionId;
+          if (scopeStillCurrent) {
             await pollSession();
-            // The message never became a turn: drop the optimistic bubble.
-            if (pendingTurn && (!sessionData || sessionData.turns.length <= pendingTurn.baseTurns)) pendingTurn = null;
-            if (!sessionData) setSession(null);
-            else renderTranscript();
+            scopeStillCurrent = requestEpoch === a2aRequestEpoch
+              && pid === currentProjectId && sid === currentSessionId;
+            if (scopeStillCurrent) {
+              if (pendingTurn && (!sessionData || sessionData.turns.length <= pendingTurn.baseTurns)) pendingTurn = null;
+              if (!sessionData) setSession(null);
+              else renderTranscript();
+            }
           }
-          loadSessions();
+          if (scopeStillCurrent && pid === currentProjectId) loadSessions();
         }
       }
+    }
+    function selectOption(id) {
+      selectedDecisionOption = id;
+      updateDecisionControls();
     }
 
     function extractParts(parts) {
@@ -1439,6 +1617,13 @@
     // ---- Accounts card
     let accountLoginTimer = null;
     let accountLoginId = null;
+    let accountsData = null;
+    let accountsRevision = 0;
+    let accountsRequestId = 0;
+    let accountsForceRequestId = 0;
+    let accountsForceInFlight = false;
+    const accountHandshakeStates = new Map();
+    const accountHandshakesInFlight = new Set();
 
     function accountsApi(method, url, body) {
       return fetch(url, {
@@ -1509,10 +1694,72 @@
 
       const actions = document.createElement('div');
       actions.className = 'account-actions';
+      const accountPath = '/api/accounts/' + (isSystem ? 'system' : encodeURIComponent(account.name));
+      const accountKey = isSystem ? 'system' : account.name;
+      const handshake = textEl('button', 'btn btn-ghost btn-xs account-handshake', '🤝');
+      handshake.type = 'button';
+      handshake.setAttribute('aria-label', 'Handshake with ' + title);
+      handshake.title = 'Send a short request and refresh this account usage window';
+      const handshakeStatus = textEl('span', 'handshake-status', '');
+      handshakeStatus.setAttribute('role', 'status');
+      handshakeStatus.setAttribute('aria-live', 'polite');
+      const priorState = accountHandshakeStates.get(accountKey);
+      if (priorState) {
+        handshakeStatus.classList.add(priorState.kind);
+        handshakeStatus.textContent = priorState.text;
+        if (priorState.error) handshakeStatus.title = priorState.error;
+      }
+      handshake.disabled = accountHandshakesInFlight.has(accountKey);
+      handshake.addEventListener('click', function () {
+        if (accountHandshakesInFlight.has(accountKey)) return;
+        accountHandshakesInFlight.add(accountKey);
+        accountsRevision += 1;
+        accountHandshakeStates.set(accountKey, { kind: '', text: 'Starting handshake...' });
+        handshake.disabled = true;
+        handshake.setAttribute('aria-busy', 'true');
+        handshakeStatus.className = 'handshake-status';
+        handshakeStatus.textContent = 'Starting handshake...';
+        handshakeStatus.removeAttribute('title');
+        accountsApi('POST', accountPath + '/handshake')
+          .then(function (result) {
+            if (result.turnStatus !== 'completed' || result.limitsRead !== true) {
+              throw new Error('Restart the launcher to enable usage handshakes');
+            }
+            const currentAccount = isSystem ? accountsData && accountsData.system
+              : accountsData && accountsData.profiles.find(function (profile) { return profile.name === account.name; });
+            if (currentAccount) {
+              currentAccount.email = result.email;
+              currentAccount.planType = result.planType;
+              currentAccount.primary = result.primary;
+              currentAccount.secondary = result.secondary;
+              currentAccount.error = null;
+            }
+            const confirmed = result.primary && Number.isFinite(result.primary.resetsAt)
+              && result.primary.resetsAt > Date.now() / 1000;
+            accountHandshakeStates.set(accountKey, {
+              kind: confirmed ? 'success' : 'pending',
+              text: confirmed ? 'Turn complete; limits refreshed' : 'Limits pending',
+            });
+            renderAccounts(accountsData);
+          })
+          .catch(function (e) {
+            accountHandshakeStates.set(accountKey, { kind: 'error', text: 'Failed', error: e.message });
+            handshakeStatus.classList.add('error');
+            handshakeStatus.textContent = 'Failed';
+            handshakeStatus.title = e.message;
+          })
+          .finally(function () {
+            accountHandshakesInFlight.delete(accountKey);
+            accountsRevision += 1;
+            if (accountsData) renderAccounts(accountsData);
+          });
+      });
+      actions.appendChild(handshake);
+      actions.appendChild(handshakeStatus);
       if (!account.active) {
         const activate = textEl('button', 'btn btn-ghost btn-xs', 'Activate');
         activate.addEventListener('click', function () {
-          accountsApi('POST', '/api/accounts/' + (isSystem ? 'system' : encodeURIComponent(account.name)) + '/activate')
+          accountsApi('POST', accountPath + '/activate')
             .then(function () { fetchAccounts(false); })
             .catch(function (e) { showAccountsError(e.message); });
         });
@@ -1526,7 +1773,7 @@
           const yes = textEl('button', 'btn btn-danger btn-xs', 'Yes');
           yes.addEventListener('click', function () {
             yes.disabled = true;
-            accountsApi('DELETE', '/api/accounts/' + encodeURIComponent(account.name))
+            accountsApi('DELETE', accountPath)
               .then(function () { fetchAccounts(false); })
               .catch(function (e) { showAccountsError(e.message); fetchAccounts(false); });
           });
@@ -1542,6 +1789,8 @@
     }
 
     function renderAccounts(data) {
+      if (!data) return;
+      accountsData = data;
       const list = document.getElementById('accountsList');
       list.textContent = '';
       list.appendChild(accountBlock(data.system, true));
@@ -1550,12 +1799,38 @@
     }
 
     async function fetchAccounts(force = false) {
+      if (!force && accountsForceInFlight) return;
+      const requestId = ++accountsRequestId;
+      const forceRequestId = force ? ++accountsForceRequestId : accountsForceRequestId;
+      const revision = accountsRevision;
+      const refreshButton = force ? document.getElementById('accountsRefreshBtn') : null;
+      const refreshStatus = force ? document.getElementById('accountsRefreshStatus') : null;
+      if (force) {
+        accountsForceInFlight = true;
+        refreshButton.disabled = true;
+        refreshButton.setAttribute('aria-busy', 'true');
+        refreshStatus.textContent = 'Refreshing...';
+        refreshStatus.classList.remove('is-error');
+      }
+      const current = () => requestId === accountsRequestId && revision === accountsRevision && accountHandshakesInFlight.size === 0
+        && (!force || forceRequestId === accountsForceRequestId);
       try {
         const data = await accountsApi('GET', '/api/accounts' + (force ? '?force=1' : ''));
+        if (!current()) return;
         showAccountsError('');
         renderAccounts(data);
+        if (force) refreshStatus.textContent = 'Accounts refreshed';
       } catch (e) {
-        showAccountsError('Failed to load accounts: ' + e.message);
+        if (current()) {
+          showAccountsError('Failed to load accounts: ' + e.message);
+          if (force) { refreshStatus.textContent = 'Refresh failed'; refreshStatus.classList.add('is-error'); }
+        }
+      } finally {
+        if (force && forceRequestId === accountsForceRequestId) {
+          accountsForceInFlight = false;
+          refreshButton.disabled = false;
+          refreshButton.removeAttribute('aria-busy');
+        }
       }
     }
 
@@ -2468,11 +2743,7 @@
         if (token !== teamLoadToken) return;
         teamData = projectId ? data : null;
         errEl.classList.add('hidden');
-        // Roles are read when the project server starts, so they are editable only while it is stopped.
-        const editable = Boolean(projectId) && data.running !== true;
-        const note = document.getElementById('aboutTeamNote');
-        note.textContent = 'Stop the project server to change roles';
-        note.classList.toggle('hidden', !(projectId && data.running === true));
+        const editable = false;
         const list = document.getElementById('aboutTeamList');
         hideUiTooltip();
         list.textContent = '';
@@ -2480,7 +2751,7 @@
         data.roles.forEach(function (r) { addAboutRow(list, r, false, editable); });
         updateTeamLeds();
         renderTeamTokens();
-        document.getElementById('aboutTeamLabel').textContent = 'Team (' + (data.roles.length + 1) + ' agents)';
+        document.getElementById('aboutTeamLabel').textContent = 'Team activity (' + (data.roles.length + 1) + ')';
         if (data.warning) {
           errEl.textContent = data.warning;
           errEl.classList.remove('hidden');
@@ -2596,10 +2867,10 @@
     }
 
     document.addEventListener('keydown', function (ev) {
-      if (ev.key === 'Escape' && !document.getElementById('roleModal').classList.contains('hidden')) closeRoleModal();
+      const modal = document.getElementById('roleModal');
+      if (ev.key === 'Escape' && modal && !modal.classList.contains('hidden')) closeRoleModal();
     });
 
-    loadTeam();
     syncPerformanceNavLink();
 
     setInterval(function () { if (!accountLoginId) fetchAccounts(false); }, 30000);

@@ -380,7 +380,12 @@ test('e2e real stack', async (suite) => {
       fs.copyFileSync(stackA.runtime.state.filePath, stateB);
       assert.equal(serverA.leadCalls.length, 1);
 
-      stackB = await boot(rootB, serverB, { stateFile: stateB });
+      await assert.rejects(boot(rootB, serverB, { stateFile: stateB }), { code: 'delivery_project_identity_conflict' });
+      release();
+      await inflight;
+      await stackA.runtime.close();
+      stackA = null;
+      stackB = await boot(rootA, serverB, { stateFile: stateB });
       const leadRow = stackB.runtime.state.db.prepare("SELECT id FROM tasks WHERE owner = 'orchestrator'").all();
       assert.equal(leadRow.length, 1);
       const leadTask = await stackB.client.getTask({ tenant: '', id: leadRow[0].id, historyLength: 0 }, stackB.requestOptions);
@@ -393,7 +398,6 @@ test('e2e real stack', async (suite) => {
 
       const done = await send(stackB, { text: 'resume', taskId: leadTask.id, contextId: leadTask.contextId });
       assert.equal(done.status.state, TaskState.TASK_STATE_COMPLETED);
-      // Stack B uses a different workspace (rootB/workspace), so builder execution row from stack A is not visible; acceptance resolves as unverified.
       assert.match(artifactText(done), /^Acceptance: unverified[\s\S]*Recovered after restart\.$/);
 
       assert.equal(serverB.leadCalls.length, 1);
@@ -403,8 +407,6 @@ test('e2e real stack', async (suite) => {
       assert.equal(serverA.workerCalls.length + serverB.workerCalls.length, 1);
       assert.equal(serverB.workerCalls.length, 0);
 
-      release();
-      await inflight;
     } finally {
       release();
       if (stackB) await stackB.runtime.close();
