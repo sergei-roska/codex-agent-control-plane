@@ -66,6 +66,49 @@ function publishInput(expected, overrides = {}) {
     expectedManifest: expected, deltaPaths: ['tracked.txt', 'new.bin', 'bin/tool'], ...overrides };
 }
 
+test('concurrent candidates use a separate table and preserve the legacy candidates table', (t) => {
+  const fx = fixture(); t.after(() => { fx.db.close(); fs.rmSync(fx.root, { recursive: true, force: true }); });
+  fx.db.exec(`CREATE TABLE candidates (
+    candidate_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, plan_revision_id TEXT NOT NULL,
+    base_commit TEXT NOT NULL, head TEXT NOT NULL, branch TEXT NOT NULL, head_moved INTEGER NOT NULL,
+    manifest_json TEXT NOT NULL, diff_artifact_id TEXT, truncated INTEGER NOT NULL,
+    acceptance_json TEXT, integrity_hash TEXT NOT NULL, created_at TEXT NOT NULL
+  )`);
+  fx.db.prepare(`INSERT INTO candidates(candidate_id,run_id,plan_revision_id,base_commit,head,branch,
+    head_moved,manifest_json,diff_artifact_id,truncated,acceptance_json,integrity_hash,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('legacy-candidate', 'legacy-run', 'legacy-plan', 'base', 'head',
+    'legacy-branch', 0, '{}', null, 0, null, 'legacy-integrity', 'legacy-created');
+
+  const store = new CandidateStore(fx.config);
+  const columns = fx.db.prepare('PRAGMA table_info(candidates)').all().map((row) => row.name);
+  assert.ok(columns.includes('run_id'));
+  assert.equal(columns.includes('project_id'), false);
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS count FROM candidates WHERE candidate_id='legacy-candidate'").get().count, 1);
+
+  baseCandidate(store);
+  assert.equal(fx.db.prepare('SELECT COUNT(*) AS count FROM concurrent_candidates').get().count, 1);
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS count FROM candidates WHERE candidate_id='legacy-candidate'").get().count, 1);
+});
+
+test('renames an existing concurrent candidates table without losing its records', (t) => {
+  const fx = fixture(); t.after(() => { fx.db.close(); fs.rmSync(fx.root, { recursive: true, force: true }); });
+  fx.db.exec(`CREATE TABLE candidates (
+    candidate_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, objective_id TEXT NOT NULL,
+    parent_candidate_id TEXT, integration_generation INTEGER NOT NULL, source_attempt_id TEXT NOT NULL,
+    environment_digest TEXT NOT NULL, check_identity TEXT NOT NULL, manifest_digest TEXT NOT NULL,
+    status TEXT NOT NULL, created_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX candidates_generation_idx ON candidates(project_id,objective_id,integration_generation);
+  INSERT INTO candidates VALUES('existing-concurrent','project-1','objective-1',NULL,3,
+    'attempt-1','${ENV_1}','checks-1','manifest-1','known','2026-10-30T00:00:00.000Z');`);
+
+  const store = new CandidateStore(fx.config);
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='candidates'").get().count, 0);
+  assert.equal(store.get('existing-concurrent').integrationGeneration, 3);
+  assert.equal(fx.db.prepare('SELECT generation FROM candidate_generations WHERE project_id=? AND objective_id=?')
+    .get('project-1', 'objective-1').generation, 3);
+});
+
 test('captures full source and keeps content-addressed review copy frozen', (t) => {
   const fx = fixture(); t.after(() => { fx.db.close(); fs.rmSync(fx.root, { recursive: true, force: true }); });
   fs.writeFileSync(path.join(fx.workspace, 'untracked.dat'), Buffer.from([0, 255, 7]));
@@ -386,7 +429,7 @@ test('blob file and directory sync precede snapshot metadata publication', (t) =
   });
   fx.db.exec(`CREATE TEMP TRIGGER snapshot_requires_durable_blobs BEFORE INSERT ON candidate_snapshots
     BEGIN SELECT assert_blob_durable(NEW.manifest_json); END;
-    CREATE TEMP TRIGGER candidate_requires_durable_blobs BEFORE INSERT ON candidates
+    CREATE TEMP TRIGGER candidate_requires_durable_blobs BEFORE INSERT ON concurrent_candidates
     BEGIN SELECT assert_candidate_blob_durable(NEW.manifest_digest); END;`);
   const candidate = baseCandidate(store);
   assert.equal(candidate.status, 'known');

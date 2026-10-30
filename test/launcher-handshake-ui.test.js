@@ -50,7 +50,11 @@ function element() {
 }
 
 function loadCard(apiResult, nowMs = Date.now()) {
-  const elements = { accountsList: element(), autoSwitchToggle: element() };
+  const elements = {
+    accountsList: element(), autoSwitchToggle: element(), accountsQuotaPreview: element(),
+    accountsQuota5hFill: element(), accountsQuota5hTrack: element(), accountsQuota5hValue: element(),
+    accountsQuotaWeeklyFill: element(), accountsQuotaWeeklyTrack: element(), accountsQuotaWeeklyValue: element(),
+  };
   let resolveApi;
   const data = {
     system: { active: false, primary: null, secondary: null },
@@ -74,7 +78,7 @@ function loadCard(apiResult, nowMs = Date.now()) {
     showAccountsError() {},
   };
   vm.createContext(context);
-  vm.runInContext(['textEl', 'formatResetCountdown', 'limitBlock', 'accountBlock', 'renderAccounts'].map(functionSource).join('\n'), context);
+  vm.runInContext(['textEl', 'formatResetCountdown', 'limitBlock', 'renderAccountQuotaPreview', 'accountBlock', 'renderAccounts'].map(functionSource).join('\n'), context);
   context.renderAccounts(data);
   const profileCard = elements.accountsList.children[1];
   const actions = profileCard.children.at(-1);
@@ -82,6 +86,56 @@ function loadCard(apiResult, nowMs = Date.now()) {
 }
 
 describe('account handshake card', () => {
+  it('previews active-account quotas and refreshes the summary on every render', () => {
+    const card = loadCard();
+    const { accountsQuotaPreview, accountsQuota5hFill, accountsQuota5hTrack, accountsQuota5hValue,
+      accountsQuotaWeeklyFill, accountsQuotaWeeklyTrack, accountsQuotaWeeklyValue } = card.elements;
+    card.data.profiles[0].active = false;
+    card.context.renderAccounts(card.data);
+    assert.equal(accountsQuota5hFill.style.width, '0%');
+    assert.equal(accountsQuota5hTrack.classList.contains('is-unknown'), true);
+    assert.equal(accountsQuota5hValue.textContent, '--');
+    assert.match(accountsQuotaPreview.attrs['aria-label'], /No active account/);
+
+    card.data.profiles[0].primary = { usedPercent: 65 };
+    card.data.profiles[0].secondary = { usedPercent: 90 };
+    card.data.profiles[0].active = true;
+    card.context.renderAccounts(card.data);
+    assert.equal(accountsQuota5hFill.style.width, '35%');
+    assert.equal(accountsQuota5hFill.className, 'progress-bar-fill accounts-quota-preview-fill warning');
+    assert.equal(accountsQuota5hTrack.classList.contains('is-unknown'), false);
+    assert.equal(accountsQuota5hValue.textContent, '35%');
+    assert.equal(accountsQuotaWeeklyFill.style.width, '10%');
+    assert.equal(accountsQuotaWeeklyFill.className, 'progress-bar-fill accounts-quota-preview-fill danger');
+    assert.equal(accountsQuotaWeeklyValue.textContent, '10%');
+    assert.match(accountsQuotaPreview.attrs['aria-label'], /alpha: 5-hour quota 35% remaining; weekly quota 10% remaining/);
+
+    card.data.profiles[0].primary = null;
+    card.data.profiles[0].secondary = { usedPercent: 10 };
+    card.context.renderAccounts(card.data);
+    assert.equal(accountsQuota5hValue.textContent, '--');
+    assert.equal(accountsQuota5hTrack.classList.contains('is-unknown'), true);
+    assert.equal(accountsQuotaWeeklyFill.style.width, '90%');
+    assert.match(accountsQuotaPreview.attrs['aria-label'], /5-hour quota unavailable/);
+
+    card.data.system = { active: true, primary: { usedPercent: 105 }, secondary: { usedPercent: -5 } };
+    card.context.renderAccounts(card.data);
+    assert.equal(accountsQuota5hFill.style.width, '0%');
+    assert.equal(accountsQuota5hFill.className, 'progress-bar-fill accounts-quota-preview-fill danger');
+    assert.equal(accountsQuotaWeeklyFill.style.width, '100%');
+    assert.match(accountsQuotaPreview.attrs['aria-label'], /Active account System account/);
+  });
+
+  it('does not report unknown account limit usage as fully available', () => {
+    const card = loadCard();
+    const profile = card.elements.accountsList.children[1];
+    const primary = profile.children[1];
+    const fill = primary.children[1].children[0];
+    assert.equal(primary.children[0].children[1].textContent, 'Unavailable');
+    assert.equal(fill.style.width, '0%');
+    assert.equal(primary.children[1].classList.contains('is-unknown'), true);
+  });
+
   it('renders the provider future reset countdown and completed handshake status', async () => {
     const nowMs = 1_800_000_000_000;
     const resetsAt = nowMs / 1000 + 5 * 60 * 60 + 60;

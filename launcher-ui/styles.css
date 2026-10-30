@@ -280,6 +280,16 @@ html, body {
   border-radius: var(--radius-md);
 }
 
+.connector-row.is-disabled {
+  border-color: var(--warning-border);
+}
+
+.pill.connector-disabled-pill {
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+}
+
 .connector-head {
   display: flex;
   align-items: center;
@@ -319,6 +329,16 @@ html, body {
   gap: 8px;
 }
 
+.connector-switch-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+}
+
 .card {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
@@ -339,6 +359,157 @@ html, body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.sidebar-disclosure > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sidebar-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sidebar-disclosure > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius-xs);
+}
+
+.sidebar-disclosure-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sidebar-disclosure-chevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  transition: transform 150ms ease;
+}
+
+.sidebar-disclosure[open] > summary .sidebar-disclosure-chevron {
+  transform: rotate(180deg);
+}
+
+@supports (interpolate-size: allow-keywords) {
+  .sidebar {
+    interpolate-size: allow-keywords;
+  }
+
+  .sidebar details::details-content {
+    block-size: 0;
+    opacity: 0;
+    overflow: clip;
+    transition: block-size 180ms ease-out, opacity 180ms ease-out;
+  }
+
+  .sidebar details[open]::details-content {
+    block-size: auto;
+    opacity: 1;
+  }
+}
+
+@supports (interpolate-size: allow-keywords) and (transition-behavior: allow-discrete) {
+  .sidebar details::details-content {
+    transition: block-size 180ms ease-out, opacity 180ms ease-out,
+      content-visibility 180ms allow-discrete;
+  }
+}
+
+.accounts-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.accounts-card::details-content {
+  grid-column: 1 / -1;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.accounts-card > summary {
+  grid-column: 1;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.accounts-card[open] > summary .accounts-quota-preview {
+  display: none;
+}
+
+.accounts-summary-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.accounts-quota-preview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 1 1 auto;
+  gap: 6px;
+  min-width: 0;
+}
+
+.accounts-quota-preview-window {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.accounts-quota-preview-track {
+  height: 4px;
+  flex: 1 1 auto;
+  min-width: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.accounts-quota-preview-track.is-unknown {
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0 2px, transparent 2px 4px);
+}
+
+.accounts-quota-preview-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--success);
+  transition: width 0.3s ease;
+}
+
+.accounts-quota-preview-fill.warning { background: var(--warning); }
+.accounts-quota-preview-fill.danger { background: var(--danger); }
+
+.accounts-quota-preview-value {
+  min-width: 20px;
+  text-align: right;
+}
+
+.accounts-card-actions {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.accounts-card > :not(summary):not(.accounts-card-actions) {
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .card-title {
@@ -408,12 +579,14 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
 }
 
 .account-block {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
   padding: 12px 12px;
   background: var(--bg-card);
   border: 1px solid transparent;
@@ -553,6 +726,11 @@ html, body {
   font-size: 13px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+}
+
+.accounts-card .limit-reset {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .account-toggle {
@@ -2503,6 +2681,12 @@ select {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .sidebar details::details-content,
+  .sidebar-disclosure-chevron,
+  .about-chevron {
+    transition: none;
+  }
+
   .status-dot.active, .status-dot.starting, .agent-led.is-active, .pulse-dot {
     animation: none;
   }

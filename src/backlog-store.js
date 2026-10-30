@@ -9,6 +9,7 @@ const {
 const { DeliveryEvents } = require('./delivery-events');
 const { HUMAN_REASONS } = require('./contracts');
 const { normalizeLedger } = require('./partial-ledger');
+const { CONCURRENT_TABLES } = require('./concurrent-table-names');
 
 const LIVE_CLAIM_STATES = ['active', 'expired', 'fenced'];
 const NO_CLAIM_OBJECTIVE_STATES = new Set(['draining', 'paused_owner', 'waiting_budget', 'waiting_owner', 'recovering', 'blocked_technical', 'validating', 'accepted', 'partial', 'canceled']);
@@ -826,7 +827,7 @@ class BacklogStore {
       if (!task || task.state !== 'queued' || task.role !== 'verifier' || task.kind !== 'review'
         || task.baseCandidateId !== request.candidateId || task.productWritePaths.length !== 0
         || task.publicationAuthority?.state !== 'denied') throw recordError('blocked_technical_resume_review_invalid');
-      const candidate = this.db.prepare(`SELECT candidate_id FROM candidates WHERE project_id=? AND objective_id=?
+      const candidate = this.db.prepare(`SELECT candidate_id FROM ${CONCURRENT_TABLES.candidates} WHERE project_id=? AND objective_id=?
         AND candidate_id=? AND status='known'`).get(projectId, objectiveId, request.candidateId);
       if (!candidate) throw recordError('blocked_technical_resume_candidate_invalid');
 
@@ -1684,7 +1685,7 @@ class BacklogStore {
       .run(record.state, encode(record), record.updatedAt, record.projectId, record.objectiveId, record.finalizationId);
   }
   #latestCandidate(candidateStore, projectId, objectiveId) {
-    const row = this.db.prepare(`SELECT candidate_id FROM candidates WHERE project_id=? AND objective_id=? AND status='known'
+    const row = this.db.prepare(`SELECT candidate_id FROM ${CONCURRENT_TABLES.candidates} WHERE project_id=? AND objective_id=? AND status='known'
       ORDER BY integration_generation DESC,candidate_id DESC LIMIT 1`).get(projectId, objectiveId);
     return row ? candidateStore.get(row.candidate_id) : null;
   }

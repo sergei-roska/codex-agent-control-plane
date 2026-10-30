@@ -53,7 +53,7 @@ function createElement(tagName) {
 describe('dedicated role settings page', () => {
   it('links from the main page and keeps role editing off the main activity view', () => {
     assert.match(mainHtml, /id="rolesNavLink" href="\/ui\/roles\.html"/);
-    assert.match(mainHtml, /class="card sidebar-section team-activity-card" id="teamBand"/);
+    assert.match(mainHtml, /class="card sidebar-section team-activity-card sidebar-disclosure" id="teamBand"/);
     assert.doesNotMatch(mainHtml, /id="roleModal"/);
     assert.match(rolesHtml, /id="roleList"/);
     assert.match(rolesHtml, /id="projectSelect"/);
@@ -246,11 +246,57 @@ describe('dedicated role settings page', () => {
 });
 
 describe('main page connector layout', () => {
+  it('makes every sidebar card collapsible and keeps Accounts collapsed by default', () => {
+    const sidebar = mainHtml.match(/<aside class="sidebar">([\s\S]*?)<\/aside>/)?.[1];
+    assert.ok(sidebar, 'sidebar markup must exist');
+
+    const about = sidebar.match(/<details class="about-details"([^>]*)>/);
+    assert.ok(about, 'About Orchestrator must be collapsible');
+    assert.doesNotMatch(about[1], /\bopen\b/);
+    assert.match(sidebar, /<summary class="card-title-summary">[\s\S]*?About Orchestrator/);
+
+    for (const id of ['projectCard', 'accountsCard', 'teamBand', 'connectorsCard']) {
+      const card = sidebar.match(new RegExp(`<details\\b(?=[^>]*\\bid="${id}")[^>]*>([\\s\\S]*?)<\\/details>`));
+      assert.ok(card, `${id} must be a details disclosure`);
+      assert.match(card[1], /^\s*<summary\b/);
+      const openingTag = card[0].slice(0, card[0].indexOf('>') + 1);
+      assert.doesNotMatch(openingTag, /\bopen\b/);
+    }
+    assert.match(sidebar, /id="accountsQuotaPreview" role="img"/);
+    assert.match(sidebar, /<summary class="card-header card-title-summary sidebar-disclosure-summary">\s*<span class="accounts-summary-title">[\s\S]*?<\/span>\s*<span class="accounts-quota-preview"[\s\S]*?<\/span>\s*<svg class="icon sidebar-disclosure-chevron"/);
+    assert.match(styles, /\.accounts-card > summary\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*center/);
+    for (const [trackId, fillId] of [['accountsQuota5hTrack', 'accountsQuota5hFill'], ['accountsQuotaWeeklyTrack', 'accountsQuotaWeeklyFill']]) {
+      assert.match(sidebar, new RegExp(`class="accounts-quota-preview-track is-unknown" id="${trackId}"`));
+      assert.match(sidebar, new RegExp(`class="progress-bar-fill accounts-quota-preview-fill" id="${fillId}" style="width: 0%"`));
+    }
+    assert.match(styles, /\.accounts-card\[open\] > summary \.accounts-quota-preview\s*\{\s*display:\s*none/);
+    assert.ok(sidebar.indexOf('id="teamBand"') < sidebar.indexOf('id="connectorsCard"'));
+  });
+
   it('places connectors in the fixed-width left sidebar and uses a two-column main grid', () => {
     assert.ok(mainHtml.indexOf('id="connectorsCard"') < mainHtml.indexOf('</aside>'));
     assert.doesNotMatch(mainHtml, /id="connectorsSidebar"/);
+    assert.match(mainHtml, /class="card sidebar-section team-activity-card sidebar-disclosure" id="teamBand"/);
     assert.match(styles, /grid-template-columns:\s*360px minmax\(0, 1fr\)/);
     assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*?grid-template-columns: 1fr/);
     assert.match(styles, /\.connector-actions\s*\{[\s\S]*?flex-wrap: wrap/);
+  });
+
+  it('keeps expanded account content constrained to the sidebar card width', () => {
+    assert.match(styles, /\.accounts-card::details-content\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;[^}]*min-width:\s*0/);
+    assert.match(styles, /\.accounts-card > summary\s*\{[^}]*align-self:\s*center/);
+    assert.match(styles, /\.accounts-card-actions\s*\{[^}]*justify-content:\s*flex-end/);
+    assert.match(styles, /\.accounts-card > :not\(summary\):not\(\.accounts-card-actions\)\s*\{[^}]*min-width:\s*0/);
+    assert.match(styles, /\.accounts-list\s*\{[^}]*min-width:\s*0/);
+    assert.match(styles, /\.account-block\s*\{[^}]*min-width:\s*0/);
+    assert.match(styles, /\.accounts-card \.limit-reset\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  });
+
+  it('animates native sidebar disclosures with intrinsic sizing and honors reduced motion', () => {
+    assert.match(styles, /@supports\s*\(interpolate-size:\s*allow-keywords\)[\s\S]*?\.sidebar\s*\{\s*interpolate-size:\s*allow-keywords/);
+    assert.match(styles, /\.sidebar details::details-content\s*\{[^}]*block-size:\s*0;[^}]*opacity:\s*0;[^}]*overflow:\s*clip;[^}]*block-size 180ms ease-out[^}]*opacity 180ms ease-out/);
+    assert.match(styles, /\.sidebar details\[open\]::details-content\s*\{[^}]*block-size:\s*auto;[^}]*opacity:\s*1/);
+    assert.match(styles, /@supports\s*\(interpolate-size:\s*allow-keywords\)\s*and\s*\(transition-behavior:\s*allow-discrete\)[\s\S]*?content-visibility 180ms allow-discrete/);
+    assert.match(styles, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.sidebar details::details-content,[\s\S]*?\.sidebar-disclosure-chevron,[\s\S]*?\.about-chevron\s*\{\s*transition:\s*none/);
   });
 });

@@ -19,6 +19,7 @@ const { validateAcceptanceContract } = require('./acceptance');
 const { HUMAN_REASONS } = require('./contracts');
 const { VERSION, validateTask } = require('./delivery-contracts');
 const { canonicalRoleId, getRole } = require('./role-names');
+const { CONCURRENT_TABLES } = require('./concurrent-table-names');
 
 const json = (value) => JSON.stringify(value);
 const canonical = (value) => {
@@ -1936,7 +1937,7 @@ class ConcurrentDeliveryEngine {
   #objectiveForRun(runId) { const run = this.#run(runId); return run ? this.store.getObjective(this.projectId, run.objectiveId) : null; }
   #isKnownRun(projectId, objectiveId) { return Boolean(this.db.prepare('SELECT 1 FROM concurrent_delivery_runs WHERE project_id=? AND objective_id=?').get(projectId, objectiveId)); }
   #latestCandidate(objectiveId) {
-    const row = this.db.prepare(`SELECT candidate_id FROM candidates WHERE project_id=? AND objective_id=? AND status='known'
+    const row = this.db.prepare(`SELECT candidate_id FROM ${CONCURRENT_TABLES.candidates} WHERE project_id=? AND objective_id=? AND status='known'
       ORDER BY integration_generation DESC,candidate_id DESC LIMIT 1`).get(this.projectId, objectiveId);
     return row ? this.candidateStore.get(row.candidate_id) : null;
   }

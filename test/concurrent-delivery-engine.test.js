@@ -607,13 +607,13 @@ test('overlapping private engineer lanes unlock dependent work and review the ch
   t.diagnostic('dependent provider turn started');
   assert.equal(dependent.slowReleased, false);
   assert.equal(dependent.fastFile, 'fast sibling\n');
-  const atDependentStart = db.prepare(`SELECT candidate_id,integration_generation,manifest_digest FROM candidates
+  const atDependentStart = db.prepare(`SELECT candidate_id,integration_generation,manifest_digest FROM concurrent_candidates
     WHERE project_id=? AND objective_id=? AND status='known' ORDER BY integration_generation DESC LIMIT 1`).get(projectId, objectiveId);
   assert.equal(atDependentStart.integration_generation, 2);
   assert.notEqual(dependent.cwd, fastLane.cwd);
 
   await waitFor(() => {
-    const latest = db.prepare(`SELECT integration_generation FROM candidates WHERE project_id=? AND objective_id=?
+    const latest = db.prepare(`SELECT integration_generation FROM concurrent_candidates WHERE project_id=? AND objective_id=?
       AND status='known' ORDER BY integration_generation DESC LIMIT 1`).get(projectId, objectiveId);
     return latest?.integration_generation === 3
       && engine.store.getObjective(projectId, objectiveId).tasks.find((task) => task.taskId === 'dependent-work')?.state === 'succeeded';
@@ -643,7 +643,7 @@ test('overlapping private engineer lanes unlock dependent work and review the ch
   let timeoutHandle;
   const timeout = new Promise((_, reject) => { timeoutHandle = setTimeout(() => reject(new Error(JSON.stringify({
     calls, objective: engine.store.getObjective(projectId, objectiveId), candidates: db.prepare(`SELECT candidate_id,integration_generation,manifest_digest
-      FROM candidates WHERE project_id=? AND objective_id=? ORDER BY integration_generation`).all(projectId, objectiveId),
+      FROM concurrent_candidates WHERE project_id=? AND objective_id=? ORDER BY integration_generation`).all(projectId, objectiveId),
     plannerTurns: db.prepare('SELECT turn_id,status,result_json FROM delivery_planner_turns').all(),
     roleExecutions: engine.roleService.projection().map((row) => engine.roleService.getExecution(row.attemptId)),
     receipts: db.prepare('SELECT receipt_json FROM review_receipts').all(), finalizations: db.prepare('SELECT state,record_json FROM backlog_finalizations').all(),
@@ -653,7 +653,7 @@ test('overlapping private engineer lanes unlock dependent work and review the ch
   catch (cause) {
     t.diagnostic(JSON.stringify({ cause: cause.code || cause.message, authorization: finalizationAuthorization,
       objective: engine.store.getObjective(projectId, objectiveId), latestCandidate: db.prepare(`SELECT candidate_id,integration_generation,manifest_digest,environment_digest,check_identity
-        FROM candidates WHERE project_id=? AND objective_id=? AND status='known' ORDER BY integration_generation DESC LIMIT 1`).get(projectId, objectiveId),
+        FROM concurrent_candidates WHERE project_id=? AND objective_id=? AND status='known' ORDER BY integration_generation DESC LIMIT 1`).get(projectId, objectiveId),
       checkpoint: engine.reviewStore.checkpointHistory({ projectId, objectiveId }),
       review: engine.reviewStore.finalizationProjection({ projectId, objectiveId,
         candidateId: engine.candidateStore.getIntent(`publication-${engine.store.listAttempts(projectId, objectiveId).find((attempt) => attempt.taskId === 'dependent-work').attemptId}`)?.candidateId,
@@ -999,7 +999,7 @@ async function createBlockedFrozenReviewHarness(t) {
   const objectiveId = 'engine-objective-1';
   const checkpoint = fx.engine.reviewStore.checkpointHistory({ projectId, objectiveId })
     .find((entry) => entry.checkpoint.kind === 'owner_request').checkpoint;
-  const candidateId = fx.db.prepare(`SELECT candidate_id FROM candidates
+  const candidateId = fx.db.prepare(`SELECT candidate_id FROM concurrent_candidates
     WHERE project_id=? AND objective_id=? AND status='known' ORDER BY integration_generation LIMIT 1`).get(projectId, objectiveId).candidate_id;
   const candidate = fx.engine.candidateStore.get(candidateId);
   const proposal = fx.engine.reviewStore.proposeReviews({ projectId, objectiveId, checkpointId: checkpoint.checkpointId,
@@ -1562,7 +1562,7 @@ for (const recoverFirst of [true, false]) test(`owner correction facade carries 
     t.diagnostic(JSON.stringify({ objective: reopened.engine.store.getObjective(projectId, 'engine-objective-1'),
       controller: recovered.status(), checkpoints: reopened.engine.reviewStore.checkpointHistory({ projectId, objectiveId: 'engine-objective-1' }),
       review: reopened.engine.reviewStore.finalizationProjection({ projectId, objectiveId: 'engine-objective-1',
-        candidateId: reopened.db.prepare("SELECT candidate_id FROM candidates WHERE status='known' ORDER BY integration_generation DESC LIMIT 1").get().candidate_id, requiredRoles: ['verifier'] }),
+        candidateId: reopened.db.prepare("SELECT candidate_id FROM concurrent_candidates WHERE status='known' ORDER BY integration_generation DESC LIMIT 1").get().candidate_id, requiredRoles: ['verifier'] }),
       pause: reopened.engine.getPause('pause-facade-run'),
       finalizations: reopened.engine.store.listFinalizations(projectId, 'engine-objective-1'),
       plannerTurns: reopened.db.prepare('SELECT status,result_json FROM delivery_planner_turns').all() }));

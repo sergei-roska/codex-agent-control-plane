@@ -1,6 +1,6 @@
 'use strict';
 
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
 const { defaultConnectorCatalog } = require('./connector-catalog');
 
 const DEFAULT_LOGIN_TIMEOUT_MS = 10 * 60_000;
@@ -14,6 +14,17 @@ function failure(status, message) {
 
 function shortText(value) {
   return String(value || 'unknown error').replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
+function logoutConnector(name, { codexHome = null, server, execFileImpl = execFile } = {}) {
+  if (!server || typeof server.url !== 'string') return Promise.reject(new TypeError('validated connector server config is required'));
+  const overrides = connectorConfigArgs(new Map([[name, server]]));
+  return new Promise((resolve, reject) => {
+    execFileImpl('codex', ['mcp', 'logout', ...overrides, name], {
+      ...(codexHome ? { env: { ...process.env, CODEX_HOME: codexHome } } : {}),
+      shell: false,
+    }, (error) => error ? reject(error) : resolve());
+  });
 }
 
 // Connectors are not in the Codex config files; each app-server child gets them as -c overrides.
@@ -52,6 +63,8 @@ function createConnectorService({
   servers = defaultConnectorCatalog().servers,
   loginTimeoutMs = DEFAULT_LOGIN_TIMEOUT_MS,
   spawnImpl = spawn,
+  logoutImpl = logoutConnector,
+  preferences = null,
   now = Date.now,
 } = {}) {
   if (typeof createAppServer !== 'function') throw new TypeError('createAppServer is required');
@@ -59,13 +72,13 @@ function createConnectorService({
   const withConnectors = (command, args, options) => spawnImpl(command, [...args, ...extraArgs], options);
   const logins = new Map();
 
-  const open = (extra) => createAppServer({ cwd: process.cwd(), codexHome: getCodexHome(), spawnImpl: withConnectors, ...extra });
+  const open = (extra, codexHome = getCodexHome()) => createAppServer({ cwd: process.cwd(), codexHome, spawnImpl: withConnectors, ...extra });
 
   // Single-flight with a short cache: the sidebar polls, and a probe can take seconds.
   let flight = null;
   let cached = null;
   let epoch = 0;
-  const invalidate = () => { epoch += 1; cached = null; };
+  const invalidate = () => { epoch += 1; cached = null; flight = null; };
 
   function list() {
     if (cached && now() - cached.at < LIST_CACHE_MS) return Promise.resolve(cached.value);
@@ -92,6 +105,7 @@ function createConnectorService({
         purpose: item.purpose,
         dataSensitivity: item.dataSensitivity,
         toolsVerified: item.toolsVerified,
+        enabled: preferences ? preferences.isEnabled(item.configName) : true,
         ...rows[i],
       }));
     } finally {
@@ -114,12 +128,12 @@ function createConnectorService({
   const inflight = new Set();
   let closing = false;
 
-  async function startSignIn(name) {
+  async function startSignIn(name, codexHome = getCodexHome()) {
     if (closing) throw failure(503, 'Connector service is shutting down');
     await endLogin(name);
     if (closing) throw failure(503, 'Connector service is shutting down');
     // No await between here and logins.set: the slot is free and is taken in the same tick.
-    const server = open({ requestTimeoutMs: LOGIN_REQUEST_TIMEOUT_MS });
+    const server = open({ requestTimeoutMs: LOGIN_REQUEST_TIMEOUT_MS }, codexHome);
     const entry = { server, timer: null, unsubscribe: null };
     logins.set(name, entry);
     entry.unsubscribe = server.onNotification('mcpServer/oauthLogin/completed', (params) => {
@@ -140,11 +154,13 @@ function createConnectorService({
     }
   }
 
-  function signIn(name) {
+  function queueLogin(name, action) {
     if (typeof name !== 'string' || !servers.has(name)) return Promise.reject(failure(404, 'Unknown connector'));
     if (closing) return Promise.reject(failure(503, 'Connector service is shutting down'));
-    invalidate();
-    const run = (chains.get(name) || Promise.resolve()).then(() => startSignIn(name));
+    const run = (chains.get(name) || Promise.resolve()).then(() => {
+      if (closing) throw failure(503, 'Connector service is shutting down');
+      return action();
+    });
     const tail = run.catch(() => {});
     chains.set(name, tail);
     inflight.add(tail);
@@ -155,6 +171,42 @@ function createConnectorService({
     return run;
   }
 
+  function signIn(name) {
+    if (typeof name !== 'string' || !servers.has(name)) return Promise.reject(failure(404, 'Unknown connector'));
+    if (closing) return Promise.reject(failure(503, 'Connector service is shutting down'));
+    invalidate();
+    return queueLogin(name, () => startSignIn(name));
+  }
+
+  function setEnabled(name, enabled) {
+    if (typeof name !== 'string' || !servers.has(name)) return Promise.reject(failure(404, 'Unknown connector'));
+    if (typeof enabled !== 'boolean') return Promise.reject(failure(400, 'enabled must be a boolean'));
+    try {
+      if (preferences) preferences.setEnabled(name, enabled);
+      invalidate();
+      return Promise.resolve({ success: true, name, enabled });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  function switchAccount(name) {
+    if (typeof name !== 'string' || !servers.has(name)) return Promise.reject(failure(404, 'Unknown connector'));
+    if (closing) return Promise.reject(failure(503, 'Connector service is shutting down'));
+    invalidate();
+    return queueLogin(name, async () => {
+      const codexHome = getCodexHome();
+      await endLogin(name);
+      try {
+        await logoutImpl(name, { codexHome, server: servers.get(name) });
+      } catch (error) {
+        throw failure(502, `Connector logout failed: ${shortText(error && error.message)}`);
+      }
+      invalidate();
+      return startSignIn(name, codexHome);
+    });
+  }
+
   // Waits for sign-ins in progress, then closes every remaining login server. New sign-ins are refused.
   async function close() {
     closing = true;
@@ -162,7 +214,7 @@ function createConnectorService({
     await Promise.all([...logins.keys()].map(endLogin));
   }
 
-  return { list, signIn, close };
+  return { list, signIn, setEnabled, switchAccount, close };
 }
 
-module.exports = { createConnectorService, connectorConfigArgs, mapState };
+module.exports = { createConnectorService, connectorConfigArgs, logoutConnector, mapState };

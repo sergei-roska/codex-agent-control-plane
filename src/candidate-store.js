@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { VERSION: DELIVERY_VERSION, validateCandidate } = require('./delivery-contracts');
+const { CONCURRENT_TABLES } = require('./concurrent-table-names');
 
 const MAX_GIT_BUFFER = 256 * 1024 * 1024;
 
@@ -102,6 +103,20 @@ function ensureDurableDirectory(directory, syncDir) {
   syncDir(target);
 }
 
+const CONCURRENT_CANDIDATE_COLUMNS = [
+  'candidate_id', 'project_id', 'objective_id', 'parent_candidate_id', 'integration_generation',
+  'source_attempt_id', 'environment_digest', 'check_identity', 'manifest_digest', 'status', 'created_at',
+];
+
+function migrateConcurrentCandidates(db) {
+  const columns = (table) => new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
+  const legacyColumns = columns('candidates');
+  if (!CONCURRENT_CANDIDATE_COLUMNS.every((column) => legacyColumns.has(column))) return;
+  const prefixedColumns = columns(CONCURRENT_TABLES.candidates);
+  if (prefixedColumns.size) fail('candidate_schema_conflict', 'Both legacy and concurrent candidate tables contain concurrent records');
+  db.transaction(() => db.exec(`ALTER TABLE candidates RENAME TO ${CONCURRENT_TABLES.candidates}`)).immediate();
+}
+
 // Captures all tracked paths plus nonignored untracked files without touching the index.
 // The digest covers HEAD, path, executable bit, byte length and complete file content.
 function captureManifest(workspace) {
@@ -182,18 +197,19 @@ class CandidateStore {
       const childPath = path.join(this.storageDir, child);
       if (fs.realpathSync(childPath) !== childPath) fail('storage_path_unsafe');
     }
+    migrateConcurrentCandidates(this.db);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS candidate_snapshots (
         digest TEXT PRIMARY KEY, manifest_json TEXT NOT NULL, created_at TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS candidates (
+      CREATE TABLE IF NOT EXISTS ${CONCURRENT_TABLES.candidates} (
         candidate_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, objective_id TEXT NOT NULL,
         parent_candidate_id TEXT, integration_generation INTEGER NOT NULL,
         source_attempt_id TEXT NOT NULL, environment_digest TEXT NOT NULL, check_identity TEXT NOT NULL,
         manifest_digest TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL
       );
-      CREATE UNIQUE INDEX IF NOT EXISTS candidates_generation_idx
-        ON candidates(project_id, objective_id, integration_generation);
+      CREATE UNIQUE INDEX IF NOT EXISTS concurrent_candidates_generation_idx
+        ON ${CONCURRENT_TABLES.candidates}(project_id, objective_id, integration_generation);
       CREATE TABLE IF NOT EXISTS candidate_refs (
         ref_type TEXT NOT NULL, ref_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY(ref_type, ref_id, candidate_id)
@@ -220,7 +236,7 @@ class CandidateStore {
       if (!intentColumns.has(name)) this.db.exec(`ALTER TABLE candidate_intents ADD COLUMN ${name} ${type}`);
     }
     this.db.exec(`INSERT INTO candidate_generations(project_id,objective_id,generation)
-      SELECT project_id,objective_id,MAX(integration_generation) FROM candidates
+      SELECT project_id,objective_id,MAX(integration_generation) FROM ${CONCURRENT_TABLES.candidates}
       GROUP BY project_id,objective_id
       ON CONFLICT(project_id,objective_id) DO UPDATE SET generation=MAX(generation,excluded.generation)`);
     this.repairMissingManifests();
@@ -228,7 +244,7 @@ class CandidateStore {
 
   now() { const value = this.clock(); return value instanceof Date ? value.toISOString() : String(value); }
   get(candidateId) {
-    const row = this.db.prepare('SELECT * FROM candidates WHERE candidate_id = ?').get(candidateId);
+    const row = this.db.prepare(`SELECT * FROM ${CONCURRENT_TABLES.candidates} WHERE candidate_id = ?`).get(candidateId);
     return row ? this.record(row) : null;
   }
   record(row) {
@@ -411,7 +427,7 @@ class CandidateStore {
     const parent = input.parentCandidateId ?? null;
     const at = this.now();
     const save = this.db.transaction(() => {
-      const existing = this.db.prepare('SELECT * FROM candidates WHERE candidate_id = ?').get(candidateId);
+      const existing = this.db.prepare(`SELECT * FROM ${CONCURRENT_TABLES.candidates} WHERE candidate_id = ?`).get(candidateId);
       const snapshot = this.db.prepare('SELECT manifest_json FROM candidate_snapshots WHERE digest=?').get(manifest.digest);
       if (!snapshot || snapshot.manifest_json !== canonical(manifest)) fail('candidate_snapshot_missing');
       this.readManifestUnsafe(manifest.digest);
@@ -434,7 +450,7 @@ class CandidateStore {
         return record;
       }
       if (parent !== null) {
-        const parentRow = this.db.prepare('SELECT project_id,objective_id,integration_generation,status FROM candidates WHERE candidate_id = ?').get(parent);
+        const parentRow = this.db.prepare(`SELECT project_id,objective_id,integration_generation,status FROM ${CONCURRENT_TABLES.candidates} WHERE candidate_id = ?`).get(parent);
         if (!parentRow || parentRow.project_id !== projectId || parentRow.objective_id !== objectiveId || parentRow.status !== 'known') fail('parent_invalid');
         if (generation <= parentRow.integration_generation) fail('generation_not_monotonic');
       }
@@ -450,7 +466,7 @@ class CandidateStore {
         if (earlier) fail('generation_order_blocked');
         if (latest != null && generation <= latest) fail('generation_not_monotonic');
       }
-      this.db.prepare(`INSERT INTO candidates(candidate_id,project_id,objective_id,parent_candidate_id,integration_generation,source_attempt_id,environment_digest,check_identity,manifest_digest,status,created_at)
+      this.db.prepare(`INSERT INTO ${CONCURRENT_TABLES.candidates}(candidate_id,project_id,objective_id,parent_candidate_id,integration_generation,source_attempt_id,environment_digest,check_identity,manifest_digest,status,created_at)
         VALUES(?,?,?,?,?,?,?,?,?,'known',?)`).run(candidateId, projectId, objectiveId, parent, generation, sourceAttemptId, environmentDigest, checkIdentity, manifest.digest, at);
       if (!reservationIntentId) {
         this.db.prepare(`INSERT INTO candidate_generations(project_id,objective_id,generation) VALUES(?,?,?)
@@ -492,7 +508,7 @@ class CandidateStore {
     const protectedSnapshots = new Set();
     const drop = this.db.transaction(() => {
       const protectedIds = new Set();
-      for (const row of this.db.prepare('SELECT candidate_id,parent_candidate_id FROM candidates').all()) {
+      for (const row of this.db.prepare(`SELECT candidate_id,parent_candidate_id FROM ${CONCURRENT_TABLES.candidates}`).all()) {
         if (row.parent_candidate_id) protectedIds.add(row.parent_candidate_id);
         if (this.db.prepare('SELECT 1 FROM candidate_refs WHERE candidate_id=? LIMIT 1').get(row.candidate_id)) protectedIds.add(row.candidate_id);
       }
@@ -506,15 +522,15 @@ class CandidateStore {
         protectedSnapshots.add(JSON.parse(row.before_manifest_json).digest);
         protectedSnapshots.add(JSON.parse(row.expected_manifest_json).digest);
       }
-      for (const row of this.db.prepare('SELECT * FROM candidates WHERE status = \'known\'').all()) {
+      for (const row of this.db.prepare(`SELECT * FROM ${CONCURRENT_TABLES.candidates} WHERE status = 'known'`).all()) {
         if (protectedIds.has(row.candidate_id)) continue;
-        this.db.prepare('DELETE FROM candidates WHERE candidate_id=?').run(row.candidate_id);
+        this.db.prepare(`DELETE FROM ${CONCURRENT_TABLES.candidates} WHERE candidate_id=?`).run(row.candidate_id);
         this.db.prepare('DELETE FROM candidate_refs WHERE ref_id=?').run(row.candidate_id);
         removed.push(row.manifest_digest);
       }
       for (const row of this.db.prepare('SELECT digest FROM candidate_snapshots').all()) {
         if (protectedSnapshots.has(row.digest)) continue;
-        if (this.db.prepare('SELECT 1 FROM candidates WHERE manifest_digest=? LIMIT 1').get(row.digest)) continue;
+        if (this.db.prepare(`SELECT 1 FROM ${CONCURRENT_TABLES.candidates} WHERE manifest_digest=? LIMIT 1`).get(row.digest)) continue;
         const snapshot = this.db.prepare('SELECT manifest_json FROM candidate_snapshots WHERE digest=?').get(row.digest);
         this.db.prepare('DELETE FROM candidate_snapshots WHERE digest=?').run(row.digest);
         removedManifests.push(row.digest);
@@ -584,7 +600,7 @@ class CandidateStore {
       if (latest != null && identity.integrationGeneration <= latest) fail('generation_not_monotonic');
       if (this.db.prepare('SELECT 1 FROM candidate_intents WHERE candidate_id=? OR (project_id=? AND objective_id=? AND integration_generation=?) LIMIT 1')
         .get(identity.candidateId, identity.projectId, identity.objectiveId, identity.integrationGeneration)) fail('candidate_intent_identity_collision');
-      const parent = this.db.prepare('SELECT status FROM candidates WHERE candidate_id=? AND project_id=? AND objective_id=?').get(identity.parentCandidateId, identity.projectId, identity.objectiveId);
+      const parent = this.db.prepare(`SELECT status FROM ${CONCURRENT_TABLES.candidates} WHERE candidate_id=? AND project_id=? AND objective_id=?`).get(identity.parentCandidateId, identity.projectId, identity.objectiveId);
       if (!parent || parent.status !== 'known') fail('parent_invalid');
       const baseSnapshot = this.db.prepare('SELECT manifest_json FROM candidate_snapshots WHERE digest=?').get(before.digest);
       if (!baseSnapshot || baseSnapshot.manifest_json !== canonical(before)) fail('base_snapshot_missing');

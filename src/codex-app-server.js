@@ -9,6 +9,7 @@ const { classifyCodexError } = require('./contracts');
 const { DEFAULT_SKILLS_ROOT } = require('./skill-catalog');
 const { loadMcpCatalog, resolveMcpToolSelection, mcpToolPins } = require('./mcp-catalog');
 const { withConnectors, resolveConnectorToolSelection, resolveManagedToolSelection } = require('./connector-catalog');
+const { readConnectorPreferences } = require('./connector-preferences');
 const {
   READ_ONLY_PROFILE, WORKSPACE_PROFILE, DANGER_FULL_ACCESS_PROFILE, resolveExecutionPermissions, nativeSandboxPolicy, withVerifierIpcNetworkAccess, scopedVerifierSandboxPolicy,
 } = require('./execution-permissions');
@@ -161,6 +162,7 @@ class CodexAppServer {
     exitWaitMs = DEFAULT_EXIT_WAIT_MS,
     cooldownMs = DEFAULT_COOLDOWN_MS,
     codexHome = null,
+    connectorPreferencesFile = null,
     mcpCatalog = loadMcpCatalog(),
   } = {}) {
     if (!Number.isSafeInteger(backgroundTerminalCleanupTimeoutMs) || backgroundTerminalCleanupTimeoutMs <= 0) {
@@ -168,6 +170,7 @@ class CodexAppServer {
     }
     this.codexPath = codexPath;
     this.codexHome = codexHome || null;
+    this.connectorPreferencesFile = connectorPreferencesFile;
     this.mcpCatalog = mcpCatalog;
     this.notificationHandlers = new Map();
     this.spawnImpl = spawnImpl;
@@ -694,6 +697,7 @@ class CodexAppServer {
     const selectedConnector = resolveConnectorToolSelection(connectors,
       selectedMcpTools.filter(isConnector).map(({ id }) => id),
       { allowedServers: allowed, pins: mcpToolPins(selectedMcpTools.filter(isConnector)) });
+    this._assertConnectorsEnabled(selectedConnector);
     const selectedByServer = new Map();
     for (const item of selected) {
       if (!selectedByServer.has(item.configName)) selectedByServer.set(item.configName, []);
@@ -775,6 +779,17 @@ class CodexAppServer {
     return { config, policy };
   }
 
+  _assertConnectorsEnabled(selectedConnectorTools) {
+    if (!this.connectorPreferencesFile || selectedConnectorTools.length === 0) return;
+    const disabled = new Set(readConnectorPreferences(this.connectorPreferencesFile).disabled);
+    const names = [...new Set(selectedConnectorTools.map((item) => item.configName).filter((name) => disabled.has(name)))];
+    if (names.length > 0) {
+      throw new CodexAppServerError(`Connector${names.length === 1 ? '' : 's'} disabled for agent use: ${names.join(', ')}`, {
+        failureClass: 'request_rejected', code: 'connector_disabled', connectors: names,
+      });
+    }
+  }
+
   async mcpServerStatus(threadId) {
     await this.start();
     const result = await this._request('mcpServerStatus/list', { threadId, detail: 'full' });
@@ -844,6 +859,8 @@ class CodexAppServer {
     const validatedMcpTools = resolveManagedToolSelection(this.mcpCatalog,
       selectedMcpTools.map((item) => item?.id),
       { allowedServers: role.tools?.mcpServers || [], pins: mcpToolPins(selectedMcpTools) });
+    const connectorCatalog = withConnectors(this.mcpCatalog).connectorCatalog;
+    this._assertConnectorsEnabled(validatedMcpTools.filter(({ id }) => connectorCatalog.has(id)));
     const permissionMode = await this.resolveExecutionPermissions(permissionWorkspace, executionPermissions,
       { fresh: executionPermissions === 'full-access' });
     assertFullAccessPermissionMode(executionPermissions, permissionMode);
@@ -919,6 +936,8 @@ class CodexAppServer {
     const validatedMcpTools = resolveManagedToolSelection(this.mcpCatalog,
       selectedMcpTools.map((item) => item?.id),
       { allowedServers: role.tools?.mcpServers || [], pins: mcpToolPins(selectedMcpTools) });
+    const connectorCatalog = withConnectors(this.mcpCatalog).connectorCatalog;
+    this._assertConnectorsEnabled(validatedMcpTools.filter(({ id }) => connectorCatalog.has(id)));
     const permissionMode = await this.resolveExecutionPermissions(permissionWorkspace, executionPermissions,
       { fresh: executionPermissions === 'full-access' });
     assertFullAccessPermissionMode(executionPermissions, permissionMode);
@@ -1104,6 +1123,9 @@ class CodexAppServer {
 
   async _run(ctx, { role, cwd, permissionWorkspace, executionPermissions, fullAccess, laneCapability, verifierRole, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills, selectedMcpTools, permissionMode, threadPermissions, turnPermissions, approvalSettings, ephemeral, scoped = null }) {
     await this.start();
+    const connectors = withConnectors(this.mcpCatalog).connectorCatalog;
+    this._assertConnectorsEnabled(selectedMcpTools.filter(({ id }) => connectors.has(id))
+      .flatMap(({ id }) => resolveConnectorToolSelection(connectors, [id], { allowedServers: role.tools?.mcpServers || [] })));
     ctx.generation = this.generation;
     this._assertTurnAdmission(ctx);
     const startup = this.startupInfo;

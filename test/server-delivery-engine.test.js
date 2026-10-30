@@ -636,7 +636,10 @@ test('default server composition routes an authenticated steer into a held real 
   }
 });
 
-async function idleConcurrentServer(t, name = 'project', provider = {}, { executionPermissions = 'inherit', legacyRows = [], concurrentEngineFactory } = {}) {
+async function idleConcurrentServer(t, name = 'project', provider = {}, {
+  executionPermissions = 'inherit', legacyRows = [], concurrentEngineFactory,
+  deliveryEngine = 'concurrent-v1', seedLegacyCandidates = false,
+} = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'server-delivery-engine-'));
   const workspace = path.join(root, name);
   const settingsFile = path.join(root, 'settings.json');
@@ -674,9 +677,21 @@ async function idleConcurrentServer(t, name = 'project', provider = {}, { execut
       async resume() { return { status: 'completed' }; },
     }),
   };
-  fs.writeFileSync(settingsFile, JSON.stringify({ version: 1, executionPermissions, deliveryEngine: 'concurrent-v1' }));
-  if (legacyRows.length) {
+  fs.writeFileSync(settingsFile, JSON.stringify({ version: 1, executionPermissions, deliveryEngine }));
+  if (legacyRows.length || seedLegacyCandidates) {
     const seeded = await openStateDatabase({ filePath: options.stateFile });
+    if (seedLegacyCandidates) {
+      seeded.db.exec(`CREATE TABLE candidates (
+        candidate_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, plan_revision_id TEXT NOT NULL,
+        base_commit TEXT NOT NULL, head TEXT NOT NULL, branch TEXT NOT NULL, head_moved INTEGER NOT NULL,
+        manifest_json TEXT NOT NULL, diff_artifact_id TEXT, truncated INTEGER NOT NULL,
+        acceptance_json TEXT, integrity_hash TEXT NOT NULL, created_at TEXT NOT NULL
+      )`);
+      seeded.db.prepare(`INSERT INTO candidates(candidate_id,run_id,plan_revision_id,base_commit,head,branch,
+        head_moved,manifest_json,diff_artifact_id,truncated,acceptance_json,integrity_hash,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('legacy-candidate', 'legacy-run', 'legacy-plan', 'base', 'head',
+        'legacy-branch', 0, '{}', null, 0, null, 'legacy-integrity', 'legacy-created');
+    }
     const insertTask = seeded.db.prepare(`INSERT INTO tasks(tenant,owner,id,context_id,status_last_updated,status_state,status,artifacts,history,metadata,protocol_version)
       VALUES('','orchestrator',?,?,?,?,'{}','[]','[]','{}','1.0')`);
     for (const row of legacyRows) {
@@ -706,6 +721,41 @@ async function idleConcurrentServer(t, name = 'project', provider = {}, { execut
   });
   return { runtime, root, options, calls, permissionCalls, settingsFile };
 }
+
+test('Legacy startup keeps the legacy candidates schema and routes new runs to Legacy', async (t) => {
+  const fx = await idleConcurrentServer(t, 'legacy-candidates', {}, { deliveryEngine: 'legacy', seedLegacyCandidates: true });
+  const { db } = fx.runtime.state;
+  assert.equal(fx.runtime.deliveryEngine, 'legacy');
+  assert.equal(fx.runtime.concurrentEngine, null);
+  const columns = db.prepare('PRAGMA table_info(candidates)').all().map((row) => row.name);
+  assert.ok(columns.includes('run_id'));
+  assert.equal(columns.includes('project_id'), false);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM candidates WHERE candidate_id='legacy-candidate'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='concurrent_candidates'").get().count, 0);
+  assert.deepEqual(await fx.runtime.orchestrator.run({ runId: 'legacy-new-run', goal: 'Use the Legacy engine.' }),
+    { status: 'completed', text: 'legacy result' });
+  assert.equal(fx.runtime.orchestrator.mapping('legacy-new-run').engine, 'legacy');
+});
+
+test('Concurrent startup uses concurrent_candidates beside the legacy candidates table', async (t) => {
+  const fx = await idleConcurrentServer(t, 'concurrent-candidates', {}, { seedLegacyCandidates: true });
+  const { db } = fx.runtime.state;
+  assert.equal(fx.runtime.deliveryEngine, 'concurrent-v1');
+  assert.ok(fx.runtime.concurrentEngine);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM candidates WHERE candidate_id='legacy-candidate'").get().count, 1);
+  const legacyColumns = db.prepare('PRAGMA table_info(candidates)').all().map((row) => row.name);
+  assert.ok(legacyColumns.includes('run_id'));
+  assert.equal(legacyColumns.includes('project_id'), false);
+  const concurrentColumns = db.prepare('PRAGMA table_info(concurrent_candidates)').all().map((row) => row.name);
+  assert.ok(concurrentColumns.includes('project_id'));
+  assert.ok(concurrentColumns.includes('integration_generation'));
+  const candidate = fx.runtime.concurrentEngine.candidateStore.createCandidate({ candidateId: 'candidate-concurrent-test',
+    projectId: fx.runtime.projectId, objectiveId: 'objective-prefix-test', integrationGeneration: 1,
+    sourceAttemptId: 'attempt-prefix-test', environmentDigest: `sha256:${'a'.repeat(64)}`, checkIdentity: 'checks-prefix-test' });
+  assert.equal(candidate.candidateId, 'candidate-concurrent-test');
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM concurrent_candidates').get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM candidates WHERE candidate_id='legacy-candidate'").get().count, 1);
+});
 
 test('concurrent engine admission recognizes persisted terminal legacy task states', { timeout: 60000 }, async (t) => {
   const terminalStates = ['TASK_STATE_COMPLETED', 'TASK_STATE_FAILED', 'TASK_STATE_CANCELED'];
@@ -1497,8 +1547,8 @@ function seedAuthoritativeEffects(db, projectId, stored, scenario) {
       db.prepare('UPDATE candidate_intents SET state=? WHERE intent_id=?').run(scenario.intentState, intentId);
     } else {
       // Use real CandidateStore candidates and frozen manifests for terminal intent fixtures.
-      const candidate = db.prepare('SELECT * FROM candidates WHERE candidate_id=?').get(`candidate-next-${index}`);
-      const base = db.prepare("SELECT * FROM candidates WHERE candidate_id='candidate-base'").get();
+      const candidate = db.prepare('SELECT * FROM concurrent_candidates WHERE candidate_id=?').get(`candidate-next-${index}`);
+      const base = db.prepare("SELECT * FROM concurrent_candidates WHERE candidate_id='candidate-base'").get();
       const before = db.prepare('SELECT manifest_json FROM candidate_snapshots WHERE digest=?').get(base.manifest_digest);
       const expected = db.prepare('SELECT manifest_json FROM candidate_snapshots WHERE digest=?').get(candidate.manifest_digest);
       db.prepare(`INSERT INTO candidate_intents(intent_id,project_id,objective_id,candidate_id,base_candidate_id,attempt_id,

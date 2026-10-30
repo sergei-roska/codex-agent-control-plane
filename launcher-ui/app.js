@@ -1662,9 +1662,10 @@
       item.appendChild(bg);
       const reset = textEl('div', 'limit-reset', 'Reset: n/a');
       item.appendChild(reset);
-      if (windowData) {
-        const used = windowData.usedPercent !== undefined ? windowData.usedPercent : 0;
-        const remaining = Math.max(0, Math.min(100, 100 - used));
+      const usedPercent = windowData && windowData.usedPercent;
+      if (Number.isFinite(usedPercent)) {
+        const used = Math.max(0, Math.min(100, usedPercent));
+        const remaining = 100 - used;
         fill.style.width = remaining + '%';
         fill.className = 'progress-bar-fill' + (remaining < 15 ? ' danger' : remaining < 40 ? ' warning' : '');
         value.textContent = remaining + '% left';
@@ -1674,8 +1675,48 @@
             ? 'Resets: ' + date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + formatResetCountdown(windowData.resetsAt)
             : 'Resets at ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + formatResetCountdown(windowData.resetsAt);
         }
+      } else {
+        bg.classList.add('is-unknown');
+        fill.className = 'progress-bar-fill unknown';
+        value.textContent = 'Unavailable';
       }
       return item;
+    }
+
+    function renderAccountQuotaPreview(data) {
+      const preview = document.getElementById('accountsQuotaPreview');
+      const activeAccount = data && data.system && data.system.active
+        ? data.system
+        : data && Array.isArray(data.profiles) ? data.profiles.find(function (profile) { return profile.active; }) : null;
+      const windows = [
+        { name: '5-hour', data: activeAccount && activeAccount.primary, fillId: 'accountsQuota5hFill', trackId: 'accountsQuota5hTrack', valueId: 'accountsQuota5hValue' },
+        { name: 'weekly', data: activeAccount && activeAccount.secondary, fillId: 'accountsQuotaWeeklyFill', trackId: 'accountsQuotaWeeklyTrack', valueId: 'accountsQuotaWeeklyValue' },
+      ];
+      const descriptions = [];
+      windows.forEach(function (windowInfo) {
+        const fill = document.getElementById(windowInfo.fillId);
+        const track = document.getElementById(windowInfo.trackId);
+        const value = document.getElementById(windowInfo.valueId);
+        const usedPercent = windowInfo.data && windowInfo.data.usedPercent;
+        if (!activeAccount || !Number.isFinite(usedPercent)) {
+          fill.style.width = '0%';
+          fill.className = 'progress-bar-fill accounts-quota-preview-fill';
+          track.classList.add('is-unknown');
+          value.textContent = '--';
+          descriptions.push(windowInfo.name + ' quota unavailable');
+          return;
+        }
+        const remaining = 100 - Math.max(0, Math.min(100, usedPercent));
+        fill.style.width = remaining + '%';
+        fill.className = 'progress-bar-fill accounts-quota-preview-fill' + (remaining < 15 ? ' danger' : remaining < 40 ? ' warning' : '');
+        track.classList.remove('is-unknown');
+        value.textContent = Math.round(remaining) + '%';
+        descriptions.push(windowInfo.name + ' quota ' + Math.round(remaining) + '% remaining');
+      });
+      const accountName = activeAccount ? (activeAccount.name || 'System account') : null;
+      preview.setAttribute('aria-label', activeAccount
+        ? 'Active account ' + accountName + ': ' + descriptions.join('; ')
+        : 'No active account; quota preview unavailable');
     }
 
     function accountBlock(account, isSystem) {
@@ -1789,6 +1830,7 @@
     }
 
     function renderAccounts(data) {
+      renderAccountQuotaPreview(data);
       if (!data) return;
       accountsData = data;
       const list = document.getElementById('accountsList');
@@ -2883,11 +2925,19 @@
     const CONNECTOR_TIMEOUT_TEXT = 'Sign-in not detected yet. Click Connect to try again.';
     let connectorList = [];
     let connectorsLoaded = false;
+    let connectorLoadSequence = 0;
+    let connectorPreferenceRevision = 0;
+    let connectorAuthRevision = 0;
+    let connectorStatusStale = false;
+    let connectorManagementSupported = false;
+    const connectorAuthMutations = new Set();
     const connectorRowState = Object.create(null);   // name -> { busy, message, isError, signInUrl }
     const connectorPollTimers = Object.create(null); // name -> interval id
 
     function connectorRowStateFor(name) {
-      if (!connectorRowState[name]) connectorRowState[name] = { busy: false, message: '', isError: false, signInUrl: '' };
+      if (!connectorRowState[name]) connectorRowState[name] = {
+        busy: false, enabledBusy: false, confirmSwitch: false, message: '', isError: false, signInUrl: ''
+      };
       return connectorRowState[name];
     }
 
@@ -2907,45 +2957,95 @@
 
     function connectorRow(c) {
       const st = connectorRowStateFor(c.name);
+      const enabled = c.enabled !== false;
       const row = document.createElement('div');
-      row.className = 'connector-row';
+      row.className = 'connector-row' + (enabled ? '' : ' is-disabled');
 
       const head = document.createElement('div');
       head.className = 'connector-head';
       head.appendChild(textEl('span', 'connector-title', c.title || c.name));
       let pillClass = 'pill-canceled';
       let pillText = 'Status unavailable';
-      if (c.state === 'signed_in') {
+      if (!connectorStatusStale && c.state === 'signed_in') {
         pillClass = 'pill-completed';
         pillText = 'Connected';
-      } else if (c.state === 'available') {
+      } else if (!connectorStatusStale && c.state === 'available') {
         pillClass = 'pill-completed';
         pillText = 'Available';
-      } else if (c.state === 'needs_sign_in') {
+      } else if (!connectorStatusStale && c.state === 'needs_sign_in') {
         pillClass = 'pill-paused';
         pillText = 'Not connected';
       }
       head.appendChild(textEl('span', 'pill ' + pillClass, pillText));
+      if (!enabled) head.appendChild(textEl('span', 'pill connector-disabled-pill', 'Disabled'));
       row.appendChild(head);
 
       if (c.purpose) row.appendChild(textEl('p', 'connector-purpose', c.purpose));
-      if (c.state === 'unknown' && c.detail) row.appendChild(textEl('p', 'connector-detail', c.detail));
+      if (!connectorStatusStale && c.state === 'unknown' && c.detail) row.appendChild(textEl('p', 'connector-detail', c.detail));
 
-      if (!connectorIsReady(c)) {
-        const actions = document.createElement('div');
-        actions.className = 'connector-actions';
-        const btn = textEl('button', 'btn btn-secondary btn-xs', 'Connect');
-        btn.type = 'button';
-        btn.disabled = st.busy;
-        btn.addEventListener('click', function () { startConnectorSignIn(c.name); });
-        actions.appendChild(btn);
-        row.appendChild(actions);
+      const actions = document.createElement('div');
+      actions.className = 'connector-actions';
+      if (connectorManagementSupported) {
+        const enabledBtn = textEl('button', 'btn btn-secondary btn-xs', enabled ? 'Disable' : 'Enable');
+        enabledBtn.type = 'button';
+        enabledBtn.disabled = st.enabledBusy;
+        enabledBtn.addEventListener('click', function () { setConnectorEnabled(c.name, !enabled); });
+        actions.appendChild(enabledBtn);
+      }
+
+      if (!connectorStatusStale) {
+        if (!connectorIsReady(c)) {
+          const btn = textEl('button', 'btn btn-secondary btn-xs', 'Connect');
+          btn.type = 'button';
+          btn.disabled = st.busy;
+          btn.addEventListener('click', function () { startConnectorSignIn(c.name); });
+          actions.appendChild(btn);
+        } else if (connectorManagementSupported && c.state === 'signed_in' && !st.confirmSwitch) {
+          const switchBtn = textEl('button', 'btn btn-secondary btn-xs', 'Switch account');
+          switchBtn.type = 'button';
+          switchBtn.disabled = st.busy;
+          switchBtn.addEventListener('click', function () {
+            st.confirmSwitch = true;
+            renderConnectors();
+          });
+          actions.appendChild(switchBtn);
+        }
+      }
+      row.appendChild(actions);
+
+      if (st.confirmSwitch && !connectorStatusStale && connectorManagementSupported) {
+        const confirmation = document.createElement('div');
+        confirmation.className = 'connector-switch-confirm';
+        confirmation.setAttribute('role', 'group');
+        confirmation.setAttribute('aria-label', 'Confirm account switch');
+        confirmation.appendChild(textEl('p', 'connector-detail', 'This clears the saved local sign-in for this connector from the current active Codex profile, then starts sign-in for another account. It does not revoke provider-side access.'));
+        const confirmActions = document.createElement('div');
+        confirmActions.className = 'connector-actions';
+        const confirmBtn = textEl('button', 'btn btn-danger btn-xs', 'Confirm switch');
+        confirmBtn.type = 'button';
+        confirmBtn.disabled = st.busy;
+        confirmBtn.addEventListener('click', function () { startConnectorSwitchAccount(c.name); });
+        const cancelBtn = textEl('button', 'btn btn-secondary btn-xs', 'Cancel');
+        cancelBtn.type = 'button';
+        cancelBtn.disabled = st.busy;
+        cancelBtn.addEventListener('click', function () {
+          st.confirmSwitch = false;
+          renderConnectors();
+        });
+        confirmActions.appendChild(confirmBtn);
+        confirmActions.appendChild(cancelBtn);
+        confirmation.appendChild(confirmActions);
+        row.appendChild(confirmation);
+      }
+
+      if (!connectorManagementSupported) {
+        row.appendChild(textEl('p', 'connector-detail', 'Restart the launcher to manage connectors.'));
       }
 
       if (st.message) row.appendChild(textEl('p', st.isError ? 'connector-message is-error' : 'connector-message', st.message));
 
       // Shown only when the browser blocked the new tab; the href is set as a DOM property, never as HTML.
-      if (st.signInUrl && !connectorIsReady(c)) {
+      if (st.signInUrl && !connectorStatusStale) {
         const link = textEl('a', 'account-link', 'Open sign-in page');
         link.href = st.signInUrl;
         link.target = '_blank';
@@ -2966,14 +3066,23 @@
     }
 
     async function loadConnectors() {
+      const requestSequence = ++connectorLoadSequence;
+      const preferenceRevision = connectorPreferenceRevision;
+      const authRevision = connectorAuthRevision;
       try {
         const res = await fetch('/api/connectors');
         let data = {};
         try { data = await res.json(); } catch (_) {}
         if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
         if (!Array.isArray(data.connectors)) throw new Error('unexpected response');
+        if (requestSequence !== connectorLoadSequence || preferenceRevision !== connectorPreferenceRevision
+          || authRevision !== connectorAuthRevision || connectorAuthMutations.size > 0) return;
         connectorList = data.connectors;
+        connectorManagementSupported = data.connectors.every(function (connector) {
+          return connector && typeof connector.enabled === 'boolean';
+        });
         connectorsLoaded = true;
+        connectorStatusStale = false;
         document.getElementById('connectorsError').classList.add('hidden');
         connectorList.forEach(function (c) {
           if (!connectorIsReady(c)) return;
@@ -2984,6 +3093,9 @@
         });
         renderConnectors();
       } catch (e) {
+        if (requestSequence !== connectorLoadSequence || preferenceRevision !== connectorPreferenceRevision
+          || authRevision !== connectorAuthRevision || connectorAuthMutations.size > 0) return;
+        connectorStatusStale = true;
         const err = document.getElementById('connectorsError');
         err.textContent = 'Failed to load connectors: ' + e.message;
         err.classList.remove('hidden');
@@ -2991,7 +3103,42 @@
           const slot = document.getElementById('connectorsSlot');
           slot.textContent = '';
           slot.appendChild(textEl('p', 'connectors-empty', 'Connectors unavailable.'));
+        } else {
+          renderConnectors();
         }
+      }
+    }
+
+    async function setConnectorEnabled(name, enabled) {
+      const st = connectorRowStateFor(name);
+      if (st.enabledBusy) return;
+      connectorPreferenceRevision += 1;
+      st.enabledBusy = true;
+      st.message = '';
+      st.isError = false;
+      renderConnectors();
+      try {
+        const res = await fetch('/api/connectors/' + encodeURIComponent(name) + '/enabled', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: enabled })
+        });
+        let data = {};
+        try { data = await res.json(); } catch (_) {}
+        if (!res.ok || data.success !== true || data.enabled !== enabled) {
+          throw new Error(data.error || ('HTTP ' + res.status));
+        }
+        connectorPreferenceRevision += 1;
+        const connector = connectorList.find(function (item) { return item.name === name; });
+        if (connector) connector.enabled = enabled;
+      } catch (e) {
+        connectorPreferenceRevision += 1;
+        await loadConnectors();
+        st.message = e.message;
+        st.isError = true;
+      } finally {
+        st.enabledBusy = false;
+        renderConnectors();
       }
     }
 
@@ -3042,6 +3189,50 @@
       } catch (e) {
         if (win) win.close();
         st.busy = false;
+        st.message = e.message;
+        st.isError = true;
+        renderConnectors();
+      }
+    }
+
+    async function startConnectorSwitchAccount(name) {
+      const st = connectorRowStateFor(name);
+      if (st.busy) return;
+      connectorAuthRevision += 1;
+      connectorAuthMutations.add(name);
+      connectorStatusStale = true;
+      // Open the tab synchronously from the confirmation click before making the request.
+      const win = window.open('about:blank', '_blank');
+      st.busy = true;
+      st.confirmSwitch = false;
+      st.message = '';
+      st.isError = false;
+      st.signInUrl = '';
+      renderConnectors();
+      try {
+        const res = await fetch('/api/connectors/' + encodeURIComponent(name) + '/switch-account', { method: 'POST' });
+        let data = {};
+        try { data = await res.json(); } catch (_) {}
+        if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        if (!isHttpsUrl(data.authUrl)) throw new Error('No valid sign-in link was returned.');
+        connectorAuthRevision += 1;
+        connectorAuthMutations.delete(name);
+        st.busy = false;
+        st.message = CONNECTOR_SIGN_IN_TEXT;
+        if (win) {
+          win.opener = null;
+          win.location.href = data.authUrl;
+        } else {
+          st.signInUrl = data.authUrl;
+        }
+        renderConnectors();
+        pollConnectorSignIn(name);
+      } catch (e) {
+        if (win) win.close();
+        connectorAuthRevision += 1;
+        connectorAuthMutations.delete(name);
+        st.busy = false;
+        await loadConnectors();
         st.message = e.message;
         st.isError = true;
         renderConnectors();

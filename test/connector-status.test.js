@@ -8,7 +8,7 @@ const { describe, it, beforeEach, afterEach } = require('node:test');
 const { createLauncherApp } = require('../src/launcher-app');
 const { createAccountProfiles } = require('../src/account-profiles');
 const { defaultConnectorCatalog } = require('../src/connector-catalog');
-const { createConnectorService, connectorConfigArgs, mapState } = require('../src/connector-status');
+const { createConnectorService, connectorConfigArgs, logoutConnector, mapState } = require('../src/connector-status');
 
 const NAMES = ['harness-atlassian', 'harness-figma', 'harness-context7', 'harness-gtm'];
 
@@ -20,6 +20,9 @@ let servers;
 let authByName;
 let startFails;
 let loginUrl;
+let profiles;
+let logoutCalls;
+let logoutFails;
 
 class FakeAppServer {
   constructor(options) {
@@ -55,8 +58,12 @@ class FakeAppServer {
   }
 }
 
-async function api(method, url) {
-  const res = await fetch(base + url, { method });
+async function api(method, url, body) {
+  const res = await fetch(base + url, {
+    method,
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
   return { status: res.status, body: await res.json() };
 }
 
@@ -65,12 +72,19 @@ beforeEach(async () => {
   servers = [];
   authByName = {};
   startFails = false;
+  logoutCalls = [];
+  logoutFails = false;
   loginUrl = 'https://auth.example.com/authorize?client_id=x';
+  profiles = createAccountProfiles({ accountsDir: path.join(tmp, 'accounts'), codexDefaultHome: path.join(tmp, 'default-home') });
   app = createLauncherApp({
     projects: { list: () => [], get: () => null },
     readAuthToken: () => 'tok',
     createAppServer: (opts) => new FakeAppServer(opts),
-    accountProfiles: createAccountProfiles({ accountsDir: path.join(tmp, 'accounts'), codexDefaultHome: path.join(tmp, 'default-home') }),
+    accountProfiles: profiles,
+    connectorLogoutImpl: async (name, options) => {
+      logoutCalls.push({ name, ...options });
+      if (logoutFails) throw new Error('codex logout failed');
+    },
   });
   await new Promise((resolve) => { http = app.listen(0, '127.0.0.1', resolve); });
   base = 'http://127.0.0.1:' + http.address().port;
@@ -92,6 +106,7 @@ describe('GET /api/connectors', () => {
       assert.equal(typeof c.purpose, 'string');
       assert.equal(typeof c.dataSensitivity, 'string');
       assert.equal(typeof c.toolsVerified, 'boolean');
+      assert.equal(c.enabled, true);
     }
     assert.equal(servers.length, 1);
     assert.equal(servers[0].closed, true);
@@ -122,6 +137,73 @@ describe('GET /api/connectors', () => {
       assert.equal(c.state, 'unknown');
       assert.match(c.detail, /spawn codex ENOENT/);
     }
+  });
+});
+
+describe('connector enablement preferences', () => {
+  it('persists reversible enablement without changing credentials or connected state', async () => {
+    authByName['harness-figma'] = { authStatus: 'oAuth', runtimeStatus: 'connected' };
+    const home = path.join(tmp, 'default-home');
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, 'auth.json'), '{"connector":"figma"}');
+
+    const disabled = await api('PUT', '/api/connectors/harness-figma/enabled', { enabled: false });
+    assert.equal(disabled.status, 200);
+    assert.deepEqual(disabled.body, { success: true, name: 'harness-figma', enabled: false });
+    assert.equal(fs.readFileSync(path.join(home, 'auth.json'), 'utf8'), '{"connector":"figma"}');
+    const { body } = await api('GET', '/api/connectors');
+    const figma = body.connectors.find((connector) => connector.name === 'harness-figma');
+    assert.equal(figma.enabled, false);
+    assert.equal(figma.state, 'signed_in');
+
+    const enabled = await api('PUT', '/api/connectors/harness-figma/enabled', { enabled: true });
+    assert.deepEqual(enabled.body, { success: true, name: 'harness-figma', enabled: true });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(profiles.accountsDir, 'connector-preferences.json'), 'utf8')),
+      { version: 1, disabled: [] });
+  });
+
+  it('requires exactly an enabled boolean and rejects unknown connectors', async () => {
+    for (const body of [{ enabled: false, extra: true }, { enabled: 0 }, {}, { enabled: null }]) {
+      const response = await api('PUT', '/api/connectors/harness-figma/enabled', body);
+      assert.equal(response.status, 400);
+    }
+    const unknown = await api('PUT', '/api/connectors/harness-other/enabled', { enabled: false });
+    assert.equal(unknown.status, 404);
+  });
+});
+
+describe('POST /api/connectors/:name/switch-account', () => {
+  it('logs out the named connector from the active Codex home before starting OAuth', async () => {
+    profiles.addProfile({ name: 'work' });
+    profiles.setActive('work');
+    const { status, body } = await api('POST', '/api/connectors/harness-figma/switch-account');
+    assert.equal(status, 200);
+    assert.deepEqual(body, { authUrl: 'https://auth.example.com/authorize?client_id=x' });
+    assert.deepEqual(logoutCalls, [{
+      name: 'harness-figma',
+      codexHome: path.join(profiles.accountsDir, 'work'),
+      server: defaultConnectorCatalog().servers.get('harness-figma'),
+    }]);
+    assert.equal(servers.length, 1);
+    assert.equal(servers[0].options.codexHome, path.join(profiles.accountsDir, 'work'));
+    assert.deepEqual(servers[0].calls[0], ['login', 'harness-figma', { timeoutSecs: 600 }]);
+    assert.equal(servers[0].closed, false);
+  });
+
+  it('does not begin sign-in when local logout fails', async () => {
+    logoutFails = true;
+    const { status, body } = await api('POST', '/api/connectors/harness-figma/switch-account');
+    assert.equal(status, 502);
+    assert.match(body.error, /logout failed/);
+    assert.deepEqual(logoutCalls.map(({ name }) => name), ['harness-figma']);
+    assert.equal(servers.length, 0);
+  });
+
+  it('rejects unknown names without invoking logout or sign-in', async () => {
+    const { status } = await api('POST', '/api/connectors/harness-other/switch-account');
+    assert.equal(status, 404);
+    assert.deepEqual(logoutCalls, []);
+    assert.equal(servers.length, 0);
   });
 });
 
@@ -185,6 +267,27 @@ describe('POST /api/connectors/:name/sign-in', () => {
 });
 
 describe('connector service internals', () => {
+  it('runs local logout with argv and the selected CODEX_HOME, without a shell', async () => {
+    let invocation;
+    await logoutConnector('harness-figma', {
+      codexHome: '/tmp/codex-home',
+      server: defaultConnectorCatalog().servers.get('harness-figma'),
+      execFileImpl: (command, args, options, callback) => {
+        invocation = { command, args, options };
+        callback(null);
+      },
+    });
+    assert.equal(invocation.command, 'codex');
+    assert.deepEqual(invocation.args, [
+      'mcp', 'logout',
+      '-c', 'mcp_servers.harness-figma.url="https://mcp.figma.com/mcp"',
+      '-c', 'mcp_servers.harness-figma.enabled=true',
+      'harness-figma',
+    ]);
+    assert.equal(invocation.options.env.CODEX_HOME, '/tmp/codex-home');
+    assert.equal(invocation.options.shell, false);
+  });
+
   it('passes the catalog urls to each app-server child as config overrides', () => {
     const args = connectorConfigArgs(defaultConnectorCatalog().servers);
     assert.ok(args.includes('mcp_servers.harness-figma.url="https://mcp.figma.com/mcp"'));
@@ -345,6 +448,54 @@ describe('connector service internals', () => {
       await assert.rejects(second, (err) => err.status === 503);
       assert.equal(created.length, 1);
       assert.equal(live(), 0);
+    });
+  });
+
+  describe('switch-account status invalidation', () => {
+    it('does not reuse or cache a status probe held across local logout', async () => {
+      const deferred = () => {
+        let resolve;
+        const promise = new Promise((done) => { resolve = done; });
+        return { promise, resolve };
+      };
+      const logoutStarted = deferred();
+      const logoutGate = deferred();
+      const oldStatus = deferred();
+      let figmaProbes = 0;
+      const service = createConnectorService({
+        getCodexHome: () => '/active/codex-home',
+        logoutImpl: async () => { logoutStarted.resolve(); await logoutGate.promise; },
+        createAppServer: () => ({
+          mcpServerAuthStatus: async (name) => {
+            if (name !== 'harness-figma') return [];
+            figmaProbes += 1;
+            if (figmaProbes === 1) return oldStatus.promise;
+            return [{ name, authStatus: 'notLoggedIn', runtimeStatus: null, tools: {}, toolsError: 'Auth required' }];
+          },
+          mcpOauthLoginStart: async () => ({ authorizationUrl: 'https://auth.example.com/authorize' }),
+          onNotification: () => () => {},
+          close: async () => {},
+        }),
+      });
+
+      const switching = service.switchAccount('harness-figma');
+      await logoutStarted.promise;
+      const heldProbe = service.list();
+      assert.equal(figmaProbes, 1);
+      logoutGate.resolve();
+      await switching;
+
+      const freshProbe = service.list();
+      assert.equal(figmaProbes, 2, 'GET after logout starts a new status probe');
+      oldStatus.resolve([{ name: 'harness-figma', authStatus: 'oAuth', runtimeStatus: 'connected' }]);
+      const [oldResult, freshResult] = await Promise.all([heldProbe, freshProbe]);
+      assert.equal(oldResult.find((row) => row.name === 'harness-figma').state, 'signed_in');
+      assert.equal(freshResult.find((row) => row.name === 'harness-figma').state, 'needs_sign_in');
+
+      const cachedResult = await service.list();
+      assert.equal(cachedResult.find((row) => row.name === 'harness-figma').state, 'needs_sign_in');
+      assert.equal(figmaProbes, 2, 'the stale in-flight probe did not replace the fresh cache');
+      await service.close();
     });
   });
 

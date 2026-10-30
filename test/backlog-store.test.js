@@ -64,9 +64,9 @@ function recoveredBlockedReviewFixture() {
   const { db, store } = fixture();
   db.exec(`CREATE TABLE task_executor_attempts (attempt_id TEXT PRIMARY KEY, state TEXT, external_task_id TEXT, context_id TEXT,
     project_id TEXT, objective_id TEXT, task_id TEXT, fencing_token INTEGER);
-    CREATE TABLE candidates (candidate_id TEXT PRIMARY KEY, project_id TEXT, objective_id TEXT, status TEXT);`);
+    CREATE TABLE concurrent_candidates (candidate_id TEXT PRIMARY KEY, project_id TEXT, objective_id TEXT, status TEXT);`);
   const candidateId = 'known-review-candidate';
-  db.prepare('INSERT INTO candidates(candidate_id,project_id,objective_id,status) VALUES(?,?,?,?)')
+  db.prepare('INSERT INTO concurrent_candidates(candidate_id,project_id,objective_id,status) VALUES(?,?,?,?)')
     .run(candidateId, projectId, objectiveId, 'known');
   const reviewTask = task('frozen-verifier', { role: 'verifier', kind: 'review', productWritePaths: [],
     publicationAuthority: { state: 'denied', reason: 'review_task', authorityRevision: 1 },

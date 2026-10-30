@@ -9,6 +9,7 @@ const { ClientFactory } = require('@a2a-js/sdk/client');
 const { parseCheckCommand } = require('./acceptance');
 const { CodexAppServer } = require('./codex-app-server');
 const { createAccountProfiles } = require('./account-profiles');
+const { createConnectorPreferences } = require('./connector-preferences');
 const { createConnectorService } = require('./connector-status');
 const { loadRoles, createLeadRole, LEAD_ROLE_NAME } = require('./role-catalog');
 const { canonicalRoleId } = require('./role-names');
@@ -115,6 +116,7 @@ function createLauncherApp({
   openTasksDb = (file, options) => new Database(file, options),
   createAppServer = (options) => new CodexAppServer(options),
   accountProfiles = createAccountProfiles(),
+  connectorLogoutImpl,
   loginTimeoutMs = LOGIN_TIMEOUT_MS,
   limitsTtlMs = LIMITS_TTL_MS,
   askOptions = {},
@@ -1113,7 +1115,13 @@ function createLauncherApp({
   });
 
   // API: Harness connectors (state and browser sign-in). Codex stores the credentials in the account home.
-  const connectors = createConnectorService({ createAppServer, getCodexHome: () => activeKeyAndHome().home });
+  const connectorPreferences = createConnectorPreferences({ accountsDir: accountProfiles.accountsDir });
+  const connectors = createConnectorService({
+    createAppServer,
+    getCodexHome: () => activeKeyAndHome().home,
+    logoutImpl: connectorLogoutImpl,
+    preferences: connectorPreferences,
+  });
 
   app.get('/api/connectors', async (req, res) => {
     try {
@@ -1126,6 +1134,27 @@ function createLauncherApp({
   app.post('/api/connectors/:name/sign-in', async (req, res) => {
     try {
       res.json(await connectors.signIn(req.params.name));
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message || String(err) });
+    }
+  });
+
+  app.put('/api/connectors/:name/enabled', async (req, res) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)
+      || Object.keys(body).length !== 1 || !Object.hasOwn(body, 'enabled') || typeof body.enabled !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'Request body must be exactly { enabled: boolean }' });
+    }
+    try {
+      res.json(await connectors.setEnabled(req.params.name, body.enabled));
+    } catch (err) {
+      res.status(err.status || 500).json({ success: false, error: err.message || String(err) });
+    }
+  });
+
+  app.post('/api/connectors/:name/switch-account', async (req, res) => {
+    try {
+      res.json(await connectors.switchAccount(req.params.name));
     } catch (err) {
       res.status(err.status || 500).json({ error: err.message || String(err) });
     }

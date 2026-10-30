@@ -165,12 +165,12 @@
       </section>
 
       <!-- Section: Project Management -->
-      <section class="card sidebar-section">
-        <div class="card-header">
-          <h2 class="card-title">
-            <svg class="icon"><use href="#i-folder"/></svg> Project
-          </h2>
-        </div>
+      <details class="card sidebar-section sidebar-disclosure" id="projectCard">
+        <summary class="card-title-summary sidebar-disclosure-summary">
+          <svg class="icon"><use href="#i-folder"/></svg>
+          <span>Project</span>
+          <svg class="icon sidebar-disclosure-chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+        </summary>
         <div class="field-group project-bar">
           <div class="project-row">
             <select id="projectSelect" onchange="onProjectSelectChange()"></select>
@@ -183,18 +183,34 @@
           </div>
           <div id="projectNotice" class="inline-notice hidden" role="alert"></div>
         </div>
-      </section>
+      </details>
 
       <!-- Section: Codex Accounts & Limits -->
-      <section class="card sidebar-section" id="accountsCard">
-        <div class="card-header">
-          <div class="card-title">
-            <svg class="icon"><use href="#i-users"/></svg> Accounts
-          </div>
+      <details class="card sidebar-section sidebar-disclosure accounts-card" id="accountsCard">
+        <summary class="card-header card-title-summary sidebar-disclosure-summary">
+          <span class="accounts-summary-title">
+            <svg class="icon"><use href="#i-users"/></svg>
+            <span>Accounts</span>
+          </span>
+          <span class="accounts-quota-preview" id="accountsQuotaPreview" role="img" aria-label="Quota preview unavailable">
+            <span class="accounts-quota-preview-window" aria-hidden="true">
+              <span class="accounts-quota-preview-label">5h</span>
+              <span class="accounts-quota-preview-track is-unknown" id="accountsQuota5hTrack"><span class="progress-bar-fill accounts-quota-preview-fill" id="accountsQuota5hFill" style="width: 0%"></span></span>
+              <span class="accounts-quota-preview-value" id="accountsQuota5hValue">--</span>
+            </span>
+            <span class="accounts-quota-preview-window" aria-hidden="true">
+              <span class="accounts-quota-preview-label">wk</span>
+              <span class="accounts-quota-preview-track is-unknown" id="accountsQuotaWeeklyTrack"><span class="progress-bar-fill accounts-quota-preview-fill" id="accountsQuotaWeeklyFill" style="width: 0%"></span></span>
+              <span class="accounts-quota-preview-value" id="accountsQuotaWeeklyValue">--</span>
+            </span>
+          </span>
+          <svg class="icon sidebar-disclosure-chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+        </summary>
+        <div class="accounts-card-actions">
+          <span class="accounts-refresh-status" id="accountsRefreshStatus" aria-live="polite"></span>
           <button class="icon-btn" id="accountsRefreshBtn" aria-label="Refresh accounts & rate limits" data-tooltip="Refresh accounts & rate limits">
             <svg class="icon"><use href="#i-refresh-cw"/></svg>
           </button>
-          <span class="accounts-refresh-status" id="accountsRefreshStatus" aria-live="polite"></span>
         </div>
         <div id="accountsList" class="accounts-list">Loading...</div>
         <div class="limit-reset hidden" id="accountsError"></div>
@@ -206,29 +222,32 @@
           <span class="toggle-track" aria-hidden="true"></span>
           <span>Auto-switch when limit reached</span>
         </label>
-      </section>
+      </details>
 
-      <section class="card sidebar-section" id="connectorsCard" aria-label="Connectors">
-        <div class="card-header">
-          <h2 class="card-title"><svg class="icon"><use href="#i-plug"/></svg> Connectors</h2>
-        </div>
-        <div class="connectors-slot" id="connectorsSlot">
-          <p class="connectors-empty">Loading connectors...</p>
-        </div>
-        <div class="limit-reset hidden" id="connectorsError"></div>
-      </section>
-
-      <section class="card sidebar-section team-activity-card" id="teamBand" aria-labelledby="aboutTeamLabel">
-        <div class="team-band-header">
+      <details class="card sidebar-section team-activity-card sidebar-disclosure" id="teamBand" aria-labelledby="aboutTeamLabel">
+        <summary class="team-band-header sidebar-disclosure-summary">
           <h2 class="card-title"><svg class="icon"><use href="#i-bot"/></svg> <span id="aboutTeamLabel">Team activity</span></h2>
-        </div>
+          <svg class="icon sidebar-disclosure-chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+        </summary>
         <div class="team-band-tokens hidden" id="teamTokens">
           <span>Session tokens: <strong id="teamTokenTotal">-</strong></span>
           <span class="team-band-split" id="teamTokenSplit"></span>
         </div>
         <div class="limit-reset hidden" id="aboutTeamError"></div>
         <div class="about-list" id="aboutTeamList"></div>
-      </section>
+      </details>
+
+      <details class="card sidebar-section sidebar-disclosure" id="connectorsCard" aria-label="Connectors">
+        <summary class="card-title-summary sidebar-disclosure-summary">
+          <svg class="icon"><use href="#i-plug"/></svg>
+          <span>Connectors</span>
+          <svg class="icon sidebar-disclosure-chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+        </summary>
+        <div class="connectors-slot" id="connectorsSlot">
+          <p class="connectors-empty">Loading connectors...</p>
+        </div>
+        <div class="limit-reset hidden" id="connectorsError"></div>
+      </details>
 
 
     </aside>

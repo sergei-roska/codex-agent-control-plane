@@ -1259,9 +1259,12 @@ async function startServer({
   }
   // An injected App Server is used as is; otherwise the switching wrapper follows the active account profile.
   const accountProfiles = createAccountProfiles(accountsDir ? { accountsDir } : {});
+  const connectorPreferencesFile = path.join(accountProfiles.accountsDir, 'connector-preferences.json');
   const switching = injectedAppServer ? null : createSwitchingAppServer({
     profiles: accountProfiles,
-    ...(appServerFactory ? { create: appServerFactory } : {}),
+    create: (codexHome) => appServerFactory
+      ? appServerFactory(codexHome, { connectorPreferencesFile })
+      : new CodexAppServer({ ...(codexHome ? { codexHome } : {}), connectorPreferencesFile }),
   });
   const appServer = injectedAppServer || switching;
   let httpServer = null;

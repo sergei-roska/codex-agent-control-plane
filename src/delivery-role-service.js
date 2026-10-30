@@ -19,6 +19,7 @@ const { canonicalRoleId, roleDisplayName } = require('./role-names');
 const { measureCandidateTree } = require('./delivery-acceptance');
 const { captureManifest } = require('./candidate-store');
 const { reviewResult } = require('./review-policy');
+const { CONCURRENT_TABLES } = require('./concurrent-table-names');
 
 const TERMINAL = new Set([TaskState.TASK_STATE_COMPLETED, TaskState.TASK_STATE_FAILED, TaskState.TASK_STATE_CANCELED, TaskState.TASK_STATE_REJECTED]);
 const ACTIVE = new Set(['claimed', 'running']);
@@ -332,7 +333,7 @@ class DeliveryRoleService {
     if (this.db.prepare(`SELECT 1 FROM delivery_output_publications p JOIN delivery_output_bindings b
       ON b.artifact_id=p.artifact_id WHERE b.attempt_id=? LIMIT 1`).get(record.attemptId)
       || this.db.prepare('SELECT 1 FROM candidate_intents WHERE attempt_id=? LIMIT 1').get(record.attemptId)
-      || this.db.prepare('SELECT 1 FROM candidates WHERE source_attempt_id=? LIMIT 1').get(record.attemptId)) fail();
+      || this.db.prepare(`SELECT 1 FROM ${CONCURRENT_TABLES.candidates} WHERE source_attempt_id=? LIMIT 1`).get(record.attemptId)) fail();
     let lane = null;
     if (record.laneId) {
       lane = this.lanes.store.get(record.laneId);
@@ -522,7 +523,7 @@ class DeliveryRoleService {
     const lease = admissionApi?.findByContextId?.(intentId) || admissionApi?.findAnyByContextId?.(intentId) || null;
     if (!intent) {
       if (lease || cause?.code !== 'generation_not_monotonic') return null;
-      const latest = this.db.prepare(`SELECT candidate_id FROM candidates
+      const latest = this.db.prepare(`SELECT candidate_id FROM ${CONCURRENT_TABLES.candidates}
         WHERE project_id=? AND objective_id=? ORDER BY integration_generation DESC LIMIT 1`).get(record.projectId, record.objectiveId);
       const candidate = latest ? this.candidates.get(latest.candidate_id) : null;
       const base = this.candidates.get(record.baseCandidateId);

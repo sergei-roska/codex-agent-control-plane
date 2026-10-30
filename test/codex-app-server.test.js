@@ -2127,6 +2127,65 @@ test('a selected connector gets its url, exact enabled_tools and required false'
   assert.deepEqual(policy.mcpMissing, ['harness-context7']);
 });
 
+test('a disabled selected connector is denied before thread or turn setup', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'disabled-connector-'));
+  const preferencesFile = path.join(root, 'connector-preferences.json');
+  fs.writeFileSync(preferencesFile, JSON.stringify({ version: 1, disabled: ['harness-figma'] }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fake = fakeSpawn(inventoryHandler(['harness-figma']));
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, connectorPreferencesFile: preferencesFile });
+  t.after(() => client.close());
+
+  await assert.rejects(client.run({
+    role: toolRole({ mcpServers: ['harness-figma'], skills: false }),
+    cwd: '/tmp/work', input: 'hi', selectedMcpTools: connectorPick('harness-figma:whoami'),
+  }), (error) => error.code === 'connector_disabled' && error.failureClass === 'request_rejected');
+  assert.equal(fake.getChildren().length, 0, 'the disabled selection is rejected before spawning an App Server');
+});
+
+test('a disabled connector is rejected before Fast-mode model capability lookup', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'disabled-fast-connector-'));
+  const preferencesFile = path.join(root, 'connector-preferences.json');
+  fs.writeFileSync(preferencesFile, JSON.stringify({ version: 1, disabled: ['harness-figma'] }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const handler = inventoryHandler(['harness-figma']);
+  let modelListRequests = 0;
+  const fake = fakeSpawn((request, send) => {
+    if (request.method === 'model/list') modelListRequests += 1;
+    return handler(request, send);
+  });
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, connectorPreferencesFile: preferencesFile });
+  t.after(() => client.close());
+
+  await assert.rejects(client.run({
+    role: { ...toolRole({ mcpServers: ['harness-figma'], skills: false }), fastMode: 'on' },
+    cwd: '/tmp/work', input: 'hi', selectedMcpTools: connectorPick('harness-figma:whoami'),
+  }), (error) => error.code === 'connector_disabled');
+  assert.equal(modelListRequests, 0);
+  assert.equal(fake.getChildren().length, 0);
+});
+
+test('a newly disabled connector is denied on the next turn of an already loaded thread', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'disable-next-turn-'));
+  const preferencesFile = path.join(root, 'connector-preferences.json');
+  fs.writeFileSync(preferencesFile, JSON.stringify({ version: 1, disabled: [] }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fake = fakeSpawn(inventoryHandler(['harness-figma']));
+  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, connectorPreferencesFile: preferencesFile });
+  t.after(() => client.close());
+  const options = {
+    role: toolRole({ mcpServers: ['harness-figma'], skills: false }),
+    cwd: '/tmp/work', input: 'first', selectedMcpTools: connectorPick('harness-figma:whoami'),
+  };
+  const first = await client.run(options);
+  const turnStartsBeforeDisable = fake.getChild().sent.filter(({ method }) => method === 'turn/start').length;
+  fs.writeFileSync(preferencesFile, JSON.stringify({ version: 1, disabled: ['harness-figma'] }));
+
+  await assert.rejects(client.run({ ...options, input: 'next', threadId: first.threadId }),
+    (error) => error.code === 'connector_disabled');
+  assert.equal(fake.getChild().sent.filter(({ method }) => method === 'turn/start').length, turnStartsBeforeDisable);
+});
+
 test('a configured connector with no selected tool is disabled, as is one the role does not allow', async (t) => {
   const selectedMcpTools = connectorPick('harness-context7:query-docs');
   const { config, policy } = await startConfig(t, {
