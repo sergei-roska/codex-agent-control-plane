@@ -22,6 +22,16 @@ function rolePageFunction(name) {
   return rolesJs.slice(start, end + '\n  }\n'.length);
 }
 
+// app.js is a classic browser script with no exports; pull one top-level function
+// out of its IIFE (4-space indented, ends at the matching brace line).
+function functionSource(name) {
+  const start = mainJs.search(new RegExp('^    function ' + name + '\\(', 'm'));
+  assert.notEqual(start, -1, `${name} must exist in app.js`);
+  const end = mainJs.indexOf('\n    }\n', start);
+  assert.notEqual(end, -1);
+  return mainJs.slice(start, end + '\n    }\n'.length);
+}
+
 function createElement(tagName) {
   const listeners = {};
   const element = {
@@ -255,13 +265,15 @@ describe('main page connector layout', () => {
     assert.doesNotMatch(about[1], /\bopen\b/);
     assert.match(sidebar, /<summary class="card-title-summary">[\s\S]*?About Orchestrator/);
 
-    for (const id of ['projectCard', 'accountsCard', 'teamBand', 'connectorsCard']) {
+    for (const id of ['accountsCard', 'teamBand', 'connectorsCard']) {
       const card = sidebar.match(new RegExp(`<details\\b(?=[^>]*\\bid="${id}")[^>]*>([\\s\\S]*?)<\\/details>`));
       assert.ok(card, `${id} must be a details disclosure`);
       assert.match(card[1], /^\s*<summary\b/);
       const openingTag = card[0].slice(0, card[0].indexOf('>') + 1);
       assert.doesNotMatch(openingTag, /\bopen\b/);
     }
+    assert.doesNotMatch(sidebar, /id="projectCard"/);
+    assert.doesNotMatch(sidebar, /id="projectSelect"/);
     assert.match(sidebar, /id="accountsQuotaPreview" role="img"/);
     assert.match(sidebar, /<summary class="card-header card-title-summary sidebar-disclosure-summary">\s*<span class="accounts-summary-title">[\s\S]*?<\/span>\s*<span class="accounts-quota-preview"[\s\S]*?<\/span>\s*<svg class="icon sidebar-disclosure-chevron"/);
     assert.match(styles, /\.accounts-card > summary\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*center/);
@@ -271,6 +283,91 @@ describe('main page connector layout', () => {
     }
     assert.match(styles, /\.accounts-card\[open\] > summary \.accounts-quota-preview\s*\{\s*display:\s*none/);
     assert.ok(sidebar.indexOf('id="teamBand"') < sidebar.indexOf('id="connectorsCard"'));
+  });
+
+  it('keeps project management in the session header as one combobox field', () => {
+    const header = mainHtml.match(/<div class="session-header">([\s\S]*?)<!-- Session Situation/)?.[1];
+    assert.ok(header, 'session header markup must exist');
+
+    // One field: a combobox input that owns the menu and shows a typed path.
+    assert.match(header, /<input[^>]*id="projectSelect"[^>]*role="combobox"/);
+    assert.match(header, /aria-controls="projectMenu"/);
+    assert.match(header, /aria-expanded="false"/);
+    assert.match(header, /placeholder="Path to project\.\.\."/);
+    assert.match(header, /id="projectMenu"[^>]*role="listbox"/);
+    // The old separate path field is gone; Add is an explicit, visible action.
+    assert.doesNotMatch(mainHtml, /id="projectPathInput"/);
+    assert.match(header, /<button[^>]*id="addProjectBtn"[^>]*onclick="addProjectFromField\(\)"/);
+    // Every inline handler the markup calls must exist in app.js.
+    for (const fn of ['onProjectFocus', 'onProjectQueryInput', 'onProjectKeydown', 'onProjectBlur', 'toggleProjectMenu', 'removeProject', 'addProjectFromField']) {
+      assert.match(mainJs, new RegExp(`function ${fn}\\b`), `${fn} must be defined`);
+    }
+    // Remove sits beside the field, not in the title block.
+    const title = header.match(/<div class="session-header-left">([\s\S]*?)<\/div>\s*<!--/)?.[1] || '';
+    assert.doesNotMatch(title, /id="removeProjectBtn"/);
+    assert.match(header, /id="projectCombo"[\s\S]*id="projectSelect"[\s\S]*id="addProjectBtn"[\s\S]*id="removeProjectBtn"/);
+  });
+
+  it('renders the project menu rows and keyboard highlight from the project list', () => {
+    const vm = require('node:vm');
+    // Only direct appends to the menu are rows; spans go to their row's children.
+    const menu = {
+      textContent: '', children: [],
+      appendChild(c) { this.children.push(c); },
+      querySelector(sel) {
+        if (sel !== '.project-menu-item.is-active') return null;
+        return this.children.find((c) => c.classList.values.has('is-active')) || null;
+      },
+    };
+    const field = { value: '', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; }, closest() { return { querySelector: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0 }) }) }; } };
+    const context = {
+      document: {
+        getElementById: (id) => ({ projectMenu: menu, projectSelect: field }[id] || null),
+        createElement: (tag) => {
+          // Fresh class list per element, and className writes feed it.
+          const values = new Set();
+          const element = {
+            tagName: tag.toUpperCase(), id: '', children: [],
+            classList: { values, add: (c) => values.add(c), remove: (c) => values.delete(c), contains: (c) => values.has(c) },
+            setAttribute() {}, addEventListener() {}, appendChild(c) { element.children.push(c); },
+          };
+          Object.defineProperty(element, 'className', {
+            get: () => [...values].join(' '),
+            set: (v) => { values.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => values.add(c)); },
+          });
+          return element;
+        },
+      },
+      projectList: [
+        { id: 'p1', name: 'alpha-repo', path: '/work/alpha-repo', status: 'stopped' },
+        { id: 'p2', name: 'beta-repo', path: '/work/beta-repo', status: 'stopped' },
+      ],
+      currentProjectId: 'p1',
+      projectQuery: 'beta',
+      projectActiveIndex: 0,
+      displayProjectName: (n) => n,
+      statusMarker: () => '[stopped]',
+      isProjectMenuOpen: () => true,
+      projectField: () => field,
+      window: { innerHeight: 800 },
+    };
+    vm.createContext(context);
+    vm.runInContext([functionSource('renderProjectMenu'), functionSource('projectMenuItems')].join('\n'), context);
+    context.renderProjectMenu();
+    assert.equal(menu.children.length, 2, 'one match plus the add-path row');
+    assert.equal(menu.children[0].id, 'project-option-0');
+    assert.equal(menu.children[0].classList.values.has('is-active'), true, 'first row carries the highlight');
+    assert.equal(field.attrs['aria-activedescendant'], 'project-option-0');
+    assert.equal(menu.children[1].classList.values.has('is-add'), true);
+
+    // Nothing matches: the typed path is still offered as an addition.
+    context.projectQuery = '/new/place';
+    context.projectActiveIndex = -1;
+    menu.children.length = 0;
+    context.renderProjectMenu();
+    assert.equal(menu.children.length, 1);
+    assert.equal(menu.children[0].classList.values.has('is-add'), true);
+    assert.equal(field.attrs['aria-activedescendant'], undefined);
   });
 
   it('places connectors in the fixed-width left sidebar and uses a two-column main grid', () => {

@@ -536,35 +536,7 @@ html, body {
   user-select: none;
 }
 
-/* Project selector */
-.project-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.project-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.project-row select, .project-row input {
-  flex: 1;
-  min-width: 0;
-}
-
-.project-row .project-remove-btn {
-  flex: none;
-  width: 38px;
-  height: 38px;
-  padding: 0;
-}
-
-.project-row .project-remove-btn:hover:not(:disabled) {
-  color: var(--danger-text);
-}
-
+/* Project meta line (session header) */
 .project-meta {
   font-family: 'JetBrains Mono', monospace;
   font-size: 13px;
@@ -1086,20 +1058,269 @@ html, body {
 
 .session-header {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 10px 16px;
   border-bottom: 1px solid var(--border-subtle);
   padding-bottom: 16px;
 }
 
+/* --- Tier 1 (wide): title | project controls | actions on one line,
+       path line under the controls. Every header row is 38px tall. --------- */
+
+/* Title takes only the width left over after the project controls get theirs.
+   Title on one line, the session id beneath it; the stack is top-aligned so its
+   first line stays level with the project field. */
 .session-header-left {
+  flex: 0 1 auto;
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  align-self: flex-start;
   min-width: 0;
 }
 
+/* Controls and actions share this row; the actions wrap under the bar first. */
+.session-trailing {
+  flex: 1 1 560px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 10px 16px;
+  min-width: 0;
+}
+
+/* Grows to the line's free width, never below its two-field minimum (288px), so
+   the actions wrap instead of the select being clipped. */
+/* Field, Add and Remove form one group centred in the block; the path line
+   under it is centred on the same axis. */
+.session-project-bar {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 10px;
+  min-width: 288px;
+}
+
+/* One combobox field: pick an existing project or type a new path. */
+.project-combo {
+  position: relative;
+  flex: 1 1 320px;
+  min-width: 220px;
+  max-width: 560px;
+}
+
+.project-combo-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* The field must read as "type a path here", not as a dropdown: full-strength
+   border, and a real placeholder whenever nothing is selected. */
+.project-combo-field input {
+  width: 100%;
+  padding-right: 34px;
+  border-color: var(--border-card);
+}
+
+.project-combo-field input::placeholder {
+  color: var(--text-muted);
+}
+
+.project-combo-toggle {
+  position: absolute;
+  right: 1px;
+  top: 1px;
+  bottom: 1px;
+  width: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.project-combo-toggle:hover {
+  color: var(--text-main);
+  background: var(--bg-elevated);
+}
+
+.project-combo-toggle .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.project-combo.is-open .project-combo-toggle .icon {
+  transform: rotate(180deg);
+}
+
+/* Portalled to <body>: fixed, so the session card's overflow cannot clip it. */
+.project-menu {
+  position: fixed;
+  z-index: 1200;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.project-menu-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.project-menu-item:hover,
+.project-menu-item.is-active {
+  background: var(--bg-card-hover);
+}
+
+.project-menu-item.is-current .project-menu-name::after {
+  content: ' \2022 current';
+  color: var(--text-dim);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.project-menu-item.is-add {
+  border-top: 1px solid var(--border-hairline);
+  margin-top: 4px;
+}
+
+.project-menu-name {
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-menu-path {
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-menu-empty {
+  padding: 8px 10px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* --- Tier 2 (<=1400): title, then a full-width controls line, then actions. */
+
+@media (max-width: 1400px) {
+  .session-header-left {
+    flex: 1 1 100%;
+  }
+
+  .session-trailing {
+    flex: 1 1 100%;
+  }
+}
+
+/* Not even the 1880px max-width fits title + controls + actions on one line,
+   so the controls always occupy their own line: reserve that block's height so
+   the title's single line still ends level with it. No staircase. */
+@media (max-width: 1880px) {
+  .session-trailing {
+    min-height: 72.5px;
+  }
+}
+
+/* Sits right beside the project field; same row height as the field. */
+.session-project-remove {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid var(--border-hairline);
+}
+
+/* The trash button steps aside while its inline confirm is showing. */
+.session-project-remove.hidden {
+  display: none;
+}
+
+/* Always-visible Add action beside the path field. */
+.session-project-bar .project-add {
+  flex: none;
+  height: 38px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.session-project-remove .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.session-project-remove:hover:not(:disabled) {
+  color: var(--danger-text);
+}
+
+/* Takes its own line under the controls; long paths ellipsize, never reflow.
+   Left padding matches the field's 12px text inset so both start on one axis. */
+.session-project-meta {
+  flex: 1 1 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  /* Centred on the same axis as the field group above it. */
+  padding: 0;
+  text-align: center;
+  word-break: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-project-bar .inline-notice {
+  padding: 2px 8px;
+}
+
+/* The confirm replaces the trash button in the controls row, so it must not
+   claim a full line: that would push a second row under the fields. */
+.project-remove-confirm {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.project-remove-confirm .limit-reset {
+  flex: 0 1 auto;
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.project-remove-confirm .btn {
+  flex: none;
+  height: 38px;
+}
+
 .session-title {
+  flex: 0 1 auto;
   font-size: 17px;
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -1132,10 +1353,40 @@ html, body {
   border: 1px solid var(--border-hairline);
 }
 
+/* Stacked: History above New session, right-aligned under the controls. */
 .session-header-actions {
+  flex: 0 0 auto;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
+}
+
+/* One row height across the header's right side: session actions match the
+   38px project fields instead of forming a 32px step under them. */
+.session-header-actions .btn {
+  height: 38px;
+}
+
+/* Narrow viewports: title line, then project controls, then actions. */
+@media (max-width: 900px) {
+  .session-header-left,
+  .session-trailing {
+    flex: 1 1 100%;
+  }
+
+  .session-trailing {
+    justify-content: flex-start;
+  }
+}
+
+/* Phones: the field may use the whole line; Remove and the meta follow it. */
+@media (max-width: 760px) {
+  .project-combo {
+    flex-basis: 100%;
+    min-width: 0;
+    max-width: none;
+  }
 }
 
 /* Task Status & Acceptance Bar */

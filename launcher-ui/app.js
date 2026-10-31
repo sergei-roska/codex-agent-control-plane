@@ -190,35 +190,284 @@
         .replace(/(^|\s)(\S)/g, (m, sep, ch) => sep + ch.toUpperCase());
     }
 
-    function renderProjectBar() {
-      const select = document.getElementById('projectSelect');
+    // The project field is one combobox: it shows the active project, and typing
+    // filters existing projects or offers the typed path as a new one to add.
+    let projectQuery = null;      // null while the field shows the active project
+    let projectActiveIndex = -1;  // highlighted menu row
+
+    function projectField() {
+      return document.getElementById('projectSelect');
+    }
+
+    // `keepFieldText` leaves the input alone while the user is typing in it;
+    // otherwise the field shows the active project label.
+    function renderProjectBar(options) {
+      const keepFieldText = !!(options && options.keepFieldText);
+      const field = projectField();
       const meta = document.getElementById('projectMeta');
       const removeBtn = document.getElementById('removeProjectBtn');
-      select.textContent = '';
-      projectList.forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p.id;
-        opt.textContent = p.name + ' ' + statusMarker(p);
-        select.appendChild(opt);
-      });
       const cur = currentProject();
       const rolesLink = document.getElementById('rolesNavLink');
       if (rolesLink) rolesLink.href = '/ui/roles.html' + (currentProjectId ? '?project=' + encodeURIComponent(currentProjectId) : '');
       syncBacklogNavLink();
+      // The field is a path input, not a project-name display: it always shows
+      // the active project's path, so "type a path here and press Add" is the
+      // obvious move. The name lives in the session title.
+      if (!keepFieldText) {
+        field.value = projectQuery !== null ? projectQuery : (cur ? cur.path : '');
+      }
+      updateProjectAddState();
       if (cur) {
-        select.value = cur.id;
-        meta.textContent = cur.path + ' | port ' + cur.port;
+        meta.textContent = cur.name + ' | port ' + cur.port;
         removeBtn.disabled = cur.status !== 'stopped';
       } else {
-        meta.textContent = projectList.length ? '' : 'No projects yet. Add a project path below.';
+        meta.textContent = projectList.length ? '' : 'No projects yet. Paste a path above and press Add.';
         removeBtn.disabled = true;
       }
-      select.disabled = projectList.length === 0;
       const sessionName = document.getElementById('sessionProjectName');
       sessionName.textContent = cur ? displayProjectName(cur.name) : 'No project';
       sessionName.classList.toggle('is-empty', !cur);
       setTooltip(sessionName, cur ? cur.name : '', true);
       document.title = (cur ? cur.name : 'No project') + ' - Codex Control Plane';
+      // The 3 s project poll re-renders this bar; keep an open menu in sync with
+      // it rather than letting the rows drift from the field's state.
+      if (isProjectMenuOpen()) renderProjectMenu();
+    }
+
+    function isProjectMenuOpen() {
+      const menu = document.getElementById('projectMenu');
+      return !!menu && !menu.classList.contains('hidden');
+    }
+
+    // The Add button is always visible; it is inert until a path that is not
+    // already a known project is in the field.
+    function projectAddCandidate() {
+      const typed = (projectField().value || '').trim();
+      if (!typed) return null;
+      if (projectList.some(p => p.path === typed)) return null;
+      return typed;
+    }
+
+    function updateProjectAddState() {
+      const addBtn = document.getElementById('addProjectBtn');
+      if (!addBtn) return;
+      addBtn.disabled = !projectAddCandidate();
+    }
+
+    // Menu rows: existing projects matching the query, plus "add this path".
+    function projectMenuItems() {
+      const q = (projectQuery || '').trim().toLowerCase();
+      const items = projectList
+        .filter(p => !q || p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q))
+        .map(p => ({ kind: 'select', id: p.id, name: p.name, path: p.path, status: p.status, readiness: p.readiness }));
+      const typed = (projectQuery || '').trim();
+      const known = projectList.some(p => p.path === typed);
+      if (typed && !known) items.push({ kind: 'add', path: typed });
+      return items;
+    }
+
+    function renderProjectMenu() {
+      const menu = document.getElementById('projectMenu');
+      const items = projectMenuItems();
+      menu.textContent = '';
+      if (!items.length) {
+        const empty = document.createElement('div');
+        empty.className = 'project-menu-empty';
+        empty.textContent = projectList.length ? 'No matching project. Keep typing a path to add one.' : 'Type a project path to add it.';
+        menu.appendChild(empty);
+        projectActiveIndex = -1;
+        return;
+      }
+      if (projectActiveIndex >= items.length) projectActiveIndex = items.length - 1;
+      items.forEach((item, index) => {
+        const row = document.createElement('div');
+        row.className = 'project-menu-item' + (index === projectActiveIndex ? ' is-active' : '');
+        row.id = 'project-option-' + index;
+        row.setAttribute('role', 'option');
+        row.setAttribute('aria-selected', index === projectActiveIndex ? 'true' : 'false');
+        const name = document.createElement('span');
+        name.className = 'project-menu-name';
+        const path = document.createElement('span');
+        path.className = 'project-menu-path';
+        if (item.kind === 'add') {
+          row.classList.add('is-add');
+          name.textContent = 'Add this path';
+          path.textContent = item.path;
+        } else {
+          name.textContent = displayProjectName(item.name) + ' ' + statusMarker(item);
+          path.textContent = item.path;
+          if (item.id === currentProjectId) row.classList.add('is-current');
+        }
+        row.appendChild(name);
+        row.appendChild(path);
+        // Keep focus in the field so the menu is not torn down by blur first.
+        row.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
+        // Commit on click, not mousedown: a press-and-drag is not a selection.
+        row.addEventListener('click', function (ev) {
+          if (ev.button !== 0) return;
+          commitProjectItem(item);
+        });
+        menu.appendChild(row);
+      });
+      // Keyboard highlight must be announced and kept in view in a scrolling menu.
+      const field = projectField();
+      const active = menu.querySelector('.project-menu-item.is-active');
+      if (projectActiveIndex >= 0 && active) {
+        field.setAttribute('aria-activedescendant', active.id);
+        if (active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
+      } else {
+        field.removeAttribute('aria-activedescendant');
+      }
+    }
+
+    // Focusing selects the active-project label so typing replaces it instead of
+    // appending to it; then all projects are in scope again.
+    function onProjectFocus(field) {
+      projectQuery = null;
+      if (field && field.select) field.select();
+      // A re-click into a field that kept focus keeps the menu as it is.
+      if (!isProjectMenuOpen()) openProjectMenu();
+    }
+
+    // Open/close are the only places that mutate menu state, so the panel, the
+    // aria-expanded flag and the chevron can never disagree.
+    function openProjectMenu() {
+      const field = projectField();
+      const menu = document.getElementById('projectMenu');
+      if (!field || !menu) return;
+      // The session card clips overflow; a fixed menu on <body> can extend freely.
+      if (menu.parentNode !== document.body) document.body.appendChild(menu);
+      menu.classList.remove('hidden');
+      field.setAttribute('aria-expanded', 'true');
+      const combo = field.closest('.project-combo');
+      if (combo) combo.classList.add('is-open');
+      renderProjectMenu();
+      repositionProjectMenu();
+    }
+
+    function closeProjectMenu() {
+      const field = projectField();
+      const menu = document.getElementById('projectMenu');
+      if (menu) menu.classList.add('hidden');
+      if (field) {
+        field.setAttribute('aria-expanded', 'false');
+        field.removeAttribute('aria-activedescendant');
+      }
+      const combo = field && field.closest('.project-combo');
+      if (combo) combo.classList.remove('is-open');
+      projectActiveIndex = -1;
+    }
+
+    function toggleProjectMenu(ev) {
+      if (ev) ev.preventDefault();
+      if (isProjectMenuOpen()) closeProjectMenu();
+      else openProjectMenu();
+      projectField().focus();
+    }
+
+    // Typing switches the field from "show active project" to "search or add".
+    function onProjectQueryInput(value) {
+      const cur = currentProject();
+      const label = cur ? cur.name + ' ' + statusMarker(cur) : '';
+      // The field may still hold the active-project label (caret placed inside
+      // it, or right after it); that text is a label, not a query. Only a
+      // leading match is stripped, so a typed path is never mangled.
+      if (label && value.indexOf(label) === 0) {
+        const dropped = value.slice(label.length);
+        if (dropped !== projectQuery) setProjectFieldValue(dropped);
+        projectQuery = dropped;
+      } else {
+        projectQuery = value;
+      }
+      updateProjectAddState();
+      // The menu must be open (and match the new query) on every keystroke, even
+      // if a poll re-render closed it since the field got focus.
+      if (isProjectMenuOpen()) renderProjectMenu();
+      else openProjectMenu();
+      // An empty query means "show the active project again", without touching
+      // the text the user is still editing.
+      if (!projectQuery) renderProjectBar({ keepFieldText: true });
+    }
+
+    function onProjectKeydown(ev) {
+      const menu = document.getElementById('projectMenu');
+      const open = !menu.classList.contains('hidden');
+      if (ev.key === 'Escape') {
+        if (open) { ev.preventDefault(); closeProjectMenu(); }
+        projectQuery = null;
+        renderProjectBar();
+        return;
+      }
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        if (!open) { openProjectMenu(); return; }
+        const count = projectMenuItems().length;
+        if (!count) return;
+        const step = ev.key === 'ArrowDown' ? 1 : -1;
+        projectActiveIndex = (projectActiveIndex + step + count) % count;
+        renderProjectMenu();
+        return;
+      }
+      if (ev.key === 'Enter') {
+        if (!open) { openProjectMenu(); return; }
+        ev.preventDefault();
+        const items = projectMenuItems();
+        if (!items.length) return;
+        commitProjectItem(items[projectActiveIndex >= 0 ? projectActiveIndex : 0]);
+        return;
+      }
+    }
+
+    function onProjectBlur() {
+      // Let a row's click run first; then drop the menu and the search text.
+      setTimeout(function () {
+        if (document.activeElement === projectField()) return;
+        resetProjectField();
+      }, 0);
+    }
+
+    // The menu is portalled to <body> (the session card clips overflow), so keep
+    // it pinned under the field while it is open.
+    function repositionProjectMenu() {
+      const menu = document.getElementById('projectMenu');
+      const field = projectField();
+      if (!menu || !field || !isProjectMenuOpen()) return;
+      const combo = field.closest('.project-combo');
+      const anchor = combo && combo.querySelector('.project-combo-field');
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      menu.style.left = rect.left + 'px';
+      menu.style.width = rect.width + 'px';
+      // Flip above the field when there is no room below.
+      const below = window.innerHeight - rect.bottom;
+      if (below < 220 && rect.top > below) {
+        menu.style.top = '';
+        menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+      } else {
+        menu.style.bottom = '';
+        menu.style.top = (rect.bottom + 4) + 'px';
+      }
+    }
+
+    function commitProjectItem(item) {
+      if (!item) return;
+      closeProjectMenu();
+      if (item.kind === 'add') return addProject(item.path);
+      projectQuery = null;
+      if (item.id !== currentProjectId) selectProject(item.id);
+      else renderProjectBar();
+    }
+
+    function resetProjectField() {
+      projectQuery = null;
+      closeProjectMenu();
+      renderProjectBar();
+    }
+
+    function setProjectFieldValue(value) {
+      const field = projectField();
+      field.value = value;
+      if (field.setSelectionRange) field.setSelectionRange(value.length, value.length);
     }
 
     function pickInitialProject() {
@@ -354,10 +603,6 @@
       } catch (_) {}
     }
 
-    function onProjectSelectChange() {
-      selectProject(document.getElementById('projectSelect').value || null);
-    }
-
     function logLine(text) {
       const logs = document.getElementById('serverLogsBody');
       logs.textContent += text;
@@ -378,7 +623,9 @@
     function inlineConfirm(container, question, onYes, onNo) {
       const saved = Array.from(container.childNodes);
       container.textContent = '';
-      container.appendChild(textEl('span', 'limit-reset', question));
+      const ask = textEl('span', 'limit-reset', question);
+      ask.setAttribute('data-confirm', '');
+      container.appendChild(ask);
       const yes = textEl('button', 'btn btn-danger btn-sm', 'Yes');
       yes.addEventListener('click', function () { yes.disabled = true; onYes(); });
       const no = textEl('button', 'btn btn-secondary btn-sm', 'No');
@@ -391,10 +638,25 @@
       container.appendChild(no);
     }
 
-    async function addProject() {
-      const input = document.getElementById('projectPathInput');
-      const projectPath = input.value.trim();
-      if (!projectPath) return showNotice('projectNotice', 'Specify project path!');
+    // The visible Add button and the menu's "Add this path" row both land here.
+    function addProjectFromField() {
+      const candidate = projectAddCandidate();
+      if (!candidate) return;
+      projectQuery = null;
+      closeProjectMenu();
+      addProject(candidate);
+    }
+
+    // Adds the given path (an existing one is just selected).
+    async function addProject(projectPath) {
+      if (!projectPath) return;
+      const existing = projectList.find(p => p.path === projectPath);
+      if (existing) {
+        projectQuery = null;
+        closeProjectMenu();
+        selectProject(existing.id);
+        return;
+      }
       try {
         const res = await fetch('/api/projects', {
           method: 'POST',
@@ -403,9 +665,14 @@
         });
         const data = await res.json();
         if (!res.ok || !data.success) throw new Error(data.error || 'Failed to add project');
+        projectQuery = null;
+        closeProjectMenu();
         await refreshProjects();
         selectProject(data.project.id);
       } catch (err) {
+        projectQuery = null;
+        closeProjectMenu();
+        renderProjectBar();
         showNotice('projectNotice', 'Failed to add project: ' + err.message);
       }
     }
@@ -413,8 +680,19 @@
     function removeProject() {
       const cur = currentProject();
       if (!cur) return;
-      const row = document.getElementById('removeProjectBtn').parentNode;
-      inlineConfirm(row, 'Remove from list? (files stay on disk)', doRemoveProject);
+      // The Yes/No pair sits in its own slot next to the button, so confirming
+      // never clears the project field. The trash button steps aside for it.
+      const btn = document.getElementById('removeProjectBtn');
+      const slot = document.getElementById('projectRemoveConfirm');
+      btn.classList.add('hidden');
+      slot.classList.remove('hidden');
+      inlineConfirm(slot,
+        'Remove from list? (files stay on disk)',
+        doRemoveProject,
+        function () {
+          slot.classList.add('hidden');
+          btn.classList.remove('hidden');
+        });
     }
 
     async function doRemoveProject() {
@@ -425,6 +703,10 @@
         await refreshProjects();
       } catch (err) {
         showNotice('projectNotice', 'Failed to remove project: ' + err.message);
+      } finally {
+        // The button element outlives the confirm slot; just bring it back.
+        document.getElementById('projectRemoveConfirm').classList.add('hidden');
+        document.getElementById('removeProjectBtn').classList.remove('hidden');
       }
     }
 
@@ -1980,6 +2262,19 @@
       accountsApi('POST', '/api/accounts/auto-switch', { enabled: box.checked })
         .then(function () { showAccountsError(''); })
         .catch(function (e) { box.checked = !box.checked; showAccountsError(e.message); });
+    });
+
+    window.addEventListener('resize', repositionProjectMenu);
+    window.addEventListener('scroll', repositionProjectMenu, true);
+    document.addEventListener('mousedown', function (ev) {
+      if (!isProjectMenuOpen()) return;
+      const menu = document.getElementById('projectMenu');
+      if (menu.contains(ev.target)
+        || ev.target === projectField()
+        || ev.target.closest('.project-combo-toggle')
+        || ev.target.closest('.project-combo')
+        || ev.target.closest('.session-project-bar')) return;
+      resetProjectField();
     });
 
     setInterval(updateStatus, 1000);

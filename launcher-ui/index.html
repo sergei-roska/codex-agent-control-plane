@@ -151,7 +151,7 @@
   <!-- Workspace Container: Sidebar + Session Stage -->
   <main class="main-layout">
 
-    <!-- Left Sidebar: Project, Accounts & Team -->
+    <!-- Left Sidebar: About, Accounts, Team & Connectors -->
     <aside class="sidebar">
       <!-- Section: About (collapsed by default) -->
       <section class="card sidebar-section">
@@ -163,27 +163,6 @@
           <p class="about-text">Local A2A server that executes tasks using a team of Codex agents. The lead analyzes goals, delegates bounded assignments to roles in parallel git worktrees, runs acceptance checks, and automatically resumes on budget return or connected accounts.</p>
         </details>
       </section>
-
-      <!-- Section: Project Management -->
-      <details class="card sidebar-section sidebar-disclosure" id="projectCard">
-        <summary class="card-title-summary sidebar-disclosure-summary">
-          <svg class="icon"><use href="#i-folder"/></svg>
-          <span>Project</span>
-          <svg class="icon sidebar-disclosure-chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
-        </summary>
-        <div class="field-group project-bar">
-          <div class="project-row">
-            <select id="projectSelect" onchange="onProjectSelectChange()"></select>
-            <button id="removeProjectBtn" class="btn btn-ghost project-remove-btn" onclick="removeProject()" disabled aria-label="Remove project" data-tooltip="Remove project"><svg class="icon"><use href="#i-trash-2"/></svg></button>
-          </div>
-          <div id="projectMeta" class="project-meta"></div>
-          <div class="project-row">
-            <input type="text" id="projectPathInput" value="__DEFAULT_WORKSPACE__" spellcheck="false" aria-label="Project path to add" placeholder="Path to project...">
-            <button id="addProjectBtn" class="btn btn-secondary btn-sm" onclick="addProject()">Add</button>
-          </div>
-          <div id="projectNotice" class="inline-notice hidden" role="alert"></div>
-        </div>
-      </details>
 
       <!-- Section: Codex Accounts & Limits -->
       <details class="card sidebar-section sidebar-disclosure accounts-card" id="accountsCard">
@@ -267,13 +246,40 @@
             <span id="activeTaskIdDisplay" class="session-task-id">no session</span>
           </div>
 
-          <div class="session-header-actions">
-            <button class="btn btn-secondary btn-sm" onclick="openHistoryModal()">
-              <svg class="icon"><use href="#i-history"/></svg> History (<span id="historyCountBadge">0</span>)
-            </button>
-            <button id="newSessionBtn" class="btn btn-secondary btn-sm" onclick="newSession()" disabled>
-              <svg class="icon"><use href="#i-plus"/></svg> New session
-            </button>
+          <!-- Project controls + History / New session share the trailing controls line. -->
+          <div class="session-trailing">
+            <div class="session-project-bar">
+              <!-- One field: it shows the active project path. Type another path to
+                   add it, or open the list to switch between known projects. -->
+              <div class="project-combo" id="projectCombo">
+                <div class="project-combo-field">
+                  <input type="text" id="projectSelect" role="combobox" aria-label="Project path, or pick an existing project" aria-expanded="false" aria-controls="projectMenu" autocomplete="off" spellcheck="false" placeholder="Path to project..." value="__DEFAULT_WORKSPACE__" onfocus="onProjectFocus(this)" oninput="onProjectQueryInput(this.value)" onkeydown="onProjectKeydown(event)" onblur="onProjectBlur()">
+                  <button type="button" class="project-combo-toggle" id="projectComboToggle" aria-label="Show projects" tabindex="-1" onmousedown="toggleProjectMenu(event)">
+                    <svg class="icon"><use href="#i-chevron-down"/></svg>
+                  </button>
+                </div>
+                <div class="project-menu hidden" id="projectMenu" role="listbox" aria-label="Projects"></div>
+              </div>
+              <button id="addProjectBtn" class="btn btn-secondary btn-sm project-add" onclick="addProjectFromField()" onmousedown="event.preventDefault()" disabled data-tooltip="Add the typed path as a project">
+                <svg class="icon"><use href="#i-plus"/></svg> Add
+              </button>
+              <button id="removeProjectBtn" class="btn btn-ghost session-project-remove" onclick="removeProject()" disabled aria-label="Remove project" data-tooltip="Remove project">
+                <svg class="icon"><use href="#i-trash-2"/></svg>
+              </button>
+              <!-- Inline confirm target for "remove project" (Yes/No pair). -->
+              <div id="projectRemoveConfirm" class="project-remove-confirm hidden"></div>
+              <div id="projectMeta" class="project-meta session-project-meta"></div>
+              <div id="projectNotice" class="inline-notice hidden" role="alert"></div>
+            </div>
+
+            <div class="session-header-actions">
+              <button class="btn btn-secondary btn-sm" onclick="openHistoryModal()">
+                <svg class="icon"><use href="#i-history"/></svg> History (<span id="historyCountBadge">0</span>)
+              </button>
+              <button id="newSessionBtn" class="btn btn-secondary btn-sm" onclick="newSession()" disabled>
+                <svg class="icon"><use href="#i-plus"/></svg> New session
+              </button>
+            </div>
           </div>
         </div>
 
