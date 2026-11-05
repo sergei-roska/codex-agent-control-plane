@@ -142,7 +142,7 @@ test('prepared read-only threads stay narrow under inherited full-access and str
   }
 });
 
-function scopedCapability(root, { executionPermissions = 'inherit' } = {}) {
+function scopedCapability(root, { executionPermissions = 'inherit', readScope = { kind: 'unknown', paths: null, reason: 'Review candidate.' } } = {}) {
   const workspace = path.join(root, 'workspace');
   const scratchParent = path.join(root, 'private');
   fs.mkdirSync(workspace, { recursive: true });
@@ -154,7 +154,7 @@ function scopedCapability(root, { executionPermissions = 'inherit' } = {}) {
     authorityRevision: 1, controlRevision: 1, disposition: 'executing' });
   const task = { schemaVersion: VERSION, projectId: 'p', objectiveId: 'o', taskId: 'review-task', revision: 1, role: 'verifier', kind: 'review',
     objective: 'Review the frozen candidate.', priority: 0, dependencies: [], productWritePaths: [],
-    readScope: { kind: 'unknown', paths: null, reason: 'Review candidate.' }, scratchWriteRoots: ['review-scratch'], resourceClaims: [],
+    readScope, scratchWriteRoots: ['review-scratch'], resourceClaims: [],
     publicationAuthority: { state: 'denied', reason: 'review_task', authorityRevision: 1 }, state: 'queued',
     checkpointId: 'checkpoint', baseCandidateId: 'candidate' };
   store.applyPlan('p', 'o', { schemaVersion: VERSION, expectedPlanRevision: 0, expectedGoalRevision: 1, expectedAuthorityRevision: 1,
@@ -577,7 +577,7 @@ test('unknown verifier turn keeps its attempt reservation and scratch for reconc
 
 test('scoped verifier run uses only its scratch root and inherited approvals, then pins the provider thread', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scoped-run-'));
-  const fx = scopedCapability(root);
+  const fx = scopedCapability(root, { readScope: { kind: 'known', paths: ['input.txt'] } });
   const child = new FakeProcess();
   const client = new CodexAppServer({ spawnImpl: () => child });
   client.resolveExecutionPermissions = async () => ({ mode: 'inherit', profileApi: true, readOnlyProfile: ':read-only',
@@ -585,7 +585,8 @@ test('scoped verifier run uses only its scratch root and inherited approvals, th
   t.after(async () => { await client.close(); fx.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const role = { id: 'verifier', name: 'Verifier', model: 'review-model', effort: 'low', sandbox: 'workspace-write',
     instructions: 'Review the frozen candidate.', tools: { mcpServers: [], skills: false } };
-  const result = await client.run({ role, cwd: fx.details.scratchRoot, permissionWorkspace: fx.workspace, input: 'Review.',
+  const checkedRequest = 'Review the candidate in the task request.';
+  const result = await client.run({ role, cwd: fx.details.scratchRoot, permissionWorkspace: fx.workspace, input: checkedRequest,
     executionPermissions: 'inherit', deliveryCapability: fx.capability });
   const thread = child.sent.find((request) => request.method === 'thread/start').params;
   const turn = child.sent.find((request) => request.method === 'turn/start').params;
@@ -596,6 +597,29 @@ test('scoped verifier run uses only its scratch root and inherited approvals, th
   assert.equal(thread.approvalPolicy, 'never');
   assert.equal(thread.approvalsReviewer, 'auto');
   assert.equal(turn.cwd, fx.details.scratchRoot);
+  assert.deepEqual(turn.input, [{ type: 'text', text: checkedRequest }]);
+  assert.deepEqual(fx.details.readScope, { kind: 'known', paths: ['input.txt'] });
+  assert.notEqual(fx.details.readScope, fx.task.readScope);
+  assert.equal(Object.isFrozen(fx.details.readScope), true);
+  assert.equal(Object.isFrozen(fx.details.readScope.paths), true);
+  assert.ok(thread.developerInstructions.includes(`Candidate ID: ${JSON.stringify(fx.details.candidateId)}`));
+  assert.ok(thread.developerInstructions.includes(`Frozen candidate path: ${JSON.stringify(fx.details.candidatePath)}`));
+  assert.ok(thread.developerInstructions.includes(`Candidate manifest SHA-256: ${fx.details.inputManifestDigest}`));
+  assert.ok(thread.developerInstructions.includes(`Verifier scratch root: ${JSON.stringify(fx.details.scratchRoot)}`));
+  assert.ok(thread.developerInstructions.includes('Trusted read scope: {"kind":"known","paths":["input.txt"]}'));
+  assert.ok(thread.developerInstructions.includes('The command working directory is the verifier scratch root, which is intentionally separate and may be empty.'));
+  assert.ok(thread.developerInstructions.includes('The frozen candidate files are at the separate candidate path above. Resolve relative file paths from the candidate root, not from the scratch working directory.'));
+  assert.ok(thread.developerInstructions.includes('For command tools, set the command workdir to the candidate path or use absolute paths beneath it when inspecting candidate files.'));
+  assert.ok(thread.developerInstructions.includes('Check the candidate root before reporting any scoped file missing. Do not infer candidate contents from the scratch directory.'));
+  assert.ok(thread.developerInstructions.includes('Write any temporary files only under the verifier scratch root.'));
+  assert.ok(thread.developerInstructions.includes('In filesInspected, use candidate-relative paths only; never report an absolute path.'));
+  assert.ok(thread.developerInstructions.includes('Your checks array must list checks you personally completed during this review, with the observed result and detail for each.'));
+  assert.ok(thread.developerInstructions.includes('The review requires at least one completed passing check. Run a real inspection or static validation before reporting it; never invent or assume a pass.'));
+  assert.ok(thread.developerInstructions.includes('If you cannot inspect the candidate or complete a passing check, report the genuine blocker or failure.'));
+  assert.ok(thread.developerInstructions.includes('Your verdict is limited to semantic and static review of the frozen candidate within the trusted read scope and current task objective/checkpoint.'));
+  assert.ok(thread.developerInstructions.includes('The host runs required acceptance checks separately after your report; they remain mandatory gates for overall acceptance.'));
+  assert.ok(thread.developerInstructions.includes('Deferred host checks alone do not make your scoped static verdict inconclusive. Never claim they ran or include them in your checks array.'));
+  assert.ok(thread.developerInstructions.includes('Report VERDICT: fail when you identify a candidate defect. Report VERDICT: inconclusive only when required scoped evidence is unavailable or the candidate cannot be assessed; never force a passing verdict.'));
   assert.deepEqual(turn.sandboxPolicy, { type: 'workspaceWrite', writableRoots: [fx.details.scratchRoot], networkAccess: true,
     excludeTmpdirEnvVar: true, excludeSlashTmp: true });
   assert.equal(Object.hasOwn(turn, 'permissions'), false);
@@ -603,6 +627,40 @@ test('scoped verifier run uses only its scratch root and inherited approvals, th
   assert.equal(fx.details.verifyCandidate(), true);
   await assert.rejects(() => client.run({ role, cwd: fx.details.scratchRoot, permissionWorkspace: fx.workspace, input: 'Continue.',
     threadId: result.threadId, executionPermissions: 'inherit', deliveryCapability: fx.capability }), { failureClass: 'request_rejected' });
+});
+
+test('candidate paths stay out of unscoped and forged verifier threads', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-verifier-no-path-leak-'));
+  const fx = scopedCapability(root);
+  t.after(() => { fx.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const role = { id: 'verifier', name: 'Verifier', model: 'review-model', effort: 'low', sandbox: 'workspace-write',
+    instructions: 'Review the supplied request.', tools: { mcpServers: [], skills: false } };
+  const unscopedChild = new FakeProcess();
+  const unscoped = new CodexAppServer({ spawnImpl: () => unscopedChild });
+  unscoped.resolveExecutionPermissions = async () => ({ mode: 'strict', profileApi: false, reason: 'strict_setting' });
+  t.after(async () => unscoped.close());
+  const originalInput = 'Review only the request body.';
+  await unscoped.run({ role, cwd: fx.workspace, permissionWorkspace: fx.workspace, input: originalInput, executionPermissions: 'strict' });
+  const unscopedThread = unscopedChild.sent.find((request) => request.method === 'thread/start').params;
+  const unscopedTurn = unscopedChild.sent.find((request) => request.method === 'turn/start').params;
+  assert.deepEqual(unscopedTurn.input, [{ type: 'text', text: originalInput }]);
+  assert.equal(unscopedThread.developerInstructions.includes(fx.details.candidatePath), false);
+  assert.equal(unscopedThread.developerInstructions.includes(fx.details.scratchRoot), false);
+
+  const forgedChild = new FakeProcess();
+  const forgedClient = new CodexAppServer({ spawnImpl: () => forgedChild });
+  forgedClient.resolveExecutionPermissions = async () => ({ mode: 'strict', profileApi: false, reason: 'strict_setting' });
+  t.after(async () => forgedClient.close());
+  const forgedCapability = Object.freeze({ capabilityId: fx.details.capabilityId, candidatePath: fx.details.candidatePath,
+    scratchRoot: fx.details.scratchRoot, candidateId: fx.details.candidateId });
+  await assert.rejects(() => forgedClient.run({ role, cwd: fx.details.scratchRoot, permissionWorkspace: fx.workspace,
+    input: originalInput, executionPermissions: 'strict', deliveryCapability: forgedCapability }), (error) => {
+    assert.equal(error.code, 'verifier_capability_invalid');
+    assert.equal(error.message.includes(fx.details.candidatePath), false);
+    return true;
+  });
+  assert.equal(forgedChild.sent.some((request) => request.method === 'thread/start'), false);
+  assert.equal(forgedChild.sent.some((request) => request.method === 'turn/start'), false);
 });
 
 test('scoped verifier run permits selected strict mode only with the branded scratch policy', async (t) => {

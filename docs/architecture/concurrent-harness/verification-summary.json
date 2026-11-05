@@ -1,5 +1,59 @@
 {
   "schemaVersion": "harness-qualification-summary/v1",
+  "latestQualification": {
+    "capturedAt": "2026-11-05T14:35:27.210858+00:00",
+    "scope": "Bounded offline source qualification, native planner supersession repair, accepted staged native code-only trial and isolated UI readiness; comparative L6 unqualified",
+    "fullSuite": {
+      "tests": 2107,
+      "suites": 58,
+      "pass": 2106,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 1,
+      "exitCode": 0,
+      "durationMs": 69364.907762,
+      "inputsUnchanged": true,
+      "sourcePinCount": 341,
+      "temporaryLog": ".agents/teamwork/closeout-20261105/qualification/full-schema-repair.tap"
+    },
+    "excludedTest": {
+      "name": "live confinement probe against the installed Codex App Server",
+      "reason": "Optional live probe disabled by default"
+    },
+    "affectedSchemaRepair": {
+      "pass": 110,
+      "fail": 0,
+      "focusedSchemaPass": 2,
+      "independentReview": "APPROVE; complete create/update/supersede outputs, domain CAS, lineage and failure-history probes plus17 contract/recovery checks"
+    },
+    "sourceHashes": {
+      "src/concurrent-delivery-engine.js": "8e12df603f1c89ca119cfc85130fa14aa6d686a355c97c9974cf81f01010cf75",
+      "test/server-delivery-engine.test.js": "68a3dbb7ce2a8eff9c10b59c3a6f82e45a1d5f7768962cb10878562a7fba1da6"
+    },
+    "sourceManifestSha256": "17f712e299b71d940aa237df0b205ef2d7887a719cbda33cf99215b8fdaa4240",
+    "stagedNativeTrial": {
+      "taskId": "1953bdb5-2031-4468-b63f-52e22678ac50",
+      "disposition": "accepted",
+      "nativeAcceptanceReview": "APPROVE",
+      "cleanupEndpointReview": "APPROVE",
+      "uninterruptedAutonomousReplay": false,
+      "originalCheckoutPreserved": true,
+      "currentWholeRuntimeEqualityClaimed": false,
+      "finalPatchSha256": "ebb982adb8f5042b549bc35f79e521939088315c5e30107f1bd384a8fb3fa32f"
+    },
+    "isolatedUI": {
+      "launcherPort": 8082,
+      "backendPort": 3002,
+      "deliveryEngine": "concurrent-v1",
+      "ready": true,
+      "taskReady": true,
+      "restartedOnQualifiedSource": true,
+      "existingRuntimeChanged": false
+    },
+    "comparativeL6": "unqualified; runner under separate repair/review; no new comparison task dispatched",
+    "temporaryEvidenceRoot": ".agents/teamwork/closeout-20261105",
+    "evidenceRetention": "Local ignored teamwork evidence may disappear; this summary retains accepted outcomes and identifiers."
+  },
   "capturedAt": "2026-10-28T18:36:02.111718+00:00",
   "scope": "Bounded offline harness qualification with owner-authorized full local execution applied and live permission probes; comparative L6 unqualified",
   "runtimeApplied": true,

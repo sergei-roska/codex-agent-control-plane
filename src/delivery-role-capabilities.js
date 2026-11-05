@@ -15,6 +15,16 @@ const inside = (root, target) => {
 const reject = (code) => { throw Object.assign(new Error(code), { code }); };
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 
+function copyReadScope(value) {
+  if (!value || !['known', 'unknown'].includes(value.kind)) reject('verifier_read_scope_unavailable');
+  if (value.kind === 'known') {
+    if (!Array.isArray(value.paths) || value.paths.some((entry) => typeof entry !== 'string')) reject('verifier_read_scope_unavailable');
+    return Object.freeze({ kind: 'known', paths: Object.freeze([...value.paths]) });
+  }
+  if (value.paths !== null || typeof value.reason !== 'string') reject('verifier_read_scope_unavailable');
+  return Object.freeze({ kind: 'unknown', paths: null, reason: value.reason });
+}
+
 function assertNoSymlinkPath(value, { create = false } = {}) {
   if (typeof value !== 'string' || !path.isAbsolute(value)) reject('verifier_path_invalid');
   const resolved = path.resolve(value);
@@ -58,6 +68,7 @@ function scopedExecutionDetails(value) {
     requestDigest: state.requestDigest,
     attemptId: state.attempt.attemptId,
     taskId: state.task.taskId,
+    readScope: copyReadScope(state.task.readScope),
     candidateId: state.task.baseCandidateId,
     candidatePath: state.prepared.destination,
     permissionWorkspace: state.workspace,

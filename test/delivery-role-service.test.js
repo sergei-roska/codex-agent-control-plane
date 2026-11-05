@@ -50,7 +50,7 @@ async function startServer(app) {
 }
 
 async function fixture(t, { appServer, role = 'engineer', reportText = null, artifactBindingAllowed = true, fastMode = null,
-  ownerCorrectionAuthorized = false, executionPermissions = 'inherit' } = {}) {
+  ownerCorrectionAuthorized = false, executionPermissions = 'inherit', productWritePaths = ['source.txt'] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-role-service-'));
   const workspace = path.join(root, 'repo');
   const state = path.join(root, 'state');
@@ -59,6 +59,15 @@ async function fixture(t, { appServer, role = 'engineer', reportText = null, art
   const git = (...args) => execFileSync('git', ['-C', workspace, ...args], { stdio: 'ignore' });
   git('init', '-q'); git('config', 'user.name', 'Role Service Test'); git('config', 'user.email', 'role-service@example.invalid');
   fs.writeFileSync(path.join(workspace, 'source.txt'), 'base\n'); git('add', '.'); git('commit', '-qm', 'base');
+  for (const relativePath of productWritePaths) {
+    const file = path.join(workspace, relativePath);
+    if (file === path.join(workspace, 'source.txt')) continue;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'base\n');
+  }
+  if (productWritePaths.some((relativePath) => relativePath !== 'source.txt')) {
+    git('add', '.'); git('commit', '-qm', 'add assigned output files');
+  }
   const db = new Database(path.join(state, 'state.sqlite'));
   const admission = new WriterAdmission({ db, workspace, settleMs: 100 });
   const store = new BacklogStore(db, { roleCapacities: { engineer: 4, explorer: 4, verifier: 4 }, maxActiveTurns: 8,
@@ -67,7 +76,7 @@ async function fixture(t, { appServer, role = 'engineer', reportText = null, art
     goalRevision: 1, requirementDigest: `sha256:${'a'.repeat(64)}`, checksDigest: `sha256:${'b'.repeat(64)}`,
     authorityRevision: 1, controlRevision: 1, disposition: 'executing' });
   const roleRecord = role === 'engineer'
-    ? { role: 'engineer', kind: 'implementation', productWritePaths: ['source.txt'], scratchWriteRoots: ['.scratch'], baseCandidateId: 'base-candidate' }
+    ? { role: 'engineer', kind: 'implementation', productWritePaths: [...productWritePaths], scratchWriteRoots: ['.scratch'], baseCandidateId: 'base-candidate' }
     : { role, kind: 'implementation', productWritePaths: [], scratchWriteRoots: ['.scratch'], baseCandidateId: 'base-candidate' };
   const task = { schemaVersion: 'delivery/v1', projectId: PROJECT, objectiveId: OBJECTIVE, taskId: 'task-1', revision: 1,
     ...roleRecord, objective: 'Update the assigned source file.', priority: 0, dependencies: [],
@@ -103,8 +112,14 @@ async function fixture(t, { appServer, role = 'engineer', reportText = null, art
     const turnId = `provider-turn-${runCalls}`;
     const processIdentity = readProcessIdentity(process.pid);
     options.onTurnStart({ threadId, processIdentity });
-    if (options.cwd.includes(path.sep + 'lane-')) fs.writeFileSync(path.join(options.cwd, 'source.txt'), `published-${runCalls}\n`);
-    return { threadId, turnId, status: 'completed', text: reportText || report(role === 'engineer' ? ['source.txt'] : []),
+    if (options.cwd.includes(path.sep + 'lane-')) {
+      for (const relativePath of productWritePaths) {
+        const file = path.join(options.cwd, relativePath);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, `published-${runCalls}\n`);
+      }
+    }
+    return { threadId, turnId, status: 'completed', text: reportText || report(role === 'engineer' ? productWritePaths : []),
       usage: { model: SETTINGS.model, effort: SETTINGS.effort, turns: 1 }, permissionEvents: [],
       execution: { turnStartSent: true, turnStartRejected: false, turnTerminal: true,
         processIdentity, threadId, turnId } };
@@ -166,6 +181,38 @@ test('authenticated role card and returnImmediately TaskExecutor publish private
   assert.equal(fx.candidates.get(result.result.candidateId).parentCandidateId, fx.base.candidateId);
   assert.equal(fx.artifacts.get(result.result.artifactId).state, 'captured');
   assert.equal(fx.service.getExecution(fx.claim.attempt.attemptId).state, 'settled');
+});
+
+test('unsorted multi-path task binds sorted scope and refuses subset or added declarations', async (t) => {
+  const writePaths = ['patches/shs-3620147-preselect-stored-values.patch', 'composer.json', 'patches.lock.json'];
+  const sortedWritePaths = [...writePaths].sort();
+  const fx = await fixture(t, { productWritePaths: writePaths });
+  const id = identity(fx);
+  const sent = await fx.executor.execute(id);
+  assert.equal(sent.state, 'submitted', JSON.stringify({ sent, evidence: fx.executor.listEvidence(id.attemptId) }));
+
+  const execution = fx.service.getExecution(id.attemptId);
+  assert.equal(execution.state, 'terminal');
+  assert.deepEqual(execution.writePaths, writePaths);
+  const stored = fx.artifacts.binding(execution.artifactId);
+  assert.equal(stored.row.state, 'bound');
+  assert.deepEqual(stored.identity.declaredWritePaths, sortedWritePaths);
+  assert.equal(fx.service.authorizeArtifactBinding(stored.identity), true);
+  assert.equal(fx.service.authorizeArtifactBinding({ ...stored.identity,
+    declaredWritePaths: sortedWritePaths.slice(0, -1) }), false);
+  assert.equal(fx.service.authorizeArtifactBinding({ ...stored.identity,
+    declaredWritePaths: [...sortedWritePaths, 'unassigned.txt'] }), false);
+  assert.equal(fx.service.authorizeArtifactBinding({ ...stored.identity,
+    declaredWritePaths: [...sortedWritePaths, sortedWritePaths[0]] }), false);
+  assert.equal(fx.artifacts.binding(execution.artifactId).row.state, 'bound');
+
+  const result = await fx.executor.poll(id);
+  assert.equal(result.state, 'succeeded');
+  assert.equal(result.result.candidateId, `candidate-${id.attemptId}`);
+  assert.deepEqual(fx.artifacts.get(result.result.artifactId).deltaPaths, sortedWritePaths);
+  for (const relativePath of writePaths) {
+    assert.equal(fs.readFileSync(path.join(fx.workspace, relativePath), 'utf8'), 'published-1\n');
+  }
 });
 
 test('role card and execution provenance preserve effective Fast modes', async (t) => {

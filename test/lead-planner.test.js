@@ -182,7 +182,14 @@ test('only a trusted local pre-dispatch rejection is labeled as such in the plan
   inbox.receive({ messageId: 'pre-dispatch-error', kind: 'steering', payload: { instruction: 'Plan carefully' } });
   await assert.rejects(planner.run(), { code: 'provider_home_changed' });
   const result = JSON.parse(db.prepare('SELECT result_json FROM delivery_planner_turns').get().result_json);
-  assert.deepEqual(result, { errorCode: 'provider_home_changed', preDispatchSource: 'switching_app_server.expected_home_preflight' });
+  assert.deepEqual(result, {
+    errorCode: 'provider_home_changed',
+    preDispatchSource: 'switching_app_server.expected_home_preflight',
+    providerFailure: {
+      message: 'Expected home changed before dispatch.', failureClass: null, outcomeUnknown: false, rpcResponse: false,
+      status: null, threadId: null, turnId: null, codexError: null, execution: null, terminalTurn: null,
+    },
+  });
 });
 
 test('reopened active turns require authorized lifecycle quiescence before reconciliation', async (t) => {

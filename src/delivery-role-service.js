@@ -512,7 +512,8 @@ class DeliveryRoleService {
         && record.contextId === binding.providerContextId && record.projectId === binding.projectId
         && record.objectiveId === binding.objectiveId && record.taskId === binding.taskId
         && record.fencingToken === binding.fencingToken && record.laneId === binding.laneId
-        && record.baseCandidateId === binding.baseCandidateId && canonical(record.writePaths) === canonical(binding.declaredWritePaths)
+        && record.baseCandidateId === binding.baseCandidateId
+        && canonical([...record.writePaths].sort()) === canonical([...binding.declaredWritePaths].sort())
         && this.#assertCurrent(record));
     } catch (_) { return false; }
   }

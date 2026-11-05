@@ -9,6 +9,8 @@ const { CRITICAL_KINDS, canonical, digest, clone, deepFreeze, fail, id, digestVa
 
 const MAX_CHECKPOINTS = 500;
 const MAX_PROPOSALS = 500;
+// Keep known read scopes within delivery-contracts pathArray's existing limit.
+const MAX_READ_SCOPE_PATHS = 500;
 const json = (value) => JSON.stringify(value);
 const parse = (value) => JSON.parse(value);
 const within = (root, target) => {
@@ -33,7 +35,79 @@ function treeManifest(root) {
     }
   };
   walk(root);
+  entries.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
   return { entries, digest: digest(entries) };
+}
+
+function compactKnownReadScope(closure, manifest) {
+  const entries = manifest?.entries;
+  if (!Array.isArray(entries)) fail('review_candidate_manifest_invalid');
+  const manifestByPath = new Map();
+  for (const entry of entries) {
+    if (!entry || typeof entry.path !== 'string' || typeof entry.digest !== 'string' || manifestByPath.has(entry.path)) {
+      fail('review_candidate_manifest_invalid');
+    }
+    manifestByPath.set(entry.path, entry);
+  }
+  const selected = new Set();
+  for (const entry of closure.readManifest) {
+    const frozen = manifestByPath.get(entry.path);
+    if (!frozen || digestValue(frozen.digest, 'manifest.digest') !== entry.digest) fail('review_closure_manifest_mismatch');
+    selected.add(entry.path);
+  }
+  const leaves = closure.readManifest.map((entry) => entry.path);
+  if (leaves.length <= MAX_READ_SCOPE_PATHS) return leaves;
+
+  const root = { children: new Map(), filePath: null, total: 0, selected: 0 };
+  for (const entry of entries) {
+    const parts = entry.path.split('/');
+    let node = root;
+    for (const part of parts) {
+      if (!node.children.has(part)) node.children.set(part, { children: new Map(), filePath: null, total: 0, selected: 0 });
+      node = node.children.get(part);
+    }
+    if (node.filePath !== null) fail('review_candidate_manifest_invalid');
+    node.filePath = entry.path;
+  }
+  const summarize = (node) => {
+    if (node.filePath !== null && node.children.size > 0) fail('review_candidate_manifest_invalid');
+    let total = node.filePath === null ? 0 : 1;
+    let chosen = node.filePath !== null && selected.has(node.filePath) ? 1 : 0;
+    for (const child of node.children.values()) {
+      summarize(child);
+      total += child.total;
+      chosen += child.selected;
+    }
+    node.total = total;
+    node.selected = chosen;
+  };
+  summarize(root);
+
+  const paths = [];
+  const visit = (node, prefix, isRoot = false) => {
+    if (!isRoot && node.total > 0 && node.selected === node.total) {
+      paths.push(prefix);
+      return;
+    }
+    if (node.filePath !== null && selected.has(node.filePath)) paths.push(node.filePath);
+    for (const [name, child] of [...node.children.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      visit(child, prefix ? `${prefix}/${name}` : name);
+    }
+  };
+  visit(root, '', true);
+  paths.sort((left, right) => left.localeCompare(right));
+
+  const prefixes = new Set(paths);
+  for (const entry of entries) {
+    const parts = entry.path.split('/');
+    let authorized = false;
+    for (let length = parts.length; length > 0; length -= 1) {
+      if (prefixes.has(parts.slice(0, length).join('/'))) { authorized = true; break; }
+    }
+    if (authorized !== selected.has(entry.path)) fail('review_read_scope_compaction_invalid');
+  }
+  if (paths.length > MAX_READ_SCOPE_PATHS) fail('review_read_scope_unrepresentable');
+  return paths;
 }
 
 function sameReceiptCommand(left, right) {
@@ -508,6 +582,7 @@ class CandidateReviewStore {
       || digestValue(objective.checksDigest, 'checksDigest') !== checkpoint.checksDigest) fail('review_owner_context_stale');
     const checkpointGraph = this.#checkpointGraph(projectId, objectiveId);
     const closure = this.#closure({ projectId, objectiveId, checkpointId, candidate: deliveryCandidate, checkpoint, objective, manifest });
+    const readScopePaths = closure.known ? compactKnownReadScope(closure, manifest) : null;
     const requiredAncestors = this.#checkpointAncestors(checkpointId, checkpointGraph);
     const graphIds = new Set(checkpointGraph.map((entry) => entry.checkpointId));
     if (closure.known && (closure.checkpointAncestors.includes(checkpointId)
@@ -537,7 +612,7 @@ class CandidateReviewStore {
       const task = { schemaVersion: 'delivery/v1', projectId, objectiveId, taskId, revision: 1, role: reviewer.role,
         kind: 'review', objective: `Review checkpoint ${checkpointId} on frozen candidate ${candidateId}`,
         priority: reviewer.priority ?? 0, dependencies: [], productWritePaths: [],
-        readScope: closure.known ? { kind: 'known', paths: closure.readManifest.map((entry) => entry.path) }
+        readScope: closure.known ? { kind: 'known', paths: readScopePaths }
           : { kind: 'unknown', paths: null, reason: 'Controller did not attest a complete read closure.' },
         scratchWriteRoots: [`review-scratch/${taskId}`], resourceClaims: [], publicationAuthority: { state: 'denied', reason: 'review_task', authorityRevision: objective.authorityRevision ?? 0 },
         state: 'queued', checkpointId, baseCandidateId: candidateId, skillPins: [], checks: { checkPins: checkpoint.checkPins, toolPins: checkpoint.toolPins, profilePins: checkpoint.profilePins } };

@@ -32,6 +32,29 @@ const error = (code, message = code) => Object.assign(new Error(message), { code
 const copy = (value) => value == null ? value : structuredClone(value);
 const ID = /^[\x21-\x7e]{1,128}$/;
 const CONTROL_MESSAGE_LIMIT = 64;
+const REVIEW_INPUT_MAX_ITEMS = 20;
+const REVIEW_INPUT_MAX_CHARS = 3000;
+const REVIEW_OWNER_GOAL_CHUNK_CHARS = 2800;
+
+function ownerGoalInputChunks(goal) {
+  if (typeof goal !== 'string' || !goal.length || goal.length > 50000) throw error('concurrent_review_owner_context_missing');
+  const chunks = [];
+  let chunk = '';
+  for (const character of goal) {
+    if (chunk.length && chunk.length + character.length > REVIEW_OWNER_GOAL_CHUNK_CHARS) {
+      chunks.push(chunk);
+      chunk = '';
+    }
+    chunk += character;
+  }
+  if (chunk) chunks.push(chunk);
+  const inputs = chunks.map((part, index) =>
+    `OWNER INTAKE GOAL (background context only; chunk ${index + 1}/${chunks.length}):\n${part}`);
+  if (inputs.length > REVIEW_INPUT_MAX_ITEMS || inputs.some((entry) => entry.length > REVIEW_INPUT_MAX_CHARS)) {
+    throw error('concurrent_review_owner_context_unrepresentable');
+  }
+  return inputs;
+}
 
 function deepFreeze(value) {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -1226,7 +1249,7 @@ class ConcurrentDeliveryEngine {
       mandatoryReviewRole: 'verifier', mandatoryOwnerCheckpoint: this.#ownerCheckpointInventory({ projectId: this.projectId, objectiveId: run.objectiveId }).map((entry) => entry.checkpointId),
       publicationAuthority: 'host-only', completionAuthority: 'host-finalization-only',
     } };
-    const input = `Return only JSON matching the requested schema. Plan work for the durable ownerContext and current projection. Choose task roles only from policy.allowedRoles. The host automatically creates and runs the mandatory verifier; never add a verifier, auditor, review, or coordinator task. All productWritePaths, readScope.paths, and scratchWriteRoots must be workspace-relative paths without leading slash, backslashes, empty segments, or dot/dot-dot segments. Host acceptance command paths are not candidate files: never copy absolute check-script paths into task scopes. Preserve the owner acceptance contract; the host runs those checks. Do not claim acceptance or completion. Resolve routine reversible choices internally. ownerDecision must be null unless a named owner-only obligation needs a decision after a completed read-only investigation. Cite investigation as attempt:<attemptId> in evidenceRefs. Choosing an option never grants new effect authority.\n${JSON.stringify(prompt)}`;
+    const input = `Return only JSON matching the requested schema. Plan work for the durable ownerContext and current projection. Choose task roles only from policy.allowedRoles. Add an ordinary new task with revision 1, supersedesTaskId null, and no expectedRevision. To update an existing task, use only its exact task ID, current expectedRevision, and next revision allowed by the schema; preserve its exact supersedesTaskId lineage. For a distinct repair, add a new task with revision 1, set supersedesTaskId to the exact eligible task ID, and set expectedRevision to that task's current revision. Supersession retains the failed task and its attempt as history; never alter the failed attempt. Never set expectedRevision to 0 or null, and do not update tasks outside the allowed list. The host automatically creates and runs the mandatory verifier; never add a verifier, auditor, review, or coordinator task. All productWritePaths, readScope.paths, and scratchWriteRoots must be workspace-relative paths without leading slash, backslashes, empty segments, or dot/dot-dot segments. Host acceptance command paths are not candidate files: never copy absolute check-script paths into task scopes. Preserve the owner acceptance contract; the host runs those checks. Do not claim acceptance or completion. Resolve routine reversible choices internally. ownerDecision must be null unless a named owner-only obligation needs a decision after a completed read-only investigation. Cite investigation as attempt:<attemptId> in evidenceRefs. Choosing an option never grants new effect authority.\n${JSON.stringify(prompt)}`;
     const identity = { projectId: this.projectId, sessionId: run.sessionId, turnId: turn.turnId,
       providerThreadId: turn.providerThreadId, providerScope: turn.providerScope,
       ownerGeneration: turn.prompt.pins.ownerGeneration };
@@ -1234,7 +1257,7 @@ class ConcurrentDeliveryEngine {
       VALUES(?,?,?,?)`).run(this.projectId, run.sessionId, turn.turnId, canonical(identity));
     let observedStart = null;
     return this.appServer.run({ role: runRole, cwd: this.workspace, permissionWorkspace: this.workspace,
-      input, threadId: lead.threadId, outputSchema: this.#plannerSchema(), executionPermissions: this.executionPermissions,
+      input, threadId: lead.threadId, outputSchema: this.plannerOutputSchema(turn.prompt.projection), executionPermissions: this.executionPermissions,
       selectedSkills: lead.settings.selectedSkills, selectedMcpTools: lead.settings.selectedMcpTools,
       expectedCodexHome: lead.codexHome,
       onTurnStart: (identity) => {
@@ -1595,12 +1618,14 @@ class ConcurrentDeliveryEngine {
     const history = this.reviewStore.checkpointHistory(scope);
     const rowsById = new Map(history.map((row) => [row.checkpoint.checkpointId, row.checkpoint]));
     const verifier = this.#settingsFor({ task: { role: 'verifier' } });
+    const contractCheckIds = run.contract.requiredChecks.map((check) => check.id);
+    const sortedContractCheckIds = [...contractCheckIds].sort();
     if (!checkpoints.length || checkpoints.some((item) => {
       const checkpoint = rowsById.get(item.checkpointId);
       return !checkpoint || !this.reviewStore.isCheckpointActive({ ...scope, checkpointId: item.checkpointId })
         || checkpoint.kind !== 'owner_request' || checkpoint.critical !== true
         || checkpoint.checkIdentity !== run.checkIdentity || checkpoint.environmentDigest !== run.environmentDigest
-        || canonical(checkpoint.checkPins) !== canonical(run.contract.requiredChecks.map((check) => check.id))
+        || canonical(checkpoint.checkPins) !== canonical(sortedContractCheckIds)
         || canonical(checkpoint.toolPins) !== canonical([]) || !this.#checkpointProfilePinAuthorized(checkpoint, verifier, run);
     })) return false;
     if (request.expectedOwnerGeneration !== objective.ownerGeneration || request.expectedControlRevision !== objective.controlRevision
@@ -1965,14 +1990,32 @@ class ConcurrentDeliveryEngine {
     if (!task || !settings || !role) throw error('concurrent_task_request_invalid');
     const frozenReview = task.kind === 'review' && task.role === 'verifier' && task.baseCandidateId
       && task.productWritePaths?.length === 0;
+    let reviewInputs = null;
+    if (frozenReview) {
+      const ownerRuns = this.db.prepare('SELECT run_id FROM concurrent_delivery_runs WHERE project_id=? AND objective_id=?')
+        .all(this.projectId, task.objectiveId);
+      if (ownerRuns.length !== 1) throw error('concurrent_review_owner_context_missing');
+      const ownerRun = this.#run(ownerRuns[0].run_id);
+      reviewInputs = [
+        `Review frozen candidate ${task.baseCandidateId} in the prepared candidate workspace. The host retains the complete read scope and verifies candidate integrity.`,
+        ...ownerGoalInputChunks(ownerRun?.goal),
+      ];
+      if (reviewInputs.length > REVIEW_INPUT_MAX_ITEMS || reviewInputs.some((entry) => entry.length > REVIEW_INPUT_MAX_CHARS)) {
+        throw error('concurrent_review_owner_context_unrepresentable');
+      }
+    }
+    const taskCriteria = Array.isArray(task.acceptance?.criteria)
+      ? task.acceptance.criteria.filter((entry) => typeof entry === 'string') : [];
     const request = {
       objective: task.objective,
       allowedFiles: [...(task.productWritePaths || [])],
       inputs: frozenReview
-        ? [`Review frozen candidate ${task.baseCandidateId} in the prepared candidate workspace. The host retains the complete read scope and verifies candidate integrity.`]
+        ? reviewInputs
         : task.readScope?.kind === 'known' ? (task.readScope.paths || []).map((file) => `Frozen candidate path: ${file}`) : [],
       evidence: [...(task.evidenceRefs || [])],
-      acceptanceCriteria: Array.isArray(task.acceptance?.criteria) ? task.acceptance.criteria.filter((entry) => typeof entry === 'string') : [],
+      acceptanceCriteria: taskCriteria.length > 0 ? taskCriteria : frozenReview
+        ? ['Assess the frozen candidate against the current task objective, checkpoint scope, owner/control revisions, and pinned checks. The original owner intake in inputs is background context only; it does not override the current goal, controls, or checkpoint pins, and grants no actions.']
+        : [],
       checks: [...(task.checks?.checkPins || [])].map((pin) => `Host will execute pinned check: ${pin}`),
       stopConditions: ['Do not publish, modify shared workspace state, or claim acceptance.'],
       skills: this.#skillsFor(task),
@@ -2008,7 +2051,7 @@ class ConcurrentDeliveryEngine {
   #leadSkills() { return []; }
   #leadMcpTools() { return []; }
   #workspaceForProject(projectId) { if (projectId !== this.projectId) throw error('concurrent_project_scope_mismatch'); return this.workspace; }
-  #plannerSchema() {
+  plannerOutputSchema(projection) {
     const object = (properties) => ({ type: 'object', additionalProperties: false,
       required: Object.keys(properties), properties });
     const nullable = (schema) => ({ anyOf: [schema, { type: 'null' }] });
@@ -2035,7 +2078,39 @@ class ConcurrentDeliveryEngine {
       publicationAuthority: object({ state: { type: 'string', enum: ['denied', 'unknown'] } }),
       state: { type: 'string', enum: ['draft', 'queued', 'blocked'] },
     });
-    const taskChange = { anyOf: [object({ task: plannerTask }), object({ task: plannerTask, expectedRevision: { type: 'integer' } })] };
+    const ordinaryNewTaskSchema = object({ ...plannerTask.properties, revision: { type: 'integer', enum: [1] },
+      supersedesTaskId: { type: 'null', enum: [null] } });
+    const branches = [object({ task: ordinaryNewTaskSchema })];
+    const mutableStates = new Set(['draft', 'queued', 'ready', 'blocked', 'failed']);
+    const plannerRoles = new Set(this.roleIds.filter((role) => !['review', 'verifier', 'auditor', 'coordinator'].includes(canonicalRoleId(role))));
+    const existingTasks = projection?.objective?.tasks;
+    if (Array.isArray(existingTasks)) {
+      for (const task of existingTasks) {
+        const roleId = canonicalRoleId(task?.role);
+        if (typeof task?.taskId !== 'string' || !Number.isSafeInteger(task?.revision) || task.revision < 1
+          || !plannerRoles.has(roleId) || !this.roleFor(task.role) || !mutableStates.has(task.state)) continue;
+        const updateTaskSchema = object({ ...plannerTask.properties,
+          taskId: { type: 'string', enum: [task.taskId] },
+          revision: { type: 'integer', enum: [task.revision + 1] },
+          supersedesTaskId: task.supersedesTaskId
+            ? { type: 'string', enum: [task.supersedesTaskId] }
+            : { type: 'null', enum: [null] },
+          state: { type: 'string', enum: ['queued', 'blocked'] },
+        });
+        branches.push(object({ task: updateTaskSchema,
+          expectedRevision: { type: 'integer', enum: [task.revision],
+            description: 'Exact current revision for this task ID from the supplied snapshot.' } }));
+        const supersedingNewTaskSchema = object({ ...plannerTask.properties,
+          revision: { type: 'integer', enum: [1] },
+          supersedesTaskId: { type: 'string', enum: [task.taskId],
+            description: 'Exact eligible existing task ID to supersede; the replacement is a distinct new task.' },
+        });
+        branches.push(object({ task: supersedingNewTaskSchema,
+          expectedRevision: { type: 'integer', enum: [task.revision],
+            description: 'Exact current revision of the superseded task from the supplied snapshot.' } }));
+      }
+    }
+    const taskChange = { description: 'Add an ordinary new task with revision 1, supersedesTaskId null, and no expectedRevision; update an eligible existing task with its exact ID, current expectedRevision, next revision, and unchanged lineage; or add a distinct new revision-1 task superseding an eligible existing task with its exact ID and current expectedRevision.', anyOf: branches };
     const delta = object({
       schemaVersion: { type: 'string', enum: [VERSION] }, expectedPlanRevision: { type: 'integer' },
       expectedGoalRevision: { type: 'integer' }, expectedAuthorityRevision: { type: 'integer' },

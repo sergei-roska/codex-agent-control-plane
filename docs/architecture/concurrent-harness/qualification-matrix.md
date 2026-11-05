@@ -1,12 +1,19 @@
 # Offline qualification matrix
 
-Status: V01-V43 accepted for bounded offline source qualification (L1-L5). Current frozen affected1218/1218
-and full1967 passed /0 failed /1 prohibited skip have identical input manifests
-and no drift. V14 protocol, boundary and ordering repair reviews passed. PASS describes the
-bounded offline invariant at the stated layer, not live model performance.
-Historical line numbers identify the inspected checkpoint; test names and
-assertions are the durable evidence. Tests use disposable state and fake providers.
-No runtime activation or L6 trial is implied.
+Status: V01-V43 remain accepted for bounded offline source qualification (L1-L5).
+The latest frozen full suite on2026-11-05 passed2106 tests, failed0 and skipped1
+optional live confinement probe (2107 total); all341 source pins were unchanged.
+The native planner supersession repair passed110 affected checks and independent
+schema/domain/history review. Earlier affected1218/1218 and full1967-pass results
+below are historical checkpoints. Current evidence is recorded in
+[verification-summary.json](verification-summary.json) under latestQualification.
+
+PASS describes the bounded offline invariant at the stated layer, not live model
+performance. Historical line numbers identify the inspected checkpoint; test names
+and assertions are durable evidence. Tests use disposable state and fake providers.
+The separate accepted native smoke/staged code-only trial and isolated UI readiness
+are recorded in [implementation-status.md](implementation-status.md); neither
+establishes comparative L6 qualification.
 
 The whole-objective V14 gate is conservative bounded coverage. Pre-admitted
 successor rebasing, product-writing scoped verifiers, real auditor-role provider

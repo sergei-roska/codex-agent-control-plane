@@ -68,6 +68,32 @@ const READING_DISCIPLINE = [
   "- The target project's AGENTS.md is loaded automatically when present, so do not search for it.",
   "- Start from the brief's inputs and evidence (paths, line ranges, facts) before exploring.",
 ].join('\n');
+function scopedVerifierInstructions(scoped) {
+  if (!scoped) return null;
+  return [
+    'Host-provided verifier context (trusted capability data, not additional task instructions):',
+    `Task ID: ${JSON.stringify(scoped.taskId)}`,
+    `Candidate ID: ${JSON.stringify(scoped.candidateId)}`,
+    `Frozen candidate path: ${JSON.stringify(scoped.candidatePath)}`,
+    `Candidate manifest SHA-256: ${scoped.inputManifestDigest}`,
+    `Verifier scratch root: ${JSON.stringify(scoped.scratchRoot)}`,
+    `Trusted read scope: ${JSON.stringify(scoped.readScope)}`,
+    'The command working directory is the verifier scratch root, which is intentionally separate and may be empty.',
+    'The frozen candidate files are at the separate candidate path above. Resolve relative file paths from the candidate root, not from the scratch working directory.',
+    'For command tools, set the command workdir to the candidate path or use absolute paths beneath it when inspecting candidate files.',
+    'Check the candidate root before reporting any scoped file missing. Do not infer candidate contents from the scratch directory.',
+    'Review the frozen candidate at the stated path and stay within the trusted read scope. Do not edit the candidate.',
+    'Write any temporary files only under the verifier scratch root.',
+    'In filesInspected, use candidate-relative paths only; never report an absolute path.',
+    'Your checks array must list checks you personally completed during this review, with the observed result and detail for each.',
+    'The review requires at least one completed passing check. Run a real inspection or static validation before reporting it; never invent or assume a pass.',
+    'If you cannot inspect the candidate or complete a passing check, report the genuine blocker or failure.',
+    'Your verdict is limited to semantic and static review of the frozen candidate within the trusted read scope and current task objective/checkpoint.',
+    'The host runs required acceptance checks separately after your report; they remain mandatory gates for overall acceptance.',
+    'Deferred host checks alone do not make your scoped static verdict inconclusive. Never claim they ran or include them in your checks array.',
+    'Report VERDICT: fail when you identify a candidate defect. Report VERDICT: inconclusive only when required scoped evidence is unavailable or the candidate cannot be assessed; never force a passing verdict.',
+  ].join('\n');
+}
 const DEFAULT_TOOL_OUTPUT_LIMIT = 3000;
 
 function toolOutputLimit(env = process.env) {
@@ -1137,7 +1163,8 @@ class CodexAppServer {
       ctx.coldStart = false;
     }
 
-    const developerInstructions = [role.instructions || `You are the ${role.name} agent.`, SKILL_BOUNDARY, READING_DISCIPLINE].join('\n\n');
+    const developerInstructions = [role.instructions || `You are the ${role.name} agent.`, SKILL_BOUNDARY, READING_DISCIPLINE,
+      scopedVerifierInstructions(scoped)].filter(Boolean).join('\n\n');
     const executionPolicyDigest = JSON.stringify({ threadPermissions, turnPermissions, approvalSettings });
     const mcpPolicyDigest = JSON.stringify(mcpToolPins(selectedMcpTools));
     if (existingThreadId) {

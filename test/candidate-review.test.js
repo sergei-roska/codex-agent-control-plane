@@ -10,7 +10,8 @@ const Database = require('better-sqlite3');
 const { CandidateStore } = require('../src/candidate-store');
 const { CandidateReviewStore } = require('../src/candidate-review');
 const { BacklogStore, stableDigest } = require('../src/backlog-store');
-const { VERSION } = require('../src/delivery-contracts');
+const { VERSION, validateTask } = require('../src/delivery-contracts');
+const { normalizeClosure, digest } = require('../src/delivery-review-policy');
 const { TaskScheduler } = require('../src/task-scheduler');
 
 const ENV = 'a'.repeat(64);
@@ -18,7 +19,7 @@ const CHECKS = 'b'.repeat(64);
 const REQUIREMENTS = 'c'.repeat(64);
 const SHA = (value) => require('node:crypto').createHash('sha256').update(value).digest('hex');
 
-function fixture(reviewOverrides = {}, backlogOverrides = {}) {
+function fixture(reviewOverrides = {}, backlogOverrides = {}, workspacePaths = []) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-review-'));
   const workspace = path.join(root, 'repo');
   const storageDir = path.join(root, 'state', 'candidates');
@@ -27,6 +28,11 @@ function fixture(reviewOverrides = {}, backlogOverrides = {}) {
   git('init', '-q'); git('config', 'user.name', 'Review Test'); git('config', 'user.email', 'review@example.invalid');
   fs.writeFileSync(path.join(workspace, 'a.txt'), 'A base\n');
   fs.writeFileSync(path.join(workspace, 'b.txt'), 'B base\n');
+  for (const [index, relativePath] of workspacePaths.entries()) {
+    const file = path.join(workspace, relativePath);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `fixture-${index}\n`);
+  }
   git('add', '.'); git('commit', '-qm', 'base');
   const dbPath = path.join(root, 'state.sqlite');
   const db = new Database(dbPath);
@@ -74,6 +80,10 @@ function fxAttemptMatches(backlogStore, attempt, claim) {
 function addCheckpoint(fx, checkpointId, file, ancestors = []) {
   const bytes = fs.readFileSync(path.join(fx.workspace, file));
   const readManifest = [{ path: file, digest: SHA(bytes) }];
+  return addCheckpointManifest(fx, checkpointId, readManifest, ancestors);
+}
+
+function addCheckpointManifest(fx, checkpointId, readManifest, ancestors = []) {
   fx.known.set(checkpointId, { checkpointId, readManifest, checkpointAncestors: ancestors });
   return fx.reviewStore.registerCheckpoint({ projectId: 'project', objectiveId: 'objective', checkpointId,
     kind: 'risk_change', reason: `Inspect ${checkpointId}`, checkIdentity: 'check-set-v1', checkPins: ['check-v1'],
@@ -194,6 +204,105 @@ test('candidate review freezes source bytes, proves exact scheduler binding, set
   const reopened = new CandidateStore({ db: new Database(fx.dbPath), workspace: fx.workspace, storageDir: fx.storageDir });
   assert.equal(reopened.readManifest(fx.candidate.manifestDigest).digest, fx.candidate.manifestDigest);
   reopened.db.close();
+});
+
+test('review input uses full-path ordering and rejects materialized tree drift', (t) => {
+  const fx = fixture({}, {}, ['patches.lock.json', 'patches/a.patch']);
+  t.after(() => { fx.db.close(); fs.rmSync(fx.root, { recursive: true, force: true }); });
+  const manifest = fx.candidateStore.readManifest(fx.candidate.manifestDigest);
+  assert.deepEqual(manifest.entries.filter((entry) => entry.path.startsWith('patches')).map((entry) => entry.path),
+    ['patches.lock.json', 'patches/a.patch']);
+  addCheckpoint(fx, 'checkpoint-path-order', 'patches.lock.json');
+  const [proposal] = propose(fx, 'checkpoint-path-order', [{ role: 'verifier' }]);
+
+  const exactPath = path.join(fx.root, 'review-input-exact');
+  const exact = fx.reviewStore.prepareReviewInput(proposal.task.taskId, exactPath);
+  assert.equal(fx.reviewStore.verifyReviewInput(exact), true);
+
+  const driftCases = [
+    ['content', (root) => {
+      fs.chmodSync(path.join(root, 'patches/a.patch'), 0o644);
+      fs.writeFileSync(path.join(root, 'patches/a.patch'), 'tampered\n');
+    }],
+    ['mode', (root) => fs.chmodSync(path.join(root, 'patches/a.patch'), 0o755)],
+    ['extra', (root) => fs.writeFileSync(path.join(root, 'extra.txt'), 'extra\n')],
+    ['missing', (root) => fs.unlinkSync(path.join(root, 'patches/a.patch'))],
+  ];
+  for (const [name, mutate] of driftCases) {
+    const destination = path.join(fx.root, `review-input-${name}`);
+    const prepared = fx.reviewStore.prepareReviewInput(proposal.task.taskId, destination);
+    mutate(destination);
+    assert.equal(fx.reviewStore.verifyReviewInput(prepared), false, `${name} drift must be rejected`);
+  }
+});
+
+test('large known closures compact to manifest-exact prefixes while preserving the full closure', async (t) => {
+  for (const size of [1000, 1001]) {
+    await t.test(`${size} selected manifest files`, (st) => {
+      const selectedPaths = Array.from({ length: size }, (_, index) => `packages/full/file-${String(index).padStart(4, '0')}.txt`);
+      const fx = fixture({}, {}, [...selectedPaths, 'packages/fullish/unselected.txt']);
+      st.after(() => { fx.db.close(); fs.rmSync(fx.root, { recursive: true, force: true }); });
+      const manifest = fx.candidateStore.readManifest(fx.candidate.manifestDigest);
+      const selected = manifest.entries.filter((entry) => entry.path.startsWith('packages/full/'));
+      assert.equal(selected.length, size);
+      addCheckpointManifest(fx, 'checkpoint-large', selected);
+
+      const [proposal] = propose(fx, 'checkpoint-large', [{ role: 'verifier' }]);
+      validateTask(proposal.task);
+      assert.deepEqual(proposal.task.readScope, { kind: 'known', paths: ['packages/full'] });
+      const normalized = normalizeClosure({ known: true, readManifest: selected, checkpointAncestors: [] });
+      assert.deepEqual(proposal.context.closure.readManifest, normalized.readManifest);
+      assert.equal(proposal.context.closure.digest, digest({ checkpointId: 'checkpoint-large',
+        readManifest: normalized.readManifest, checkpointAncestors: [] }));
+      assert.equal(proposal.context.closure.readManifest.length, size);
+    });
+  }
+});
+
+test('large sparse read scopes retain leaves and do not expand across siblings or similar prefixes', (t) => {
+  const libFiles = Array.from({ length: 501 }, (_, index) => `lib/chunk-${String(index).padStart(3, '0')}/file.txt`);
+  const extraFiles = [...libFiles, 'lib2/unselected.txt', 'src/a.js', 'src/b.js', 'src/sparse/unselected.js', 'src2/unselected.js'];
+  const fx = fixture({}, {}, extraFiles); t.after(() => { fx.db.close(); fs.rmSync(fx.root, { recursive: true, force: true }); });
+  const manifest = fx.candidateStore.readManifest(fx.candidate.manifestDigest);
+  const selectedPaths = new Set([...libFiles, 'src/a.js', 'src/b.js']);
+  const selected = manifest.entries.filter((entry) => selectedPaths.has(entry.path));
+  addCheckpointManifest(fx, 'checkpoint-sparse-large', selected);
+
+  const [proposal] = propose(fx, 'checkpoint-sparse-large', [{ role: 'auditor' }]);
+  validateTask(proposal.task);
+  assert.deepEqual(proposal.task.readScope, { kind: 'known', paths: ['lib', 'src/a.js', 'src/b.js'] });
+  const allowed = (file) => proposal.task.readScope.paths.some((scope) => file === scope || file.startsWith(`${scope}/`));
+  assert.equal(allowed('lib/chunk-000/file.txt'), true);
+  assert.equal(allowed('lib2/unselected.txt'), false);
+  assert.equal(allowed('src/sparse/unselected.js'), false);
+  assert.equal(allowed('src2/unselected.js'), false);
+  assert.equal(proposal.task.readScope.paths.includes('src'), false);
+});
+
+test('known closures must match the frozen manifest and unrepresentable root scopes fail before insertion', async (t) => {
+  for (const [label, entry] of [
+    ['absent path', { path: 'absent.txt', digest: SHA(Buffer.from('absent')) }],
+    ['mismatched digest', { path: 'a.txt', digest: SHA(Buffer.from('not the frozen bytes')) }],
+  ]) {
+    await t.test(label, (st) => {
+      const fx = fixture(); st.after(() => { fx.db.close(); fs.rmSync(fx.root, { recursive: true, force: true }); });
+      addCheckpointManifest(fx, 'checkpoint-invalid', [entry]);
+      assert.throws(() => propose(fx, 'checkpoint-invalid', [{ role: 'verifier' }]), { code: 'review_closure_manifest_mismatch' });
+      assert.equal(fx.db.prepare('SELECT COUNT(*) AS count FROM review_tasks').get().count, 0);
+      assert.equal(fx.db.prepare('SELECT COUNT(*) AS count FROM review_contexts').get().count, 0);
+    });
+  }
+
+  await t.test('too many independent top-level files', (st) => {
+    const paths = Array.from({ length: 501 }, (_, index) => `root-file-${String(index).padStart(3, '0')}.txt`);
+    const fx = fixture({}, {}, paths); st.after(() => { fx.db.close(); fs.rmSync(fx.root, { recursive: true, force: true }); });
+    const manifest = fx.candidateStore.readManifest(fx.candidate.manifestDigest);
+    const selected = manifest.entries.filter((entry) => paths.includes(entry.path));
+    addCheckpointManifest(fx, 'checkpoint-unrepresentable', selected);
+    assert.throws(() => propose(fx, 'checkpoint-unrepresentable', [{ role: 'verifier' }]), { code: 'review_read_scope_unrepresentable' });
+    assert.equal(fx.db.prepare('SELECT COUNT(*) AS count FROM review_tasks').get().count, 0);
+    assert.equal(fx.db.prepare('SELECT COUNT(*) AS count FROM review_contexts').get().count, 0);
+  });
 });
 
 test('failed scoped reviewer retry preserves a qualified sibling and cannot qualify a newer candidate', (t) => {

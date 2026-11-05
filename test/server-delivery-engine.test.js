@@ -14,6 +14,7 @@ const { openStateDatabase, acquireWorkspaceLock, acquireStateLock } = require('.
 const { readProcessIdentity } = require('../src/process-quiescence');
 const { scopedExecutionDetails } = require('../src/delivery-role-capabilities');
 const { LeadPlanner } = require('../src/lead-planner');
+const { VERSION, validatePlanDelta } = require('../src/delivery-contracts');
 
 function tempDir(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'server-delivery-engine-'));
@@ -1056,6 +1057,12 @@ test('planner sends a strict usable schema and exposes a failed terminal provide
       seenSchema = options.outputSchema;
       assert.match(options.input, /host automatically creates and runs the mandatory verifier/i);
       assert.match(options.input, /never copy absolute check-script paths into task scopes/i);
+      assert.match(options.input, /Add an ordinary new task with revision 1, supersedesTaskId null, and no expectedRevision/i);
+      assert.match(options.input, /update an existing task, use only its exact task ID, current expectedRevision, and next revision allowed by the schema; preserve its exact supersedesTaskId lineage/i);
+      assert.match(options.input, /For a distinct repair, add a new task with revision 1, set supersedesTaskId to the exact eligible task ID, and set expectedRevision to that task's current revision/i);
+      assert.match(options.input, /Supersession retains the failed task and its attempt as history; never alter the failed attempt/i);
+      assert.match(options.input, /do not update tasks outside the allowed list/i);
+      assert.match(options.input, /Never set expectedRevision to 0 or null/i);
       const processIdentity = readProcessIdentity(process.pid);
       options.onTurnStart({ threadId: options.threadId, processIdentity });
       const providerError = { code: 'invalid_json_schema', type: 'invalid_request_error', param: 'text.format.schema',
@@ -1083,8 +1090,15 @@ test('planner sends a strict usable schema and exposes a failed terminal provide
   const deltaSchema = seenSchema.properties.delta.anyOf.find((entry) => entry.type === 'object');
   assert.ok(deltaSchema);
   assert.ok(Object.hasOwn(deltaSchema.properties, 'tasks') && Object.hasOwn(deltaSchema.properties, 'dependencies'));
-  const taskSchema = deltaSchema.properties.tasks.items.anyOf.find((entry) => Object.hasOwn(entry.properties, 'task'))
-    .properties.task;
+  const emptyBranches = deltaSchema.properties.tasks.items.anyOf;
+  assert.equal(emptyBranches.length, 1, 'an empty snapshot exposes only the add-task branch');
+  const taskOnlyChange = emptyBranches[0];
+  const taskSchema = taskOnlyChange.properties.task;
+  assert.equal(Object.hasOwn(taskOnlyChange.properties, 'expectedRevision'), false);
+  assert.deepEqual(taskSchema.properties.revision.enum, [1]);
+  assert.deepEqual(taskOnlyChange.required, ['task']);
+  assert.match(deltaSchema.properties.tasks.items.description, /ordinary new task with revision 1, supersedesTaskId null, and no expectedRevision.*update an eligible existing task.*distinct new revision-1 task/i);
+  assert.deepEqual(taskSchema.properties.supersedesTaskId, { type: 'null', enum: [null] });
   for (const key of ['role', 'objective', 'productWritePaths', 'readScope', 'state']) assert.ok(Object.hasOwn(taskSchema.properties, key));
   assert.ok(taskSchema.properties.role.enum.includes('engineer'));
   for (const paths of [taskSchema.properties.productWritePaths, taskSchema.properties.scratchWriteRoots,
@@ -1098,6 +1112,76 @@ test('planner sends a strict usable schema and exposes a failed terminal provide
   const dependencySchema = deltaSchema.properties.dependencies.items;
   for (const key of ['predecessorType', 'predecessorId', 'successorTaskId', 'kind']) assert.ok(Object.hasOwn(dependencySchema.properties, key));
   assert.match(dependencySchema.properties.expectedOutput.description, /exact known candidate ID.*or null/i);
+  const currentProjection = { projectId: 'revision-guidance-project', objectiveId: 'revision-guidance-objective',
+    planRevision: 0, goalRevision: 1, authorityRevision: 1, controlRevision: 1, tasks: [], checkpoints: [] };
+  const newTask = { schemaVersion: VERSION, projectId: currentProjection.projectId, objectiveId: currentProjection.objectiveId,
+    taskId: 'new-task', revision: 1, role: 'engineer', kind: 'implementation', objective: 'Create one file', priority: 0,
+    dependencies: [], productWritePaths: ['output.txt'], readScope: { kind: 'known', paths: [], reason: null },
+    scratchWriteRoots: ['.scratch'], resourceClaims: [], publicationAuthority: { state: 'denied' }, state: 'queued', supersedesTaskId: null };
+  const planDelta = { schemaVersion: VERSION, expectedPlanRevision: 0, expectedGoalRevision: 1,
+    expectedAuthorityRevision: 1, expectedControlRevision: 1, nextPlanRevision: 1, dependencies: [] };
+  assert.equal(validatePlanDelta(currentProjection, { ...planDelta, tasks: [{ task: newTask }] }).tasks[0].taskId, 'new-task');
+  assert.throws(() => validatePlanDelta(currentProjection, {
+    ...planDelta, tasks: [{ expectedRevision: 0, task: newTask }],
+  }), { code: 'unexpected_expected_revision' });
+  assert.throws(() => validatePlanDelta(currentProjection, {
+    ...planDelta, tasks: [{ expectedRevision: 1, task: newTask }],
+  }), { code: 'unexpected_expected_revision' });
+
+  const existingA = { ...newTask, taskId: 'existing-a', revision: 4, state: 'failed' };
+  const existingB = { ...newTask, taskId: 'existing-b', revision: 8, state: 'blocked' };
+  const immutable = { ...newTask, taskId: 'immutable-running', revision: 3, state: 'running' };
+  const immutableClaimed = { ...newTask, taskId: 'immutable-claimed', state: 'claimed' };
+  const immutableSettling = { ...newTask, taskId: 'immutable-settling', state: 'settling' };
+  const terminalSucceeded = { ...newTask, taskId: 'terminal-succeeded', state: 'succeeded' };
+  const terminalCanceled = { ...newTask, taskId: 'terminal-canceled', state: 'canceled' };
+  const terminalSuperseded = { ...newTask, taskId: 'terminal-superseded', state: 'superseded' };
+  const hostReview = { ...newTask, taskId: 'host-review', revision: 2, role: 'verifier', kind: 'review' };
+  const existingProjection = { ...currentProjection, planRevision: 4,
+    tasks: [existingA, existingB, immutable, immutableClaimed, immutableSettling,
+      terminalSucceeded, terminalCanceled, terminalSuperseded, hostReview] };
+  const laterSchema = fixture.runtime.concurrentEngine.plannerOutputSchema({ objective: { tasks: existingProjection.tasks } });
+  assertStrictOutputSchema(laterSchema);
+  const laterDeltaSchema = laterSchema.properties.delta.anyOf.find((entry) => entry.type === 'object');
+  const laterBranches = laterDeltaSchema.properties.tasks.items.anyOf;
+  assert.equal(laterBranches.length, 5, 'two mutable planner tasks expose update and supersede branches plus ordinary create');
+  const addBranch = laterBranches.find((branch) => !Object.hasOwn(branch.properties, 'expectedRevision'));
+  assert.deepEqual(addBranch.properties.task.properties.revision.enum, [1]);
+  assert.deepEqual(addBranch.properties.task.properties.supersedesTaskId, { type: 'null', enum: [null] });
+  const updateA = laterBranches.find((branch) => branch.properties.task.properties.taskId.enum?.[0] === 'existing-a');
+  const updateB = laterBranches.find((branch) => branch.properties.task.properties.taskId.enum?.[0] === 'existing-b');
+  const supersedeA = laterBranches.find((branch) => branch.properties.task.properties.supersedesTaskId.enum?.[0] === 'existing-a');
+  assert.ok(updateA && updateB);
+  assert.ok(supersedeA);
+  assert.deepEqual(updateA.properties.expectedRevision.enum, [4]);
+  assert.deepEqual(updateA.properties.task.properties.revision.enum, [5]);
+  assert.deepEqual(updateA.properties.task.properties.state.enum, ['queued', 'blocked']);
+  assert.deepEqual(updateA.properties.task.properties.supersedesTaskId, { type: 'null', enum: [null] });
+  assert.deepEqual(updateB.properties.expectedRevision.enum, [8]);
+  assert.deepEqual(updateB.properties.task.properties.revision.enum, [9]);
+  assert.deepEqual(supersedeA.properties.expectedRevision.enum, [4]);
+  assert.deepEqual(supersedeA.properties.task.properties.revision.enum, [1]);
+  assert.deepEqual(supersedeA.properties.task.properties.supersedesTaskId.enum, ['existing-a']);
+  assert.equal(supersedeA.properties.task.properties.taskId.type, 'string');
+  assert.equal(supersedeA.properties.task.properties.taskId.enum, undefined);
+  assert.equal(laterBranches.some((branch) => branch.properties.task.properties.taskId.enum?.[0] === 'immutable-running'), false);
+  assert.equal(laterBranches.some((branch) => branch.properties.task.properties.taskId.enum?.[0] === 'host-review'), false);
+  for (const taskId of ['immutable-running', 'immutable-claimed', 'immutable-settling', 'terminal-succeeded', 'terminal-canceled', 'terminal-superseded', 'host-review']) {
+    assert.equal(laterBranches.some((branch) => branch.properties.task.properties.supersedesTaskId.enum?.[0] === taskId), false,
+      `ineligible task ${taskId} must not be a supersession target`);
+  }
+
+  const laterPlanDelta = { ...planDelta, expectedPlanRevision: 4, nextPlanRevision: 5 };
+  const updateTaskA = { ...existingA, revision: 5, state: 'queued', supersedesTaskId: null };
+  assert.equal(validatePlanDelta(existingProjection, { ...laterPlanDelta, tasks: [
+    { task: updateTaskA, expectedRevision: 4 },
+  ] }).tasks[0].taskId, 'existing-a');
+  assert.throws(() => validatePlanDelta(existingProjection, { ...laterPlanDelta, tasks: [
+    { task: { ...updateTaskA, revision: 6 }, expectedRevision: 8 },
+  ] }), { code: 'task_revision_stale' });
+  assert.throws(() => validatePlanDelta(existingProjection, { ...laterPlanDelta, tasks: [
+    { task: { ...newTask, taskId: 'new-id-with-zero', revision: 1 }, expectedRevision: 0 },
+  ] }), { code: 'unexpected_expected_revision' });
   assert.equal(task?.status?.state, 'TASK_STATE_INPUT_REQUIRED', JSON.stringify(payload));
   assert.equal(task?.metadata?.pause?.kind, 'error');
   assert.match(task?.status?.message?.parts?.[0]?.text || '', /invalid_json_schema/);
@@ -1107,6 +1191,77 @@ test('planner sends a strict usable schema and exposes a failed terminal provide
   assert.equal(JSON.parse(ledger.result_json).terminalProof.source, 'codex_app_server.terminal_schema_failure');
   const fact = fixture.runtime.state.db.prepare('SELECT terminal_json FROM concurrent_planner_execution_facts').get();
   assert.equal(JSON.parse(fact.terminal_json).terminalTurn.status, 'failed');
+});
+
+test('planner schema represents a distinct repair superseding a failed task without rewriting its attempt', async (t) => {
+  const fixture = await idleConcurrentServer(t, 'planner-supersession-schema');
+  const { runtime } = fixture;
+  const store = runtime.concurrentEngine.store;
+  const projectId = runtime.projectId;
+  const objectiveId = 'planner-schema-supersession';
+  store.createObjective({ projectId, objectiveId, sessionId: 'planner-schema-session', engineVersion: VERSION,
+    goalRevision: 1, requirementDigest: `sha256:${'a'.repeat(64)}`, checksDigest: `sha256:${'b'.repeat(64)}`,
+    authorityRevision: 1, controlRevision: 1, disposition: 'executing' });
+  const makeTask = (taskId, extra = {}) => ({ schemaVersion: VERSION, projectId, objectiveId, taskId, revision: 1,
+    role: 'engineer', kind: 'implementation', objective: `Implement ${taskId}`, priority: 1, dependencies: [],
+    productWritePaths: ['source.txt'], readScope: { kind: 'known', paths: ['source.txt'], reason: null },
+    scratchWriteRoots: ['.scratch/repair'], resourceClaims: [], publicationAuthority: { state: 'unknown' },
+    state: 'queued', ...extra });
+  const seed = store.getObjective(projectId, objectiveId);
+  store.applyPlan(projectId, objectiveId, { schemaVersion: VERSION, expectedPlanRevision: seed.planRevision,
+    expectedGoalRevision: seed.goalRevision, expectedAuthorityRevision: seed.authorityRevision,
+    expectedControlRevision: seed.controlRevision, nextPlanRevision: seed.planRevision + 1,
+    tasks: [{ task: makeTask('failed-task', { supersedesTaskId: null }) }], dependencies: [] });
+  const claims = store.claimReady(projectId, objectiveId, 0, { controlRevision: 1, limit: 1 });
+  assert.equal(claims.length, 1);
+  const { attempt, claim } = claims[0];
+  store.recordSubmitted(projectId, objectiveId, attempt.attemptId, claim.fencingToken, 'failed-task-external');
+  store.settleAttempt(projectId, objectiveId, attempt.attemptId, claim.fencingToken,
+    { state: 'failed', failureKind: 'known_product_check_failure' },
+    { remoteQuiescent: true, processQuiescent: true, effectsSettled: true });
+
+  const current = store.getObjective(projectId, objectiveId);
+  const failedTask = current.tasks.find((task) => task.taskId === 'failed-task');
+  assert.equal(failedTask.state, 'failed');
+  const failedAttemptBefore = store.listAttempts(projectId, objectiveId);
+  const schema = runtime.concurrentEngine.plannerOutputSchema({ objective: current });
+  assertStrictOutputSchema(schema);
+  const deltaSchema = schema.properties.delta.anyOf.find((entry) => entry.type === 'object');
+  const taskBranches = deltaSchema.properties.tasks.items.anyOf;
+  const supersedeBranch = taskBranches.find((branch) => branch.properties.task.properties.supersedesTaskId?.enum?.includes('failed-task'));
+  assert.ok(supersedeBranch, 'schema must expose the failed task exact supersession target');
+  assert.equal(supersedeBranch.properties.task.properties.taskId.type, 'string', 'repair task gets a distinct new ID');
+  assert.deepEqual(supersedeBranch.properties.task.properties.revision.enum, [1]);
+  assert.deepEqual(supersedeBranch.properties.task.properties.supersedesTaskId.enum, ['failed-task']);
+  assert.deepEqual(supersedeBranch.properties.expectedRevision.enum, [failedTask.revision]);
+
+  const repairTask = makeTask('repair-task', { objective: 'Repair after the failed attempt.', supersedesTaskId: 'failed-task' });
+  const delta = { schemaVersion: VERSION, expectedPlanRevision: current.planRevision,
+    expectedGoalRevision: current.goalRevision, expectedAuthorityRevision: current.authorityRevision,
+    expectedControlRevision: current.controlRevision, nextPlanRevision: current.planRevision + 1,
+    tasks: [{ task: repairTask, expectedRevision: failedTask.revision }], dependencies: [] };
+  assert.equal(validatePlanDelta(current, delta).tasks[0].supersedesTaskId, 'failed-task');
+  assert.throws(() => validatePlanDelta(current, { ...delta,
+    tasks: [{ task: repairTask, expectedRevision: failedTask.revision + 1 }] }), { code: 'task_revision_stale' });
+  for (const [state, code] of [['running', 'active_task_contract_immutable'], ['succeeded', 'terminal_task_immutable']]) {
+    const ineligible = { ...current, tasks: current.tasks.map((task) => task.taskId === 'failed-task' ? { ...task, state } : task) };
+    assert.throws(() => validatePlanDelta(ineligible, delta), { code });
+  }
+  for (const missingTarget of ['missing-task', 'foreign-project-task']) {
+    const invalidRepair = { ...repairTask, supersedesTaskId: missingTarget };
+    assert.throws(() => validatePlanDelta(current, { ...delta,
+      tasks: [{ task: invalidRepair, expectedRevision: failedTask.revision }] }), { code: 'superseded_task_missing' });
+  }
+  const sameIdRetry = { ...repairTask, taskId: 'failed-task' };
+  assert.throws(() => validatePlanDelta(current, { ...delta,
+    tasks: [{ task: sameIdRetry, expectedRevision: failedTask.revision }] }), { code: 'task_revision_step_invalid' });
+  const alteredLineage = { ...repairTask, taskId: 'failed-task', revision: failedTask.revision + 1,
+    state: 'queued', supersedesTaskId: 'other-lineage' };
+  assert.throws(() => validatePlanDelta(current, { ...delta,
+    tasks: [{ task: alteredLineage, expectedRevision: failedTask.revision }] }), { code: 'supersession_lineage_immutable' });
+  const applied = store.applyPlan(projectId, objectiveId, delta);
+  assert.equal(applied.tasks.find((task) => task.taskId === 'failed-task').state, 'superseded');
+  assert.deepEqual(store.listAttempts(projectId, objectiveId), failedAttemptBefore);
 });
 
 test('startup refuses unsafe interrupted shutdowns and releases new server resources', { timeout: 20000 }, async (t) => {
@@ -1410,9 +1565,15 @@ test('default real server accepts a base candidate with empty owner checks', { t
   } finally { await runtime.close(); }
 });
 
-test('owner full-access composes coordinator, scoped verifier, and candidate-bound final checks', { timeout: 20000 }, async (t) => {
+test('owner full-access carries lossless owner context into the scoped verifier without changing its gates', { timeout: 20000 }, async (t) => {
   const permissionResolutions = [];
   const providerCalls = [];
+  const ownerGoal = `${'x'.repeat(2799)}🙂${'z'.repeat(47199)}`;
+  assert.equal(ownerGoal.length, 50000);
+  const requiredCheckIds = ['upstream-kernel', 'composer-relock', 'composer-project-validate'];
+  const requiredChecks = requiredCheckIds.map((id) => ({ id, argv: ['node', 'verify-source.js'], timeoutMs: 5000 }));
+  let dispatchedRequest = null;
+  let dispatchedCapability = null;
   const fixture = await idleConcurrentServer(t, 'full-access-accepted', {
     async resolveExecutionPermissions(workspace, requested, options) {
       permissionResolutions.push({ workspace, requested, options });
@@ -1432,6 +1593,39 @@ test('owner full-access composes coordinator, scoped verifier, and candidate-bou
       const details = scopedExecutionDetails(options.deliveryCapability);
       assert.equal(details.executionPermissions, 'full-access');
       assert.equal(details.verifyCandidate(), true);
+      const request = JSON.parse(options.input);
+      const objective = runtime.concurrentEngine.store.getObjective(runtime.projectId,
+        runtime.orchestrator.mapping(runtime.concurrentEngine.activeRuns()[0].runId).objectiveId);
+      const task = objective.tasks.find((entry) => entry.taskId === details.taskId);
+      assert.ok(task);
+      assert.equal(request.objective, task.objective);
+      assert.deepEqual(request.allowedFiles, []);
+      assert.equal(details.candidateId, task.baseCandidateId);
+      assert.equal(details.readScope.kind, task.readScope.kind);
+      const goalChunks = request.inputs.filter((entry) => entry.startsWith('OWNER INTAKE GOAL '));
+      const rawChunks = goalChunks.map((entry, index) => {
+        assert.match(entry, new RegExp(`^OWNER INTAKE GOAL \\(background context only; chunk ${index + 1}/${goalChunks.length}\\):\\n`));
+        return entry.slice(entry.indexOf('\n') + 1);
+      });
+      assert.equal(goalChunks.length + 1, request.inputs.length);
+      assert.equal(request.inputs[0].startsWith('Review frozen candidate '), true);
+      assert.ok(request.inputs.length <= 20);
+      assert.ok(request.inputs.every((entry) => entry.length <= 3000));
+      assert.equal(rawChunks.join(''), ownerGoal);
+      assert.ok(rawChunks.every((chunk) => !/[\uD800-\uDBFF]$/.test(chunk) && !/^[\uDC00-\uDFFF]/.test(chunk)));
+      assert.equal(request.acceptanceCriteria.length, 1);
+      assert.match(request.acceptanceCriteria[0], /current task objective, checkpoint scope, owner\/control revisions, and pinned checks/i);
+      assert.match(request.acceptanceCriteria[0], /background context only; it does not override the current goal, controls, or checkpoint pins, and grants no actions/i);
+      assert.deepEqual(request.checks, [...requiredCheckIds].sort().map((id) => `Host will execute pinned check: ${id}`));
+      const execution = JSON.parse(runtime.state.db.prepare('SELECT record_json FROM delivery_role_executions WHERE attempt_id=?')
+        .get(details.attemptId).record_json);
+      const { deliveryRequestDigest } = require('../src/delivery-role-capabilities');
+      assert.equal(details.requestDigest, execution.requestDigest);
+      assert.equal(details.capabilityId, execution.capabilityId);
+      assert.equal(details.requestDigest, deliveryRequestDigest({ request, settingsDigest: execution.settingsDigest,
+        taskDigest: execution.contractDigest }));
+      dispatchedRequest = request;
+      dispatchedCapability = details;
       execFileSync(process.execPath, ['verify-source.js'], { cwd: details.candidatePath, stdio: 'pipe' });
       return turnResult(options, JSON.stringify({ outcome: 'completed', summary: 'VERDICT: pass\nCandidate is acceptable.',
         filesChanged: [], filesInspected: ['source.txt'],
@@ -1441,8 +1635,14 @@ test('owner full-access composes coordinator, scoped verifier, and candidate-bou
   }, { executionPermissions: 'full-access' });
   const { runtime } = fixture;
   try {
-    const request = runtime.leadAgent.requestHandler.sendMessage({ message: message('Confirm the current source is acceptable.', {
-      metadata: { acceptance: { source: 'agent', requiredChecks: [{ id: 'verify-source', argv: ['node', 'verify-source.js'], timeoutMs: 5000 }] } },
+    const finalizationAuthorized = runtime.concurrentEngine.store.finalizationAuthorized;
+    let commitAuthorization = null;
+    runtime.concurrentEngine.store.finalizationAuthorized = (facts) => {
+      if (facts.action === 'commit') commitAuthorization = structuredClone(facts);
+      return finalizationAuthorized(facts);
+    };
+    const request = runtime.leadAgent.requestHandler.sendMessage({ message: message(ownerGoal, {
+      metadata: { acceptance: { source: 'agent', requiredChecks } },
     }), configuration: {} }, call());
     let timer;
     const result = await Promise.race([request, new Promise((_, reject) => {
@@ -1456,6 +1656,27 @@ test('owner full-access composes coordinator, scoped verifier, and candidate-bou
     assert.equal(runtime.concurrentEngine.getRunDigest(result.id).disposition, 'accepted');
     assert.ok(providerCalls.includes('coordinator'));
     assert.ok(providerCalls.includes('verifier'));
+    assert.ok(dispatchedRequest);
+    assert.equal(dispatchedCapability.verifyCandidate(), true);
+    assert.ok(commitAuthorization);
+    const objectiveId = runtime.orchestrator.mapping(result.id).objectiveId;
+    const checkpointHistory = runtime.concurrentEngine.reviewStore.checkpointHistory.bind(runtime.concurrentEngine.reviewStore);
+    const checkpoint = checkpointHistory({ projectId: runtime.projectId, objectiveId })[0].checkpoint;
+    assert.deepEqual(checkpoint.checkPins, [...requiredCheckIds].sort());
+    assert.deepEqual(commitAuthorization.record.request.requiredCheckIds, requiredCheckIds);
+    assert.equal(finalizationAuthorized(commitAuthorization), true);
+    for (const checkPins of [
+      [...requiredCheckIds].sort().slice(1),
+      [...requiredCheckIds].sort().concat('unexpected-check'),
+      [...requiredCheckIds].sort().concat(requiredCheckIds[0]),
+    ]) {
+      runtime.concurrentEngine.reviewStore.checkpointHistory = (scope) => checkpointHistory(scope).map((entry) =>
+        entry.checkpoint.checkpointId === checkpoint.checkpointId
+          ? { ...entry, checkpoint: { ...entry.checkpoint, checkPins } }
+          : entry);
+      assert.equal(finalizationAuthorized(commitAuthorization), false, `checkpoint pins ${JSON.stringify(checkPins)} must be exact`);
+    }
+    runtime.concurrentEngine.reviewStore.checkpointHistory = checkpointHistory;
     assert.ok(permissionResolutions.length >= 3);
     assert.ok(permissionResolutions.every(({ workspace, requested, options }) => workspace === fixture.options.workspace
       && requested === 'full-access' && options?.fresh === true));

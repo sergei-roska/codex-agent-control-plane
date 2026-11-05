@@ -1,20 +1,84 @@
 # Concurrent Harness implementation status
 
-Updated 2026-10-28. Source changes are uncommitted. The running backend was not
-restarted or upgraded; this is source qualification, not a live rollout report.
+Updated 2026-11-05. This document records bounded source qualification, isolated
+native trials, and isolated UI readiness.
 
 ## Current integrated qualification
 
-The current frozen affected suite passed1231/1231. The full suite completed1982 tests:
-1981 passed,0 failed,0 canceled,1 explicitly prohibited test skipped. Both runs
-used identical input manifests and reported no drift. V14 protocol and ordering
-repairs have independent approval. CN-14/CN-15 bounded offline source
-qualification is accepted for V01-V43; L6 remains unqualified. See [qualification-matrix.md](qualification-matrix.md) and
-[verification-summary.json](verification-summary.json) for current evidence.
+The latest frozen source passed the full suite on2026-11-05:2106 tests passed,
+0 failed and1 optional live confinement probe skipped (2107 total). All341 source
+pins matched before and after the run. The inherited baseline passed2105 tests
+with the same single skip before the new native supersession regression. A follow-up assertion in
+the composed finalization test passed1/1. Accepted source behavior couples
+planner task IDs to revision rules; preserves exact unordered write-scope equality;
+compacts large known review scopes without changing the attested closure;
+canonicalizes measured candidate paths to match stored manifests; and gives
+frozen verifiers host-bound candidate identity/path/read scope while keeping the
+read-only candidate root distinct from writable scratch. The exact original owner
+intake is passed in bounded, lossless background-context chunks subordinate to
+current task/checkpoint/control pins. A verifier's semantic/static verdict is
+distinct from overall acceptance: deferred host checks alone do not force an
+inconclusive static verdict, while the host checks remain mandatory. Finalization
+compares exact checkpoint check IDs without depending on input ordering; authored
+contract order for check execution is preserved. Existing task, candidate, report,
+pinned-check and acceptance gates remain in force.
+
+The isolated synthetic native smoke completed and persisted `accepted` across a
+safe close/reopen. Its independent file check passed; both shutdown phases were
+`released`.
+
+The staged DCCOURTS-182 trial's final native task `1953bdb5-2031-4468-b63f-52e22678ac50`
+completed as `accepted` on the same frozen candidate and manifest. All three
+required checks passed in both verifier evidence and host finalization evidence;
+finalization persisted accepted and shutdown was `released`. This was staged
+candidate completion followed by fresh verification, not uninterrupted
+autonomous replay. Root verified the database backup hash and clean rollback: the
+owned trial worktree/branch were removed, and the original checkout's seven-file
+hashes, branch and status matched its pre-trial snapshot. Independent review approved the native acceptance evidence and subsequently
+approved the cleanup endpoint, retained patch/backup integrity and exact original
+checkout preservation. The intermediate reset-before-removal order has root
+evidence only. A later unrelated registry entry changes the current original
+projects.json hash; removing that entry in memory reproduces the pretrial hash.
+Current whole-runtime equality is therefore not claimed.
+
+The isolated launcher on port8082 and its project backend on port3002 are running
+with HTTP200 UI/assets/agent card and taskReady=true. They use a private runtime
+and a clean disposable workspace. The private Codex home has the existing-account
+auth copy, explicit workspace trust and owner-authorized full-access/never settings.
+No existing project runtime or global Codex settings were changed by restoration.
+
+Before live CN-15 comparison, independent inspection found that the native planner
+output schema cannot express the existing domain supersession operation: a distinct
+replacement needs supersedesTaskId and the target's expectedRevision, while the
+schema prohibits both for a new task ID. The accepted schema/prompt repair now
+distinguishes ordinary creation, exact-revision update with preserved lineage,
+and a distinct revision-1 replacement pinned to the eligible target/current
+revision. The regression failed before the repair and now passes through actual
+plan validation/application while preserving the original failed attempt. All110
+affected checks passed; independent review approved the source delta and ran
+complete native-schema/domain output probes plus composed V43 recovery.
+Earlier offline V43 coverage alone did not establish native representability.
+The empty isolated UI project was safely restarted on this qualified source;
+readiness and taskReady returned true. The live comparison runner is under
+separate repair/review, and no new comparison task has been dispatched yet.
+L6 and economy/cost qualification remain unqualified; no broader model quality
+or production deployment is claimed.
 
 The sections below retain milestone history, including earlier incomplete and
 failed checkpoints; they do not supersede this current qualification statement.
-L6/live rollout is separately unqualified. No runtime was updated.
+The source qualification record that followed on2026-10-28 is retained below as
+historical context, not as the current test result.
+
+## Historical source qualification record (2026-10-28)
+
+At that checkpoint, the frozen affected suite passed1231/1231. The full suite
+completed1982 tests:1981 passed,0 failed,0 canceled and1 explicitly prohibited
+test skipped. Both runs used identical input manifests and reported no drift.
+V14 protocol and ordering repairs had independent approval. CN-14/CN-15 bounded
+offline source qualification was accepted for V01-V43; L6 remained unqualified.
+See [qualification-matrix.md](qualification-matrix.md) and
+[verification-summary.json](verification-summary.json) for that checkpoint's
+evidence.
 
 ## Completed source milestones
 
