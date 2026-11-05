@@ -15,6 +15,7 @@ const { readProcessIdentity } = require('../src/process-quiescence');
 const { scopedExecutionDetails } = require('../src/delivery-role-capabilities');
 const { LeadPlanner } = require('../src/lead-planner');
 const { VERSION, validatePlanDelta } = require('../src/delivery-contracts');
+const { checkSpecialistRequest } = require('../src/contracts');
 
 function tempDir(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'server-delivery-engine-'));
@@ -39,7 +40,7 @@ function message(text, extra = {}) {
 }
 
 function assertStrictOutputSchema(schema) {
-  const allowed = new Set(['type', 'additionalProperties', 'required', 'properties', 'items', 'anyOf', 'enum', 'description', 'pattern']);
+  const allowed = new Set(['type', 'additionalProperties', 'required', 'properties', 'items', 'anyOf', 'enum', 'description', 'pattern', 'minItems']);
   const visit = (node, at = '$') => {
     assert.ok(node && typeof node === 'object' && !Array.isArray(node), `schema node must be an object at ${at}`);
     for (const key of Object.keys(node)) assert.ok(allowed.has(key), `unsupported schema keyword ${key} at ${at}`);
@@ -48,10 +49,16 @@ function assertStrictOutputSchema(schema) {
       assert.deepEqual([...node.required].sort(), Object.keys(node.properties).sort(), `every property must be required at ${at}`);
       for (const [key, child] of Object.entries(node.properties)) visit(child, `${at}.${key}`);
     }
+    if (node.minItems !== undefined) assert.equal(Number.isSafeInteger(node.minItems) && node.minItems >= 1, true, `minItems must be a positive integer at ${at}`);
     if (node.items) visit(node.items, `${at}[]`);
     for (const [index, child] of (node.anyOf || []).entries()) visit(child, `${at}.anyOf[${index}]`);
   };
   visit(schema);
+}
+
+function plannerTaskVariants(change) { return change?.properties?.task?.anyOf || []; }
+function plannerTaskSchemaForRole(change, role) {
+  return plannerTaskVariants(change).find((variant) => variant.properties.role.enum.includes(role));
 }
 
 const call = () => new ServerCallContext({ tenant: '' });
@@ -1052,9 +1059,11 @@ for (const rejectedPlanCode of ['planner_output_invalid', 'path_unsafe']) test(`
 
 test('planner sends a strict usable schema and exposes a failed terminal provider turn', { timeout: 15000 }, async (t) => {
   let seenSchema = null;
+  let seenInput = null;
   const fixture = await idleConcurrentServer(t, 'planner-schema-terminal-failure', {
     async run(options) {
       seenSchema = options.outputSchema;
+      seenInput = options.input;
       assert.match(options.input, /host automatically creates and runs the mandatory verifier/i);
       assert.match(options.input, /never copy absolute check-script paths into task scopes/i);
       assert.match(options.input, /Add an ordinary new task with revision 1, supersedesTaskId null, and no expectedRevision/i);
@@ -1093,7 +1102,29 @@ test('planner sends a strict usable schema and exposes a failed terminal provide
   const emptyBranches = deltaSchema.properties.tasks.items.anyOf;
   assert.equal(emptyBranches.length, 1, 'an empty snapshot exposes only the add-task branch');
   const taskOnlyChange = emptyBranches[0];
-  const taskSchema = taskOnlyChange.properties.task;
+  const taskVariants = taskOnlyChange.properties.task.anyOf;
+  assert.ok(Array.isArray(taskVariants), 'task branches must separate writable and read-only role groups');
+  const plannerRoles = fixture.runtime.concurrentEngine.roleIds.filter((role) => !['review', 'verifier', 'auditor', 'coordinator'].includes(role));
+  const readOnlyRoles = plannerRoles.filter((role) => fixture.runtime.concurrentEngine.roleFor(role)?.sandbox === 'read-only').sort();
+  const writableRoles = plannerRoles.filter((role) => fixture.runtime.concurrentEngine.roleFor(role)?.sandbox !== 'read-only').sort();
+  assert.deepEqual(taskVariants.map((variant) => [...variant.properties.role.enum].sort()).sort(),
+    [readOnlyRoles, writableRoles].filter((group) => group.length > 0).sort());
+  const writableRole = writableRoles.find((role) => role === 'engineer');
+  const readOnlyRole = readOnlyRoles[0];
+  assert.ok(writableRole && readOnlyRole, 'configured roles must include writable and read-only planner roles');
+  const taskSchema = plannerTaskSchemaForRole(taskOnlyChange, writableRole);
+  const readOnlyTaskSchema = plannerTaskSchemaForRole(taskOnlyChange, readOnlyRole);
+  assert.equal(taskSchema.properties.productWritePaths.minItems, 1, 'writable roles require a nonempty write scope');
+  assert.equal(Object.hasOwn(readOnlyTaskSchema.properties.productWritePaths, 'minItems'), false,
+    'read-only diagnostics may have an empty write scope');
+  assert.match(seenInput, /policy\.writableRoles only for tasks with at least one bounded productWritePaths entry.*policy\.readOnlyRoles for no-write diagnostics, where productWritePaths may be empty/i);
+  assert.throws(() => checkSpecialistRequest({ objective: 'Implement one bounded change.', allowedFiles: [] },
+    { ...fixture.runtime.concurrentEngine.roleFor(writableRole), id: writableRole }),
+  (error) => error.violations?.some((entry) => entry.code === 'writer_scope_missing') === true);
+  assert.deepEqual(checkSpecialistRequest({ objective: 'Implement one bounded change.', allowedFiles: ['source.txt'] },
+    { ...fixture.runtime.concurrentEngine.roleFor(writableRole), id: writableRole }).allowedFiles, ['source.txt']);
+  assert.deepEqual(checkSpecialistRequest({ objective: 'Inspect the failure without writing.', allowedFiles: [] },
+    { ...fixture.runtime.concurrentEngine.roleFor(readOnlyRole), id: readOnlyRole }).allowedFiles, []);
   assert.equal(Object.hasOwn(taskOnlyChange.properties, 'expectedRevision'), false);
   assert.deepEqual(taskSchema.properties.revision.enum, [1]);
   assert.deepEqual(taskOnlyChange.required, ['task']);
@@ -1121,6 +1152,9 @@ test('planner sends a strict usable schema and exposes a failed terminal provide
   const planDelta = { schemaVersion: VERSION, expectedPlanRevision: 0, expectedGoalRevision: 1,
     expectedAuthorityRevision: 1, expectedControlRevision: 1, nextPlanRevision: 1, dependencies: [] };
   assert.equal(validatePlanDelta(currentProjection, { ...planDelta, tasks: [{ task: newTask }] }).tasks[0].taskId, 'new-task');
+  const readOnlyDiagnostic = { ...newTask, taskId: 'read-only-diagnostic', role: readOnlyRole,
+    kind: 'diagnostic', objective: 'Inspect the current source without writing.', productWritePaths: [] };
+  assert.equal(validatePlanDelta(currentProjection, { ...planDelta, tasks: [{ task: readOnlyDiagnostic }] }).tasks[0].role, readOnlyRole);
   assert.throws(() => validatePlanDelta(currentProjection, {
     ...planDelta, tasks: [{ expectedRevision: 0, task: newTask }],
   }), { code: 'unexpected_expected_revision' });
@@ -1145,29 +1179,38 @@ test('planner sends a strict usable schema and exposes a failed terminal provide
   const laterDeltaSchema = laterSchema.properties.delta.anyOf.find((entry) => entry.type === 'object');
   const laterBranches = laterDeltaSchema.properties.tasks.items.anyOf;
   assert.equal(laterBranches.length, 5, 'two mutable planner tasks expose update and supersede branches plus ordinary create');
+  for (const branch of laterBranches) {
+    assert.deepEqual(plannerTaskVariants(branch).map((variant) => [...variant.properties.role.enum].sort()).sort(),
+      [readOnlyRoles, writableRoles].filter((group) => group.length > 0).sort());
+    assert.equal(plannerTaskSchemaForRole(branch, writableRole).properties.productWritePaths.minItems, 1);
+    assert.equal(Object.hasOwn(plannerTaskSchemaForRole(branch, readOnlyRole).properties.productWritePaths, 'minItems'), false);
+  }
   const addBranch = laterBranches.find((branch) => !Object.hasOwn(branch.properties, 'expectedRevision'));
-  assert.deepEqual(addBranch.properties.task.properties.revision.enum, [1]);
-  assert.deepEqual(addBranch.properties.task.properties.supersedesTaskId, { type: 'null', enum: [null] });
-  const updateA = laterBranches.find((branch) => branch.properties.task.properties.taskId.enum?.[0] === 'existing-a');
-  const updateB = laterBranches.find((branch) => branch.properties.task.properties.taskId.enum?.[0] === 'existing-b');
-  const supersedeA = laterBranches.find((branch) => branch.properties.task.properties.supersedesTaskId.enum?.[0] === 'existing-a');
+  assert.deepEqual(plannerTaskSchemaForRole(addBranch, writableRole).properties.revision.enum, [1]);
+  assert.deepEqual(plannerTaskSchemaForRole(addBranch, writableRole).properties.supersedesTaskId, { type: 'null', enum: [null] });
+  const updateA = laterBranches.find((branch) => plannerTaskVariants(branch).some((variant) => variant.properties.taskId.enum?.[0] === 'existing-a'));
+  const updateB = laterBranches.find((branch) => plannerTaskVariants(branch).some((variant) => variant.properties.taskId.enum?.[0] === 'existing-b'));
+  const supersedeA = laterBranches.find((branch) => plannerTaskVariants(branch).some((variant) => variant.properties.supersedesTaskId.enum?.[0] === 'existing-a'));
   assert.ok(updateA && updateB);
   assert.ok(supersedeA);
+  const updateATask = plannerTaskSchemaForRole(updateA, writableRole);
+  const updateBTask = plannerTaskSchemaForRole(updateB, writableRole);
+  const supersedeATask = plannerTaskSchemaForRole(supersedeA, writableRole);
   assert.deepEqual(updateA.properties.expectedRevision.enum, [4]);
-  assert.deepEqual(updateA.properties.task.properties.revision.enum, [5]);
-  assert.deepEqual(updateA.properties.task.properties.state.enum, ['queued', 'blocked']);
-  assert.deepEqual(updateA.properties.task.properties.supersedesTaskId, { type: 'null', enum: [null] });
+  assert.deepEqual(updateATask.properties.revision.enum, [5]);
+  assert.deepEqual(updateATask.properties.state.enum, ['queued', 'blocked']);
+  assert.deepEqual(updateATask.properties.supersedesTaskId, { type: 'null', enum: [null] });
   assert.deepEqual(updateB.properties.expectedRevision.enum, [8]);
-  assert.deepEqual(updateB.properties.task.properties.revision.enum, [9]);
+  assert.deepEqual(updateBTask.properties.revision.enum, [9]);
   assert.deepEqual(supersedeA.properties.expectedRevision.enum, [4]);
-  assert.deepEqual(supersedeA.properties.task.properties.revision.enum, [1]);
-  assert.deepEqual(supersedeA.properties.task.properties.supersedesTaskId.enum, ['existing-a']);
-  assert.equal(supersedeA.properties.task.properties.taskId.type, 'string');
-  assert.equal(supersedeA.properties.task.properties.taskId.enum, undefined);
-  assert.equal(laterBranches.some((branch) => branch.properties.task.properties.taskId.enum?.[0] === 'immutable-running'), false);
-  assert.equal(laterBranches.some((branch) => branch.properties.task.properties.taskId.enum?.[0] === 'host-review'), false);
+  assert.deepEqual(supersedeATask.properties.revision.enum, [1]);
+  assert.deepEqual(supersedeATask.properties.supersedesTaskId.enum, ['existing-a']);
+  assert.equal(supersedeATask.properties.taskId.type, 'string');
+  assert.equal(supersedeATask.properties.taskId.enum, undefined);
+  assert.equal(laterBranches.some((branch) => plannerTaskVariants(branch).some((variant) => variant.properties.taskId.enum?.[0] === 'immutable-running')), false);
+  assert.equal(laterBranches.some((branch) => plannerTaskVariants(branch).some((variant) => variant.properties.taskId.enum?.[0] === 'host-review')), false);
   for (const taskId of ['immutable-running', 'immutable-claimed', 'immutable-settling', 'terminal-succeeded', 'terminal-canceled', 'terminal-superseded', 'host-review']) {
-    assert.equal(laterBranches.some((branch) => branch.properties.task.properties.supersedesTaskId.enum?.[0] === taskId), false,
+    assert.equal(laterBranches.some((branch) => plannerTaskVariants(branch).some((variant) => variant.properties.supersedesTaskId.enum?.[0] === taskId)), false,
       `ineligible task ${taskId} must not be a supersession target`);
   }
 
@@ -1228,11 +1271,14 @@ test('planner schema represents a distinct repair superseding a failed task with
   assertStrictOutputSchema(schema);
   const deltaSchema = schema.properties.delta.anyOf.find((entry) => entry.type === 'object');
   const taskBranches = deltaSchema.properties.tasks.items.anyOf;
-  const supersedeBranch = taskBranches.find((branch) => branch.properties.task.properties.supersedesTaskId?.enum?.includes('failed-task'));
+  const supersedeBranch = taskBranches.find((branch) => plannerTaskVariants(branch)
+    .some((variant) => variant.properties.supersedesTaskId?.enum?.includes('failed-task')));
   assert.ok(supersedeBranch, 'schema must expose the failed task exact supersession target');
-  assert.equal(supersedeBranch.properties.task.properties.taskId.type, 'string', 'repair task gets a distinct new ID');
-  assert.deepEqual(supersedeBranch.properties.task.properties.revision.enum, [1]);
-  assert.deepEqual(supersedeBranch.properties.task.properties.supersedesTaskId.enum, ['failed-task']);
+  const supersedeTask = plannerTaskSchemaForRole(supersedeBranch, 'engineer');
+  assert.equal(supersedeTask.properties.productWritePaths.minItems, 1);
+  assert.equal(supersedeTask.properties.taskId.type, 'string', 'repair task gets a distinct new ID');
+  assert.deepEqual(supersedeTask.properties.revision.enum, [1]);
+  assert.deepEqual(supersedeTask.properties.supersedesTaskId.enum, ['failed-task']);
   assert.deepEqual(supersedeBranch.properties.expectedRevision.enum, [failedTask.revision]);
 
   const repairTask = makeTask('repair-task', { objective: 'Repair after the failed attempt.', supersedesTaskId: 'failed-task' });

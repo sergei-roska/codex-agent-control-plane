@@ -1,7 +1,7 @@
 {
   "schemaVersion": "harness-qualification-summary/v1",
   "latestQualification": {
-    "capturedAt": "2026-11-05T14:35:27.210858+00:00",
+    "capturedAt": "2026-11-05T15:19:41.566211+00:00",
     "scope": "Bounded offline source qualification, native planner supersession repair, accepted staged native code-only trial and isolated UI readiness; comparative L6 unqualified",
     "fullSuite": {
       "tests": 2107,
@@ -11,10 +11,10 @@
       "cancelled": 0,
       "skipped": 1,
       "exitCode": 0,
-      "durationMs": 69364.907762,
+      "durationMs": 66364.593497,
       "inputsUnchanged": true,
       "sourcePinCount": 341,
-      "temporaryLog": ".agents/teamwork/closeout-20261105/qualification/full-schema-repair.tap"
+      "temporaryLog": ".agents/teamwork/closeout-20261105/qualification/full-writer-scope.tap"
     },
     "excludedTest": {
       "name": "live confinement probe against the installed Codex App Server",
@@ -27,10 +27,10 @@
       "independentReview": "APPROVE; complete create/update/supersede outputs, domain CAS, lineage and failure-history probes plus17 contract/recovery checks"
     },
     "sourceHashes": {
-      "src/concurrent-delivery-engine.js": "8e12df603f1c89ca119cfc85130fa14aa6d686a355c97c9974cf81f01010cf75",
-      "test/server-delivery-engine.test.js": "68a3dbb7ce2a8eff9c10b59c3a6f82e45a1d5f7768962cb10878562a7fba1da6"
+      "src/concurrent-delivery-engine.js": "2c5d35f0d7c5653a263657f01cfb2349cf2f334470b41823ecab0fd02afffa8a",
+      "test/server-delivery-engine.test.js": "14f731ca1bf323f2935ad1f7212e1066056d4a32d72b6fdbe4793f567e308930"
     },
-    "sourceManifestSha256": "17f712e299b71d940aa237df0b205ef2d7887a719cbda33cf99215b8fdaa4240",
+    "sourceManifestSha256": "5b37ccd266bd5f365f1265bee05b36d4045e9a6d189e5f8fb3d8e830d92d1c08",
     "stagedNativeTrial": {
       "taskId": "1953bdb5-2031-4468-b63f-52e22678ac50",
       "disposition": "accepted",
@@ -50,9 +50,31 @@
       "restartedOnQualifiedSource": true,
       "existingRuntimeChanged": false
     },
-    "comparativeL6": "unqualified; runner under separate repair/review; no new comparison task dispatched",
+    "comparativeL6": "unqualified; first native arm incomplete; fresh matched pair authorized with identical clarified read-only failed-probe workflow",
     "temporaryEvidenceRoot": ".agents/teamwork/closeout-20261105",
-    "evidenceRetention": "Local ignored teamwork evidence may disappear; this summary retains accepted outcomes and identifiers."
+    "evidenceRetention": "Local ignored teamwork evidence may disappear; this summary retains accepted outcomes and identifiers.",
+    "sourceManifestPath": ".agents/teamwork/closeout-20261105/qualification/source-manifest-writer-scope.json",
+    "writerScopeRepair": {
+      "affectedPass": 110,
+      "affectedFail": 0,
+      "independentReview": "APPROVE;18 actual strict schema variants; specialist writer guard unchanged",
+      "writableScopeNonempty": true,
+      "readOnlyScopeMayBeEmpty": true
+    },
+    "firstComparisonArm": {
+      "taskId": "39a9d0e3-84f1-4285-b968-a5dd50d25a6a",
+      "status": "incomplete",
+      "plannerTurns": 1,
+      "plannerTokens": 19471,
+      "specialistExecutions": 0,
+      "executorIntents": 0,
+      "failure": "writable engineer planned with empty product write scope; specialist boundary rejected before dispatch",
+      "engineSafeClose": false,
+      "ownedProviderGroupsGone": true,
+      "ownedRunnerStopped": true,
+      "privateRuntimeOwnershipRetained": true,
+      "replayed": false
+    }
   },
   "capturedAt": "2026-10-28T18:36:02.111718+00:00",
   "scope": "Bounded offline harness qualification with owner-authorized full local execution applied and live permission probes; comparative L6 unqualified",

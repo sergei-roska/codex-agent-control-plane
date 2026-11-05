@@ -59,8 +59,24 @@ affected checks passed; independent review approved the source delta and ran
 complete native-schema/domain output probes plus composed V43 recovery.
 Earlier offline V43 coverage alone did not establish native representability.
 The empty isolated UI project was safely restarted on this qualified source;
-readiness and taskReady returned true. The live comparison runner is under
-separate repair/review, and no new comparison task has been dispatched yet.
+readiness and taskReady returned true. The live collector passed independent review. Its first genuine comparison arm
+39a9d0e3-84f1-4285-b968-a5dd50d25a6a stopped after one coordinator turn, before any
+specialist execution: the plan assigned a writable engineer an empty product
+write scope, which the existing specialist contract correctly rejects. No dispatch
+intent or role execution exists. The accepted source repair derives read-only and
+writable role groups and requires nonempty write scopes for writable roles across
+create/update/supersede. Read-only diagnostic scopes may remain empty. All 110
+affected checks and 18 independent schema variants passed, followed by the frozen
+2106-pass full suite with no drift. The empty isolated UI was restarted on this
+source.
+
+The first arm remains incomplete. Its private runtime/claim and backup are retained;
+owned provider groups are gone and its verified runner was stopped. Engine shutdown
+was not released, and no held-state replay or manual claim release was performed.
+The next matched pair uses identical clarified inputs: a genuine failed read-only
+probe, investigation from retained failure evidence, distinct repairs with normal
+supersession, fresh verification and immutable host checks. Collector status is
+preliminary; whole-trial recovery/acceptance requires independent actual evidence.
 L6 and economy/cost qualification remain unqualified; no broader model quality
 or production deployment is claimed.
 

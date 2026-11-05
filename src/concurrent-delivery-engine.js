@@ -1243,13 +1243,16 @@ class ConcurrentDeliveryEngine {
     const ownerContext = { originalGoal: run.goal, acceptanceContract: this.checkContract.get(run.objectiveId) || run.contract,
       objectiveId: run.objectiveId, sessionId: run.sessionId, requirementDigest: this.store.getObjective(this.projectId, run.objectiveId)?.requirementDigest,
       checksDigest: this.store.getObjective(this.projectId, run.objectiveId)?.checksDigest, failureEvidence: run.failure || null };
-    const plannerRoles = this.roleIds.filter((role) => !['review', 'verifier', 'auditor', 'coordinator'].includes(canonicalRoleId(role)));
+    const plannerScopeRoles = this.#plannerRoleGroups();
+    const plannerRoles = plannerScopeRoles.plannerRoles;
     const prompt = { ...turn.prompt, ownerContext, policy: {
       allowedRoles: plannerRoles,
+      readOnlyRoles: plannerScopeRoles.readOnlyRoles,
+      writableRoles: plannerScopeRoles.writableRoles,
       mandatoryReviewRole: 'verifier', mandatoryOwnerCheckpoint: this.#ownerCheckpointInventory({ projectId: this.projectId, objectiveId: run.objectiveId }).map((entry) => entry.checkpointId),
       publicationAuthority: 'host-only', completionAuthority: 'host-finalization-only',
     } };
-    const input = `Return only JSON matching the requested schema. Plan work for the durable ownerContext and current projection. Choose task roles only from policy.allowedRoles. Add an ordinary new task with revision 1, supersedesTaskId null, and no expectedRevision. To update an existing task, use only its exact task ID, current expectedRevision, and next revision allowed by the schema; preserve its exact supersedesTaskId lineage. For a distinct repair, add a new task with revision 1, set supersedesTaskId to the exact eligible task ID, and set expectedRevision to that task's current revision. Supersession retains the failed task and its attempt as history; never alter the failed attempt. Never set expectedRevision to 0 or null, and do not update tasks outside the allowed list. The host automatically creates and runs the mandatory verifier; never add a verifier, auditor, review, or coordinator task. All productWritePaths, readScope.paths, and scratchWriteRoots must be workspace-relative paths without leading slash, backslashes, empty segments, or dot/dot-dot segments. Host acceptance command paths are not candidate files: never copy absolute check-script paths into task scopes. Preserve the owner acceptance contract; the host runs those checks. Do not claim acceptance or completion. Resolve routine reversible choices internally. ownerDecision must be null unless a named owner-only obligation needs a decision after a completed read-only investigation. Cite investigation as attempt:<attemptId> in evidenceRefs. Choosing an option never grants new effect authority.\n${JSON.stringify(prompt)}`;
+    const input = `Return only JSON matching the requested schema. Plan work for the durable ownerContext and current projection. Choose task roles only from policy.allowedRoles. Use policy.writableRoles only for tasks with at least one bounded productWritePaths entry; use policy.readOnlyRoles for no-write diagnostics, where productWritePaths may be empty. Add an ordinary new task with revision 1, supersedesTaskId null, and no expectedRevision. To update an existing task, use only its exact task ID, current expectedRevision, and next revision allowed by the schema; preserve its exact supersedesTaskId lineage. For a distinct repair, add a new task with revision 1, set supersedesTaskId to the exact eligible task ID, and set expectedRevision to that task's current revision. Supersession retains the failed task and its attempt as history; never alter the failed attempt. Never set expectedRevision to 0 or null, and do not update tasks outside the allowed list. The host automatically creates and runs the mandatory verifier; never add a verifier, auditor, review, or coordinator task. All productWritePaths, readScope.paths, and scratchWriteRoots must be workspace-relative paths without leading slash, backslashes, empty segments, or dot/dot-dot segments. Host acceptance command paths are not candidate files: never copy absolute check-script paths into task scopes. Preserve the owner acceptance contract; the host runs those checks. Do not claim acceptance or completion. Resolve routine reversible choices internally. ownerDecision must be null unless a named owner-only obligation needs a decision after a completed read-only investigation. Cite investigation as attempt:<attemptId> in evidenceRefs. Choosing an option never grants new effect authority.\n${JSON.stringify(prompt)}`;
     const identity = { projectId: this.projectId, sessionId: run.sessionId, turnId: turn.turnId,
       providerThreadId: turn.providerThreadId, providerScope: turn.providerScope,
       ownerGeneration: turn.prompt.pins.ownerGeneration };
@@ -2050,6 +2053,12 @@ class ConcurrentDeliveryEngine {
   #mcpToolsFor() { return []; }
   #leadSkills() { return []; }
   #leadMcpTools() { return []; }
+  #plannerRoleGroups() {
+    const plannerRoles = this.roleIds.filter((role) => !['review', 'verifier', 'auditor', 'coordinator'].includes(canonicalRoleId(role)));
+    const readOnlyRoles = plannerRoles.filter((role) => this.roleFor(role)?.sandbox === 'read-only');
+    const writableRoles = plannerRoles.filter((role) => this.roleFor(role)?.sandbox !== 'read-only');
+    return { plannerRoles, readOnlyRoles, writableRoles };
+  }
   #workspaceForProject(projectId) { if (projectId !== this.projectId) throw error('concurrent_project_scope_mismatch'); return this.workspace; }
   plannerOutputSchema(projection) {
     const object = (properties) => ({ type: 'object', additionalProperties: false,
@@ -2065,9 +2074,10 @@ class ConcurrentDeliveryEngine {
       successorTaskId: { type: 'string' }, kind: { type: 'string', enum: ['requires_output', 'requires_acceptance', 'integration_after'] },
       expectedOutput: { ...nullable({ type: 'string' }), description: 'Use the exact known candidate ID required by the successor, or null. Never put narrative text here.' },
     });
+    const plannerScopeRoles = this.#plannerRoleGroups();
     const plannerTask = object({
       schemaVersion: { type: 'string', enum: [VERSION] }, projectId: { type: 'string' }, objectiveId: { type: 'string' },
-      taskId: { type: 'string' }, revision: { type: 'integer' }, role: { type: 'string', enum: this.roleIds.filter((role) => !['review', 'verifier', 'auditor', 'coordinator'].includes(canonicalRoleId(role))) }, kind: { type: 'string' },
+      taskId: { type: 'string' }, revision: { type: 'integer' }, role: { type: 'string', enum: plannerScopeRoles.plannerRoles }, kind: { type: 'string' },
       objective: { type: 'string' }, priority: { type: 'integer' }, dependencies: { type: 'array', items: dependency },
       productWritePaths: pathArray,
       readScope: { anyOf: [
@@ -2078,18 +2088,29 @@ class ConcurrentDeliveryEngine {
       publicationAuthority: object({ state: { type: 'string', enum: ['denied', 'unknown'] } }),
       state: { type: 'string', enum: ['draft', 'queued', 'blocked'] },
     });
-    const ordinaryNewTaskSchema = object({ ...plannerTask.properties, revision: { type: 'integer', enum: [1] },
+    const roleScopedTask = (properties) => ({ anyOf: [
+      ...(plannerScopeRoles.readOnlyRoles.length ? [object({ ...plannerTask.properties, ...properties,
+        role: { type: 'string', enum: plannerScopeRoles.readOnlyRoles },
+        productWritePaths: pathArray,
+      })] : []),
+      ...(plannerScopeRoles.writableRoles.length ? [object({ ...plannerTask.properties, ...properties,
+        role: { type: 'string', enum: plannerScopeRoles.writableRoles },
+        productWritePaths: { ...pathArray, minItems: 1,
+          description: 'At least one bounded writable path is required for this role.' },
+      })] : []),
+    ] });
+    const ordinaryNewTaskSchema = roleScopedTask({ revision: { type: 'integer', enum: [1] },
       supersedesTaskId: { type: 'null', enum: [null] } });
     const branches = [object({ task: ordinaryNewTaskSchema })];
     const mutableStates = new Set(['draft', 'queued', 'ready', 'blocked', 'failed']);
-    const plannerRoles = new Set(this.roleIds.filter((role) => !['review', 'verifier', 'auditor', 'coordinator'].includes(canonicalRoleId(role))));
+    const plannerRoles = new Set(plannerScopeRoles.plannerRoles);
     const existingTasks = projection?.objective?.tasks;
     if (Array.isArray(existingTasks)) {
       for (const task of existingTasks) {
         const roleId = canonicalRoleId(task?.role);
         if (typeof task?.taskId !== 'string' || !Number.isSafeInteger(task?.revision) || task.revision < 1
           || !plannerRoles.has(roleId) || !this.roleFor(task.role) || !mutableStates.has(task.state)) continue;
-        const updateTaskSchema = object({ ...plannerTask.properties,
+        const updateTaskSchema = roleScopedTask({
           taskId: { type: 'string', enum: [task.taskId] },
           revision: { type: 'integer', enum: [task.revision + 1] },
           supersedesTaskId: task.supersedesTaskId
@@ -2100,7 +2121,7 @@ class ConcurrentDeliveryEngine {
         branches.push(object({ task: updateTaskSchema,
           expectedRevision: { type: 'integer', enum: [task.revision],
             description: 'Exact current revision for this task ID from the supplied snapshot.' } }));
-        const supersedingNewTaskSchema = object({ ...plannerTask.properties,
+        const supersedingNewTaskSchema = roleScopedTask({
           revision: { type: 'integer', enum: [1] },
           supersedesTaskId: { type: 'string', enum: [task.taskId],
             description: 'Exact eligible existing task ID to supersede; the replacement is a distinct new task.' },
