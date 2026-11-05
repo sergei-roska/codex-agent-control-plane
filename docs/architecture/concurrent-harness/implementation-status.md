@@ -77,6 +77,24 @@ The next matched pair uses identical clarified inputs: a genuine failed read-onl
 probe, investigation from retained failure evidence, distinct repairs with normal
 supersession, fresh verification and immutable host checks. Collector status is
 preliminary; whole-trial recovery/acceptance requires independent actual evidence.
+The second native arm b2d033f0-abc9-4dd7-8941-3cd5bb96e50c also remains incomplete.
+It completed one coordinator turn with 20,478 tokens, then rejected the plan before
+admitting any task: standalone delta.dependencies omitted the record schemaVersion,
+which the native schema had failed to require. Embedded task dependency references
+correctly omit that field. The accepted repair separates the two schema shapes and
+pins delivery/v1 on standalone records. Independent review replayed the retained
+output through real domain validation and checked three generated schema variants;
+only adding the five standalone versions resolves the original rejection. This is
+offline regression evidence, not a successful replay of the native task. The final
+full suite passed 2,106 tests, failed 0 and skipped 1 optional live probe, with all
+341 source pins unchanged. The empty isolated UI was restarted on this source.
+
+Both private failed runtimes are retained with their databases and ownership. Owned
+provider groups and runner processes are gone, but engine shutdown was not released;
+no database edits, claim release, or held-run replay were used. At the final quota
+check, 94 percent of the five-hour allowance was used, above the session's 90-percent
+new-dispatch stop threshold. No further model task was started. A fresh matched
+Concurrent/Legacy trial and independent recovery-history acceptance remain pending.
 L6 and economy/cost qualification remain unqualified; no broader model quality
 or production deployment is claimed.
 

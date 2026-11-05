@@ -1140,9 +1140,13 @@ test('planner sends a strict usable schema and exposes a failed terminal provide
     assert.equal(pattern.test('docs\\file.md'), false);
   }
   assert.equal(taskSchema.properties.role.enum.some((role) => ['verifier', 'auditor', 'review', 'coordinator'].includes(role)), false);
-  const dependencySchema = deltaSchema.properties.dependencies.items;
-  for (const key of ['predecessorType', 'predecessorId', 'successorTaskId', 'kind']) assert.ok(Object.hasOwn(dependencySchema.properties, key));
-  assert.match(dependencySchema.properties.expectedOutput.description, /exact known candidate ID.*or null/i);
+  const standaloneDependencySchema = deltaSchema.properties.dependencies.items;
+  for (const key of ['predecessorType', 'predecessorId', 'successorTaskId', 'kind']) assert.ok(Object.hasOwn(standaloneDependencySchema.properties, key));
+  assert.match(standaloneDependencySchema.properties.expectedOutput.description, /exact known candidate ID.*or null/i);
+  assert.deepEqual(standaloneDependencySchema.properties.schemaVersion.enum, [VERSION]);
+  assert.ok(standaloneDependencySchema.required.includes('schemaVersion'));
+  const embeddedDependencySchema = taskSchema.properties.dependencies.items;
+  assert.equal(Object.hasOwn(embeddedDependencySchema.properties, 'schemaVersion'), false);
   const currentProjection = { projectId: 'revision-guidance-project', objectiveId: 'revision-guidance-objective',
     planRevision: 0, goalRevision: 1, authorityRevision: 1, controlRevision: 1, tasks: [], checkpoints: [] };
   const newTask = { schemaVersion: VERSION, projectId: currentProjection.projectId, objectiveId: currentProjection.objectiveId,
@@ -1152,6 +1156,17 @@ test('planner sends a strict usable schema and exposes a failed terminal provide
   const planDelta = { schemaVersion: VERSION, expectedPlanRevision: 0, expectedGoalRevision: 1,
     expectedAuthorityRevision: 1, expectedControlRevision: 1, nextPlanRevision: 1, dependencies: [] };
   assert.equal(validatePlanDelta(currentProjection, { ...planDelta, tasks: [{ task: newTask }] }).tasks[0].taskId, 'new-task');
+  const dependencyReference = { projectId: currentProjection.projectId, objectiveId: currentProjection.objectiveId,
+    predecessorType: 'task', predecessorId: 'dependency-predecessor', successorTaskId: 'dependency-successor',
+    kind: 'requires_output', expectedOutput: null };
+  const predecessorTask = { ...newTask, taskId: 'dependency-predecessor', dependencies: [] };
+  const successorTask = { ...newTask, taskId: 'dependency-successor', dependencies: [dependencyReference] };
+  const dependencyDelta = { ...planDelta, tasks: [{ task: predecessorTask }, { task: successorTask }], dependencies: [dependencyReference] };
+  assert.throws(() => validatePlanDelta(currentProjection, dependencyDelta), { code: 'field_required', path: '$.schemaVersion' });
+  const versionedDependency = { schemaVersion: VERSION, ...dependencyReference };
+  const validDependencyDelta = validatePlanDelta(currentProjection, { ...dependencyDelta, dependencies: [versionedDependency] });
+  assert.equal(validDependencyDelta.dependencies[0].schemaVersion, VERSION);
+  assert.equal(Object.hasOwn(validDependencyDelta.tasks[1].dependencies[0], 'schemaVersion'), false);
   const readOnlyDiagnostic = { ...newTask, taskId: 'read-only-diagnostic', role: readOnlyRole,
     kind: 'diagnostic', objective: 'Inspect the current source without writing.', productWritePaths: [] };
   assert.equal(validatePlanDelta(currentProjection, { ...planDelta, tasks: [{ task: readOnlyDiagnostic }] }).tasks[0].role, readOnlyRole);

@@ -1,7 +1,7 @@
 {
   "schemaVersion": "harness-qualification-summary/v1",
   "latestQualification": {
-    "capturedAt": "2026-11-05T15:19:41.566211+00:00",
+    "capturedAt": "2026-11-05T15:30:17.254515+00:00",
     "scope": "Bounded offline source qualification, native planner supersession repair, accepted staged native code-only trial and isolated UI readiness; comparative L6 unqualified",
     "fullSuite": {
       "tests": 2107,
@@ -11,10 +11,10 @@
       "cancelled": 0,
       "skipped": 1,
       "exitCode": 0,
-      "durationMs": 66364.593497,
+      "durationMs": 65950.639882,
       "inputsUnchanged": true,
       "sourcePinCount": 341,
-      "temporaryLog": ".agents/teamwork/closeout-20261105/qualification/full-writer-scope.tap"
+      "temporaryLog": ".agents/teamwork/closeout-20261105/qualification/full-dependency-version.tap"
     },
     "excludedTest": {
       "name": "live confinement probe against the installed Codex App Server",
@@ -27,10 +27,10 @@
       "independentReview": "APPROVE; complete create/update/supersede outputs, domain CAS, lineage and failure-history probes plus17 contract/recovery checks"
     },
     "sourceHashes": {
-      "src/concurrent-delivery-engine.js": "2c5d35f0d7c5653a263657f01cfb2349cf2f334470b41823ecab0fd02afffa8a",
-      "test/server-delivery-engine.test.js": "14f731ca1bf323f2935ad1f7212e1066056d4a32d72b6fdbe4793f567e308930"
+      "src/concurrent-delivery-engine.js": "7c9a3787f105c18c708819edab6dfe5aedb9c9e50849ef9d1dcc44cf9db99baa",
+      "test/server-delivery-engine.test.js": "7edbc07c2a76f78b2ce8cf44e5e3422f47d105336bd5ccb4a5406ab941c4de5a"
     },
-    "sourceManifestSha256": "5b37ccd266bd5f365f1265bee05b36d4045e9a6d189e5f8fb3d8e830d92d1c08",
+    "sourceManifestSha256": "73c11eca715ea62f6886e69eb98893da73e67c1bd5f9c25c629fa21fff18fd9b",
     "stagedNativeTrial": {
       "taskId": "1953bdb5-2031-4468-b63f-52e22678ac50",
       "disposition": "accepted",
@@ -50,10 +50,10 @@
       "restartedOnQualifiedSource": true,
       "existingRuntimeChanged": false
     },
-    "comparativeL6": "unqualified; first native arm incomplete; fresh matched pair authorized with identical clarified read-only failed-probe workflow",
+    "comparativeL6": "unqualified; two incomplete native arms preserved; fresh matched Concurrent/Legacy comparison and independent recovery-history acceptance pending",
     "temporaryEvidenceRoot": ".agents/teamwork/closeout-20261105",
     "evidenceRetention": "Local ignored teamwork evidence may disappear; this summary retains accepted outcomes and identifiers.",
-    "sourceManifestPath": ".agents/teamwork/closeout-20261105/qualification/source-manifest-writer-scope.json",
+    "sourceManifestPath": ".agents/teamwork/closeout-20261105/qualification/source-manifest-dependency-version.json",
     "writerScopeRepair": {
       "affectedPass": 110,
       "affectedFail": 0,
@@ -74,6 +74,35 @@
       "ownedRunnerStopped": true,
       "privateRuntimeOwnershipRetained": true,
       "replayed": false
+    },
+    "standaloneDependencyRepair": {
+      "independentReview": "APPROVE; actual native output domain replay and3 generated schema variants",
+      "focusedPass": 2,
+      "contractAndRecoveryPass": 17,
+      "standaloneVersion": "delivery/v1",
+      "embeddedReferencesRemainVersionless": true,
+      "freshNativeAcceptanceEstablished": false
+    },
+    "secondComparisonArm": {
+      "taskId": "b2d033f0-abc9-4dd7-8941-3cd5bb96e50c",
+      "status": "incomplete",
+      "plannerTurns": 1,
+      "plannerTokens": 20478,
+      "specialistExecutions": 0,
+      "admittedTasks": 0,
+      "failure": "standalone dependency record schemaVersion missing from native schema",
+      "engineSafeClose": false,
+      "ownedProviderGroupsGone": true,
+      "ownedRunnerStopped": true,
+      "privateRuntimeOwnershipRetained": true,
+      "replayed": false
+    },
+    "quotaStop": {
+      "actualFiveHourUsedPercent": 94,
+      "actualWeeklyUsedPercent": 31,
+      "checkedAt": "2026-11-05T15:28:03.578Z",
+      "newDispatchStopThresholdPercent": 90,
+      "newModelTasksStartedAfterThreshold": false
     }
   },
   "capturedAt": "2026-10-28T18:36:02.111718+00:00",

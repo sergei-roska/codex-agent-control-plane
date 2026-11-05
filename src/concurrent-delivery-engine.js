@@ -2068,17 +2068,19 @@ class ConcurrentDeliveryEngine {
     const pathArray = { type: 'array', items: { type: 'string',
       pattern: String.raw`^[^/\\]+(/[^/\\]+)*$`,
       description: 'Workspace-relative path only. No absolute paths, backslashes, dot or dot-dot segments. External host acceptance scripts are not candidate paths.' } };
-    const dependency = object({
+    const dependencyProperties = {
       projectId: { type: 'string' }, objectiveId: { type: 'string' },
       predecessorType: { type: 'string', enum: ['task', 'checkpoint'] }, predecessorId: { type: 'string' },
       successorTaskId: { type: 'string' }, kind: { type: 'string', enum: ['requires_output', 'requires_acceptance', 'integration_after'] },
       expectedOutput: { ...nullable({ type: 'string' }), description: 'Use the exact known candidate ID required by the successor, or null. Never put narrative text here.' },
-    });
+    };
+    const dependencyReference = object(dependencyProperties);
+    const dependencyRecord = object({ schemaVersion: { type: 'string', enum: [VERSION] }, ...dependencyProperties });
     const plannerScopeRoles = this.#plannerRoleGroups();
     const plannerTask = object({
       schemaVersion: { type: 'string', enum: [VERSION] }, projectId: { type: 'string' }, objectiveId: { type: 'string' },
       taskId: { type: 'string' }, revision: { type: 'integer' }, role: { type: 'string', enum: plannerScopeRoles.plannerRoles }, kind: { type: 'string' },
-      objective: { type: 'string' }, priority: { type: 'integer' }, dependencies: { type: 'array', items: dependency },
+      objective: { type: 'string' }, priority: { type: 'integer' }, dependencies: { type: 'array', items: dependencyReference },
       productWritePaths: pathArray,
       readScope: { anyOf: [
         object({ kind: { type: 'string', enum: ['known'] }, paths: pathArray, reason: { type: 'null' } }),
@@ -2136,7 +2138,7 @@ class ConcurrentDeliveryEngine {
       schemaVersion: { type: 'string', enum: [VERSION] }, expectedPlanRevision: { type: 'integer' },
       expectedGoalRevision: { type: 'integer' }, expectedAuthorityRevision: { type: 'integer' },
       expectedControlRevision: { type: 'integer' }, nextPlanRevision: { type: 'integer' },
-      tasks: { type: 'array', items: taskChange }, dependencies: { type: 'array', items: dependency },
+      tasks: { type: 'array', items: taskChange }, dependencies: { type: 'array', items: dependencyRecord },
     });
     const option = object({ id: { type: 'string' }, description: { type: 'string' } });
     const ownerDecision = object({

@@ -6,7 +6,10 @@ optional live confinement probe (2107 total); all341 source pins were unchanged.
 The native planner supersession repair passed110 affected checks and independent
 schema/domain/history review. The subsequent role-sensitive writer-scope schema
 repair passed the same full suite and 110 affected checks; independent review
-validated 18 actual schema variants against writer/read-only capabilities. Earlier affected1218/1218 and full1967-pass results
+validated 18 actual schema variants against writer/read-only capabilities. The
+subsequent standalone dependency version repair passed the same full suite with
+all 341 pins unchanged; independent replay and three generated schema checks
+confirm standalone records require delivery/v1 while embedded references omit it. Earlier affected1218/1218 and full1967-pass results
 below are historical checkpoints. Current evidence is recorded in
 [verification-summary.json](verification-summary.json) under latestQualification.
 
