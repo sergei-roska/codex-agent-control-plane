@@ -1,5 +1,11 @@
 # Concurrent Harness: architecture and delivery plan
 
+Current assignments come from the [autonomous delivery backlog](../../autonomous-delivery-backlog.md).
+The package plan below is archived planning history. Architecture and implementation
+evidence remain useful at their recorded revisions; historical exclusions do not
+override current owner requirements. Read the [migration map](../../autonomous-delivery-migration.md)
+for pending work dispositions.
+
 Status: accepted design, implementation in progress since 2026-10-26.
 Role settings/UI, contracts, transactional backlog, immutable candidates,
 per-attempt execution and worker scheduling have qualified local source gates.
@@ -21,8 +27,9 @@ Source application, engine selection and restart boundaries:
    lead, candidate reviews, resource limits, and recovery contracts.
 3. Read [role authority and execution rights](role-policy.md) for role capabilities,
    autonomy, practical tool access and lead availability.
-4. Use [implementation packages](implementation-plan.md) to assign work. Package
-   dependencies, ownership, tests, and handoff requirements are explicit.
+4. Use the [active backlog](../../autonomous-delivery-backlog.md) to assign new work.
+   [Historical implementation packages](implementation-plan.md) preserve prior scope
+   and package acceptance evidence.
 5. Use [validation and rollout](validation.md) for acceptance traces, crash
    injection, comparative measures, migration, and rollback.
 6. Query [knowledge-graph.json](knowledge-graph.json) for baseline file imports, subsystem

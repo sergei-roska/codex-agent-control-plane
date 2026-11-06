@@ -56,6 +56,35 @@ function boundedIdentity(value, code, max = 128) {
   if (typeof value !== 'string' || value.length < 1 || value.length > max || /[\x00-\x20\x7f]/.test(value)) throw recordError(code);
   return value;
 }
+function normalizeBudgetBlockers(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 64) throw recordError('budget_wait_blockers_invalid');
+  for (let index = 0; index < value.length; index++) {
+    if (!Object.hasOwn(value, index)) throw recordError('budget_wait_blockers_invalid');
+  }
+  const seen = new Set();
+  return value.map((item) => {
+    const fields = exactRecord(item, ['accountIdHash', 'provider', 'model', 'windowId', 'reasonCode', 'resetsAt'],
+      'budget_wait_blocker_fields_invalid');
+    const blocker = { accountIdHash: fields.accountIdHash, provider: fields.provider, model: fields.model,
+      windowId: fields.windowId, reasonCode: fields.reasonCode, resetsAt: fields.resetsAt };
+    if (typeof blocker.accountIdHash !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(blocker.accountIdHash)) {
+      throw recordError('budget_wait_account_hash_invalid');
+    }
+    boundedIdentity(blocker.provider, 'budget_wait_provider_invalid', 128);
+    if (blocker.model !== null) boundedIdentity(blocker.model, 'budget_wait_model_invalid', 128);
+    boundedIdentity(blocker.windowId, 'budget_wait_window_invalid', 128);
+    if (typeof blocker.reasonCode !== 'string' || !/^[a-z][a-z0-9_.-]{0,63}$/.test(blocker.reasonCode)) {
+      throw recordError('budget_wait_reason_invalid');
+    }
+    if (blocker.resetsAt !== null && (!Number.isSafeInteger(blocker.resetsAt) || blocker.resetsAt < 0)) {
+      throw recordError('budget_wait_reset_invalid');
+    }
+    const identity = JSON.stringify(blocker);
+    if (seen.has(identity)) throw recordError('budget_wait_blocker_duplicate');
+    seen.add(identity);
+    return blocker;
+  });
+}
 
 class BacklogStore {
   constructor(db, options = {}) {
@@ -767,6 +796,40 @@ class BacklogStore {
     return tx.immediate();
   }
 
+  completeCancellation(projectId, objectiveId, input) {
+    const request = exactRecord(input, ['expectedControlRevision', 'expectedOwnerGeneration'], 'cancel_completion_fields_invalid');
+    if (!Number.isSafeInteger(request.expectedControlRevision) || request.expectedControlRevision < 0
+      || !Number.isSafeInteger(request.expectedOwnerGeneration) || request.expectedOwnerGeneration < 0) {
+      throw recordError('cancel_completion_fields_invalid');
+    }
+    const tx = this.db.transaction(() => {
+      const row = this.#objectiveRow(projectId, objectiveId);
+      if (!row) throw recordError('objective_missing');
+      if (row.owner_generation !== request.expectedOwnerGeneration) throw recordError('owner_generation_stale');
+      const objective = decode(row.record_json);
+      if (objective.controlRevision !== request.expectedControlRevision) throw recordError('control_revision_stale');
+      if (objective.disposition === 'canceled') return this.getObjective(projectId, objectiveId);
+      if (objective.disposition !== 'draining' || this.getLifecycleControl(projectId, objectiveId)?.cause !== 'owner_cancel') {
+        throw recordError('cancel_completion_state_invalid');
+      }
+      if (this.listClaims(projectId, objectiveId).some((claim) => LIVE_CLAIM_STATES.includes(claim.state))
+        || this.listAttempts(projectId, objectiveId).some((attempt) => !['succeeded', 'failed', 'canceled'].includes(attempt.state))) {
+        throw recordError('cancel_effects_unsettled');
+      }
+      if (this.#tasks(projectId, objectiveId).some((task) => !['succeeded', 'failed', 'canceled', 'superseded'].includes(task.state))) {
+        throw recordError('cancel_tasks_unsettled');
+      }
+      const next = validateObjective({ ...objective, disposition: 'canceled', updatedAt: this.now() });
+      this.db.prepare('UPDATE backlog_objectives SET record_json=? WHERE project_id=? AND objective_id=?')
+        .run(encode(next), projectId, objectiveId);
+      this.events.appendInTransaction(projectId, { eventType: 'objective.canceled', objectRevision: next.controlRevision,
+        payload: { objectiveId, controlRevision: next.controlRevision },
+        dedupeKey: `objective:${objectiveId}:cancel-complete:${next.controlRevision}` });
+      return this.getObjective(projectId, objectiveId);
+    });
+    return tx.immediate();
+  }
+
   transitionLifecycleControl(projectId, objectiveId, input) {
     const request = exactRecord(input, ['action', 'expectedControlRevision', 'expectedOwnerGeneration'], 'lifecycle_control_fields_invalid');
     if (!['pause', 'stop', 'resume', 'cancel'].includes(request.action)
@@ -884,7 +947,10 @@ class BacklogStore {
   }
 
   recordBudgetWait(projectId, objectiveId, input) {
-    const wait = exactRecord(input, ['waitId', 'source', 'provider', 'model', 'reasonCode', 'nextWakeAt', 'expectedControlRevision', 'expectedOwnerGeneration'], 'budget_wait_fields_invalid');
+    const fields = ['waitId', 'source', 'provider', 'model', 'reasonCode', 'nextWakeAt', 'expectedControlRevision', 'expectedOwnerGeneration'];
+    if (input && Object.hasOwn(input, 'blockers')) fields.push('blockers');
+    const wait = exactRecord(input, fields, 'budget_wait_fields_invalid');
+    if (Object.hasOwn(wait, 'blockers')) wait.blockers = normalizeBudgetBlockers(wait.blockers);
     boundedIdentity(wait.waitId, 'budget_wait_id_invalid');
     boundedIdentity(wait.source, 'budget_wait_source_invalid', 80);
     boundedIdentity(wait.provider, 'budget_wait_provider_invalid', 128);
@@ -903,6 +969,7 @@ class BacklogStore {
       if (prior) {
         const saved = decode(prior.record_json);
         if (['waitId', 'source', 'provider', 'model', 'reasonCode', 'nextWakeAt'].some((key) => saved[key] !== wait[key])
+          || JSON.stringify(saved.blockers ?? null) !== JSON.stringify(wait.blockers ?? null)
           || saved.controlRevision !== wait.expectedControlRevision || saved.ownerGeneration !== wait.expectedOwnerGeneration) throw recordError('budget_wait_conflict');
         return saved;
       }
@@ -1343,7 +1410,9 @@ class BacklogStore {
   settleAttempt(projectId, objectiveId, attemptId, fencingToken, result, evidence = {}) {
     return this.#mutateAttempt(projectId, objectiveId, attemptId, fencingToken, (attempt, claim, task) => {
       const objective = this.getObjective(projectId, objectiveId);
-      if (objective?.disposition === 'canceled' && result.state !== 'canceled') {
+      const cancelRequested = objective?.disposition === 'canceled' || (objective?.disposition === 'draining'
+        && this.getLifecycleControl(projectId, objectiveId)?.cause === 'owner_cancel');
+      if (cancelRequested && result.state !== 'canceled') {
         result = { state: 'canceled', failureKind: 'objective_canceled' };
       }
       const terminal = result.state;
@@ -1441,19 +1510,21 @@ class BacklogStore {
         throw recordError('terminal_result_conflict');
       }
       const terminalResult = { state: 'canceled', failureKind: 'reconciled_no_effect' };
+      const cancelRequested = objective.disposition === 'canceled' || (objective.disposition === 'draining'
+        && this.getLifecycleControl(projectId, objectiveId)?.cause === 'owner_cancel');
       const currentTaskContract = decode(row.contract_json);
       const capturedGoal = attempt.capturedControls?.goalRevision;
       const sameGoal = capturedGoal === undefined ? objective.goalRevision === 1
         : Number.isSafeInteger(capturedGoal) && capturedGoal === objective.goalRevision;
-      const replanRequired = objective.disposition !== 'canceled' && (!sameGoal
+      const replanRequired = !cancelRequested && (!sameGoal
         || attempt.capturedControls?.authorityRevision !== objective.authorityRevision);
-      const recoveryExhausted = !replanRequired && attempt.attemptNo >= retryLimit && objective.disposition !== 'canceled';
+      const recoveryExhausted = !replanRequired && attempt.attemptNo >= retryLimit && !cancelRequested;
       attempt = { ...attempt, state: 'canceled', outcome: terminalResult,
         effect: { remoteQuiescent: true, processQuiescent: true, effectsSettled: true },
         evidenceRefs: proof.evidenceRefs, settledAt: this.now() };
       claim = { ...claim, state: 'released', releasedAt: this.now() };
       let nextTask;
-      if (objective.disposition === 'canceled') nextTask = { ...task, state: 'canceled' };
+      if (cancelRequested) nextTask = { ...task, state: 'canceled' };
       else if (replanRequired) nextTask = { ...task, state: 'blocked', blockedReason: 'owner_correction_replan_required' };
       else if (recoveryExhausted) nextTask = { ...task, state: 'blocked', blockedReason: 'recovery_retry_exhausted' };
       else nextTask = { ...currentTaskContract, state: currentTaskContract.state === 'ready' ? 'ready' : 'queued' };
@@ -1470,11 +1541,11 @@ class BacklogStore {
         : recoveryExhausted || replanRequired ? 'attempt.recovery_task_blocked' : 'attempt.reconciled_no_effect';
       this.events.appendInTransaction(projectId, { eventType,
         objectRevision: nextTask.revision, taskId: task.taskId, attemptId,
-        payload: { objectiveId, taskId: task.taskId, fencingToken, retry: !recoveryExhausted && !replanRequired && objective.disposition !== 'canceled',
+        payload: { objectiveId, taskId: task.taskId, fencingToken, retry: !recoveryExhausted && !replanRequired && !cancelRequested,
           taskBlocked: recoveryExhausted || replanRequired, objectiveBlocked, attemptNo: attempt.attemptNo, retryLimit, evidenceRefs: proof.evidenceRefs },
         dedupeKey: `attempt:${attemptId}:reconciled-no-effect` });
       return { attempt, claim, task: nextTask, duplicate: false,
-        state: objective.disposition === 'canceled' ? 'canceled' : objectiveBlocked ? 'blocked_technical'
+        state: cancelRequested ? 'canceled' : objectiveBlocked ? 'blocked_technical'
           : recoveryExhausted || replanRequired ? 'task_blocked' : 'no_effect_requeued' };
     });
     return tx.immediate();
@@ -1500,10 +1571,10 @@ class BacklogStore {
     let disposition;
     if (action === 'pause' && !['accepted', 'partial', 'canceled'].includes(objective.disposition)) disposition = 'paused_owner';
     else if (action === 'resume' && objective.disposition === 'paused_owner') disposition = 'executing';
-    else if (action === 'cancel' && !['accepted', 'partial', 'canceled'].includes(objective.disposition)) disposition = 'canceled';
+    else if (action === 'cancel' && !['accepted', 'partial', 'canceled'].includes(objective.disposition)) disposition = 'draining';
     else throw recordError('control_transition_invalid');
     const next = validateObjective({ ...objective, disposition, controlRevision: objective.controlRevision + 1, updatedAt: this.now() });
-    const eventAction = { pause: 'paused', resume: 'resumed', cancel: 'canceled' }[action];
+    const eventAction = { pause: 'paused', resume: 'resumed', cancel: 'cancel_requested' }[action];
     const cause = { pause: 'owner_pause', resume: 'active', cancel: 'owner_cancel' }[action];
     this.db.prepare('UPDATE backlog_objectives SET record_json=? WHERE project_id=? AND objective_id=?')
       .run(encode(next), projectId, objectiveId);

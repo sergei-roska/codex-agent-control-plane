@@ -43,7 +43,7 @@ function plannerOutput(prompt, tasks = []) {
 
 function fixture({ tasks = [], runTurn = async ({ prompt }) => plannerOutput(prompt), sendMessage, cancelTask, authenticateOwner,
   ownerCorrectionAuthorized = () => false, inbox, file = ':memory:', plannerReservedSlots = 1, getTask,
-  resultAdapter, lifecycleOptions = {}, reconcilePriorTurn, authorizeRecovery, onOwnerCorrection, now = () => Date.now(),
+  findByContext = async () => null, resultAdapter, recoveryProofAdapter, lifecycleOptions = {}, reconcilePriorTurn, authorizeRecovery, onOwnerCorrection, now = () => Date.now(),
   pollIntervalMs = 100000, providerThreadId = `test-thread:${projectId}:${sessionId}`,
   contextFor = () => ({}), projectId: configuredProjectId = projectId, objectiveId: configuredObjectiveId = objectiveId,
   sessionId: configuredSessionId = sessionId } = {}) {
@@ -58,7 +58,7 @@ function fixture({ tasks = [], runTurn = async ({ prompt }) => plannerOutput(pro
   const transport = {
     sendMessage: sendMessage || (async ({ message }) => ({ id: `remote-${message.metadata.attemptId}`, contextId: message.contextId,
       metadata: { attemptId: message.metadata.attemptId } })),
-    async findByContext() { return null; },
+    findByContext,
     getTask: getTask || (async ({ id, contextId }) => ({ id, contextId, status: { state: 'TASK_STATE_WORKING' } })),
   };
   if (cancelTask) transport.cancel = cancelTask;
@@ -66,6 +66,7 @@ function fixture({ tasks = [], runTurn = async ({ prompt }) => plannerOutput(pro
     settingsFor: async () => ({ model: 'model-pinned', effort: 'high', fast: true }),
     roleFor: (id) => ({ id, sandbox: 'writable' }),
     requestAdapter: ({ task: value }) => ({ request: { objective: value.objective, allowedFiles: value.productWritePaths } }),
+    recoveryProofAdapter,
     resultAdapter: resultAdapter || (async () => ({
       result: { state: 'succeeded', trusted: true, candidateId: 'candidate-test', output: 'test output' },
       evidence: { remoteQuiescent: true, processQuiescent: true, effectsSettled: true, controllerValidated: true, evidenceRefs: ['test:controller'] },
@@ -83,13 +84,82 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function waitFor(predicate) {
-  for (let tries = 0; tries < 500; tries += 1) {
+async function waitFor(predicate, attempts = 500) {
+  for (let tries = 0; tries < attempts; tries += 1) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
   assert.fail('timed out waiting for controller state');
 }
+
+test('unknown worker effects reconcile after dependency recovery without resending', { timeout: 7000 }, async (t) => {
+  let available = false;
+  let sends = 0;
+  let remote;
+  const f = fixture({ tasks: [task('recover-after-cancel')],
+    async sendMessage({ message }) {
+      sends += 1;
+      remote = { id: `remote-${message.metadata.attemptId}`, contextId: message.contextId,
+        metadata: { attemptId: message.metadata.attemptId } };
+      throw new Error('send acknowledgement lost');
+    },
+    findByContext: async () => available ? remote : null,
+    getTask: async ({ id, contextId }) => ({ id, contextId, status: { state: 'TASK_STATE_COMPLETED' } }),
+  });
+  t.after(() => { f.controller.shutdown(); f.db.close(); });
+  f.controller.start();
+  await waitFor(() => f.executor.getAttempt(f.store.listAttempts(projectId, objectiveId)[0]?.attemptId)?.state === 'uncertain', 1000);
+  const requested = await f.controller.cancelObjective();
+  assert.equal(requested.objective.disposition, 'draining');
+  const attemptId = f.store.listAttempts(projectId, objectiveId)[0].attemptId;
+  assert.equal(f.store.getObjective(projectId, objectiveId).disposition, 'draining');
+  assert.equal(sends, 1);
+
+  available = true;
+  await waitFor(() => f.executor.getAttempt(attemptId)?.state === 'settled', 1500);
+  assert.equal(f.store.listAttempts(projectId, objectiveId)[0].state, 'canceled');
+  assert.equal(f.store.getObjective(projectId, objectiveId).disposition, 'draining');
+  assert.equal(sends, 1);
+});
+
+test('no-intent cancellation recovery retries with the current generation until trusted proof is available', { timeout: 7000 }, async (t) => {
+  let proofAvailable = false;
+  let proofCalls = 0;
+  let sends = 0;
+  const f = fixture({ tasks: [task('recover-no-intent')],
+    sendMessage: async () => { sends += 1; throw new Error('no work may be sent'); },
+    recoveryProofAdapter: ({ identity, attempt, claim }) => {
+      proofCalls += 1;
+      if (!proofAvailable) return null;
+      return { projectId: identity.projectId, objectiveId: identity.objectiveId, taskId: identity.taskId,
+        attemptId: identity.attemptId, fencingToken: identity.fencingToken, claimOwnerGeneration: claim.ownerGeneration,
+        recoveryGeneration: identity.recoveryGeneration, providerContextId: attempt.providerContextId, intentState: null,
+        noEffect: true, remoteQuiescent: true, processQuiescent: true, effectsSettled: true,
+        evidenceRefs: ['test:no-intent-no-effect'] };
+    },
+  });
+  t.after(() => { f.controller.shutdown(); f.db.close(); });
+  const objective = f.store.getObjective(projectId, objectiveId);
+  const [claimed] = f.store.claimReady(projectId, objectiveId, objective.ownerGeneration, {
+    controlRevision: objective.controlRevision, leaseMs: 1,
+  });
+  f.store.markExpired(projectId, objectiveId, claimed.claim.leaseUntil);
+  const canceled = await f.controller.cancelObjective();
+  assert.equal(canceled.objective.disposition, 'draining');
+  f.controller.start();
+  await waitFor(() => proofCalls >= 2, 1000);
+  assert.equal(f.store.getObjective(projectId, objectiveId).ownerGeneration, objective.ownerGeneration);
+  assert.equal(f.store.listAttempts(projectId, objectiveId)[0].state, 'unknown');
+  assert.equal(sends, 0);
+
+  proofAvailable = true;
+  await waitFor(() => f.store.listAttempts(projectId, objectiveId)[0].state === 'canceled', 1500);
+  const settled = f.store.listAttempts(projectId, objectiveId)[0];
+  assert.equal(settled.outcome.failureKind, 'reconciled_no_effect');
+  assert.equal(f.store.listClaims(projectId, objectiveId)[0].state, 'released');
+  assert.equal(f.store.getObjective(projectId, objectiveId).disposition, 'draining');
+  assert.equal(sends, 0);
+});
 
 test('acknowledges steering during a slow actual execution and atomically applies it before another claim', async (t) => {
   const sendEntered = deferred();

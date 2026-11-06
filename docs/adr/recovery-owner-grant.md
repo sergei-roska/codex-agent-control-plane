@@ -1,13 +1,36 @@
 # ADR: Bounded owner grant past recovery_generation_limit
 
-Status: accepted 2026-10-19. Code: `src/lead-graph.js`
+Status: historical decision superseded on 2026-11-06 by the AD-04
+autonomous-delivery backlog criterion. Code: `src/lead-graph.js`
 (`applyOwnerRecoveryGrant`, `validOwnerGrant`, `recoveryGenerationCap`).
+
+## Current contract
+
+A recovery generation threshold alone does not justify an owner question or an
+extra recovery generation. A `supported_controller_replan` grant is valid only
+when the pending request also identifies a separately investigated owner-only
+dependency, cites the completed read-only investigation, and the normal
+checkpoint and receipt fences pass. Examples include missing credentials or
+access, a required external write, or an evidenced dependency/environment
+capability decision. A persisted threshold-only request is migrated to
+nonterminal technical replanning while preserving the run's goal, scope,
+checks, review receipts, and checkpoint state. It leaves no generic human
+request and does not trigger acceptance or a partial result.
+
+Cancellation, genuine owner decisions, and already-recorded owner scope
+decisions retain their existing behavior. An explicitly granted recovery
+generation remains bounded by the rules below.
+
+## Historical decision (2026-10-19)
 
 ## Decision
 
 A checkpoint that stopped at `recovery_generation_limit` (generation 2,
 phase `replan_required`) can receive exactly one more recovery generation, only
-through an explicit owner choice. The grant applies when all hold:
+through an explicit owner choice. This threshold-only contract is superseded;
+the historical implementation decision is retained here for context. The grant
+now also requires the separate owner-only dependency in the current contract
+above. The grant applies when all hold:
 
 - the pending decision is a lead-raised `human_decision` (not a server
   escalation) with reason `infeasible_requirement`, or a checkpoint has
@@ -44,14 +67,14 @@ template) changes nothing and logs a `review_recovery` stage event
 - The grant lives in `state.reviewRecovery`, inside the graph checkpoint, so it
   survives restart.
 
-## Rationale
+## Historical rationale
 
 The README ("Long runs and repeated work") already lets an owner `continue` or
 `change_goal` grant another configured allowance. This applies the same
 pattern to the recovery cap: a human decision, recorded and bounded, rather than
 an automatic extension.
 
-## Exception to design-review.md:23
+## Historical exception to design-review.md:23
 
 `docs/evidence/aut-02/design-review.md:23` says an exhausted generation cap
 returns to replanning or the pause "without granting new rounds or budget". The

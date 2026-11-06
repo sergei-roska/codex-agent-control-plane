@@ -21,6 +21,7 @@ const { loadEffectiveRoles } = require('./role-overrides');
 const { readSettingsFile, resolveAcceptanceScratch } = require('./project-settings');
 const { registerRoleAgents } = require('./a2a-role-service');
 const { LeadOrchestrator, ResumeInputError, renderRunDigest } = require('./lead-orchestrator');
+const { isThresholdOnlyRecoveryQuestion } = require('./lead-graph');
 const { openStateDatabase, createTaskStore, DispatchJournal, reconcileInterruptedTasks, acquireStateLock, acquireWorkspaceLock, stateDbPath } = require('./durable-store');
 const { createBudgetWatcher } = require('./budget-watcher');
 const { classifyTransientFailure, createTransientRecoveryStore, createTransientRecovery } = require('./transient-recovery');
@@ -51,7 +52,31 @@ const SHUTDOWN_TIMEOUT_MS = 5_000;
 // close() waits up to SHUTDOWN_TIMEOUT_MS for the runs to settle, then up to the same for the app server and HTTP close.
 const SHUTDOWN_TOTAL_MS = 2 * SHUTDOWN_TIMEOUT_MS;
 const AUTO_RESUME_TEXT = 'Automatic resume: Codex usage budget is available again.';
+const AUTO_AUTH_RESUME_TEXT = 'Automatic resume: the account has been authenticated and required model budget is available.';
 const TERMINAL_STORED_TASK_STATES = new Set(['TASK_STATE_COMPLETED', 'TASK_STATE_FAILED', 'TASK_STATE_CANCELED']);
+
+async function migrateLegacyRecoveryQuestion(orchestrator, runId) {
+  const graph = orchestrator?.graph;
+  if (!graph || typeof graph.getState !== 'function' || typeof graph.updateState !== 'function') return false;
+  const config = { configurable: { thread_id: runId } };
+  const snapshot = await graph.getState(config);
+  const values = snapshot?.values || {};
+  const request = values.humanRequest;
+  const interrupt = (snapshot?.tasks || []).flatMap((task) => task.interrupts || [])
+    .map((entry) => entry.value).find((value) => value?.kind === 'human_decision' && value.decisionId === request?.decisionId);
+  const pendingHumanInput = (snapshot?.next || []).includes('human_input');
+  if ((!interrupt && !pendingHumanInput) || !isThresholdOnlyRecoveryQuestion(request, values)) return false;
+  const progress = [...(Array.isArray(values.progress) ? values.progress : []), {
+    round: Number.isInteger(values.round) ? values.round : 0,
+    kind: 'recovery_question_migrated',
+    detail: 'A threshold-only owner recovery question was retired; required review remains active for technical replanning.',
+  }].slice(-50);
+  await graph.updateState(config, { humanRequest: null, progress }, 'human_input');
+  const migrated = await graph.getState(config);
+  return migrated?.values?.humanRequest == null
+    && !((migrated?.tasks || []).flatMap((task) => task.interrupts || [])
+      .some((entry) => entry.value?.kind === 'human_decision' && entry.value.decisionId === request.decisionId));
+}
 
 function projectIdForWorkspace(workspace) {
   const realWorkspace = fs.realpathSync(workspace);
@@ -527,6 +552,15 @@ function describePause(taskId, pause, { autoResume = false, nextCheckAt = null, 
     } else {
       lines.push('Send a message to this task to retry once quota is available.');
     }
+  } else if (pause?.kind === 'waiting_for_auth') {
+    lines.push('Waiting for an authenticated Codex account with available budget for this run.');
+    lines.push(pause.action || 'Open the local Accounts panel and sign in to the affected existing profile.');
+    if (autoResume) {
+      lines.push('The server checks account authentication and required model availability, then resumes this task automatically.');
+      if (nextCheckAt) lines.push(`Next authentication check: ${new Date(nextCheckAt).toISOString()}`);
+    } else {
+      lines.push('After signing in, send a message to this task to retry.');
+    }
   } else if (pause?.kind === 'writer_unresolved') {
     lines.push('Earlier writer outcome(s) are unresolved: the server could not prove the writer stopped, so writable work is blocked.');
     for (const attempt of pause.attempts || []) lines.push(`  - ${attempt.attemptId} (${attempt.role}): ${attempt.reason}`);
@@ -539,11 +573,11 @@ function describePause(taskId, pause, { autoResume = false, nextCheckAt = null, 
     lines.push(`The run stopped after a ${pause.category || 'transient'} failure: ${pause.message || 'unknown error'}`);
     if (pause.attempts) lines.push(`Automatic recovery attempt: ${pause.attempts}`);
     if (pause.nextAttemptAt) lines.push(`Next recovery attempt: ${new Date(pause.nextAttemptAt).toISOString()}`);
-    if (pause.recoveryExhausted) lines.push(`Automatic recovery exhausted after ${pause.attempts} attempts.`);
+    if (pause.recoveryExhausted === true && !Number.isFinite(pause.nextAttemptAt)) lines.push(`Automatic recovery exhausted after ${pause.attempts} attempts.`);
     else if (pause.ownerPauseRequested) lines.push('Automatic recovery is paused by the owner. Use the pause control to resume it, or send a message to continue manually.');
     else if (pause.recoveryState === 'dispatched') lines.push('The server is submitting this automatic recovery attempt.');
-    else if (pause.automatic !== true) lines.push('Automatic recovery is disabled or unsafe for this checkpoint; send a message to retry manually.');
-    else lines.push('The server will retry this checkpoint automatically.');
+    else if (Number.isFinite(pause.nextAttemptAt)) lines.push('The server will retry this checkpoint automatically.');
+    else lines.push('Automatic recovery is disabled or unsafe for this checkpoint; send a message to retry manually.');
   } else if (pause?.kind === 'owner_pause') {
     lines.push('Paused by the owner. Running worker turns finished first; no new work is planned until you continue.');
     lines.push('Send a message to this task to continue.');
@@ -705,9 +739,9 @@ function persistTransientRecoveryStatus({ db, recoveryStore, taskId, record, now
       checkpointId: record.checkpoint_id,
       nextAttemptAt: record.state === 'waiting' ? record.next_attempt_at : null,
       recoveryState: record.state,
-      recoveryExhausted: record.state === 'exhausted',
+      recoveryExhausted: record.state === 'exhausted' && !Number.isFinite(record.next_attempt_at),
       ownerPauseRequested: record.state === 'owner_paused',
-      automatic: ['waiting', 'dispatched'].includes(record.state),
+      automatic: record.state === 'dispatched' || (record.state === 'waiting' && Number.isFinite(record.next_attempt_at)),
     };
     const message = Message.toJSON(agentMessage(taskId, taskStatus.message?.contextId || '', `recovery-${record.updated_at}`, describePause(taskId, pause)));
     const timestamp = new Date(now()).toISOString();
@@ -731,7 +765,7 @@ function ownerStopReason() {
 
 // `ownerChecks` (project setting, see src/project-settings.js): command strings pinned as an owner contract for a
 // new run whose message carries no acceptance contract. Explicit checks replace them; a resume never repins.
-function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, budgetWatcher = null, transientRecovery = null, autoResume = true, ownerChecks = null, legacyTaskIds = new Set() }) {
+function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, budgetWatcher = null, transientRecovery = null, autoResume = true, ownerChecks = null, legacyTaskIds = new Set(), objectiveBinding = null }) {
   const controllers = new Map();
   const reservations = new Set();
   const inflight = new Set();
@@ -739,7 +773,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
   // Registers a budget pause with the watcher before describing it, so the text can name the next check.
   function describePauseText(taskId, pause) {
     if (!budgetWatcher) return describePause(taskId, pause);
-    if (pause?.kind === 'waiting_for_budget') {
+    if (pause?.kind === 'waiting_for_budget' || pause?.kind === 'waiting_for_auth') {
       budgetWatcher.notePause(taskId, pause);
       const watched = budgetWatcher.status(taskId);
       return describePause(taskId, pause, { autoResume: true, nextCheckAt: watched?.nextCheckAt ?? null, autoSwitch: watched?.autoSwitch === true });
@@ -753,7 +787,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
     reservations.delete(taskId);
     const controller = new AbortController();
     controllers.set(taskId, controller);
-    const task = requestContext.task || {
+    let task = requestContext.task || {
       id: taskId,
       contextId,
       status: status(TaskState.TASK_STATE_SUBMITTED),
@@ -762,6 +796,13 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       metadata: {},
     };
     const resuming = requestContext.task?.status?.state === TaskState.TASK_STATE_INPUT_REQUIRED;
+    let recoveryQuestionMigrated = false;
+    if (resuming) {
+      try { recoveryQuestionMigrated = await migrateLegacyRecoveryQuestion(orchestrator, taskId); } catch (_) { recoveryQuestionMigrated = false; }
+      if (recoveryQuestionMigrated) {
+        task = { ...task, status: status(TaskState.TASK_STATE_WORKING), metadata: { ...(task.metadata || {}), pause: null } };
+      }
+    }
     let effectivePause = null;
     // LL-4: checks the lead pins during the run are recorded in the task like an owner contract,
     // with source 'agent', so a restart and the launcher see them.
@@ -790,6 +831,14 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       let newRequest;
       let livePause = null;
       if (resuming) {
+        if (objectiveBinding) {
+          const storedBinding = requestContext.task?.metadata?.objectiveBinding;
+          if (!storedBinding || storedBinding.projectId !== objectiveBinding.projectId
+            || storedBinding.workspace !== objectiveBinding.workspace || storedBinding.taskId !== taskId) {
+            republishPause(effectivePause, 'The original project/workspace binding is missing or conflicts with this server. The task remains incomplete and no work was dispatched.', 'objective-binding-error');
+            return;
+          }
+        }
         try { livePause = (await orchestrator.getPause?.(taskId)) || null; } catch (_) { livePause = null; }
         // The checkpoint is authoritative; the stored task metadata is only a fallback.
         effectivePause = livePause || requestContext.task.metadata?.pause || null;
@@ -797,6 +846,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       const pauseKind = effectivePause?.kind;
       const automaticResume = requestContext.userMessage?.metadata?.autoResume;
       const automaticBudget = automaticResume?.reason === 'budget';
+      const automaticAuth = automaticResume?.reason === 'auth';
       const automaticTransient = automaticResume?.reason === 'transient_recovery';
       if (automaticBudget && (autoResume !== true || !resuming || livePause?.kind !== 'waiting_for_budget')) {
         if (resuming) {
@@ -806,6 +856,19 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
             taskId,
             contextId,
             status: status(TaskState.TASK_STATE_FAILED, agentMessage(taskId, contextId, 'budget-resume-rejected', 'Automatic budget resume is only accepted for a task currently waiting for budget.')),
+            metadata: {},
+          }));
+        }
+        return;
+      }
+      if (automaticAuth && (autoResume !== true || !resuming || livePause?.kind !== 'waiting_for_auth')) {
+        if (resuming) {
+          republishPause(effectivePause, 'The automatic authentication retry is no longer eligible; the task remains paused.', 'auth-resume-rejected');
+        } else {
+          eventBus.publish(AgentEvent.statusUpdate({
+            taskId,
+            contextId,
+            status: status(TaskState.TASK_STATE_FAILED, agentMessage(taskId, contextId, 'auth-resume-rejected', 'Automatic authentication resume is only accepted for a task currently waiting for authentication.')),
             metadata: {},
           }));
         }
@@ -911,16 +974,25 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
         // Task metadata merges shallowly, so a cleared pause is null rather than absent.
         // A new run also pins its validated contract in the task record, so a restart before the
         // first checkpoint recovers it whichever metadata level carried it.
-        metadata: resuming ? { pause: null } : (hasContract(contract) ? { acceptanceContract: contract } : {}),
+        metadata: resuming ? { pause: null } : {
+          ...(objectiveBinding ? { objectiveBinding: { ...objectiveBinding, taskId } } : {}),
+          acceptanceContract: contract,
+        },
       }));
-      if (!resuming && hasContract(contract) && loadTask) {
-        // Nothing may execute until the pinned contract is readable from the store.
+      if (!resuming && loadTask && (objectiveBinding || hasContract(contract))) {
+        // Nothing may execute until the immutable objective binding and pinned contract are readable.
         const deadline = Date.now() + durabilityTimeoutMs;
         let durable = false;
         for (;;) {
           let stored = null;
           try { stored = await loadTask(taskId); } catch (_) { stored = null; }
-          if (stored?.metadata?.acceptanceContract) { durable = true; break; }
+          const savedBinding = stored?.metadata?.objectiveBinding;
+          const bindingDurable = !objectiveBinding || (savedBinding?.projectId === objectiveBinding.projectId
+            && savedBinding?.workspace === objectiveBinding.workspace && savedBinding?.taskId === taskId);
+          const hasPinnedContract = Boolean(stored?.metadata)
+            && Object.hasOwn(stored.metadata, 'acceptanceContract')
+            && (stored.metadata.acceptanceContract === null || typeof stored.metadata.acceptanceContract === 'object');
+          if (bindingDurable && hasPinnedContract) { durable = true; break; }
           if (Date.now() >= deadline) break;
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
@@ -937,7 +1009,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
       let result;
       if (resuming) {
         try {
-          const resumeOrigin = ['budget', 'transient_recovery'].includes(automaticResume?.reason) ? 'automatic' : 'owner';
+          const resumeOrigin = ['budget', 'auth', 'transient_recovery'].includes(automaticResume?.reason) ? 'automatic' : 'owner';
           result = await orchestrator.resume({ runId: taskId, input: resumeInput, signal: controller.signal, onEvent, contextId, resumeOrigin });
         } catch (error) {
           if (error?.name !== 'RunNotFoundError' || (pauseKind !== 'restart' && pauseKind !== 'stopped')) throw error;
@@ -1068,8 +1140,8 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
           kind: 'transient_recovery', message, errorName: error?.name || 'Error',
           category: classification.category, attempts: record.attempts,
           checkpointId: record.checkpoint_id, nextAttemptAt: record.next_attempt_at,
-          recoveryExhausted: record.state === 'exhausted',
-          automatic: record.state === 'waiting',
+          recoveryExhausted: record.state === 'exhausted' && !Number.isFinite(record.next_attempt_at),
+          automatic: record.state === 'waiting' && Number.isFinite(record.next_attempt_at),
           ...(ownerPaused ? { ownerPauseRequested: true } : {}),
         } : { kind: 'error', message, errorName: error?.name || 'Error', recoveryCategory: classification.category };
         if (pause.kind !== 'transient_recovery') transientRecovery?.forget(taskId);
@@ -1158,10 +1230,10 @@ function rejectOverlappingLeadTask(executor) {
   };
 }
 
-function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), budgetWatcher = null, transientRecovery = null, autoResume = true, ownerChecks = null, legacyTaskIds = new Set() }) {
+function registerLead(app, { leadRole, orchestrator, baseUrl, authMiddleware, taskStore = new InMemoryTaskStore(), budgetWatcher = null, transientRecovery = null, autoResume = true, ownerChecks = null, legacyTaskIds = new Set(), objectiveBinding = null }) {
   const endpoint = new URL('/orchestrator', `${baseUrl}/`).toString();
   const card = makeLeadCard({ leadRole, endpoint });
-  const executor = makeLeadExecutor({ orchestrator, loadTask: (id) => taskStore.load(id, {}), budgetWatcher, transientRecovery, autoResume, ownerChecks, legacyTaskIds });
+  const executor = makeLeadExecutor({ orchestrator, loadTask: (id) => taskStore.load(id, {}), budgetWatcher, transientRecovery, autoResume, ownerChecks, legacyTaskIds, objectiveBinding });
   const requestHandler = new DefaultRequestHandler(card, taskStore, executor);
   app.use('/orchestrator/agent-card.json', agentCardHandler({ agentCardProvider: async () => AgentCard.toJSON(card) }));
   app.use('/orchestrator', authMiddleware, express.json(), rejectOverlappingLeadTask(executor), jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));
@@ -1229,6 +1301,7 @@ async function startServer({
   appServer: injectedAppServer = null,
   accountsDir,
   readProfileLimits = readLimitsOfHome,
+  readProfileState = null,
   appServerFactory,
   listen = true,
   listenImpl = (application, listenPort, host, callback) => application.listen(listenPort, host, callback),
@@ -1260,8 +1333,13 @@ async function startServer({
   // An injected App Server is used as is; otherwise the switching wrapper follows the active account profile.
   const accountProfiles = createAccountProfiles(accountsDir ? { accountsDir } : {});
   const connectorPreferencesFile = path.join(accountProfiles.accountsDir, 'connector-preferences.json');
+  let dispatchJournal = null;
   const switching = injectedAppServer ? null : createSwitchingAppServer({
     profiles: accountProfiles,
+    onCallBound: (record) => {
+      if (!dispatchJournal) throw Object.assign(new Error('Provider call journal is unavailable'), { code: 'provider_call_binding_unavailable' });
+      return dispatchJournal.recordCallBound(record);
+    },
     create: (codexHome) => appServerFactory
       ? appServerFactory(codexHome, { connectorPreferencesFile })
       : new CodexAppServer({ ...(codexHome ? { codexHome } : {}), connectorPreferencesFile }),
@@ -1348,6 +1426,10 @@ async function startServer({
     if (!workspaceLockAcquired) { releaseWorkspaceLock = acquireWorkspaceLock(workspace, workspaceLockDir ? { lockDir: workspaceLockDir } : undefined); workspaceLockAcquired = true; }
     const startupLeadTaskIds = new Set(state.db.prepare('SELECT id FROM tasks WHERE owner=?').all('orchestrator').map((row) => row.id));
     const storedMappings = storedDeliveryMappings(state.db, normalizedProjectId);
+    dispatchJournal = new DispatchJournal(state);
+    if (typeof appServer.setCallBindingHandler === 'function') {
+      appServer.setCallBindingHandler((record) => dispatchJournal.recordCallBound(record));
+    }
 
     const authToken = loadOrCreateAuthToken(tokenFile ? { filePath: tokenFile } : undefined);
     const authMiddleware = createAuthMiddleware(authToken);
@@ -1414,7 +1496,7 @@ async function startServer({
       appServer, roles, workspace, baseUrl, authToken, leadRole, skillCatalog, mcpCatalog,
       aut03TrialRunIds,
       aut03LeadSkillEnabled,
-      checkpointer: state.checkpointer, journal: new DispatchJournal(state), admission, usageLedger, stagingLog, activityStore, evidenceStore, sessionThreads,
+      checkpointer: state.checkpointer, journal: dispatchJournal, admission, usageLedger, stagingLog, activityStore, evidenceStore, sessionThreads,
       parallelWriters: worktreeMode,
       ...(acceptanceScratch ? { acceptanceScratch } : {}),
       executionPermissions,
@@ -1512,12 +1594,14 @@ async function startServer({
         models: [...models],
         readRateLimits: async () => (typeof appServer.readRateLimits === 'function' ? appServer.readRateLimits() : null),
         listPausedRuns: () => listBudgetPausedRuns({ state, taskStore: leadTaskStore, orchestrator }),
-        resumeRun: (taskId) => resumeBudgetRun({ taskId, baseUrl, authToken, taskStore: leadTaskStore, orchestrator, executor: () => leadAgent.executor, loopback }),
+        resumeRun: (taskId, reason) => resumeBudgetRun({ taskId, reason, baseUrl, authToken, taskStore: leadTaskStore, orchestrator, executor: () => leadAgent.executor, loopback }),
         // Automatic account switching needs the wrapper; an injected App Server stays on its account.
         accounts: switching ? {
           profiles: accountProfiles,
-          switchTo: (name) => switching.switchTo(name),
+          switchTo: (...args) => switching.switchTo(...args),
           readProfileLimits,
+          ...(readProfileState || readProfileLimits === readLimitsOfHome
+            ? { readProfileState: readProfileState || readAccountStateOfHome } : {}),
           watch: (onChange) => {
             fs.watchFile(accountProfiles.filePath, { interval: 2000, persistent: false }, onChange);
             return () => fs.unwatchFile(accountProfiles.filePath, onChange);
@@ -1530,6 +1614,7 @@ async function startServer({
     const leadAgent = registerLead(app, {
       leadRole, orchestrator, baseUrl, authMiddleware, taskStore: leadTaskStore, budgetWatcher,
       transientRecovery, autoResume, ownerChecks, legacyTaskIds,
+      objectiveBinding: { projectId: normalizedProjectId, workspace: fs.realpathSync(workspace) },
     });
     registerControl(app, { authMiddleware, orchestrator, runtimeIdentity, transientRecovery });
     registerDeliveryHostControls(app, { authMiddleware, router: orchestrator });
@@ -1640,7 +1725,7 @@ async function startServer({
   }
 }
 
-/** Lead tasks waiting in INPUT_REQUIRED whose checkpoint pause is waiting_for_budget. */
+/** Lead tasks waiting in INPUT_REQUIRED on an automatic budget or authentication pause. */
 async function listBudgetPausedRuns({ state, taskStore, orchestrator }) {
   const rows = state.db.prepare('SELECT tenant, id FROM tasks WHERE owner = ? AND status_state = ? ORDER BY id')
     .all('orchestrator', 'TASK_STATE_INPUT_REQUIRED');
@@ -1648,17 +1733,18 @@ async function listBudgetPausedRuns({ state, taskStore, orchestrator }) {
   for (const { id } of rows) {
     let pause = null;
     try { pause = (await orchestrator.getPause?.(id)) || null; } catch (_) { pause = null; }
-    if (pause?.kind === 'waiting_for_budget') paused.push({ runId: id, pause });
+    if (pause?.kind === 'waiting_for_budget' || pause?.kind === 'waiting_for_auth') paused.push({ runId: id, pause });
   }
   return paused;
 }
 
-/** The task when it is INPUT_REQUIRED on a budget pause and not executing; otherwise null. */
-async function budgetRunResumable({ taskId, taskStore, orchestrator, executor }) {
+/** The task when it is INPUT_REQUIRED on a recoverable account pause and not executing; otherwise null. */
+async function budgetRunResumable({ taskId, taskStore, orchestrator, executor, expectedKind = null }) {
   const task = await taskStore.load(taskId, {});
   if (!task || task.status?.state !== TaskState.TASK_STATE_INPUT_REQUIRED) return null;
   const pause = (await orchestrator.getPause?.(taskId)) || null;
-  if (pause?.kind !== 'waiting_for_budget') return null;
+  if (!['waiting_for_budget', 'waiting_for_auth'].includes(pause?.kind)) return null;
+  if (expectedKind && pause.kind !== expectedKind) return null;
   if (executor().isTaskActive(taskId)) return null;
   return task;
 }
@@ -1673,13 +1759,31 @@ async function readLimitsOfHome(home) {
   }
 }
 
+/** Reads explicit account auth state separately from model availability; null limits stay unknown. */
+async function readAccountStateOfHome(home) {
+  const server = new CodexAppServer(home ? { codexHome: home } : {});
+  try {
+    const [accountResult, limitsResult] = await Promise.allSettled([server.getAccount(), server.readRateLimits()]);
+    const state = { limits: limitsResult.status === 'fulfilled' ? limitsResult.value : null };
+    if (accountResult.status === 'fulfilled' && typeof accountResult.value?.requiresOpenaiAuth === 'boolean') {
+      state.requiresOpenaiAuth = accountResult.value.requiresOpenaiAuth;
+    } else if (accountResult.status === 'rejected' && classifyTransientFailure(accountResult.reason).category === 'auth') {
+      state.requiresOpenaiAuth = true;
+    }
+    return state;
+  } finally {
+    try { await server.close(); } catch (_) { /* best effort */ }
+  }
+}
+
 /**
  * Resumes a budget-paused lead task through the same A2A message/send a human uses (loopback, bearer token).
  * Returns false when the task is no longer waiting for budget; a message to a task that is already
  * executing is also rejected server-side by rejectOverlappingLeadTask.
  */
-async function resumeBudgetRun({ taskId, baseUrl, authToken, taskStore, orchestrator, executor, loopback }) {
-  const task = await budgetRunResumable({ taskId, taskStore, orchestrator, executor });
+async function resumeBudgetRun({ taskId, reason = 'budget', baseUrl, authToken, taskStore, orchestrator, executor, loopback }) {
+  const task = await budgetRunResumable({ taskId, taskStore, orchestrator, executor,
+    expectedKind: reason === 'auth' ? 'waiting_for_auth' : 'waiting_for_budget' });
   if (!task) return false;
   if (!loopback.client) loopback.client = await new ClientFactory().createFromUrl(baseUrl, '/orchestrator/agent-card.json');
   await loopback.client.sendMessage({
@@ -1689,8 +1793,8 @@ async function resumeBudgetRun({ taskId, baseUrl, authToken, taskStore, orchestr
       contextId: task.contextId || '',
       taskId,
       role: 1,
-      parts: [textPart(AUTO_RESUME_TEXT)],
-      metadata: { autoResume: { reason: 'budget' } },
+      parts: [textPart(reason === 'auth' ? AUTO_AUTH_RESUME_TEXT : AUTO_RESUME_TEXT)],
+      metadata: { autoResume: { reason } },
       extensions: [],
       referenceTaskIds: [],
     },
@@ -1773,4 +1877,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { SHUTDOWN_TIMEOUT_MS, SHUTDOWN_TOTAL_MS, startServer, projectIdForWorkspace, inspectConcurrentStartupQuarantine, describePause, persistTransientRecoveryStatus, waitForShutdownWork, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts };
+module.exports = { SHUTDOWN_TIMEOUT_MS, SHUTDOWN_TOTAL_MS, startServer, projectIdForWorkspace, inspectConcurrentStartupQuarantine, describePause, persistTransientRecoveryStatus, waitForShutdownWork, makeLeadExecutor, extractGoal, makeLeadCard, registerLead, registerControl, rejectOverlappingLeadTask, protectRoleRpcMounts, migrateLegacyRecoveryQuestion };

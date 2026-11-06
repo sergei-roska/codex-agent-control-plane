@@ -1,5 +1,7 @@
 # Implementation packages and succession
 
+> Archived development plan, 2026-11-06. Use the [current autonomous delivery backlog](../../autonomous-delivery-backlog.md) for new work. The historical content below preserves decisions, IDs and evidence; its priorities and restrictions do not override the current owner requirements.
+
 Status: implementation authorized by the owner on 2026-10-26. Role settings and
 small UI regressions started first while the concurrent engine design was being
 finalized. All other statuses below are planning states, not implementation claims.

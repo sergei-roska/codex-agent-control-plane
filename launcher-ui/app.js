@@ -1899,6 +1899,7 @@
     // ---- Accounts card
     let accountLoginTimer = null;
     let accountLoginId = null;
+    let accountLoginStarting = false;
     let accountsData = null;
     let accountsRevision = 0;
     let accountsRequestId = 0;
@@ -2088,6 +2089,24 @@
         });
         actions.appendChild(activate);
       }
+      let signInArea = null;
+      if (account.requiresOpenaiAuth === true) {
+        const signInName = isSystem ? 'system' : account.name;
+        signInArea = document.createElement('div');
+        signInArea.className = 'account-signin';
+        const browserSignIn = textEl('button', 'btn btn-secondary btn-xs', 'Sign in with browser');
+        browserSignIn.type = 'button';
+        browserSignIn.addEventListener('click', function () {
+          startAccountLogin(signInName, 'browser', true, signInArea);
+        });
+        const deviceSignIn = textEl('button', 'btn btn-secondary btn-xs', 'Use device code');
+        deviceSignIn.type = 'button';
+        deviceSignIn.addEventListener('click', function () {
+          startAccountLogin(signInName, 'device', true, signInArea);
+        });
+        actions.appendChild(browserSignIn);
+        actions.appendChild(deviceSignIn);
+      }
       if (!isSystem && !account.active) {
         const remove = textEl('button', 'btn btn-ghost btn-xs', 'Remove');
         remove.addEventListener('click', function () {
@@ -2108,6 +2127,7 @@
         actions.appendChild(remove);
       }
       block.appendChild(actions);
+      if (signInArea) block.appendChild(signInArea);
       return block;
     }
 
@@ -2162,6 +2182,7 @@
       if (accountLoginTimer) clearInterval(accountLoginTimer);
       accountLoginTimer = null;
       accountLoginId = null;
+      accountLoginStarting = false;
     }
 
     function resetAddArea() {
@@ -2201,15 +2222,21 @@
       input.focus();
     }
 
-    async function startAccountLogin(name, method) {
-      const area = document.getElementById('accountAddArea');
+    async function startAccountLogin(name, method, relogin = false, targetArea = null) {
+      if (accountLoginId || accountLoginStarting) return;
+      accountLoginStarting = true;
+      const area = targetArea || document.getElementById('accountAddArea');
       let started;
       try {
-        started = await accountsApi('POST', '/api/accounts', { name: name, method: method });
+        started = await accountsApi('POST', relogin
+          ? '/api/accounts/' + encodeURIComponent(name) + '/login'
+          : '/api/accounts', { name: name, method: method });
       } catch (e) {
+        accountLoginStarting = false;
         showAccountsError(e.message);
         return;
       }
+      accountLoginStarting = false;
       showAccountsError('');
       area.textContent = '';
       const box = document.createElement('div');
@@ -2233,7 +2260,10 @@
       const cancel = textEl('button', 'btn btn-ghost btn-xs', 'Cancel');
       cancel.addEventListener('click', function () {
         const id = accountLoginId;
-        resetAddArea();
+        if (targetArea) {
+          targetArea.textContent = '';
+          stopAccountLoginPolling();
+        } else resetAddArea();
         if (id) accountsApi('POST', '/api/accounts/login/' + encodeURIComponent(id) + '/cancel').catch(function () {});
       });
       box.appendChild(cancel);
@@ -2246,7 +2276,9 @@
         try {
           const st = await accountsApi('GET', '/api/accounts/login/' + encodeURIComponent(id));
           if (id !== accountLoginId || st.status === 'pending') return;
-          resetAddArea();
+          if (targetArea) targetArea.textContent = '';
+          else resetAddArea();
+          if (targetArea) stopAccountLoginPolling();
           if (st.status === 'completed') fetchAccounts(true);
           else showAccountsError('Login ' + st.status + (st.error ? ': ' + st.error : ''));
         } catch (e) {

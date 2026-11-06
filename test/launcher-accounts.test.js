@@ -16,6 +16,9 @@ let app;
 let servers;
 let limitsByHome;
 let failHomes;
+let rateLimitErrorsByHome;
+let accountErrorsByHome;
+let authByHome;
 let loginMode;
 let handshakeFailure;
 let handshakeGate;
@@ -33,6 +36,8 @@ class FakeAppServer {
 
   async readRateLimits() {
     this.calls.push(['readRateLimits']);
+    const home = this.options.codexHome ?? null;
+    if (rateLimitErrorsByHome.has(home)) throw rateLimitErrorsByHome.get(home);
     if (failHomes.has(this.options.codexHome)) return null;
     const sequence = limitsReadSequence.get(this.options.codexHome ?? null);
     const value = sequence && sequence.length > 1 ? sequence.shift()
@@ -54,7 +59,11 @@ class FakeAppServer {
   }
 
   async getAccount() {
-    return { account: { email: `${path.basename(this.options.codexHome || 'system')}@example.com`, planType: 'plus' } };
+    const home = this.options.codexHome ?? null;
+    if (accountErrorsByHome.has(home)) throw accountErrorsByHome.get(home);
+    const result = { account: { email: `${path.basename(home || 'system')}@example.com`, planType: 'plus' } };
+    if (authByHome.has(home)) result.requiresOpenaiAuth = authByHome.get(home);
+    return result;
   }
 
   async loginStart(params) {
@@ -132,6 +141,9 @@ beforeEach(() => {
   servers = [];
   limitsByHome = new Map();
   failHomes = new Set();
+  rateLimitErrorsByHome = new Map();
+  accountErrorsByHome = new Map();
+  authByHome = new Map();
   loginMode = {};
   handshakeFailure = null;
   handshakeGate = null;
@@ -247,6 +259,134 @@ describe('GET /api/accounts', () => {
     assert.equal(r.body.profiles[0].error, null);
     assert.match(r.body.profiles[1].error, /unavailable/);
     assert.equal(r.body.profiles[1].primary, null);
+  });
+
+  it('exposes only explicit auth state when rate limits are unavailable', async () => {
+    const { a, b } = seedProfiles();
+    failHomes.add(a.home);
+    failHomes.add(b.home);
+    authByHome.set(a.home, true);
+    await start();
+
+    const response = await api('GET', '/api/accounts');
+    assert.equal(response.status, 200);
+    assert.equal(response.body.profiles[0].primary, null);
+    assert.equal(response.body.profiles[0].requiresOpenaiAuth, true);
+    assert.equal(response.body.profiles[1].requiresOpenaiAuth, undefined);
+  });
+
+  it('exposes auth-required for typed auth RPC errors but keeps unrelated failures unknown', async () => {
+    const { a, b } = seedProfiles();
+    const authError = Object.assign(new Error('Authentication required'), {
+      rpcData: { codexErrorInfo: { unauthorized: { httpStatusCode: 401 } } },
+    });
+    accountErrorsByHome.set(a.home, authError);
+    accountErrorsByHome.set(b.home, new Error('Temporary account RPC failure'));
+    failHomes.add(a.home);
+    failHomes.add(b.home);
+    failHomes.add(null);
+    authByHome.set(null, false);
+    await start();
+
+    const response = await api('GET', '/api/accounts');
+    assert.equal(response.status, 200);
+    assert.equal(response.body.profiles[0].requiresOpenaiAuth, true);
+    assert.equal(response.body.profiles[1].requiresOpenaiAuth, undefined);
+    assert.equal(response.body.system.requiresOpenaiAuth, false);
+    assert.equal(response.body.profiles[0].primary, null);
+    assert.equal(response.body.profiles[1].primary, null);
+    assert.equal(response.body.system.primary, null);
+  });
+
+  it('classifies an explicit typed auth failure from the limits RPC without inferring from null', async () => {
+    const { a, b } = seedProfiles();
+    rateLimitErrorsByHome.set(a.home, Object.assign(new Error('Unauthorized'), { statusCode: 403 }));
+    failHomes.add(b.home);
+    await start();
+
+    const response = await api('GET', '/api/accounts');
+    assert.equal(response.body.profiles[0].requiresOpenaiAuth, true);
+    assert.equal(response.body.profiles[1].requiresOpenaiAuth, undefined);
+  });
+});
+
+describe('existing account re-login', () => {
+  it('uses the existing profile home and preserves the profile on verified success', async () => {
+    const { a } = seedProfiles();
+    profiles.setActive('alpha');
+    authByHome.set(a.home, true);
+    const before = profiles.read();
+    await start();
+
+    const response = await api('POST', '/api/accounts/alpha/login', { method: 'browser' });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.authUrl, 'https://example.com/auth');
+    assert.equal(servers[0].options.codexHome, a.home);
+    assert.deepEqual(servers[0].calls[0], ['loginStart', { type: 'chatgpt' }]);
+    assert.deepEqual(profiles.read(), before);
+    authByHome.set(a.home, false);
+    servers[0].emit('account/login/completed', { loginId: response.body.loginId, success: true });
+    const done = await until(async () => {
+      const status = await api('GET', `/api/accounts/login/${response.body.loginId}`);
+      return status.body.status === 'completed' ? status.body : null;
+    });
+    assert.equal(done.name, 'alpha');
+    assert.deepEqual(profiles.read(), before);
+    assert.equal(fs.existsSync(a.home), true);
+    assert.equal(servers[0].closed, true);
+  });
+
+  it('supports device-code login and rejects completion without explicit authenticated state', async () => {
+    const { a } = seedProfiles();
+    authByHome.set(a.home, true);
+    await start();
+
+    const response = await api('POST', '/api/accounts/alpha/login', { method: 'device' });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.verificationUrl, 'https://example.com/device');
+    assert.equal(response.body.userCode, 'ABCD-1234');
+    assert.equal(servers[0].options.codexHome, a.home);
+    assert.deepEqual(servers[0].calls[0], ['loginStart', { type: 'chatgptDeviceCode' }]);
+    authByHome.set(a.home, true);
+    servers[0].emit('account/login/completed', { loginId: response.body.loginId, success: true });
+    const failed = await until(async () => {
+      const status = await api('GET', `/api/accounts/login/${response.body.loginId}`);
+      return status.body.status === 'failed' ? status.body : null;
+    });
+    assert.match(failed.error, /did not restore account authentication/);
+    assert.equal(profiles.read().profiles.some((profile) => profile.name === 'alpha'), true);
+    assert.equal(fs.existsSync(a.home), true);
+    assert.equal(servers[0].closed, true);
+  });
+
+  it('preserves the existing profile and home after cancel and timeout', async () => {
+    const { a } = seedProfiles();
+    const before = profiles.read();
+    await start({ loginTimeoutMs: 30 });
+
+    const canceled = await api('POST', '/api/accounts/alpha/login', { method: 'browser' });
+    assert.equal(canceled.status, 200);
+    const cancelResponse = await api('POST', `/api/accounts/login/${canceled.body.loginId}/cancel`);
+    assert.equal(cancelResponse.body.status, 'failed');
+    assert.equal(fs.existsSync(a.home), true);
+    assert.deepEqual(profiles.read(), before);
+
+    const timedOut = await api('POST', '/api/accounts/alpha/login', { method: 'device' });
+    assert.equal(timedOut.status, 200);
+    const expired = await until(async () => {
+      const status = await api('GET', `/api/accounts/login/${timedOut.body.loginId}`);
+      return status.body.status === 'expired' ? status.body : null;
+    });
+    assert.ok(expired.error);
+    assert.equal(fs.existsSync(a.home), true);
+    assert.deepEqual(profiles.read(), before);
+    assert.deepEqual(servers.slice(-2).map((entry) => entry.options.codexHome), [a.home, a.home]);
+  });
+
+  it('does not render re-login controls without an explicit auth-required signal', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'launcher-ui', 'app.js'), 'utf8');
+    assert.match(source, /account\.requiresOpenaiAuth === true/);
+    assert.doesNotMatch(source, /rate.?limits[^\n]*null[^\n]*sign.?in/i);
   });
 });
 

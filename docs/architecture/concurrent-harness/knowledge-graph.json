@@ -7968,6 +7968,8 @@
     "imports": "edges.type=imports",
     "tests": "edges.type=tests_import",
     "scope": "nodes.subsystem",
-    "readyPackages": "implementation-backlog.json packages with status planned and every dependency status in accepted_design/source_accepted"
-  }
+    "readyPackages": "Historical package query is retired. Assign new work from ../../autonomous-delivery-backlog.md; implementation-backlog.json preserves historical package evidence only."
+  },
+  "planningStatus": "historical_snapshot",
+  "currentBacklogRef": "../../autonomous-delivery-backlog.md"
 }

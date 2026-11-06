@@ -40,6 +40,7 @@ const { buildSituation, buildReviewContexts, ownerPausedLead, gitStatus } = requ
 const { createAskService, AskError } = require('./launcher-ask');
 const { projectDeliveryObjectives, projectDeliveryVisibility, MAX_PAGE_SIZE } = require('./delivery-visibility');
 const { readOwnerSettings, writeDeliveryEngine } = require('./launcher-project-settings');
+const { classifyTransientFailure } = require('./transient-recovery');
 
 const UI_DIR = path.join(__dirname, '..', 'launcher-ui');
 const PROJECT_ID = /^[0-9a-f]{10}$/;
@@ -386,6 +387,70 @@ function createLauncherApp({
       res.json(control);
     } catch (_) {
       res.status(503).json({ available: false, reason: 'delivery_control_unavailable' });
+    }
+  });
+
+  const OWNER_CONTROL_FIELDS = ['runId', 'projectId', 'sessionId', 'objectiveId', 'expectedControlRevision'];
+  app.post('/api/projects/:id/delivery/control/:action', async (req, res) => {
+    const { action } = req.params;
+    const body = req.body;
+    if (!['pause', 'resume', 'cancel'].includes(action)) return res.status(404).json({ error: 'Delivery control action not found' });
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== OWNER_CONTROL_FIELDS.length
+      || Object.keys(body).some((key) => !OWNER_CONTROL_FIELDS.includes(key))
+      || OWNER_CONTROL_FIELDS.some((key) => !Object.hasOwn(body, key))
+      || !validScopeId(body.runId) || body.projectId !== req.params.id || !validScopeId(body.sessionId)
+      || !validScopeId(body.objectiveId) || !Number.isSafeInteger(body.expectedControlRevision) || body.expectedControlRevision < 0) {
+      return res.status(400).json({ error: 'Invalid delivery owner control request' });
+    }
+    try {
+      if (projects.get(req.params.id).status !== 'running') return res.status(409).json({ error: 'Project server is stopped' });
+      const mapping = deliveryRunMapping(req.params.id, body.objectiveId, body.sessionId);
+      if (!mapping || mapping.run_id !== body.runId) return res.status(409).json({ error: 'Delivery run scope is no longer current' });
+      let current;
+      try { current = await controlCall(req.params.id, 'GET', `/control/delivery/${encodeURIComponent(mapping.run_id)}`); }
+      catch (_) { return res.status(503).json({ error: 'Owner control is unavailable' }); }
+      if (!controlScopeMatches(current, req.params.id, body.sessionId, body.objectiveId, mapping.run_id)) {
+        return res.status(409).json({ error: 'Delivery run scope is no longer current' });
+      }
+      if (current.revisions?.controlRevision !== body.expectedControlRevision) {
+        return res.status(409).json({ error: 'Delivery control revision is stale' });
+      }
+      if (action === 'resume' && current.disposition !== 'paused_owner') {
+        return res.status(409).json({ error: 'Delivery objective is not paused by the owner' });
+      }
+      if (action === 'cancel' && ['accepted', 'partial', 'canceled', 'draining'].includes(current.disposition)) {
+        return res.status(409).json({ error: 'Delivery objective is already terminal or canceling' });
+      }
+      let acknowledgement;
+      try {
+        acknowledgement = await controlCall(req.params.id, 'POST',
+          `/control/delivery/${encodeURIComponent(mapping.run_id)}/${action}`, body);
+      } catch (error) {
+        const status = /answered 409/.test(error.message) ? 409 : /answered 404/.test(error.message) ? 503 : 502;
+        return res.status(status).json({ error: status === 409 ? 'Delivery state changed; refresh status' : 'Owner control is unavailable' });
+      }
+      if (action === 'cancel') {
+        const validCancelAck = controlScopeMatches(acknowledgement, req.params.id, body.sessionId, body.objectiveId, mapping.run_id)
+          && acknowledgement.action === 'cancel' && acknowledgement.acknowledged === true
+          && ((acknowledgement.state === 'requested' && acknowledgement.disposition === 'draining')
+            || (acknowledgement.state === 'applied' && acknowledgement.disposition === 'canceled'))
+          && ['draining', 'canceled'].includes(acknowledgement.disposition)
+          && Number.isSafeInteger(acknowledgement.revisions?.controlRevision)
+          && acknowledgement.revisions.controlRevision > body.expectedControlRevision;
+        if (!validCancelAck) return res.status(502).json({ error: 'Cancellation request acknowledgement could not be verified' });
+        return res.json(acknowledgement);
+      }
+      const expectedDisposition = action === 'pause' ? 'paused_owner' : 'executing';
+      const nextRevision = acknowledgement?.revisions?.controlRevision;
+      if (!controlScopeMatches(acknowledgement, req.params.id, body.sessionId, body.objectiveId, mapping.run_id)
+        || acknowledgement.action !== action || acknowledgement.state !== 'applied' || acknowledgement.acknowledged !== true
+        || acknowledgement.disposition !== expectedDisposition || !Number.isSafeInteger(nextRevision)
+        || nextRevision <= body.expectedControlRevision) {
+        return res.status(502).json({ error: 'Owner control acknowledgement could not be verified' });
+      }
+      return res.json(acknowledgement);
+    } catch (_) {
+      return res.status(503).json({ error: 'Owner control is unavailable' });
     }
   });
 
@@ -812,18 +877,30 @@ function createLauncherApp({
   async function readLimits(home) {
     const server = createAppServer({ cwd: process.cwd(), codexHome: home });
     try {
-      const [data, accountData] = await Promise.all([
-        server.readRateLimits(),
-        server.getAccount().catch(() => null),
+      const [limitsResult, accountResult] = await Promise.all([
+        Promise.resolve().then(() => server.readRateLimits()).then(
+          (value) => ({ value, error: null }), (error) => ({ value: null, error })),
+        Promise.resolve().then(() => server.getAccount()).then(
+          (value) => ({ value, error: null }), (error) => ({ value: null, error })),
       ]);
+      const data = limitsResult.value;
+      const accountData = accountResult.value;
       const r = data?.rateLimits;
-      if (!r) throw new Error('Rate limits unavailable');
-      return {
+      const value = {
         email: accountData?.account?.email || null,
-        planType: accountData?.account?.planType || r.planType || null,
-        primary: r.primary || null,    // 5h
-        secondary: r.secondary || null, // weekly
+        planType: accountData?.account?.planType || r?.planType || null,
+        primary: r?.primary || null,    // 5h
+        secondary: r?.secondary || null, // weekly
       };
+      if (typeof accountData?.requiresOpenaiAuth === 'boolean') value.requiresOpenaiAuth = accountData.requiresOpenaiAuth;
+      if ([limitsResult.error, accountResult.error].some((error) => error && classifyTransientFailure(error).category === 'auth')) {
+        value.requiresOpenaiAuth = true;
+      }
+      if (!r) {
+        value.limitsAvailable = false;
+        value.error = 'Rate limits unavailable';
+      } else value.limitsAvailable = true;
+      return value;
     } finally {
       await server.close().catch(() => {});
     }
@@ -873,6 +950,7 @@ function createLauncherApp({
     const { key, home } = activeKeyAndHome();
     try {
       const v = await cachedLimits(key, home, force);
+      if (v.limitsAvailable !== true) throw new Error(v.error || 'Rate limits unavailable');
       res.json({ success: true, email: v.email, planType: v.planType || 'plus', primary: v.primary, secondary: v.secondary });
     } catch (err) {
       const stale = limitsCache.get(key);
@@ -893,8 +971,11 @@ function createLauncherApp({
       view.planType = v.planType || view.planType;
       view.primary = v.primary;
       view.secondary = v.secondary;
+      if (typeof v.requiresOpenaiAuth === 'boolean') view.requiresOpenaiAuth = v.requiresOpenaiAuth;
+      if (v.limitsAvailable !== true) view.error = v.error || 'Rate limits unavailable';
     } catch (err) {
       view.error = err.message || String(err);
+      if (typeof err.requiresOpenaiAuth === 'boolean') view.requiresOpenaiAuth = err.requiresOpenaiAuth;
     }
     return view;
   }
@@ -992,15 +1073,24 @@ function createLauncherApp({
     if (status === 'completed') {
       try {
         const info = await entry.server.getAccount().catch(() => null);
-        accountProfiles.addProfile({ name: entry.name, email: info?.account?.email || null, planType: info?.account?.planType || null });
+        if (entry.relogin) {
+          if (info?.requiresOpenaiAuth !== false) throw new Error('Sign-in did not restore account authentication');
+          if (entry.name !== 'system' && !accountProfiles.read().profiles.some((profile) => profile.name === entry.name)) {
+            throw new Error('Account profile was removed during sign-in');
+          }
+          limitsCache.delete(entry.key);
+          limitsCacheEpochs.set(entry.key, (limitsCacheEpochs.get(entry.key) || 0) + 1);
+        } else {
+          accountProfiles.addProfile({ name: entry.name, email: info?.account?.email || null, planType: info?.account?.planType || null });
+        }
       } catch (err) {
         status = 'failed';
         error = err.message || String(err);
-        removeUnfinishedHome(entry.name);
+        if (!entry.relogin) removeUnfinishedHome(entry.name);
       }
     } else {
       if (cancel && entry.loginId) await entry.server.loginCancel(entry.loginId).catch(() => {});
-      removeUnfinishedHome(entry.name);
+      if (!entry.relogin) removeUnfinishedHome(entry.name);
     }
     await entry.server.close().catch(() => {});
     entry.status = status;
@@ -1050,6 +1140,44 @@ function createLauncherApp({
     } catch (err) {
       entry.unsubscribe?.();
       removeUnfinishedHome(name);
+      try { await entry.server?.close(); } catch (_) { /* best effort */ }
+      res.status(500).json({ success: false, error: err.message || String(err) });
+    }
+  });
+
+  app.post('/api/accounts/:name/login', async (req, res) => {
+    const name = req.params.name;
+    const method = req.body && req.body.method;
+    if (method !== 'browser' && method !== 'device') {
+      return res.status(400).json({ success: false, error: 'method must be browser or device' });
+    }
+    const profile = name === 'system' ? null : accountProfiles.read().profiles.find((entry) => entry.name === name);
+    if (name !== 'system' && !profile) return res.status(404).json({ success: false, error: 'Unknown account: ' + name });
+    if ([...logins.values()].some((entry) => entry.name === name && entry.status === 'pending')) {
+      return res.status(409).json({ success: false, error: 'Account sign-in is already pending' });
+    }
+    const entry = { name, key: name === 'system' ? SYSTEM_KEY : name, relogin: true,
+      status: 'pending', loginId: null, early: null, server: null, timer: null, unsubscribe: null };
+    try {
+      entry.server = createAppServer({ cwd: process.cwd(), ...(profile ? { codexHome: profile.home } : {}) });
+      entry.unsubscribe = entry.server.onNotification('account/login/completed', (params) => {
+        if (!entry.loginId) entry.early = params;
+        else if (params.loginId === entry.loginId) handleLoginCompleted(entry, params);
+      });
+      const result = await entry.server.loginStart(method === 'device' ? { type: 'chatgptDeviceCode' } : { type: 'chatgpt' });
+      entry.loginId = result.loginId;
+      logins.set(entry.loginId, entry);
+      entry.timer = setTimeout(() => { endLogin(entry, 'expired', 'Login timed out', { cancel: true }); }, loginTimeoutMs);
+      entry.timer.unref?.();
+      if (entry.early && entry.early.loginId === entry.loginId) handleLoginCompleted(entry, entry.early);
+      const body = { success: true, loginId: entry.loginId };
+      if (method === 'device') {
+        body.verificationUrl = result.verificationUrl;
+        body.userCode = result.userCode;
+      } else body.authUrl = result.authUrl;
+      res.json(body);
+    } catch (err) {
+      entry.unsubscribe?.();
       try { await entry.server?.close(); } catch (_) { /* best effort */ }
       res.status(500).json({ success: false, error: err.message || String(err) });
     }

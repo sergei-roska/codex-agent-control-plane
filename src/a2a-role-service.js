@@ -363,6 +363,18 @@ function messageCorrelations(requestContext) {
   };
 }
 
+function providerCallBinding(requestContext) {
+  const metadata = requestContext?.userMessage?.metadata || {};
+  const keys = ['runId', 'attemptId', 'assignmentId'];
+  if (!keys.some((key) => Object.hasOwn(metadata, key))) return null;
+  const taskId = requestContext?.taskId;
+  if (keys.some((key) => typeof metadata[key] !== 'string' || !metadata[key])
+    || typeof taskId !== 'string' || !taskId) {
+    throw Object.assign(new Error('Provider call correlation is incomplete'), { code: 'provider_call_binding_invalid' });
+  }
+  return { runId: metadata.runId, attemptId: metadata.attemptId, assignmentId: metadata.assignmentId, taskId };
+}
+
 function makeExecutor({
   roleId, role, appServer, workspace, admission, reconcileRetry = DEFAULT_RECONCILE_RETRY, usageLedger = null, activityStore = null, skillCatalog,
   mcpCatalog, lanes = null, stagingLog, executionPermissions = 'inherit', resolveVerifierCapability = null,
@@ -1036,6 +1048,10 @@ function makeExecutor({
           if (scoped) scoped.assertCurrent();
           if (scoped && !scoped.verifyCandidate()) throw new BoundaryViolation('review.candidate', 'verifier_candidate_drift', 'Frozen verifier candidate changed before execution.');
           if (scoped) deliveryReservationSettled = false;
+          const callBinding = providerCallBinding(requestContext);
+          if (callBinding && appServer.callBindingVersion !== 'call-bound/v1') {
+            throw Object.assign(new Error('Provider call binding is unavailable for this App Server'), { code: 'provider_call_binding_unavailable' });
+          }
           const runPromise = appServer.run({
             role: { id: roleId, ...role },
             cwd: scoped ? scoped.scratchRoot : lane ? lane.workspacePath : workspace,
@@ -1046,6 +1062,7 @@ function makeExecutor({
                 : auditRole && reviewContext?.kind !== 'investigation'
                   ? `${text}\n\n${AUDIT_REPORT_GUIDANCE}` : text,
             ...(threadId ? { threadId } : {}),
+            ...(callBinding ? { callBinding } : {}),
             selectedSkills,
             selectedMcpTools,
             executionPermissions,

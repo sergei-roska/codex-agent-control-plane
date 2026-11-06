@@ -1,5 +1,10 @@
 # Concurrent Harness implementation status
 
+Planning reset, 2026-11-06: [current backlog](../../autonomous-delivery-backlog.md).
+The qualification below is preserved historical evidence. Pending work is mapped
+in the [migration record](../../autonomous-delivery-migration.md); the reset does
+not mark any pending runtime behavior or live qualification complete.
+
 Updated 2026-11-05. This document records bounded source qualification, isolated
 native trials, and isolated UI readiness.
 

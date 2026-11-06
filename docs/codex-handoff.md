@@ -1,4 +1,31 @@
-# Current handoff: audit loop and session repairs (2026-10-13)
+# Current direction: autonomous delivery backlog reset (2026-11-06)
+
+Use [the active development backlog](autonomous-delivery-backlog.md),
+[historical work mapping](autonomous-delivery-migration.md), and
+[restriction evidence](autonomous-delivery-constraints.md) for new assignments.
+The owner requires durable autonomous completion, automatic account failover,
+quota wait/resume across restart, independent recovery and justified owner questions.
+Restrictions need an owner requirement, a provider fact, or an evidenced invariant.
+Do not turn arbitrary iteration or token thresholds into owner questions or success.
+
+This is a planning reset. Existing source and historical qualification remain;
+new runtime behavior is pending the active backlog's acceptance scenarios. Runtime
+objectives and execution histories are separate from development plans and are
+preserved. The previous comparative trial is incomplete, not a release gate for
+all new functional work. See the current [source status](architecture/concurrent-harness/implementation-status.md).
+Local succession: `.agents/teamwork/PROJECT.md` and its linked owner handoff.
+
+Known source gaps at `ab5c195`: the legacy server inherits an 80-round default
+from `LeadOrchestrator`; concurrent account migration and budget wake are not
+fully connected. The historical unlimited-round wording below is not current
+runtime evidence. See the constraint inventory for caller traces and probes.
+
+Historical handoffs below describe their recorded revisions. Their next-step
+instructions and planning restrictions are superseded by the active backlog.
+
+---
+
+# Historical handoff: audit loop and session repairs (2026-10-13)
 
 The current local work map is `.agents/teamwork/PROJECT.md`; read the lead's
 handoff linked there before broad exploration. Root `AGENTS.md` defines the

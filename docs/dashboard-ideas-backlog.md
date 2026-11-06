@@ -1,5 +1,7 @@
 # Dashboard ideas backlog
 
+> Archived development plan, 2026-11-06. Use the [current autonomous delivery backlog](autonomous-delivery-backlog.md) for new work. The historical content below preserves decisions, IDs and evidence; its priorities and restrictions do not override the current owner requirements.
+
 Status: ideas recorded at the owner's request on 2026-10-10. Not designed, not
 scheduled. Each item needs a short design before implementation.
 

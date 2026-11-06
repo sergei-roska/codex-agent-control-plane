@@ -113,6 +113,37 @@ test('omitted contract and context preserve the complete pinned intake across SQ
   assert.equal(calls[1].newRequest, 'next');
 });
 
+test('concurrent objective identity and required-check intake survive router reopen', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-router-concurrent-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const filename = path.join(directory, 'state.sqlite');
+  const contract = { requiredChecks: [{ id: 'source-check', argv: [process.execPath, 'verify.js'] }] };
+  const calls = [];
+  const concurrent = {
+    async run(input) { calls.push(['run', input]); return { status: 'paused' }; },
+    async resume(input) { calls.push(['resume', input]); return { status: 'paused' }; },
+  };
+  const legacy = { async run() { throw new Error('Unexpected legacy run'); }, async resume() { throw new Error('Unexpected legacy resume'); } };
+  const firstDb = new Database(filename);
+  const first = new DeliveryEngineRouter({ db: firstDb, projectId: PROJECT, defaultEngine: 'concurrent-v1',
+    legacyEngine: legacy, concurrentEngine: concurrent, now: () => 11 });
+  await first.run({ runId: 'objective-task-1', goal: 'Keep the initial owner goal.', contract, contextId: 'provider-context-1' });
+  const original = first.mapping('objective-task-1');
+  assert.equal(original.objectiveId, first.objectiveIdFor('objective-task-1'));
+  assert.equal(original.sessionId, first.sessionIdFor('objective-task-1', 'provider-context-1'));
+  firstDb.close();
+
+  const secondDb = new Database(filename);
+  t.after(() => secondDb.close());
+  const reopened = new DeliveryEngineRouter({ db: secondDb, projectId: PROJECT, defaultEngine: 'legacy',
+    legacyEngine: legacy, concurrentEngine: concurrent, now: () => 22 });
+  await reopened.resume({ runId: 'objective-task-1' });
+  assert.deepEqual(reopened.mapping('objective-task-1'), original);
+  assert.deepEqual(calls[1][1], { runId: 'objective-task-1', objectiveId: original.objectiveId,
+    sessionId: original.sessionId, engineMapping: original });
+  assert.deepEqual(original.request, { goal: 'Keep the initial owner goal.', contract, contextId: 'provider-context-1' });
+});
+
 test('resume placeholder backfills once and retains the legacy engine after default changes', async (t) => {
   const db = new Database(':memory:');
   t.after(() => db.close());

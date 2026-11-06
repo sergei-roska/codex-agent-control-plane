@@ -11,6 +11,7 @@ const { execFileSync } = require('node:child_process');
 const express = require('express');
 const Database = require('better-sqlite3');
 const { ConcurrentDeliveryEngine } = require('../src/concurrent-delivery-engine');
+const { DeliveryEngineRouter } = require('../src/delivery-engine-router');
 const { createSwitchingAppServer } = require('../src/app-server-switch');
 const { WriterAdmission } = require('../src/writer-admission');
 const { LaneManager } = require('../src/writer-lanes');
@@ -201,13 +202,14 @@ for (const mode of ['required', 'empty', 'planner-recovery', 'default-profile', 
       }),
     });
   }
-  const { db, engine, lead } = await createHarness(t, { appServer: composedAppServer,
+  const fx = await createHarness(t, { appServer: composedAppServer,
     ...(mode === 'large-review' ? { files: {
       'source.txt': 'stable input\n',
       'verify-source.js': "'use strict';\nif (require('node:fs').readFileSync('source.txt', 'utf8') !== 'stable input\\n') process.exit(1);\n",
       ...Object.fromEntries(Array.from({ length: 210 }, (_, index) => [`scope-${index}.txt`, `input ${index}\n`])),
     } } : {}),
     ...(pinnedIdentity ? { providerIdentity: pinnedIdentity, providerIdentityFor: () => pinnedIdentity } : {}) });
+  const { db, engine, lead } = fx;
 
   const running = engine.run({ runId: 'engine-run-1', goal: 'Confirm the current source is acceptable.',
     contract: { requiredChecks: emptyChecks ? [] : [{ id: 'source-content', argv: [process.execPath, 'verify-source.js'] }] },
@@ -279,6 +281,31 @@ for (const mode of ['required', 'empty', 'planner-recovery', 'default-profile', 
   const finalCheckProof = db.prepare('SELECT result_json FROM concurrent_finalization_check_proofs').get();
   assert.ok(finalCheckProof);
   assert.equal(JSON.parse(finalCheckProof.result_json).checkResults.length, emptyChecks ? 0 : 1);
+  if (mode === 'required') {
+    const objectiveId = 'engine-objective-1';
+    const terminalBefore = engine.store.listFinalizations(projectId, objectiveId).find((entry) => entry.state === 'accepted').terminalRecord;
+    const finalizationBefore = engine.store.getFinalization(projectId, objectiveId, terminalBefore.finalizationId);
+    const candidateId = terminalBefore.pins.candidate.candidateId;
+    const terminalStatus = engine.controlStatus('engine-run-1');
+    assert.equal(terminalStatus.phase, 'terminal');
+    assert.equal(terminalStatus.finalization.state, 'accepted');
+    assert.equal(terminalStatus.finalization.qualified, true);
+    assert.equal(terminalStatus.finalization.fingerprint, finalizationBefore.terminalDigest);
+    assert.equal(terminalStatus.disposition, 'accepted');
+    await engine.shutdown();
+    db.close();
+    const reopened = await reopenWithProvider(t, fx, { accountId: 'fake-account', codexHome: expectedHome }, fx.appServer);
+    const qualification = reopened.engine.store.currentFinalizationQualification(projectId, objectiveId,
+      { candidateStore: reopened.engine.candidateStore, reviewStore: reopened.engine.reviewStore });
+    assert.equal(qualification.current, true, JSON.stringify(qualification));
+    assert.equal(qualification.historical.pins.candidate.candidateId, candidateId);
+    assert.deepEqual(reopened.engine.store.getFinalization(projectId, objectiveId, terminalBefore.finalizationId), finalizationBefore);
+    assert.deepEqual(await reopened.engine.resume({ runId: 'engine-run-1' }), result);
+    assert.deepEqual(reopened.engine.controlStatus('engine-run-1').finalization, terminalStatus.finalization);
+    assert.equal(reopened.engine.getRunDigest('engine-run-1').candidateId, candidateId);
+    assert.deepEqual(reopened.engine.store.listFinalizations(projectId, objectiveId).find((entry) => entry.state === 'accepted').terminalRecord,
+      terminalBefore);
+  }
 });
 
 test('lead preparation settings mutation is rejected before any provider turn', async (t) => {
@@ -428,6 +455,7 @@ test('steering revision changes during controller setup roll back the appended m
   releaseLead.resolve();
   const result = await running;
   assert.equal(result.status, 'canceled');
+  assert.equal(engine.store.getObjective(projectId, 'steer-race-objective').disposition, 'canceled');
   assert.equal(oldController.inbox.get(body.messageId), null);
 });
 
@@ -752,7 +780,8 @@ for (const failure of ['live-process', 'missing-terminal', 'wrong-thread', 'prov
     await assert.rejects(engine.shutdown(), { code: 'concurrent_shutdown_unsafe' });
     assert.equal(db.prepare('SELECT status FROM delivery_planner_turns').get().status, 'unknown');
     abort.abort();
-    assert.equal((await pending).status, 'canceled');
+    assert.equal((await pending).status, 'input_required');
+    assert.equal(engine.store.getObjective(projectId, 'engine-objective-1').disposition, 'draining');
   });
 }
 
@@ -770,7 +799,8 @@ test('database reopen cannot release a canceled run with an unknown durable plan
   await waitFor(() => fx.engine.controllers.get('reopen-run')?.status().lastRecovery, 'missing unknown planner recovery');
   await assert.rejects(fx.engine.shutdown(), { code: 'concurrent_shutdown_unsafe' });
   abort.abort();
-  assert.equal((await pending).status, 'canceled');
+  assert.equal((await pending).status, 'input_required');
+  assert.equal(fx.engine.store.getObjective(projectId, 'engine-objective-1').disposition, 'draining');
   fx.db.close();
   const db = new Database(path.join(fx.storageRoot, 'state.sqlite'));
   const admission = new WriterAdmission({ db, workspace: fx.workspace });
@@ -782,11 +812,11 @@ test('database reopen cannot release a canceled run with an unknown durable plan
     providerIdentity: identity, providerIdentityFor: () => identity, roles: fx.roles, leadRole: fx.lead, admission, lanes,
     writerIsolation: { mode: 'worktree' }, sleepMs: 10 });
   try {
-    assert.deepEqual(await reopened.recoverStoredRuns(), []);
+    assert.deepEqual(await reopened.recoverStoredRuns(), [{ runId: 'reopen-run', state: 'checked' }]);
     assert.equal(calls, 1);
     await assert.rejects(reopened.shutdown(), (cause) => {
       assert.equal(cause.code, 'concurrent_shutdown_unsafe');
-      assert.equal(cause.projections[0].disposition, 'canceled');
+      assert.equal(cause.projections[0].disposition, 'draining');
       assert.ok(cause.projections[0].reasons.includes('live_or_unknown_planner_turn'));
       assert.equal(cause.projections[0].plannerTurns[0].status, 'unknown');
       return true;
@@ -870,7 +900,8 @@ for (const mode of ['owned', 'cooperative', 'unknown', 'publication', 'pending-i
     const attempt = fx.engine.store.listAttempts(projectId, objectiveId).find((row) => row.taskId === 'held-worker');
     assert.ok(attempt);
     abort.abort();
-    assert.equal((await running).status, 'canceled');
+    assert.equal((await running).status, 'input_required');
+    assert.equal(fx.engine.store.getObjective(projectId, objectiveId).disposition, 'draining');
     assert.equal(fx.engine.executor.getAttempt(attempt.attemptId).externalTaskId, null);
     await assert.rejects(fx.engine.shutdown(), { code: 'concurrent_shutdown_unsafe' });
     assert.equal(fx.engine.roleService.getExecution(attempt.attemptId).state, 'running');
@@ -902,7 +933,7 @@ for (const mode of ['owned', 'cooperative', 'unknown', 'publication', 'pending-i
         baseUrl: fx.baseUrl, authMiddleware: auth, authToken: 'concurrent-test-token', appServer: fx.appServer,
         providerIdentity: identity, providerIdentityFor: () => identity, roles: fx.roles, leadRole: fx.lead, admission, lanes,
         writerIsolation: { mode: 'worktree' }, sleepMs: 10 });
-      assert.deepEqual(await engine.recoverStoredRuns(), []);
+      assert.deepEqual(await engine.recoverStoredRuns(), [{ runId, state: 'checked' }]);
     }
     try {
       if (['owned', 'reopen'].includes(mode)) {
@@ -964,6 +995,31 @@ function facadePlannerResult(options, turnId) {
     execution: { threadId, turnId, processIdentity, turnStartSent: true, turnStartRejected: false, turnTerminal: true } };
 }
 
+test('revision-pinned owner cancel stays draining until the admitted planner turn settles', { timeout: 10000 }, async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  t.after(() => release.resolve());
+  let calls = 0;
+  const fx = await createHarness(t, { appServer: { async run(options) {
+    calls += 1;
+    const result = facadePlannerResult(options, `cancel-turn-${calls}`);
+    if (calls === 1) { entered.resolve(); await release.promise; }
+    return result;
+  } } });
+  const pending = fx.engine.run(facadeIntake(new AbortController().signal));
+  await entered.promise;
+  const before = fx.engine.controlStatus('pause-facade-run');
+  const acknowledgement = await fx.engine.requestCancel('pause-facade-run', before.revisions.controlRevision);
+  assert.deepEqual([acknowledgement.action, acknowledgement.state, acknowledgement.disposition,
+    acknowledgement.revisions.controlRevision], ['cancel', 'requested', 'draining', before.revisions.controlRevision + 1]);
+  assert.equal(fx.engine.store.getObjective(projectId, before.objectiveId).disposition, 'draining');
+  release.resolve();
+  const result = await pending;
+  assert.equal(result.status, 'canceled');
+  assert.equal(fx.engine.store.getObjective(projectId, before.objectiveId).disposition, 'canceled');
+  assert.equal(calls, 1);
+});
+
 async function createPausedFacadeHarness(t, { appServer = {} } = {}) {
   const fx = await createHarness(t, { appServer: { async run(options) { return facadePlannerResult(options, 'initial-pause-turn'); }, ...appServer } });
   const abort = new AbortController();
@@ -975,6 +1031,66 @@ async function createPausedFacadeHarness(t, { appServer = {} } = {}) {
   await fx.engine.shutdown();
   return fx;
 }
+
+test('concurrent status uses persisted phase, wait, task, and provider binding facts', { timeout: 15000 }, async (t) => {
+  const fx = await createPausedFacadeHarness(t);
+  let status = fx.engine.controlStatus('pause-facade-run');
+  assert.equal(status.phase, 'paused');
+  assert.equal(status.disposition, 'paused_owner');
+  assert.deepEqual(status.nextAction, { kind: 'owner_action', state: 'required', reason: 'paused_owner' });
+  assert.equal(status.providerBinding.state, 'bound');
+  assert.equal(status.providerBinding.account, 'durably_bound');
+  assert.equal(JSON.stringify(status).includes('fake-account'), false);
+  assert.equal(status.candidate.state, 'known');
+  assert.deepEqual(status.waits, []);
+
+  let objective = fx.engine.store.getObjective(projectId, 'engine-objective-1');
+  objective = fx.engine.store.transitionLifecycleControl(projectId, 'engine-objective-1', { action: 'resume',
+    expectedOwnerGeneration: objective.ownerGeneration, expectedControlRevision: objective.controlRevision });
+  const queued = engineerTask('engine-objective-1', 'status-pending-worker', 'status-pending.txt', 'remain queued for status');
+  fx.engine.store.applyPlan(projectId, 'engine-objective-1', planDelta(objective, [queued]));
+  status = fx.engine.controlStatus('pause-facade-run');
+  assert.equal(status.phase, 'active');
+  assert.equal(status.nextAction.kind, 'dispatch_tasks');
+  assert.ok(status.blockers.some((blocker) => blocker.kind === 'task_pending' && blocker.taskId === queued.taskId));
+  assert.deepEqual(status.checks, []);
+
+  objective = fx.engine.store.getObjective(projectId, 'engine-objective-1');
+  const wait = fx.engine.store.recordBudgetWait(projectId, 'engine-objective-1', { waitId: 'status-budget-wait', source: 'test',
+    provider: 'app-server', model: 'test-model', reasonCode: 'quota', nextWakeAt: 123456,
+    expectedControlRevision: objective.controlRevision, expectedOwnerGeneration: objective.ownerGeneration });
+  status = fx.engine.controlStatus('pause-facade-run');
+  assert.equal(status.phase, 'waiting');
+  assert.equal(status.disposition, 'waiting_budget');
+  assert.deepEqual(status.nextAction, { kind: 'wait_for_budget', state: 'scheduled', at: wait.nextWakeAt, reason: null });
+  assert.deepEqual(status.waits, [{ waitId: wait.waitId, state: 'waiting', source: 'test', provider: 'app-server', model: 'test-model',
+    reasonCode: 'quota', nextWakeAt: wait.nextWakeAt }]);
+  assert.ok(status.blockers.some((blocker) => blocker.kind === 'budget_wait'));
+});
+
+test('concurrent status marks blocked and missing durable evidence as unknown', { timeout: 15000 }, async (t) => {
+  const fx = await createPausedFacadeHarness(t);
+  let objective = fx.engine.store.getObjective(projectId, 'engine-objective-1');
+  objective = fx.engine.store.transitionLifecycleControl(projectId, 'engine-objective-1', { action: 'resume',
+    expectedOwnerGeneration: objective.ownerGeneration, expectedControlRevision: objective.controlRevision });
+  objective = fx.engine.store.blockTechnical(projectId, 'engine-objective-1', { failureCode: 'status_test_blocked',
+    expectedControlRevision: objective.controlRevision, expectedOwnerGeneration: objective.ownerGeneration });
+  let status = fx.engine.controlStatus('pause-facade-run');
+  assert.equal(status.phase, 'blocked');
+  assert.equal(status.disposition, 'blocked_technical');
+  assert.deepEqual(status.nextAction, { kind: 'technical_recovery', state: 'required', reason: 'blocked_technical' });
+
+  fx.db.prepare(`UPDATE concurrent_delivery_runs SET lead_thread_id=NULL,lead_codex_home=NULL,lead_settings_json=NULL
+    WHERE project_id=? AND run_id=?`).run(projectId, 'pause-facade-run');
+  fx.engine.controllers.delete('pause-facade-run');
+  status = fx.engine.controlStatus('pause-facade-run');
+  assert.deepEqual(status.providerBinding, { state: 'unknown', account: 'unknown', codexHome: 'unknown',
+    reason: 'durable_lead_binding_unavailable' });
+  assert.deepEqual(status.controller, { state: 'unknown', reason: 'controller_not_loaded' });
+  assert.deepEqual(status.finalization, { state: 'none', qualified: false, reason: 'finalization_not_recorded', candidateId: null });
+  assert.equal(status.checks.every((check) => check.state === 'unknown'), true);
+  assert.equal(JSON.stringify(status).includes('fake-account'), false);
+});
 
 async function reopenWithProvider(t, fx, identity, appServer) {
   const db = new Database(path.join(fx.storageRoot, 'state.sqlite'));
@@ -993,6 +1109,97 @@ async function reopenWithProvider(t, fx, identity, appServer) {
   t.after(async () => { await engine.shutdown().catch(() => {}); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); db.close(); });
   return { db, engine };
 }
+
+test('composed router and engine reopen the same concurrent objective with checkpoint and attempt lineage', { timeout: 15000 }, async (t) => {
+  const runId = 'composed-restart-task';
+  const goal = 'Keep the original objective and execute only its required source check.';
+  const contract = { requiredChecks: [{ id: 'source-check', argv: [process.execPath, 'verify-source.js'] }] };
+  const contextId = 'composed-provider-context';
+  const calls = [];
+  const roles = new Map([
+    ['verifier', { id: 'verifier', name: 'Verifier', description: 'Checks frozen inputs.', sandbox: 'read-only', model: 'test-model', effort: 'low', fastMode: 'off' }],
+    ['engineer', { id: 'engineer', name: 'Engineer', description: 'Writes assigned changes.', sandbox: 'workspace-write', model: 'test-model', effort: 'low', fastMode: 'off' }],
+  ]);
+  const fx = await createHarness(t, { roles, appServer: { async run(options) {
+    calls.push(options.role.id);
+    return facadePlannerResult(options, `composed-turn-${calls.length}`);
+  } } });
+  const legacyEngine = { async run() { throw new Error('Unexpected legacy dispatch'); }, async resume() { throw new Error('Unexpected legacy resume'); } };
+  const router = new DeliveryEngineRouter({ db: fx.db, projectId, defaultEngine: 'concurrent-v1',
+    legacyEngine, concurrentEngine: fx.engine });
+  const initial = router.run({ runId, goal, contract, contextId });
+  await waitFor(() => fx.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='delivery_planner_turns'").get()
+    && fx.db.prepare("SELECT status FROM delivery_planner_turns WHERE status='complete'").get(), 'initial composed planner did not complete');
+  const mapping = router.mapping(runId);
+  assert.equal(mapping.objectiveId, router.objectiveIdFor(runId));
+  assert.equal(mapping.sessionId, router.sessionIdFor(runId, contextId));
+  assert.equal(fx.engine.requestPause(runId), true);
+  assert.equal((await initial).pause.kind, 'owner_pause');
+
+  const objectiveId = mapping.objectiveId;
+  const checkpointBefore = fx.engine.reviewStore.checkpointHistory({ projectId, objectiveId });
+  assert.equal(checkpointBefore.length, 1);
+  assert.equal(checkpointBefore[0].checkpoint.checkIdentity, fx.engine.db.prepare(`SELECT check_identity FROM concurrent_delivery_runs
+    WHERE project_id=? AND run_id=?`).get(projectId, runId).check_identity);
+  assert.deepEqual(checkpointBefore[0].checkpoint.checkPins, ['source-check']);
+  const originalRun = fx.engine.db.prepare('SELECT * FROM concurrent_delivery_runs WHERE project_id=? AND run_id=?').get(projectId, runId);
+  assert.equal(originalRun.goal, goal);
+  const persistedContract = { id: 'acceptance-contract/v1', requiredChecks: [{ ...contract.requiredChecks[0], timeoutMs: 600000 }] };
+  assert.deepEqual(JSON.parse(originalRun.contract_json), persistedContract);
+
+  let objective = fx.engine.store.getObjective(projectId, objectiveId);
+  objective = fx.engine.store.transitionLifecycleControl(projectId, objectiveId, { action: 'resume',
+    expectedOwnerGeneration: objective.ownerGeneration, expectedControlRevision: objective.controlRevision });
+  const task = engineerTask(objectiveId, 'lineage-worker', 'never-written.txt', 'retain historical attempt lineage');
+  const queuedTask = engineerTask(objectiveId, 'queued-worker', 'queued-output.txt', 'remain pending behind the prior worker');
+  const dependency = { schemaVersion: 'delivery/v1', projectId, objectiveId, predecessorType: 'task', predecessorId: task.taskId,
+    successorTaskId: queuedTask.taskId, kind: 'requires_output' };
+  fx.engine.store.applyPlan(projectId, objectiveId, planDelta(objective, [task, queuedTask], [dependency]));
+  objective = fx.engine.store.getObjective(projectId, objectiveId);
+  const [claim] = fx.engine.store.claimReady(projectId, objectiveId, objective.ownerGeneration, { controlRevision: objective.controlRevision });
+  assert.ok(claim);
+  const settled = fx.engine.store.settleAttempt(projectId, objectiveId, claim.attempt.attemptId, claim.claim.fencingToken,
+    { state: 'canceled', failureKind: 'test_no_dispatch' }, { remoteQuiescent: true, processQuiescent: true,
+      effectsSettled: true, evidenceRefs: ['test:no-dispatch'] });
+  assert.equal(settled.attempt.state, 'canceled');
+  objective = fx.engine.store.getObjective(projectId, objectiveId);
+  fx.engine.store.transitionLifecycleControl(projectId, objectiveId, { action: 'pause',
+    expectedOwnerGeneration: objective.ownerGeneration, expectedControlRevision: objective.controlRevision });
+  const attemptBefore = fx.engine.store.listAttempts(projectId, objectiveId);
+  assert.equal(attemptBefore.length, 1);
+  const queuedBefore = fx.engine.store.getObjective(projectId, objectiveId).tasks.find((entry) => entry.taskId === queuedTask.taskId);
+  assert.equal(queuedBefore.state, 'queued');
+
+  await fx.engine.shutdown();
+  fx.db.close();
+  const identity = { accountId: 'fake-account', codexHome };
+  const reopened = await reopenWithProvider(t, fx, identity, fx.appServer);
+  const resumedRouter = new DeliveryEngineRouter({ db: reopened.db, projectId, defaultEngine: 'legacy',
+    legacyEngine, concurrentEngine: reopened.engine });
+  const resumed = resumedRouter.resume({ runId });
+  await waitFor(() => calls.length === 2, 'reopened composed planner did not resume');
+  assert.equal(reopened.engine.requestPause(runId), true);
+  assert.equal((await resumed).pause.kind, 'owner_pause');
+
+  assert.deepEqual(resumedRouter.mapping(runId), mapping);
+  const reopenedRun = reopened.db.prepare('SELECT * FROM concurrent_delivery_runs WHERE project_id=? AND run_id=?').get(projectId, runId);
+  assert.equal(reopenedRun.objective_id, objectiveId);
+  assert.equal(reopenedRun.session_id, mapping.sessionId);
+  assert.equal(reopenedRun.goal, goal);
+  assert.deepEqual(JSON.parse(reopenedRun.contract_json), persistedContract);
+  assert.equal(reopenedRun.check_identity, originalRun.check_identity);
+  assert.deepEqual(reopened.engine.reviewStore.checkpointHistory({ projectId, objectiveId }), checkpointBefore);
+  assert.deepEqual(reopened.engine.store.listAttempts(projectId, objectiveId), attemptBefore);
+  assert.equal(reopened.engine.store.listAttempts(projectId, objectiveId)[0].attemptId, claim.attempt.attemptId);
+  assert.deepEqual(reopened.engine.store.getObjective(projectId, objectiveId).tasks.find((entry) => entry.taskId === queuedTask.taskId), queuedBefore);
+  assert.deepEqual(calls, ['lead', 'lead']);
+  await assert.rejects(resumedRouter.run({ runId, goal: 'A similar but different goal must not replace the owner objective.' }),
+    { code: 'run_intake_conflict' });
+  await assert.rejects(resumedRouter.run({ runId, contract: { requiredChecks: [] } }), { code: 'run_intake_conflict' });
+  assert.deepEqual(calls, ['lead', 'lead']);
+  assert.equal(reopened.engine.store.getObjective(projectId, objectiveId).disposition, 'paused_owner');
+  assert.equal(fs.existsSync(path.join(fx.workspace, 'never-written.txt')), false);
+});
 
 async function createBlockedFrozenReviewHarness(t) {
   const fx = await createPausedFacadeHarness(t);

@@ -108,7 +108,7 @@ function createTransientRecovery({ store, clock = { now: Date.now, setTimeout, c
   }
   function schedule(record) {
     clearTimer(record.run_id);
-    if (record.state !== 'waiting' || record.attempts >= maxAttempts) return;
+    if (record.state !== 'waiting' || !Number.isFinite(record.next_attempt_at)) return;
     const delay = Math.max(0, record.next_attempt_at - now());
     const timer = clock.setTimeout(() => { timers.delete(record.run_id); attempt(record.run_id).catch(() => {}); }, delay);
     timer?.unref?.();
@@ -163,35 +163,35 @@ function createTransientRecovery({ store, clock = { now: Date.now, setTimeout, c
     const current = store.get(record.run_id);
     if (stopped || !current || current.state !== 'dispatched' || current.attempts !== record.attempts
       || current.checkpoint_id !== record.checkpoint_id) return;
-    const attempts = record.attempts + 1;
+    const attempts = Math.min(record.attempts + 1, maxAttempts);
     const exhausted = attempts >= maxAttempts;
     const updated = {
       ...record,
       attempts,
-      state: exhausted ? 'exhausted' : 'waiting',
-      next_attempt_at: exhausted ? null : now() + backoff(attempts),
+      state: 'waiting',
+      next_attempt_at: now() + (exhausted ? maxDelayMs : backoff(attempts)),
       updated_at: now(),
     };
     store.put(updated);
     notify(store.get(record.run_id));
-    if (!exhausted) schedule(store.get(record.run_id));
+    schedule(store.get(record.run_id));
   }
   function failure(runId, { category, cause, checkpointId, enabled = true }) {
     const prior = store.get(runId);
-    const attempts = (prior?.attempts || 0) + 1;
+    const attempts = Math.min((prior?.attempts || 0) + 1, maxAttempts);
     const exhausted = attempts >= maxAttempts;
-    const nextAttemptAt = enabled && !exhausted ? now() + backoff(attempts) : null;
+    const nextAttemptAt = enabled ? now() + (exhausted ? maxDelayMs : backoff(attempts)) : null;
     const record = {
       runId, run_id: runId, attempts,
       nextAttemptAt,
       next_attempt_at: nextAttemptAt,
       category, cause: String(cause || '').slice(0, 500), checkpointId, checkpoint_id: checkpointId,
-      state: exhausted ? 'exhausted' : enabled ? 'waiting' : 'manual', updatedAt: now(), updated_at: now(),
+      state: enabled ? 'waiting' : 'manual', updatedAt: now(), updated_at: now(),
     };
     store.put(record);
     clearTimer(runId);
     notify(store.get(runId));
-    if (!exhausted) schedule(store.get(runId));
+    if (enabled) schedule(store.get(runId));
     return store.get(runId);
   }
   function start() {
@@ -199,6 +199,11 @@ function createTransientRecovery({ store, clock = { now: Date.now, setTimeout, c
     for (let record of store.list()) {
       if (record.state === 'dispatched') {
         record = { ...record, state: 'waiting', next_attempt_at: now(), updated_at: now() };
+        store.put(record);
+        notify(store.get(record.run_id));
+      } else if (record.state === 'waiting' && record.attempts >= maxAttempts
+        && !Number.isFinite(record.next_attempt_at)) {
+        record = { ...record, next_attempt_at: now() + maxDelayMs, updated_at: now() };
         store.put(record);
         notify(store.get(record.run_id));
       }

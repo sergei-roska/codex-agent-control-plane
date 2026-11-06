@@ -70,6 +70,7 @@ class ProjectDeliveryController {
     this.cyclePending = false;
     this.busyRetryTimer = null;
     this.busyRetryDelayMs = 100;
+    this.reconciliationTimers = new Map();
     this.lastPlanner = null;
     this.lastRecovery = null;
     this.lastAttemptFailure = null;
@@ -108,6 +109,9 @@ class ProjectDeliveryController {
     this.runGeneration += 1;
     this.running = true;
     this.scheduler.start();
+    for (const attempt of this.store.listAttempts(this.projectId, this.objectiveId).filter((item) => item.state === 'unknown')) {
+      this.#scheduleUnknownReconciliation(attempt.attemptId);
+    }
     if (this.inbox.pending({ limit: 1 }).length) this.wake();
     else if (this.inbox.projection().wakeup) this.wake();
     return this.status();
@@ -153,6 +157,8 @@ class ProjectDeliveryController {
     this.cyclePending = false;
     if (this.busyRetryTimer) { clearTimeout(this.busyRetryTimer); this.busyRetryTimer = null; }
     this.scheduler.stop();
+    for (const timer of this.reconciliationTimers.values()) clearTimeout(timer);
+    this.reconciliationTimers.clear();
     this.lifecycle.close();
     return this.status();
   }
@@ -342,8 +348,14 @@ class ProjectDeliveryController {
         throw cause;
       }
       if (!this.shutdownRequested && ['succeeded', 'failed', 'canceled', 'settled'].includes(result?.state)) {
+        const attemptId = args[0]?.attemptId;
+        const timer = this.reconciliationTimers.get(attemptId);
+        if (timer) clearTimeout(timer);
+        this.reconciliationTimers.delete(attemptId);
         this.inbox.signal('attempt.settled');
         this.wake();
+      } else if (result?.state === 'unknown' && args[0]?.attemptId) {
+        this.#scheduleUnknownReconciliation(args[0].attemptId);
       }
       return result;
     };
@@ -364,6 +376,34 @@ class ProjectDeliveryController {
 
   #runGenerationCurrent(runGeneration) {
     return !this.shutdownRequested && runGeneration === this.runGeneration;
+  }
+
+  #scheduleUnknownReconciliation(attemptId) {
+    if (this.shutdownRequested || this.reconciliationTimers.has(attemptId)) return;
+    const timer = setTimeout(async () => {
+      this.reconciliationTimers.delete(attemptId);
+      if (this.shutdownRequested) return;
+      const attempt = this.store.listAttempts(this.projectId, this.objectiveId).find((item) => item.attemptId === attemptId);
+      if (!attempt || !['claimed', 'unknown', 'running', 'settling'].includes(attempt.state)) return;
+      const claim = this.store.listClaims(this.projectId, this.objectiveId).find((item) => item.attemptId === attemptId);
+      if (!claim || !['active', 'expired', 'fenced'].includes(claim.state)) return;
+      const intent = this.executor.getAttempt(attemptId);
+      const identity = { projectId: this.projectId, objectiveId: this.objectiveId, taskId: attempt.taskId,
+        attemptId, fencingToken: claim.fencingToken,
+        ...(attempt.state === 'unknown' && (!intent || claim.ownerGeneration !== this.ownerGeneration)
+          ? { recoveryGeneration: this.ownerGeneration } : {}) };
+      try {
+        if (intent?.state === 'submitted') await this.executor.poll(identity);
+        else if (intent && intent.state !== 'settled') await this.executor.reconcile(identity);
+        else if (!intent) await this.executor.recover(identity);
+      } catch (_) { /* unresolved identities remain held for the next reconciliation pass */ }
+      const current = this.store.listAttempts(this.projectId, this.objectiveId).find((item) => item.attemptId === attemptId);
+      if (current && !['succeeded', 'failed', 'canceled'].includes(current.state)) this.#scheduleUnknownReconciliation(attemptId);
+      this.scheduler.wake();
+      this.wake('attempt.reconciliation');
+    }, 1000);
+    timer.unref?.();
+    this.reconciliationTimers.set(attemptId, timer);
   }
 
   #staleRunResult() {

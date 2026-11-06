@@ -1,5 +1,7 @@
 # Orchestrator improvement backlog
 
+> Archived development plan, 2026-11-06. Use the [current autonomous delivery backlog](autonomous-delivery-backlog.md) for new work. The historical content below preserves decisions, IDs and evidence; its priorities and restrictions do not override the current owner requirements.
+
 ## Harness autonomy audit, 2026-10-21
 
 A1 transient Lead recovery is implemented and independently reviewed. It adds a

@@ -96,7 +96,9 @@ class DeliveryLifecycle {
   }
 
   recordBudgetWait(input) {
-    const normalized = this.#exact(input, ['waitId', 'source', 'provider', 'model', 'reasonCode', 'delayMs'], 'budget_wait_fields_invalid');
+    const fields = ['waitId', 'source', 'provider', 'model', 'reasonCode', 'delayMs'];
+    if (input && Object.hasOwn(input, 'blockers')) fields.push('blockers');
+    const normalized = this.#exact(input, fields, 'budget_wait_fields_invalid');
     for (const field of ['waitId', 'source', 'provider', 'model']) identity(normalized[field], `budget_${field}`, field === 'source' ? 80 : 128);
     if (typeof normalized.reasonCode !== 'string' || !/^[a-z][a-z0-9_.-]{0,63}$/.test(normalized.reasonCode)) throw error('budget_wait_reason_invalid');
     if (!Number.isSafeInteger(normalized.delayMs) || normalized.delayMs < 0 || normalized.delayMs > 30 * 24 * 60 * 60 * 1000) throw error('budget_wait_delay_invalid');
@@ -104,6 +106,7 @@ class DeliveryLifecycle {
     const wait = this.store.recordBudgetWait(this.projectId, this.objectiveId, {
       waitId: normalized.waitId, source: normalized.source, provider: normalized.provider, model: normalized.model,
       reasonCode: normalized.reasonCode, nextWakeAt: this.now() + normalized.delayMs,
+      ...(Object.hasOwn(normalized, 'blockers') ? { blockers: normalized.blockers } : {}),
       expectedControlRevision: pins.expectedControlRevision, expectedOwnerGeneration: pins.expectedOwnerGeneration,
     });
     this.disabledBudgetWaits.delete(wait.waitId);

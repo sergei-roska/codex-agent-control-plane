@@ -18,10 +18,17 @@ function functionSource(name) {
 
 function element() {
   const classes = new Set();
-  return {
+  const node = {
     value: '',
-    textContent: '',
     disabled: false,
+    children: [],
+    attributes: {},
+    _textContent: '',
+    get textContent() { return this._textContent + this.children.map((child) => child.textContent).join(''); },
+    set textContent(value) { this._textContent = String(value); this.children = []; },
+    appendChild(child) { this.children.push(child); return child; },
+    addEventListener() {},
+    querySelector(selector) { return selector === 'input' ? this.children.find((child) => child.type === 'radio') || null : null; },
     classList: {
       add(name) { classes.add(name); },
       remove(name) { classes.delete(name); },
@@ -34,6 +41,7 @@ function element() {
       },
     },
   };
+  return node;
 }
 
 function deferred() {
@@ -46,6 +54,9 @@ function deferred() {
 function createHarness() {
   const elements = Object.fromEntries([
     'decisionAnswer', 'decisionId', 'decisionSubmit', 'decisionCard', 'sendError',
+    'decisionReasonRow', 'decisionReason', 'decisionQuestion', 'decisionIdText', 'decisionIdRow',
+    'decisionOptionsBlock', 'decisionOptionsList', 'decisionIndependentRow', 'decisionIndependent',
+    'decisionEvidence', 'decisionEvidenceCount', 'decisionEvidenceList',
   ].map((id) => [id, element()]));
   const calls = [];
   const request = deferred();
@@ -63,10 +74,15 @@ function createHarness() {
     decisionCardKey: JSON.stringify(['task-a', 'error', 'decision-1', '', pause.message]),
     decisionOptionIds: ['keep', 'change'],
     selectedDecisionOption: 'keep',
+    DECISION_LABELS: { infeasible_requirement: 'Infeasible requirement' },
     pendingTurn: null,
     document: {
       getElementById(id) { return elements[id] || (elements[id] = element()); },
-      querySelectorAll() { return []; },
+      createElement(tag) { const node = element(); node.tagName = tag.toUpperCase(); return node; },
+      querySelectorAll(selector) {
+        return selector === '#decisionOptionsList .decision-option'
+          ? elements.decisionOptionsList.children : [];
+      },
     },
     projectUrl(endpoint) { return '/api/projects/' + context.currentProjectId + endpoint; },
     fetch(url, init) { calls.push({ url, init }); return request.promise; },
@@ -97,6 +113,9 @@ function createHarness() {
   vm.runInContext([
     functionSource('lastTurn'),
     functionSource('isPausedState'),
+    functionSource('textEl'),
+    functionSource('decisionLabel'),
+    functionSource('renderDecisionCard'),
     functionSource('updateDecisionControls'),
     functionSource('updateDecisionCard'),
     functionSource('selectOption'),
@@ -192,6 +211,61 @@ test('decision submit clears only the submitted draft after acknowledged continu
   assert.equal(context.selectedDecisionOption, '');
   assert.equal(context.sending, false);
   assert.equal(context.decisionSubmitting, false);
+});
+
+test('rendered owner decision shows LL-7 evidence and applies the selected option ID in scope', async () => {
+  const harness = createHarness();
+  const { context, elements, calls, request } = harness;
+  const pause = {
+    kind: 'owner_decision',
+    decisionId: 'decision-ll7',
+    reason: 'infeasible_requirement',
+    question: 'Which supported recovery path should the team take?',
+    recommendation: 'recover',
+    options: [
+      { id: 'recover', description: 'Use the supported recovery path.' },
+      { id: 'defer', description: 'Defer until the missing capability is available.' },
+    ],
+    evidenceChecked: ['Checked the provider capability matrix.', 'Confirmed the workspace cannot change it.'],
+    independentWork: 'The team can document the fallback while waiting.',
+  };
+  context.sessionData.turns[0].leadTask.metadata.pause = pause;
+  context.decisionCardKey = '';
+  context.updateDecisionCard();
+
+  assert.equal(elements.decisionCard.classList.contains('hidden'), false);
+  assert.equal(elements.decisionReason.textContent, 'Infeasible requirement');
+  assert.equal(elements.decisionQuestion.textContent, pause.question);
+  assert.equal(elements.decisionIndependent.textContent, pause.independentWork);
+  assert.equal(elements.decisionEvidenceCount.textContent, '2');
+  assert.deepEqual(elements.decisionEvidenceList.children.map((item) => item.textContent), pause.evidenceChecked);
+  const [recommended, other] = elements.decisionOptionsList.children;
+  assert.match(recommended.textContent, /recover/);
+  assert.match(recommended.textContent, /Recommended/);
+  assert.match(recommended.textContent, /Use the supported recovery path\./);
+  assert.match(other.textContent, /Defer until the missing capability is available\./);
+  assert.equal(elements.decisionSubmit.disabled, true, 'an option is required even when response text exists');
+
+  elements.decisionAnswer.value = 'Owner notes may accompany the choice.';
+  context.updateDecisionControls();
+  assert.equal(elements.decisionSubmit.disabled, true, 'free text alone cannot choose an option');
+  context.selectOption('recover');
+  assert.equal(elements.decisionSubmit.disabled, false);
+  assert.equal(recommended.querySelector('input').checked, true);
+  assert.equal(other.querySelector('input').checked, false);
+  assert.equal(context.decisionScopeMatches({ projectId: 'project-a', sessionId: 'session-a', taskId: 'task-a' }), true);
+  context.pollState = 'TASK_STATE_COMPLETED';
+  const submission = context.submitDecision();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/projects/project-a/task/send');
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    goal: 'Owner notes may accompany the choice.',
+    taskId: 'task-a',
+    decision: 'decision-ll7',
+    choice: 'recover',
+  });
+  request.resolve(response({ success: true, result: { status: { state: 'TASK_STATE_COMPLETED' } } }));
+  assert.equal((await submission).ok, true);
 });
 
 test('a stopped task is not presented or submitted as a human decision', async () => {

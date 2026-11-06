@@ -320,7 +320,7 @@ function warningText(warning) {
         : [warning];
   return warnings.filter((entry) => entry && typeof entry.description === 'string').map((entry) => {
     const references = (entry.references || []).map((item) => item.attemptId || item.assignmentId).filter(Boolean).join(', ');
-    return `Loop warning: the same scoped work repeated ${entry.attempts} times with unchanged evidence: ${entry.description}${references ? ` (attempts: ${references})` : ''}. Choose a concrete different hypothesis or method, or use the existing findings; another unchanged recurrence will pause the run.`;
+    return `Loop warning: the same scoped work repeated ${entry.attempts} times with unchanged evidence: ${entry.description}${references ? ` (attempts: ${references})` : ''}. Keep the objective active, investigate the failure, and choose a materially different supported strategy when evidence supports one; do not claim progress without fresh checks.`;
   }).join('\n');
 }
 

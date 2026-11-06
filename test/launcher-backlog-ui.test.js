@@ -89,6 +89,149 @@ test('objective discovery, live polling, detail rendering and stale selection gu
   assert.equal(selector.children.some(option => option.value === 'objective-new'), true);
 });
 
+test('owner pause and resume use current revisions and show durable or unknown action state', async () => {
+  const elements = new Map();
+  const document = { getElementById(id) { if (!elements.has(id)) elements.set(id, new Element(id)); return elements.get(id); }, createElement() { return new Element(); } };
+  let disposition = 'executing';
+  let controlRevision = 1;
+  let failNextAction = false;
+  const actionBodies = [];
+  const fetch = (url, options = {}) => {
+    const parsed = new URL(url, 'http://localhost');
+    if (parsed.pathname.endsWith('/delivery/objectives')) return Promise.resolve(responseJson({ available: true,
+      objectives: [{ objectiveId: 'objective-ui', sessionId: 'session-a', disposition }] }));
+    if (parsed.pathname.endsWith('/delivery/backlog')) return Promise.resolve(responseJson(projection('objective-ui', 1)));
+    if (parsed.pathname.endsWith('/delivery/control') && options.method !== 'POST') return Promise.resolve(responseJson({
+      engine: 'concurrent-v1', runId: 'run-ui', projectId: 'aaaaaaaaaa', sessionId: 'session-a', objectiveId: 'objective-ui',
+      revisions: { planRevision: 1, goalRevision: 1, controlRevision }, inbox: [], disposition,
+      controller: { state: 'available', running: true },
+    }));
+    if (options.method === 'POST') {
+      const action = parsed.pathname.endsWith('/pause') ? 'pause' : 'resume';
+      const body = JSON.parse(options.body);
+      actionBodies.push({ action, body });
+      if (failNextAction) { failNextAction = false; return Promise.reject(new Error('connection lost')); }
+      disposition = action === 'pause' ? 'paused_owner' : 'executing';
+      controlRevision += 1;
+      return Promise.resolve(responseJson({ engine: 'concurrent-v1', runId: 'run-ui', projectId: 'aaaaaaaaaa',
+        sessionId: 'session-a', objectiveId: 'objective-ui', action, state: 'applied', acknowledged: true, disposition,
+        revisions: { planRevision: 1, goalRevision: 1, controlRevision } }));
+    }
+    return Promise.resolve(responseJson({ error: 'unexpected_request' }));
+  };
+  const source = fs.readFileSync(path.join(__dirname, '..', 'launcher-ui', 'backlog.js'), 'utf8');
+  const window = { location: { search: '?project=aaaaaaaaaa&session=session-a', origin: 'http://localhost' },
+    addEventListener() {}, setInterval() { return 1; } };
+  vm.runInNewContext(source, { document, window, URL, URLSearchParams, fetch, console });
+  await flush(); await flush();
+  assert.equal(elements.get('ownerPause').disabled, false);
+  const pause = elements.get('ownerPause').handlers.click();
+  assert.equal(elements.get('ownerPause').disabled, true);
+  await pause;
+  assert.deepEqual(actionBodies[0], { action: 'pause', body: { runId: 'run-ui', projectId: 'aaaaaaaaaa',
+    sessionId: 'session-a', objectiveId: 'objective-ui', expectedControlRevision: 1 } });
+  assert.match(elements.get('ownerControlStatus').textContent, /Pause applied at control revision 2/);
+  assert.equal(elements.get('ownerResume').disabled, false);
+
+  await elements.get('ownerResume').handlers.click();
+  assert.equal(actionBodies[1].action, 'resume');
+  assert.equal(actionBodies[1].body.expectedControlRevision, 2);
+  assert.equal(elements.get('ownerPause').disabled, false);
+
+  failNextAction = true;
+  await elements.get('ownerPause').handlers.click();
+  assert.match(elements.get('ownerControlStatus').textContent, /outcome is unknown/);
+  assert.match(elements.get('ownerControlStatus').textContent, /Objective control: executing/);
+  assert.equal(actionBodies.length, 3);
+});
+
+test('owner cancel reports draining as pending and disables further owner controls', async () => {
+  const elements = new Map();
+  const document = { getElementById(id) { if (!elements.has(id)) elements.set(id, new Element(id)); return elements.get(id); }, createElement() { return new Element(); } };
+  let disposition = 'executing';
+  let controlRevision = 3;
+  let cancelCalls = 0;
+  const fetch = (url, options = {}) => {
+    const parsed = new URL(url, 'http://localhost');
+    if (parsed.pathname.endsWith('/delivery/objectives')) return Promise.resolve(responseJson({ available: true,
+      objectives: [{ objectiveId: 'objective-ui', sessionId: 'session-a', disposition }] }));
+    if (parsed.pathname.endsWith('/delivery/backlog')) return Promise.resolve(responseJson(projection('objective-ui', 1)));
+    if (parsed.pathname.endsWith('/delivery/control') && options.method !== 'POST') return Promise.resolve(responseJson({
+      engine: 'concurrent-v1', runId: 'run-ui', projectId: 'aaaaaaaaaa', sessionId: 'session-a', objectiveId: 'objective-ui',
+      revisions: { planRevision: 1, goalRevision: 1, controlRevision }, inbox: [], disposition,
+      controller: { state: 'available', running: true },
+    }));
+    if (options.method === 'POST') {
+      cancelCalls += 1;
+      const body = JSON.parse(options.body);
+      assert.equal(parsed.pathname, '/api/projects/aaaaaaaaaa/delivery/control/cancel');
+      assert.equal(body.expectedControlRevision, 3);
+      disposition = 'draining';
+      controlRevision = 4;
+      return Promise.resolve(responseJson({ engine: 'concurrent-v1', runId: 'run-ui', projectId: 'aaaaaaaaaa',
+        sessionId: 'session-a', objectiveId: 'objective-ui', action: 'cancel', state: 'requested', acknowledged: true,
+        disposition, revisions: { planRevision: 1, goalRevision: 1, controlRevision } }));
+    }
+    return Promise.resolve(responseJson({ error: 'unexpected_request' }));
+  };
+  const source = fs.readFileSync(path.join(__dirname, '..', 'launcher-ui', 'backlog.js'), 'utf8');
+  const window = { location: { search: '?project=aaaaaaaaaa&session=session-a', origin: 'http://localhost' },
+    addEventListener() {}, setInterval() { return 1; } };
+  vm.runInNewContext(source, { document, window, URL, URLSearchParams, fetch, console });
+  await flush(); await flush();
+  assert.equal(elements.get('ownerCancel').disabled, false);
+  await elements.get('ownerCancel').handlers.click();
+  assert.equal(cancelCalls, 1);
+  assert.match(elements.get('ownerControlStatus').textContent, /Cancellation requested/);
+  assert.match(elements.get('ownerControlStatus').textContent, /Cancellation is draining/);
+  assert.equal(elements.get('ownerPause').disabled, true);
+  assert.equal(elements.get('ownerResume').disabled, true);
+  assert.equal(elements.get('ownerCancel').disabled, true);
+});
+
+test('late pause acknowledgement for an old objective cannot replace the selected control status', async () => {
+  const elements = new Map();
+  const document = { getElementById(id) { if (!elements.has(id)) elements.set(id, new Element(id)); return elements.get(id); }, createElement() { return new Element(); } };
+  let resolvePause;
+  let pauseBody;
+  const fetch = (url, options = {}) => {
+    const parsed = new URL(url, 'http://localhost');
+    if (parsed.pathname.endsWith('/delivery/objectives')) return Promise.resolve(responseJson({ available: true, objectives: [
+      { objectiveId: 'objective-old', sessionId: 'session-a', disposition: 'executing' },
+      { objectiveId: 'objective-new', sessionId: 'session-a', disposition: 'executing' },
+    ] }));
+    if (parsed.pathname.endsWith('/delivery/backlog')) return Promise.resolve(responseJson(projection(parsed.searchParams.get('objectiveId'), 1)));
+    if (parsed.pathname.endsWith('/delivery/control') && options.method !== 'POST') {
+      const objectiveId = parsed.searchParams.get('objectiveId');
+      return Promise.resolve(responseJson({ engine: 'concurrent-v1', runId: 'run-' + objectiveId,
+        projectId: 'aaaaaaaaaa', sessionId: 'session-a', objectiveId,
+        revisions: { planRevision: 1, goalRevision: 1, controlRevision: 1 }, inbox: [], disposition: 'executing',
+        controller: { state: 'available', running: true },
+      }));
+    }
+    pauseBody = JSON.parse(options.body);
+    return new Promise(resolve => { resolvePause = resolve; });
+  };
+  const source = fs.readFileSync(path.join(__dirname, '..', 'launcher-ui', 'backlog.js'), 'utf8');
+  const window = { location: { search: '?project=aaaaaaaaaa&session=session-a', origin: 'http://localhost' },
+    addEventListener() {}, setInterval() { return 1; } };
+  vm.runInNewContext(source, { document, window, URL, URLSearchParams, fetch, console });
+  await flush(); await flush();
+  assert.equal(elements.get('backlogObjective').value, 'objective-old');
+  const pause = elements.get('ownerPause').handlers.click();
+  assert.equal(pauseBody.objectiveId, 'objective-old');
+  elements.get('backlogObjective').value = 'objective-new';
+  elements.get('backlogObjective').handlers.change();
+  await flush(); await flush();
+  assert.equal(elements.get('ownerControlStatus').textContent, 'Objective control: executing.');
+  resolvePause(responseJson({ engine: 'concurrent-v1', runId: 'run-objective-old', projectId: 'aaaaaaaaaa',
+    sessionId: 'session-a', objectiveId: 'objective-old', action: 'pause', state: 'applied', acknowledged: true,
+    disposition: 'paused_owner', revisions: { planRevision: 1, goalRevision: 1, controlRevision: 2 } }));
+  await pause;
+  assert.equal(elements.get('ownerControlStatus').textContent, 'Objective control: executing.');
+  assert.equal(elements.get('ownerResume').disabled, true);
+});
+
 test('project and session changes clear selection and discard old objective and backlog responses', async () => {
   const elements = new Map();
   const document = { getElementById(id) { if (!elements.has(id)) elements.set(id, new Element(id)); return elements.get(id); }, createElement() { return new Element(); } };

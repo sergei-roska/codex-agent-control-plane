@@ -67,6 +67,50 @@ test('budget wake requires due time, literal true eligibility, and unchanged con
   assert.equal(wakes, 1);
 });
 
+test('a due timestamp without authoritative eligibility cannot wake a budget wait', (t) => {
+  let clock = 100;
+  const f = fixture({ now: () => clock });
+  t.after(() => { f.lifecycle.close(); f.db.close(); });
+  const wait = f.lifecycle.recordBudgetWait({ waitId: 'hint-only', source: 'planner', provider: 'provider-a',
+    model: 'model-a', reasonCode: 'rate_limit', delayMs: 50 });
+  assert.equal(Object.hasOwn(wait, 'blockers'), false);
+  clock = wait.nextWakeAt;
+  assert.equal(f.lifecycle.tick().woke, 0);
+  assert.equal(f.store.listBudgetWaits(projectId, objectiveId)[0].state, 'waiting');
+  assert.equal(f.store.getObjective(projectId, objectiveId).disposition, 'waiting_budget');
+});
+
+test('explicit blocker windows survive projections and a second wait after wake', (t) => {
+  let clock = 100;
+  let eligible = true;
+  const f = fixture({ now: () => clock, lifecycleOptions: { budgetWakeEligibility: () => eligible } });
+  t.after(() => { f.lifecycle.close(); f.db.close(); });
+  const accountIdHash = `sha256:${'a'.repeat(64)}`;
+  const firstWindows = [
+    { accountIdHash, provider: 'provider-a', model: 'model-a', windowId: 'short', reasonCode: 'rate_limit', resetsAt: 150 },
+    { accountIdHash, provider: 'provider-a', model: 'model-a', windowId: 'weekly', reasonCode: 'quota.exhausted', resetsAt: null },
+  ];
+  const first = f.lifecycle.recordBudgetWait({ waitId: 'wait-first', source: 'executor', provider: 'provider-a',
+    model: 'model-a', reasonCode: 'rate_limit', delayMs: 10, blockers: firstWindows });
+  assert.deepEqual(first.blockers, firstWindows);
+  assert.deepEqual(f.lifecycle.projection().budgetWaits[0].blockers, firstWindows);
+
+  clock = first.nextWakeAt;
+  assert.equal(f.lifecycle.wakeBudget('wait-first').state, 'woken');
+  eligible = false;
+  const remainingWindow = [firstWindows[1]];
+  const second = f.lifecycle.recordBudgetWait({ waitId: 'wait-second', source: 'executor', provider: 'provider-a',
+    model: 'model-a', reasonCode: 'quota.exhausted', delayMs: 20, blockers: remainingWindow });
+  assert.deepEqual(second.blockers, remainingWindow);
+  assert.deepEqual(f.lifecycle.projection().budgetWaits.map((wait) => ({ waitId: wait.waitId, state: wait.state, blockers: wait.blockers })), [
+    { waitId: 'wait-first', state: 'woken', blockers: firstWindows },
+    { waitId: 'wait-second', state: 'waiting', blockers: remainingWindow },
+  ]);
+  clock = second.nextWakeAt;
+  assert.equal(f.lifecycle.tick().woke, 0);
+  assert.equal(f.store.listBudgetWaits(projectId, objectiveId)[1].state, 'waiting');
+});
+
 test('a later owner pause pins out an earlier budget wake and leaves the wait durable', (t) => {
   let clock = 100;
   let wakes = 0;

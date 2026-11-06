@@ -4,6 +4,7 @@ const CONTROL_FIELDS = Object.freeze([
   'runId', 'projectId', 'sessionId', 'objectiveId', 'messageId', 'text',
   'expectedPlanRevision', 'expectedGoalRevision', 'expectedControlRevision',
 ]);
+const OWNER_CONTROL_FIELDS = Object.freeze(['runId', 'projectId', 'sessionId', 'objectiveId', 'expectedControlRevision']);
 const SCOPE_ID = /^[\x21-\x7e]{1,128}$/;
 const express = require('express');
 
@@ -21,6 +22,16 @@ function validSteeringBody(body, runId, projectId) {
   if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 2000) return false;
   return ['expectedPlanRevision', 'expectedGoalRevision', 'expectedControlRevision']
     .every((key) => Number.isSafeInteger(body[key]) && body[key] >= 0);
+}
+
+function validOwnerControlBody(body, runId, projectId) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const keys = Object.keys(body);
+  if (keys.length !== OWNER_CONTROL_FIELDS.length || keys.some((key) => !OWNER_CONTROL_FIELDS.includes(key))) return false;
+  if (OWNER_CONTROL_FIELDS.some((key) => !Object.hasOwn(body, key))) return false;
+  if (body.runId !== runId || body.projectId !== projectId
+    || !SCOPE_ID.test(body.runId) || !SCOPE_ID.test(body.sessionId) || !SCOPE_ID.test(body.objectiveId)) return false;
+  return Number.isSafeInteger(body.expectedControlRevision) && body.expectedControlRevision >= 0;
 }
 
 function validDecisionBody(body, runId, projectId, replace) {
@@ -59,6 +70,65 @@ function registerDeliveryHostControls(app, { authMiddleware, router } = {}) {
       return responseError(res, 503, 'delivery_control_unavailable');
     }
   });
+
+  for (const action of ['pause', 'resume', 'cancel']) {
+    app.post(`/control/delivery/:runId/${action}`, authMiddleware, express.json({ limit: '16kb', strict: true }), async (req, res) => {
+      const runId = req.params?.runId;
+      if (!validOwnerControlBody(req.body, runId, router?.projectId)) return responseError(res, 400, 'owner_control_request_invalid');
+      const mapping = router?.mapping?.(runId);
+      if (!mapping || mapping.runId !== runId) return responseError(res, 404, 'delivery_run_not_found');
+      if (mapping.engine !== 'concurrent-v1') return responseError(res, 503, 'delivery_engine_unsupported');
+      if (mapping.projectId !== req.body.projectId || mapping.sessionId !== req.body.sessionId
+        || mapping.objectiveId !== req.body.objectiveId) return responseError(res, 409, 'owner_control_scope_mismatch');
+      if (typeof router.concurrentEngine?.controlStatus !== 'function') return responseError(res, 503, 'delivery_control_unavailable');
+      try {
+        const current = router.concurrentEngine.controlStatus(runId);
+        if (!current || current.runId !== runId || current.projectId !== mapping.projectId
+          || current.sessionId !== mapping.sessionId || current.objectiveId !== mapping.objectiveId) {
+          return responseError(res, 404, 'delivery_run_not_found');
+        }
+        if (current.revisions?.controlRevision !== req.body.expectedControlRevision) return responseError(res, 409, 'owner_control_revision_stale');
+        if (action === 'resume' && current.disposition !== 'paused_owner') return responseError(res, 409, 'owner_control_transition_invalid');
+        if (action === 'cancel') {
+          const acknowledgement = await router.requestCancel(runId, req.body.expectedControlRevision);
+          const updated = router.concurrentEngine.controlStatus(runId);
+          if (!acknowledgement || acknowledgement.engine !== 'concurrent-v1' || acknowledgement.runId !== runId
+            || acknowledgement.projectId !== mapping.projectId || acknowledgement.sessionId !== mapping.sessionId
+            || acknowledgement.objectiveId !== mapping.objectiveId || acknowledgement.action !== 'cancel'
+            || acknowledgement.acknowledged !== true
+            || !((acknowledgement.state === 'requested' && acknowledgement.disposition === 'draining')
+              || (acknowledgement.state === 'applied' && acknowledgement.disposition === 'canceled'))
+            || !['draining', 'canceled'].includes(acknowledgement.disposition)
+            || acknowledgement.disposition !== updated?.disposition
+            || !Number.isSafeInteger(acknowledgement.revisions?.controlRevision)
+            || acknowledgement.revisions.controlRevision <= req.body.expectedControlRevision
+            || updated?.revisions?.controlRevision !== acknowledgement.revisions.controlRevision) {
+            return responseError(res, 503, 'delivery_control_unavailable');
+          }
+          return res.json(acknowledgement);
+        }
+        const applied = action === 'pause' ? router.requestPause(runId) : router.cancelPauseRequest(runId);
+        if (!applied) return responseError(res, 409, 'owner_control_not_applied');
+        const updated = router.concurrentEngine.controlStatus(runId);
+        const expectedDisposition = action === 'pause' ? 'paused_owner' : 'executing';
+        if (!updated || updated.runId !== runId || updated.projectId !== mapping.projectId
+          || updated.sessionId !== mapping.sessionId || updated.objectiveId !== mapping.objectiveId
+          || updated.disposition !== expectedDisposition
+          || !Number.isSafeInteger(updated.revisions?.controlRevision)
+          || updated.revisions.controlRevision <= req.body.expectedControlRevision) {
+          return responseError(res, 503, 'delivery_control_unavailable');
+        }
+        return res.json({ engine: 'concurrent-v1', runId, projectId: mapping.projectId,
+          sessionId: mapping.sessionId, objectiveId: mapping.objectiveId, action,
+          state: 'applied', acknowledged: true, disposition: updated.disposition, revisions: updated.revisions });
+      } catch (cause) {
+        if (action === 'cancel' && ['control_revision_stale', 'owner_generation_stale', 'control_transition_invalid'].includes(cause.code)) {
+          return responseError(res, 409, cause.code);
+        }
+        return responseError(res, 503, 'delivery_control_unavailable');
+      }
+    });
+  }
 
   for (const replace of [false, true]) {
     app.post(`/control/delivery/:runId/decision${replace ? '/replace' : ''}`, authMiddleware, express.json({ limit: '16kb', strict: true }), async (req, res) => {
@@ -118,4 +188,4 @@ function registerDeliveryHostControls(app, { authMiddleware, router } = {}) {
   });
 }
 
-module.exports = { CONTROL_FIELDS, registerDeliveryHostControls };
+module.exports = { CONTROL_FIELDS, OWNER_CONTROL_FIELDS, registerDeliveryHostControls };

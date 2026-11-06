@@ -20,6 +20,7 @@ async function fixture(t, { engineName = 'concurrent-v1' } = {}) {
   const accepted = new Map();
   let steerCalls = 0;
   let runCalls = 0;
+  let disposition = 'executing';
   const currentRevisions = { planRevision: 3, goalRevision: 2, controlRevision: 4 };
   const concurrentEngine = {
     run: () => { runCalls += 1; return heldTurn; },
@@ -29,7 +30,23 @@ async function fixture(t, { engineName = 'concurrent-v1' } = {}) {
       if (!mapping || mapping.engine !== 'concurrent-v1') return null;
       return { engine: 'concurrent-v1', runId, projectId: PROJECT, sessionId: mapping.sessionId,
         objectiveId: mapping.objectiveId, revisions: { ...currentRevisions },
-        inbox: [], pending: [], disposition: 'running' };
+        inbox: [], pending: [], disposition };
+    },
+    requestPause(runId) {
+      if (disposition !== 'executing') return false;
+      disposition = 'paused_owner'; currentRevisions.controlRevision += 1; return true;
+    },
+    cancelPauseRequest(runId) {
+      if (disposition !== 'paused_owner') return false;
+      disposition = 'executing'; currentRevisions.controlRevision += 1; return true;
+    },
+    async requestCancel(runId, expectedControlRevision) {
+      if (expectedControlRevision !== currentRevisions.controlRevision) throw Object.assign(new Error('stale'), { code: 'control_revision_stale' });
+      const mapping = router.mapping(runId);
+      disposition = 'draining'; currentRevisions.controlRevision += 1;
+      return { engine: 'concurrent-v1', runId, projectId: PROJECT, sessionId: mapping.sessionId,
+        objectiveId: mapping.objectiveId, action: 'cancel', state: 'requested', acknowledged: true,
+        disposition, revisions: { ...currentRevisions } };
     },
     async steer(body) {
       steerCalls += 1;
@@ -100,6 +117,38 @@ test('authenticated controls use persisted router scope and return durable immed
   assert.equal(fx.router.mapping('run-control-1').engine, 'concurrent-v1');
   assert.equal(fx.runCalls, 1);
   void running;
+});
+
+test('pause and resume controls are revision-pinned, scoped, and report durable disposition', async (t) => {
+  const fx = await fixture(t);
+  void fx.router.run({ runId: 'run-owner-control', goal: 'goal' });
+  const mapping = fx.router.mapping('run-owner-control');
+  const body = { runId: mapping.runId, projectId: PROJECT, sessionId: mapping.sessionId,
+    objectiveId: mapping.objectiveId, expectedControlRevision: fx.currentRevisions.controlRevision };
+  const paused = await fx.request('POST', '/control/delivery/run-owner-control/pause', body);
+  assert.equal(paused.status, 200);
+  assert.deepEqual([paused.body.action, paused.body.state, paused.body.disposition, paused.body.revisions.controlRevision],
+    ['pause', 'applied', 'paused_owner', 5]);
+  assert.equal((await fx.request('POST', '/control/delivery/run-owner-control/resume', body)).status, 409);
+  const resumed = await fx.request('POST', '/control/delivery/run-owner-control/resume', { ...body, expectedControlRevision: 5 });
+  assert.equal(resumed.status, 200);
+  assert.deepEqual([resumed.body.action, resumed.body.state, resumed.body.disposition, resumed.body.revisions.controlRevision],
+    ['resume', 'applied', 'executing', 6]);
+  assert.equal((await fx.request('POST', '/control/delivery/run-owner-control/pause', { ...body, extra: true })).status, 400);
+  assert.equal((await fx.request('POST', '/control/delivery/run-owner-control/pause', { ...body, objectiveId: 'foreign' })).status, 409);
+});
+
+test('cancel control acknowledges durable draining without claiming terminal cancellation', async (t) => {
+  const fx = await fixture(t);
+  void fx.router.run({ runId: 'run-owner-cancel', goal: 'goal' });
+  const mapping = fx.router.mapping('run-owner-cancel');
+  const body = { runId: mapping.runId, projectId: PROJECT, sessionId: mapping.sessionId,
+    objectiveId: mapping.objectiveId, expectedControlRevision: fx.currentRevisions.controlRevision };
+  const cancel = await fx.request('POST', '/control/delivery/run-owner-cancel/cancel', body);
+  assert.equal(cancel.status, 200);
+  assert.deepEqual([cancel.body.action, cancel.body.state, cancel.body.disposition, cancel.body.revisions.controlRevision],
+    ['cancel', 'requested', 'draining', 5]);
+  assert.equal((await fx.request('POST', '/control/delivery/run-owner-cancel/cancel', body)).status, 409);
 });
 
 test('control routes authenticate before revealing mapped state', async (t) => {

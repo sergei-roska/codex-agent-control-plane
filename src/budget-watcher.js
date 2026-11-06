@@ -78,7 +78,7 @@ function createBudgetWatcher({
   // First check after a pause when automatic account switching is on, whatever the reset hint says.
   switchDelayMs = 3000,
   onState,
-  // Optional automatic account switching: { profiles, switchTo(name|null), readProfileLimits(home|null),
+  // Optional account recovery: { profiles, switchTo(name|null), readProfileLimits(home|null), readProfileState(home|null),
   // canSwitch?(runId), watch?(onChange) -> unsubscribe }.
   accounts = null,
 } = {}) {
@@ -128,6 +128,19 @@ function createBudgetWatcher({
     return response;
   }
 
+  async function readProfileState(home, fresh = false) {
+    const key = home || '';
+    const cached = profileCache.get(key);
+    if (!fresh && cached && c.now() - cached.at < PROFILE_CACHE_MS && cached.state) return cached.state;
+    let state = null;
+    try {
+      if (typeof accounts.readProfileState === 'function') state = await accounts.readProfileState(home);
+      else state = { limits: await readProfile(home) };
+    } catch (_) { state = null; }
+    profileCache.set(key, { at: c.now(), response: state?.limits ?? null, state });
+    return state;
+  }
+
   /**
    * Looks for another account with budget (profiles in order, then the system account) and switches to
    * the first one. Returns { switched, earliestReset } where earliestReset is the soonest known reset.
@@ -144,12 +157,18 @@ function createBudgetWatcher({
       .map((profile) => ({ name: profile.name, home: profile.home }));
     if (from !== null) candidates.push({ name: null, home: null });
     for (const candidate of candidates) {
-      const response = await readProfile(candidate.home);
+      const accountState = typeof accounts.readProfileState === 'function'
+        ? await readProfileState(candidate.home) : null;
+      const response = accountState ? accountState.limits : await readProfile(candidate.home);
       if (stopped || entries.get(runId) !== entry) return result;
+      if (accountState && accountState.requiresOpenaiAuth !== false) continue;
       if (isBudgetAvailable(response, models)) {
         try {
-          accounts.profiles.setActive(candidate.name);
-          await accounts.switchTo(candidate.name);
+            const switched = await accounts.switchTo(candidate.name, {
+              active: from,
+              selectionRevision: state.selectionRevision,
+            });
+            if (!['switched', 'already_active'].includes(switched)) return result;
         } catch (_) {
           return result;
         }
@@ -165,6 +184,42 @@ function createBudgetWatcher({
     return result;
   }
 
+  async function recoverAuthentication(runId, entry) {
+    let state;
+    try { state = accounts.profiles.read(); } catch (_) { return false; }
+    if (accounts.canSwitch && !(await accounts.canSwitch(runId))) return false;
+    if (stopped || entries.get(runId) !== entry) return false;
+    const active = state.active;
+    const profiles = state.profiles.map((profile) => ({ name: profile.name, home: profile.home }));
+    const byName = new Map(profiles.map((profile) => [profile.name, profile]));
+    const candidates = [];
+    candidates.push(active === null ? { name: null, home: null } : byName.get(active));
+    if (state.autoSwitch) {
+      for (const profile of profiles) if (profile.name !== active) candidates.push(profile);
+      if (active !== null) candidates.push({ name: null, home: null });
+    }
+    for (const candidate of candidates.filter(Boolean)) {
+      const result = await readProfileState(candidate.home, true);
+      if (stopped || entries.get(runId) !== entry) return false;
+      if (result?.requiresOpenaiAuth !== false || !isBudgetAvailable(result.limits, models)) continue;
+      if (typeof accounts.switchTo !== 'function') return false;
+      try {
+        const switched = await accounts.switchTo(candidate.name, {
+          active,
+          selectionRevision: state.selectionRevision,
+        });
+        if (!['switched', 'already_active'].includes(switched)) return false;
+      } catch (_) { return false; }
+      let selected;
+      try { selected = accounts.profiles.read(); } catch (_) { return false; }
+      if (selected.active !== candidate.name) return false;
+      if (candidate.name !== null
+        && selected.profiles.find((profile) => profile.name === candidate.name)?.home !== candidate.home) return false;
+      return true;
+    }
+    return false;
+  }
+
   // One check per entry at a time: a profile-change check must not race a timer check into a double resume.
   async function check(runId, entry) {
     if (entry.checking) return;
@@ -175,6 +230,12 @@ function createBudgetWatcher({
   async function runCheck(runId, entry) {
     if (stopped || entries.get(runId) !== entry) return;
     entry.lastCheckAt = c.now();
+    if (entry.pause?.kind === 'waiting_for_auth') {
+      const recovered = accounts ? await recoverAuthentication(runId, entry) : false;
+      if (stopped || entries.get(runId) !== entry) return;
+      if (!recovered) { schedule(runId, entry, recheckDelay(runId)); return; }
+      return resume(runId, entry);
+    }
     let response = null;
     try { response = await readRateLimits(); } catch (_) { response = null; }
     if (stopped || entries.get(runId) !== entry) return;
@@ -195,13 +256,18 @@ function createBudgetWatcher({
         return;
       }
     }
-    // Recorded before the send: the resume itself makes the server call forget(runId).
+    // Revalidate after all awaited eligibility and account-switch work before sending.
+    if (stopped || entries.get(runId) !== entry) return;
+    await resume(runId, entry);
+  }
+
+  async function resume(runId, entry) {
     const record = history.get(runId) || { backoffMs: 0 };
     const previousResumedAt = record.resumedAt;
     record.resumedAt = c.now();
     history.set(runId, record);
     let outcome;
-    try { outcome = await resumeRun(runId); } catch (_) { outcome = undefined; }
+    try { outcome = await resumeRun(runId, entry.pause?.kind === 'waiting_for_auth' ? 'auth' : 'budget'); } catch (_) { outcome = undefined; }
     if (outcome === undefined || outcome === false) record.resumedAt = previousResumedAt;
     if (stopped) return;
     if (outcome === undefined) {
@@ -215,7 +281,7 @@ function createBudgetWatcher({
 
   function notePause(runId, pause) {
     if (stopped || !runId) return;
-    if (pause && pause.kind && pause.kind !== 'waiting_for_budget') return;
+    if (pause && pause.kind && !['waiting_for_budget', 'waiting_for_auth'].includes(pause.kind)) return;
     const existing = entries.get(runId);
     if (existing) clearEntryTimer(existing);
     const now = c.now();
@@ -232,7 +298,7 @@ function createBudgetWatcher({
     entries.set(runId, entry);
     const resetsAtMs = parseResetsAt(pause?.resetsAt);
     let base = resetsAtMs !== null && resetsAtMs > now ? resetsAtMs + marginMs - now : intervalMs;
-    if (accountsAutoSwitch()) base = switchDelayMs;
+    if (pause?.kind === 'waiting_for_auth' || accountsAutoSwitch()) base = switchDelayMs;
     schedule(runId, entry, Math.max(base, record?.backoffMs || 0));
   }
 

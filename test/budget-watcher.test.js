@@ -216,12 +216,13 @@ test('a failed resume keeps waiting and retries on the next interval', async () 
   assert.equal(watcher.status('r1'), null);
 });
 
-test('only waiting_for_budget pauses are registered', async () => {
+test('only automatic budget and authentication pauses are registered', async () => {
   const { clock, watcher } = setup();
   watcher.notePause('r1', { kind: 'restart' });
   watcher.notePause('r2', { kind: 'human_decision' });
   watcher.notePause('r3', { kind: 'writer_unresolved' });
-  assert.equal(clock.pending(), 0);
+  watcher.notePause('r4', { kind: 'waiting_for_auth' });
+  assert.equal(clock.pending(), 1);
 });
 
 test('start() registers the budget-paused runs listed by listPausedRuns', async () => {
@@ -240,13 +241,21 @@ test('start() registers the budget-paused runs listed by listPausedRuns', async 
 function accountsSetup({ autoSwitch = true, active = null, names = ['a', 'b'], limits = {}, switchResult = 'switched', canSwitch } = {}) {
   const log = { read: [], setActive: [], switchTo: [] };
   const listeners = new Set();
-  const state = { active, autoSwitch, profiles: names.map((name) => ({ name, home: `/h/${name}` })) };
+  const state = { active, selectionRevision: 0, autoSwitch, profiles: names.map((name) => ({ name, home: `/h/${name}` })) };
   const accounts = {
     profiles: {
       read: () => state,
-      setActive: (name) => { log.setActive.push(name); state.active = name; },
+      setActive: (name) => { log.setActive.push(name); state.active = name; state.selectionRevision += 1; },
     },
-    switchTo: async (name) => { log.switchTo.push(name); return switchResult; },
+    switchTo: async (name, expected = {}) => {
+      log.switchTo.push(name);
+      if (state.active !== expected.active || state.selectionRevision !== expected.selectionRevision) return 'busy';
+      if (switchResult === 'switched') {
+        state.active = name;
+        state.selectionRevision += 1;
+      }
+      return switchResult;
+    },
     readProfileLimits: async (home) => { log.read.push(home); return limits[home === null ? 'system' : home] ?? BLOCKED; },
     ...(canSwitch ? { canSwitch } : {}),
     watch: (onChange) => {
@@ -256,6 +265,83 @@ function accountsSetup({ autoSwitch = true, active = null, names = ['a', 'b'], l
   };
   return { accounts, log, state, listeners, notify: () => { for (const fn of [...listeners]) fn(); } };
 }
+
+test('waiting_for_auth requires explicit authenticated state and authoritative model availability', async () => {
+  const { accounts, log, state } = accountsSetup({ active: 'a', limits: { '/h/b': OK } });
+  const auth = new Map([['/h/a', true], ['/h/b', true]]);
+  const limitState = new Map([['/h/a', null], ['/h/b', OK]]);
+  const reads = [];
+  accounts.readProfileState = async (home) => {
+    const key = home || 'system';
+    reads.push(key);
+    return { requiresOpenaiAuth: auth.get(key), limits: limitState.get(key) ?? null };
+  };
+  const { clock, calls, watcher } = setup({ accounts, switchDelayMs: 0 });
+  watcher.notePause('auth-run', { kind: 'waiting_for_auth' });
+  await clock.advance(0);
+  assert.deepEqual(calls.resumes, [], 'available limits do not qualify an account that still requires authentication');
+  assert.equal(watcher.status('auth-run').state, 'waiting');
+
+  auth.set('/h/b', false);
+  limitState.set('/h/b', null);
+  await clock.advance(1000);
+  assert.deepEqual(calls.resumes, [], 'an authenticated account with null limits remains unavailable');
+
+  limitState.set('/h/b', OK);
+  await clock.advance(1000);
+  await clock.advance(5000);
+  assert.deepEqual(log.setActive, []);
+  assert.deepEqual(log.switchTo, ['b']);
+  assert.deepEqual(calls.resumes, ['auth-run']);
+  assert.deepEqual(reads.slice(0, 6), ['/h/a', '/h/b', 'system', '/h/a', '/h/b', 'system']);
+  watcher.stop();
+});
+
+test('waiting_for_auth resumes the active profile after local sign-in even when auto-switch is off', async () => {
+  const { accounts } = accountsSetup({ autoSwitch: false, active: 'a' });
+  let authenticated = false;
+  accounts.readProfileState = async () => ({ requiresOpenaiAuth: authenticated ? false : true, limits: authenticated ? OK : null });
+  const { clock, calls, watcher } = setup({ accounts, switchDelayMs: 0 });
+  watcher.notePause('auth-run', { kind: 'waiting_for_auth' });
+  await clock.advance(0);
+  assert.deepEqual(calls.resumes, []);
+  authenticated = true;
+  await clock.advance(1000);
+  assert.deepEqual(calls.resumes, ['auth-run']);
+  watcher.stop();
+});
+
+test('waiting_for_auth rejects an active profile result after owner selection changes during the read', async () => {
+  const { accounts, state, log } = accountsSetup({ autoSwitch: false, active: 'a', names: ['a', 'b', 'c'] });
+  let authenticated = false;
+  let enterRead;
+  const readStarted = new Promise((resolve) => { enterRead = resolve; });
+  let releaseRead;
+  const readGate = new Promise((resolve) => { releaseRead = resolve; });
+  accounts.readProfileState = async (home) => {
+    if (authenticated) {
+      enterRead();
+      await readGate;
+      return { requiresOpenaiAuth: false, limits: OK };
+    }
+    return { requiresOpenaiAuth: true, limits: null };
+  };
+  const { clock, calls, watcher } = setup({ accounts, switchDelayMs: 0 });
+  watcher.notePause('auth-run', { kind: 'waiting_for_auth' });
+  await clock.advance(0);
+  assert.deepEqual(calls.resumes, []);
+  authenticated = true;
+  const nextCheck = clock.advance(1000);
+  await readStarted;
+  state.active = 'c';
+  state.selectionRevision += 1;
+  releaseRead();
+  await nextCheck;
+  assert.deepEqual(calls.resumes, [], 'a positive read for A must not authorize a resume on newly selected C');
+  assert.equal(state.active, 'c');
+  assert.deepEqual(log.switchTo, ['a'], 'the active candidate must pass through the revision-pinned wrapper too');
+  watcher.stop();
+});
 
 test('auto-switch off: no other account is read and the run keeps waiting', async () => {
   const { accounts, log } = accountsSetup({ autoSwitch: false, limits: { '/h/a': OK } });
@@ -274,9 +360,35 @@ test('auto-switch on: the first available profile is chosen, set active, switche
   watcher.notePause('r1', { kind: 'waiting_for_budget' });
   await clock.advance(1000);
   assert.deepEqual(log.read, ['/h/b']);
-  assert.deepEqual(log.setActive, ['b']);
+  assert.deepEqual(log.setActive, []);
   assert.deepEqual(log.switchTo, ['b']);
   assert.deepEqual(calls.resumes, ['r1']);
+  watcher.stop();
+});
+
+test('forget during an account switch prevents the run from resuming', async () => {
+  const { accounts, log } = accountsSetup({ limits: { '/h/a': OK } });
+  let signalSwitchStarted;
+  const switchStarted = new Promise((resolve) => { signalSwitchStarted = resolve; });
+  let releaseSwitch;
+  accounts.switchTo = async (name) => {
+    log.switchTo.push(name);
+    signalSwitchStarted();
+    await new Promise((resolve) => { releaseSwitch = resolve; });
+    return 'switched';
+  };
+  const { clock, calls, watcher } = setup({ accounts });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+
+  const advancing = clock.advance(1000);
+  await switchStarted;
+  watcher.forget('r1', { dropHistory: true });
+  releaseSwitch();
+  await advancing;
+
+  assert.deepEqual(log.switchTo, ['a']);
+  assert.deepEqual(calls.resumes, []);
+  assert.equal(watcher.status('r1'), null);
   watcher.stop();
 });
 
@@ -349,13 +461,89 @@ test('profile limits are cached for 60 s across runs and checks', async () => {
   watcher.stop();
 });
 
-test('switchTo busy still resumes the run', async () => {
-  const { accounts, log } = accountsSetup({ limits: { '/h/a': OK }, switchResult: 'busy' });
+test('switchTo busy retains the pause and does not resume before the account swap', async () => {
+  const { accounts, log, state } = accountsSetup({ limits: { '/h/a': OK }, switchResult: 'busy' });
   const { clock, calls, watcher } = setup({ accounts });
   watcher.notePause('r1', { kind: 'waiting_for_budget' });
   await clock.advance(1000);
   assert.deepEqual(log.switchTo, ['a']);
-  assert.deepEqual(calls.resumes, ['r1']);
+  assert.deepEqual(log.setActive, []);
+  assert.equal(state.active, null, 'a busy switch must not change the active profile');
+  assert.deepEqual(calls.resumes, []);
+  assert.equal(watcher.status('r1').state, 'waiting');
+  watcher.stop();
+});
+
+test('budget switch failure preserves the prior active profile', async () => {
+  const { accounts, state } = accountsSetup({ active: 'a', limits: { '/h/b': OK } });
+  accounts.switchTo = async () => { throw new Error('switch failed'); };
+  const { clock, calls, watcher } = setup({ accounts });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  await clock.advance(1000);
+  assert.equal(state.active, 'a');
+  assert.deepEqual(calls.resumes, []);
+  watcher.stop();
+});
+
+test('auth switch failure preserves the prior active profile', async () => {
+  const { accounts, state } = accountsSetup({ active: 'a', limits: { '/h/b': OK } });
+  accounts.readProfileState = async (home) => ({
+    requiresOpenaiAuth: home === '/h/a',
+    limits: home === '/h/b' ? OK : null,
+  });
+  accounts.switchTo = async () => { throw new Error('switch failed'); };
+  const { clock, calls, watcher } = setup({ accounts, switchDelayMs: 0 });
+  watcher.notePause('auth-run', { kind: 'waiting_for_auth' });
+  await clock.advance(0);
+  assert.equal(state.active, 'a');
+  assert.deepEqual(calls.resumes, []);
+  watcher.stop();
+});
+
+test('a delayed busy switch preserves a newer owner profile selection', async () => {
+  const { accounts, state } = accountsSetup({ active: 'a', names: ['a', 'b', 'c'], limits: { '/h/b': OK } });
+  let entered;
+  const started = new Promise((resolve) => { entered = resolve; });
+  let release;
+  accounts.switchTo = async (name, expected) => {
+    entered();
+    await new Promise((resolve) => { release = resolve; });
+    if (state.active !== expected.active || state.selectionRevision !== expected.selectionRevision) return 'busy';
+    return 'busy';
+  };
+  const { clock, calls, watcher } = setup({ accounts });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  const advancing = clock.advance(1000);
+  await started;
+  state.active = 'c';
+  state.selectionRevision += 1;
+  release();
+  await advancing;
+  assert.equal(state.active, 'c');
+  assert.deepEqual(calls.resumes, []);
+  watcher.stop();
+});
+
+test('a delayed switch failure preserves a newer owner profile selection', async () => {
+  const { accounts, state } = accountsSetup({ active: 'a', names: ['a', 'b', 'c'], limits: { '/h/b': OK } });
+  let entered;
+  const started = new Promise((resolve) => { entered = resolve; });
+  let fail;
+  accounts.switchTo = async () => {
+    entered();
+    await new Promise((resolve) => { fail = resolve; });
+    throw new Error('delayed switch failure');
+  };
+  const { clock, calls, watcher } = setup({ accounts });
+  watcher.notePause('r1', { kind: 'waiting_for_budget' });
+  const advancing = clock.advance(1000);
+  await started;
+  state.active = 'c';
+  state.selectionRevision += 1;
+  fail();
+  await advancing;
+  assert.equal(state.active, 'c');
+  assert.deepEqual(calls.resumes, []);
   watcher.stop();
 });
 

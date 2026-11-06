@@ -16,6 +16,15 @@
       <button id="backlogRefresh" class="btn btn-secondary btn-sm" type="button">Refresh</button>
     </header>
     <p id="backlogStatus" role="status" aria-live="polite">Loading read-only delivery state...</p>
+    <section class="backlog-steering" aria-labelledby="ownerControlHeading">
+      <h2 id="ownerControlHeading">Objective control</h2>
+      <p id="ownerControlStatus" role="status" aria-live="polite">Select an active concurrent objective to pause, resume, or cancel it.</p>
+      <div class="owner-control-actions">
+        <button id="ownerPause" class="btn btn-secondary btn-sm" type="button" disabled>Pause</button>
+        <button id="ownerResume" class="btn btn-secondary btn-sm" type="button" disabled>Resume</button>
+        <button id="ownerCancel" class="btn btn-secondary btn-sm" type="button" disabled>Cancel</button>
+      </div>
+    </section>
     <section class="backlog-steering" aria-labelledby="steeringHeading">
       <h2 id="steeringHeading">Message the lead</h2>
       <p id="steeringStatus" role="status" aria-live="polite">Owner steering is available for an active concurrent objective.</p>

@@ -118,7 +118,7 @@
   function getSteeringRecord(key) {
     if (!steeringRecords.has(key)) steeringRecords.set(key, {
       key, draft: '', retryBody: null, pending: false, status: 'Owner steering is available for an active concurrent objective.',
-      reply: '', control: null, controlGeneration: 0,
+      reply: '', control: null, controlGeneration: 0, controlPending: false, controlMessage: '',
     });
     return steeringRecords.get(key);
   }
@@ -136,10 +136,30 @@
   function renderControl(record) {
     if (!record) {
       el('steeringSend').disabled = true;
+      el('ownerPause').disabled = true;
+      el('ownerResume').disabled = true;
+      el('ownerCancel').disabled = true;
+      el('ownerControlStatus').textContent = 'Select an active concurrent objective to pause, resume, or cancel it.';
       return;
     }
+    if (record !== activeSteeringRecord) return;
     const control = record && record.control;
     const controlState = control && control.revisions ? control : null;
+    const disposition = controlState?.disposition;
+    const controllerAvailable = controlState?.controller?.state === 'available' && controlState.controller.running === true;
+    const pauseable = ['planning', 'executing', 'recovering', 'waiting_budget', 'waiting_owner', 'blocked_technical'].includes(disposition);
+    el('ownerPause').disabled = !controllerAvailable || !pauseable || record.controlPending;
+    el('ownerResume').disabled = !controllerAvailable || disposition !== 'paused_owner' || record.controlPending;
+    const cancelable = ['planning', 'executing', 'recovering', 'waiting_budget', 'waiting_owner', 'blocked_technical', 'paused_owner'].includes(disposition);
+    el('ownerCancel').disabled = !controllerAvailable || !cancelable || record.controlPending;
+    const durableControlText = disposition === 'paused_owner' ? 'Objective is paused by the owner.'
+      : disposition === 'draining' ? 'Cancellation is draining; downstream effects are still being reconciled.'
+      : disposition === 'canceled' ? 'Objective is canceled.'
+        : ['accepted', 'partial'].includes(disposition) ? 'Objective is complete.'
+          : disposition ? 'Objective control: ' + disposition.replace(/_/g, ' ') + '.'
+            : 'Current objective control is unavailable.';
+    el('ownerControlStatus').textContent = record.controlPending ? 'Applying owner control...'
+      : [record.controlMessage, durableControlText].filter(Boolean).join(' ');
     const send = el('steeringSend');
     const active = controlState && ['planning', 'executing', 'recovering'].includes(controlState.disposition);
     send.disabled = !active || record.pending || !(record.retryBody || record.draft.trim());
@@ -194,6 +214,62 @@
     return ack && ack.engine === 'concurrent-v1' && ack.runId === body.runId && ack.projectId === body.projectId
       && ack.sessionId === body.sessionId && ack.objectiveId === body.objectiveId && ack.messageId === body.messageId
       && ack.acknowledged === true && ['received', 'applied', 'blocked'].includes(ack.state);
+  }
+  function ownerControlAckMatches(ack, body, action) {
+    if (action === 'cancel') return ack && ack.engine === 'concurrent-v1' && ack.runId === body.runId
+      && ack.projectId === body.projectId && ack.sessionId === body.sessionId && ack.objectiveId === body.objectiveId
+      && ack.action === 'cancel' && ack.acknowledged === true
+      && ((ack.state === 'requested' && ack.disposition === 'draining') || (ack.state === 'applied' && ack.disposition === 'canceled'))
+      && ['draining', 'canceled'].includes(ack.disposition) && Number.isSafeInteger(ack.revisions?.controlRevision)
+      && ack.revisions.controlRevision > body.expectedControlRevision;
+    const expectedDisposition = action === 'pause' ? 'paused_owner' : 'executing';
+    return ack && ack.engine === 'concurrent-v1' && ack.runId === body.runId && ack.projectId === body.projectId
+      && ack.sessionId === body.sessionId && ack.objectiveId === body.objectiveId && ack.action === action
+      && ack.acknowledged === true && ack.state === 'applied' && ack.disposition === expectedDisposition
+      && Number.isSafeInteger(ack.revisions?.controlRevision)
+      && ack.revisions.controlRevision > body.expectedControlRevision;
+  }
+  async function changeOwnerControl(action) {
+    const record = activeSteeringRecord;
+    const key = activeSteeringKey;
+    if (!record || record.controlPending || !record.control?.revisions) return;
+    const snapshot = record.control;
+    const body = { runId: snapshot.runId, projectId: snapshot.projectId, sessionId: snapshot.sessionId,
+      objectiveId: snapshot.objectiveId, expectedControlRevision: snapshot.revisions.controlRevision };
+    record.controlPending = true;
+    record.controlMessage = '';
+    renderControl(record);
+    try {
+      const response = await fetch('/api/projects/' + encodeURIComponent(body.projectId) + '/delivery/control/' + action, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      record.controlPending = false;
+      if (response.status === 409) {
+        record.controlMessage = 'Delivery changed. Current control status was refreshed; check it before another action.';
+        renderControl(record);
+        await loadControl(record, key);
+        return;
+      }
+      if (!response.ok || !ownerControlAckMatches(result, body, action)) {
+        record.controlMessage = 'Owner control outcome is unknown. Durable status was refreshed; check it before another action.';
+        renderControl(record);
+        await loadControl(record, key);
+        return;
+      }
+      record.controlMessage = action === 'cancel'
+        ? result.disposition === 'canceled' ? 'Cancellation completed at control revision ' + result.revisions.controlRevision + '.'
+          : 'Cancellation requested at control revision ' + result.revisions.controlRevision + '; downstream effects are still being reconciled.'
+        : (action === 'pause' ? 'Pause' : 'Resume') + ' applied at control revision ' + result.revisions.controlRevision + '.';
+      record.control = result;
+      renderControl(record);
+      await loadControl(record, key);
+    } catch (_) {
+      record.controlPending = false;
+      record.controlMessage = 'Owner control outcome is unknown. Durable status was refreshed; check it before another action.';
+      renderControl(record);
+      await loadControl(record, key);
+    }
   }
   async function sendSteering(event) {
     event.preventDefault();
@@ -362,6 +438,9 @@
     renderControl(activeSteeringRecord);
   });
   el('steeringForm').addEventListener('submit', sendSteering);
+  el('ownerPause').addEventListener('click', () => changeOwnerControl('pause'));
+  el('ownerResume').addEventListener('click', () => changeOwnerControl('resume'));
+  el('ownerCancel').addEventListener('click', () => changeOwnerControl('cancel'));
   next.addEventListener('click', () => loadPage(false));
   refreshButton.addEventListener('click', () => refreshObjectives());
   window.addEventListener('popstate', () => refreshObjectives({ preserve: false }));

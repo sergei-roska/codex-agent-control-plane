@@ -173,7 +173,7 @@ function finalizationFixture({ beforeEventInsert, finalizationRemainderResolver,
   const admission = { async acquire() { return { executionId: 'final-check-execution' }; }, recordTurnStart() {},
     async release() { return { state: 'released' }; } };
   const close = ({ remove = true } = {}) => { lifecycle.close(); db.close(); if (remove) fs.rmSync(root, { recursive: true, force: true }); };
-  return { root, workspace, dbPath, db, store, candidateStore, candidate, reviewStore, inbox, planner, lifecycle,
+  return { root, workspace, storageDir, dbPath, db, store, candidateStore, candidate, reviewStore, inbox, planner, lifecycle,
     contract, request, adapters, admission, applyCalls: () => applyCalls, close };
 }
 
@@ -316,6 +316,23 @@ test('dependency readiness requires trusted settled output and explicit checkpoi
     assert.throws(() => store.recordSubmitted(projectId, objectiveId, claim.attemptId, claim.fencingToken, 'remote-b'), { code: 'external_task_conflict' });
     store.settleAttempt(projectId, objectiveId, claim.attemptId, claim.fencingToken, { state: 'succeeded', trusted: true, outputContract: 'output:v1' }, { remoteQuiescent: true, processQuiescent: true, effectsSettled: true, controllerValidated: true });
     assert.deepEqual(store.claimReady(projectId, objectiveId, 0, { controlRevision: 1 }).map((item) => item.task.taskId), ['task-b']);
+  } finally { db.close(); }
+});
+
+test('a stale dependent target output identity cannot unlock its successor', () => {
+  const { db, store } = fixture();
+  try {
+    const successor = task('task-b', { dependencies: [dep('task-a', 'task-b', 'requires_output', 'output:stale')] });
+    apply(store, [{ task: task('task-a') }, { task: successor }]);
+    assert.deepEqual(store.claimReady(projectId, objectiveId, 0, { controlRevision: 1 }).map((item) => item.task.taskId), ['task-a']);
+    const claim = store.listClaims(projectId, objectiveId)[0];
+    store.pinSelectedSettings(projectId, objectiveId, claim.attemptId, claim.fencingToken, { model: 'model-pinned', effort: 'high', fast: true });
+    store.recordSubmitted(projectId, objectiveId, claim.attemptId, claim.fencingToken, 'remote-a');
+    store.settleAttempt(projectId, objectiveId, claim.attemptId, claim.fencingToken,
+      { state: 'succeeded', trusted: true, outputContract: 'output:current' },
+      { remoteQuiescent: true, processQuiescent: true, effectsSettled: true, controllerValidated: true });
+    assert.deepEqual(store.claimReady(projectId, objectiveId, 0, { controlRevision: 1 }), []);
+    assert.equal(store.getObjective(projectId, objectiveId).tasks.find((entry) => entry.taskId === 'task-b').state, 'queued');
   } finally { db.close(); }
 });
 
@@ -807,6 +824,55 @@ test('budget waits preserve provider/model identity and stale control or generat
   assert.equal(store.getObjective(projectId, objectiveId).disposition, 'paused_owner');
 });
 
+test('budget wait blockers persist across SQLite reopen and validate exact unique records', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-wait-blockers-'));
+  const file = path.join(directory, 'state.sqlite');
+  let currentDb;
+  t.after(() => {
+    if (currentDb?.open) currentDb.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const { db, store } = fixture(file);
+  currentDb = db;
+  const accountIdHash = `sha256:${'a'.repeat(64)}`;
+  const first = { accountIdHash, provider: 'provider-a', model: 'model-a', windowId: 'weekly',
+    reasonCode: 'rate_limit', resetsAt: 1500 };
+  const second = { accountIdHash: `sha256:${'b'.repeat(64)}`, provider: 'provider-b', model: null,
+    windowId: 'short', reasonCode: 'quota.exhausted', resetsAt: null };
+  const input = (blockers) => ({ waitId: 'budget-blockers', source: 'planner', provider: 'provider-a',
+    model: 'model-a', reasonCode: 'rate_limit', nextWakeAt: 1400, blockers,
+    expectedControlRevision: 1, expectedOwnerGeneration: 0 });
+
+  assert.throws(() => store.recordBudgetWait(projectId, objectiveId, input([first, first])),
+    { code: 'budget_wait_blocker_duplicate' });
+  const reorderedFirst = { resetsAt: first.resetsAt, reasonCode: first.reasonCode, windowId: first.windowId,
+    model: first.model, provider: first.provider, accountIdHash: first.accountIdHash };
+  assert.throws(() => store.recordBudgetWait(projectId, objectiveId, input([first, reorderedFirst])),
+    { code: 'budget_wait_blocker_duplicate' });
+  assert.throws(() => store.recordBudgetWait(projectId, objectiveId, input([])),
+    { code: 'budget_wait_blockers_invalid' });
+  assert.throws(() => store.recordBudgetWait(projectId, objectiveId, input([{ ...first, accountIdHash: 'sha256:BAD' }])),
+    { code: 'budget_wait_account_hash_invalid' });
+  assert.throws(() => store.recordBudgetWait(projectId, objectiveId, input([{ ...first, resetsAt: 1.5 }])),
+    { code: 'budget_wait_reset_invalid' });
+  assert.throws(() => store.recordBudgetWait(projectId, objectiveId, input(Array(65).fill(first))),
+    { code: 'budget_wait_blockers_invalid' });
+  const beforeObjective = store.getObjective(projectId, objectiveId);
+  const beforeEvents = store.events.replay(projectId).length;
+  assert.throws(() => store.recordBudgetWait(projectId, objectiveId, input(new Array(1))),
+    { code: 'budget_wait_blockers_invalid' });
+  assert.deepEqual(store.getObjective(projectId, objectiveId), beforeObjective);
+  assert.equal(store.events.replay(projectId).length, beforeEvents);
+  assert.deepEqual(store.listBudgetWaits(projectId, objectiveId), []);
+
+  const saved = store.recordBudgetWait(projectId, objectiveId, input([first, second]));
+  assert.deepEqual(saved.blockers, [first, second]);
+  db.close();
+  currentDb = new Database(file);
+  const reopened = new BacklogStore(currentDb, { now: () => 2000 });
+  assert.deepEqual(reopened.listBudgetWaits(projectId, objectiveId)[0].blockers, [first, second]);
+});
+
 test('typed retry records require current pins and block after bounded strategy exhaustion', (t) => {
   let clock = 100;
   const { db, store } = fixture(':memory:', { now: () => clock, maxLifecycleStrategies: 2 });
@@ -882,7 +948,7 @@ test('retry scope kind and task/checkpoint references are validated', (t) => {
   assert.equal(store.recordLifecycleRetry(projectId, objectiveId, retry('checkpoint', 'checkpoint-a')).state, 'waiting');
 });
 
-test('objective cancellation terminalizes unstarted work and rejects late successful settlement', (t) => {
+test('objective cancellation drains unsettled work before becoming terminal', (t) => {
   const { db, store } = fixture();
   t.after(() => db.close());
   apply(store, [{ task: task('a-running') }, { task: task('b-queued') }]);
@@ -890,14 +956,21 @@ test('objective cancellation terminalizes unstarted work and rejects late succes
   store.pinSelectedSettings(projectId, objectiveId, claimed.attempt.attemptId, claimed.claim.fencingToken, { model: 'pinned' });
   store.recordSubmitted(projectId, objectiveId, claimed.attempt.attemptId, claimed.claim.fencingToken, 'remote-running');
   const canceled = store.requestControl(projectId, objectiveId, 'cancel', 1);
-  assert.equal(canceled.disposition, 'canceled');
+  assert.equal(canceled.disposition, 'draining');
   assert.equal(canceled.tasks.find((item) => item.taskId === 'b-queued').state, 'canceled');
+  assert.deepEqual(store.claimReady(projectId, objectiveId, 0, { controlRevision: canceled.controlRevision }), []);
+  assert.throws(() => store.completeCancellation(projectId, objectiveId, {
+    expectedControlRevision: canceled.controlRevision, expectedOwnerGeneration: canceled.ownerGeneration,
+  }), { code: 'cancel_effects_unsettled' });
   const settled = store.settleAttempt(projectId, objectiveId, claimed.attempt.attemptId, claimed.claim.fencingToken,
     { state: 'succeeded', trusted: true, output: 'late output' },
     { remoteQuiescent: true, processQuiescent: true, effectsSettled: true, controllerValidated: true, evidenceRefs: ['test:late'] });
   assert.equal(settled.attempt.state, 'canceled');
   assert.deepEqual(settled.attempt.outcome, { state: 'canceled', failureKind: 'objective_canceled' });
   assert.equal(store.getObjective(projectId, objectiveId).tasks.find((item) => item.taskId === 'a-running').state, 'canceled');
+  assert.equal(store.completeCancellation(projectId, objectiveId, {
+    expectedControlRevision: canceled.controlRevision, expectedOwnerGeneration: canceled.ownerGeneration,
+  }).disposition, 'canceled');
   assert.throws(() => store.applyPlan(projectId, objectiveId, revisionedPlan(store.getObjective(projectId, objectiveId), [])), { code: 'plan_objective_terminal' });
 });
 
@@ -1005,6 +1078,8 @@ test('unknown finalization checks survive SQLite reopen and require trusted no-e
   const dummyAdapters = { candidateStore: { db, get() {}, readManifest() {}, addReference() {}, removeReference() {} },
     reviewStore: { db, finalizationProjection() {} },
     lifecycle: { db, store: reopened, projectId: FINAL_PROJECT, objectiveId: FINAL_OBJECTIVE, shutdownProjection() {} } };
+  assert.throws(() => reopened.commitFinalization(FINAL_PROJECT, FINAL_OBJECTIVE,
+    { finalizationId: request.finalizationId, expectedPinsDigest: barrier.pinsDigest }, dummyAdapters), { code: 'finalization_not_ready' });
   assert.throws(() => reopened.startFinalizationChecks(FINAL_PROJECT, FINAL_OBJECTIVE, {
     finalizationId: request.finalizationId, expectedPinsDigest: barrier.pinsDigest, checkAttemptId: 'check-attempt-retry',
   }, dummyAdapters), { code: 'finalization_check_reconciliation_required' });
@@ -1017,6 +1092,56 @@ test('unknown finalization checks survive SQLite reopen and require trusted no-e
   assert.equal(reconciled.checkAttemptId, null);
   db.close();
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('unknown worker effects survive SQLite reopen and block accepted finalization', (t) => {
+  const fx = finalizationFixture();
+  t.after(() => { if (fs.existsSync(fx.root)) fs.rmSync(fx.root, { recursive: true, force: true }); });
+  const current = fx.store.getObjective(FINAL_PROJECT, FINAL_OBJECTIVE);
+  const pending = task('uncertain-writer', { projectId: FINAL_PROJECT, objectiveId: FINAL_OBJECTIVE });
+  fx.store.applyPlan(FINAL_PROJECT, FINAL_OBJECTIVE, {
+    schemaVersion: VERSION, expectedPlanRevision: current.planRevision, expectedGoalRevision: current.goalRevision,
+    expectedAuthorityRevision: current.authorityRevision, expectedControlRevision: current.controlRevision,
+    nextPlanRevision: current.planRevision + 1, tasks: [{ task: pending }], dependencies: [],
+  });
+  const claim = fx.store.claimReady(FINAL_PROJECT, FINAL_OBJECTIVE, current.ownerGeneration,
+    { controlRevision: current.controlRevision })[0];
+  assert.ok(claim);
+  fx.store.pinSelectedSettings(FINAL_PROJECT, FINAL_OBJECTIVE, claim.attempt.attemptId, claim.claim.fencingToken,
+    { model: 'model-pinned', effort: 'high', fast: true });
+  fx.store.recordSubmitted(FINAL_PROJECT, FINAL_OBJECTIVE, claim.attempt.attemptId, claim.claim.fencingToken, 'remote-uncertain-writer');
+  assert.equal(fx.store.markExpired(FINAL_PROJECT, FINAL_OBJECTIVE, Number.MAX_SAFE_INTEGER), 1);
+  const request = fx.request();
+  fx.close({ remove: false });
+
+  const db = new Database(fx.dbPath);
+  const store = new BacklogStore(db, { finalizationAuthorized: () => true });
+  const candidateStore = new CandidateStore({ db, workspace: fx.workspace, storageDir: fx.storageDir,
+    controls: ({ projectId, objectiveId }) => {
+      const objective = store.getObjective(projectId, objectiveId);
+      return { allowed: ['planning', 'executing'].includes(objective?.disposition), fenced: false,
+        projectId, objectiveId, controlRevision: objective?.controlRevision ?? 0, fencingToken: 1 };
+    }, admission: { async acquire() { throw new Error('no candidate publication expected'); }, async release() {}, markUnresolved() {} },
+    quiescence: () => true, apply: async () => ({ applied: true }) });
+  const reviewStore = new CandidateReviewStore({ db, candidateStore,
+    currentObjective: ({ projectId, objectiveId }) => store.getObjective(projectId, objectiveId),
+    checkpointInventory: () => [], attestClosure: () => ({ frozen: true }), authorizeCheckpoint: () => true });
+  const inbox = new DeliveryInbox(db, { projectId: FINAL_PROJECT, sessionId: 'finalization-session', objectiveId: FINAL_OBJECTIVE });
+  const planner = new LeadPlanner({ store, inbox, runTurn: async () => ({ state: 'idle' }) });
+  const lifecycle = new DeliveryLifecycle({ store, executor: { db }, projectId: FINAL_PROJECT,
+    objectiveId: FINAL_OBJECTIVE, inbox, planner, effectsSettledForShutdown: () => false });
+  const adapters = { candidateStore, reviewStore, lifecycle };
+
+  const unknown = store.listAttempts(FINAL_PROJECT, FINAL_OBJECTIVE).find((entry) => entry.attemptId === claim.attempt.attemptId);
+  assert.equal(unknown.state, 'unknown');
+  assert.equal(store.listClaims(FINAL_PROJECT, FINAL_OBJECTIVE).find((entry) => entry.claimId === claim.claim.claimId).state, 'expired');
+  assert.throws(() => store.beginFinalization(FINAL_PROJECT, FINAL_OBJECTIVE, request, adapters), { code: 'finalization_blocked' });
+  assert.equal(store.getFinalization(FINAL_PROJECT, FINAL_OBJECTIVE, request.finalizationId), null);
+  assert.equal(store.getObjective(FINAL_PROJECT, FINAL_OBJECTIVE).disposition, 'executing');
+  assert.equal(store.getObjective(FINAL_PROJECT, FINAL_OBJECTIVE).tasks.find((entry) => entry.taskId === pending.taskId).state, 'settling');
+
+  lifecycle.close();
+  db.close();
 });
 
 test('terminal partial requires trusted provenance for every remainder and emits only trusted evidence', async (t) => {
@@ -1137,6 +1262,55 @@ function controlledFinalizationFixture() {
   });
   return { fx, setAuthorization(value) { allowAuthorization = value; }, setCheckProof(value) { allowCheckProof = value; } };
 }
+
+test('a queued successor blocks accepted finalization even after a finish claim', (t) => {
+  const fx = finalizationFixture();
+  t.after(() => fx.close());
+  const current = fx.store.getObjective(FINAL_PROJECT, FINAL_OBJECTIVE);
+  const pending = task('pending-successor', { projectId: FINAL_PROJECT, objectiveId: FINAL_OBJECTIVE });
+  fx.store.applyPlan(FINAL_PROJECT, FINAL_OBJECTIVE, {
+    schemaVersion: VERSION, expectedPlanRevision: current.planRevision, expectedGoalRevision: current.goalRevision,
+    expectedAuthorityRevision: current.authorityRevision, expectedControlRevision: current.controlRevision,
+    nextPlanRevision: current.planRevision + 1, tasks: [{ task: pending }], dependencies: [],
+  });
+  assert.throws(() => fx.store.beginFinalization(FINAL_PROJECT, FINAL_OBJECTIVE, fx.request(), fx.adapters),
+    { code: 'finalization_blocked' });
+  assert.equal(fx.store.getObjective(FINAL_PROJECT, FINAL_OBJECTIVE).tasks[0].state, 'queued');
+  assert.equal(fx.store.listFinalizations(FINAL_PROJECT, FINAL_OBJECTIVE).length, 0);
+});
+
+test('stale check receipts and missing mandatory checks cannot become accepted evidence', async (t) => {
+  const fixtures = [];
+  const create = () => { const fx = finalizationFixture(); fixtures.push(fx); return fx; };
+  t.after(() => fixtures.forEach((fx) => fx.close()));
+
+  const missingFx = create();
+  const missingRequest = missingFx.request();
+  const missingBarrier = missingFx.store.beginFinalization(FINAL_PROJECT, FINAL_OBJECTIVE, missingRequest, missingFx.adapters);
+  missingFx.store.startFinalizationChecks(FINAL_PROJECT, FINAL_OBJECTIVE, { finalizationId: missingRequest.finalizationId,
+    expectedPinsDigest: missingBarrier.pinsDigest, checkAttemptId: 'missing-check-attempt' }, missingFx.adapters);
+  const validResult = await runFrozenCandidateChecks({ candidateStore: missingFx.candidateStore, candidate: missingFx.candidate,
+    contract: missingFx.contract, runId: 'missing-check-run', attempt: 1,
+    executionPermissions: 'strict', admission: missingFx.admission });
+  assert.throws(() => missingFx.store.recordFinalizationChecks(FINAL_PROJECT, FINAL_OBJECTIVE,
+    { finalizationId: missingRequest.finalizationId, checkAttemptId: 'missing-check-attempt',
+      result: { ...validResult, checkResults: [] } }, missingFx.adapters), { code: 'finalization_required_checks_not_passed' });
+  assert.equal(missingFx.store.getFinalization(FINAL_PROJECT, FINAL_OBJECTIVE, missingRequest.finalizationId).state, 'checking');
+
+  const staleFx = create();
+  const staleRequest = staleFx.request();
+  const staleBarrier = staleFx.store.beginFinalization(FINAL_PROJECT, FINAL_OBJECTIVE, staleRequest, staleFx.adapters);
+  staleFx.store.startFinalizationChecks(FINAL_PROJECT, FINAL_OBJECTIVE, { finalizationId: staleRequest.finalizationId,
+    expectedPinsDigest: staleBarrier.pinsDigest, checkAttemptId: 'stale-check-attempt' }, staleFx.adapters);
+  const staleResult = await runFrozenCandidateChecks({ candidateStore: staleFx.candidateStore, candidate: staleFx.candidate,
+    contract: staleFx.contract, runId: 'stale-check-run', attempt: 1,
+    executionPermissions: 'strict', admission: staleFx.admission });
+  assert.throws(() => staleFx.store.recordFinalizationChecks(FINAL_PROJECT, FINAL_OBJECTIVE,
+    { finalizationId: staleRequest.finalizationId, checkAttemptId: 'stale-check-attempt',
+      result: { ...staleResult, candidate: { ...staleResult.candidate, candidateId: 'candidate-stale-receipt' } } }, staleFx.adapters),
+  { code: 'finalization_check_result_pins_stale' });
+  assert.equal(staleFx.store.getFinalization(FINAL_PROJECT, FINAL_OBJECTIVE, staleRequest.finalizationId).state, 'checking');
+});
 
 test('typed finalization command replays reauthorize without rewriting evidence after pin drift', async (t) => {
   const fixtures = [];

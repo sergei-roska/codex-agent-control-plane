@@ -16,4 +16,5 @@
 .backlog-steering h2 { margin: 0 0 8px; }
 .backlog-steering form { display: grid; gap: 8px; max-width: 760px; }
 .backlog-steering textarea { width: 100%; resize: vertical; }
+.owner-control-actions { display: flex; gap: 8px; }
 #steeringReply { white-space: pre-wrap; }

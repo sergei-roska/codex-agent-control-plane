@@ -531,10 +531,23 @@ test('transient recovery delivery updates durable pause text only while the task
   assert.match(statusText(updated), /Automatic recovery attempt: 2/);
   assert.match(statusText(updated), /The server will retry this checkpoint automatically\./);
 
-  const exhausted = { ...rearmed, attempts: 5, next_attempt_at: null, state: 'exhausted', updated_at: rearmed.updated_at + 1 };
+  const capped = { ...rearmed, attempts: 5, next_attempt_at: Date.now() + 300_000, state: 'waiting', updated_at: rearmed.updated_at + 1 };
+  recoveryStore.put(capped);
+  assert.equal(persistTransientRecoveryStatus({
+    db: state.db, recoveryStore, taskId, record: capped, now: () => 11_000,
+  }), true);
+  const cappedTask = await taskStore.load(taskId, call);
+  assert.equal(cappedTask.metadata.pause.recoveryExhausted, false);
+  assert.equal(cappedTask.metadata.pause.automatic, true);
+  assert.equal(cappedTask.metadata.pause.nextAttemptAt, capped.next_attempt_at);
+  assert.match(statusText(cappedTask), /Next recovery attempt:/);
+  assert.match(statusText(cappedTask), /The server will retry this checkpoint automatically\./);
+  assert.doesNotMatch(statusText(cappedTask), /exhausted|retry manually/i);
+
+  const exhausted = { ...capped, next_attempt_at: null, state: 'exhausted', updated_at: capped.updated_at + 1 };
   recoveryStore.put(exhausted);
   assert.equal(persistTransientRecoveryStatus({
-    db: state.db, recoveryStore, taskId, record: exhausted, now: () => 11_000,
+    db: state.db, recoveryStore, taskId, record: exhausted, now: () => 11_500,
   }), true);
   const exhaustedTask = await taskStore.load(taskId, call);
   assert.equal(exhaustedTask.metadata.pause.recoveryExhausted, true);
@@ -853,6 +866,62 @@ test('input problems on a paused task republish the same pause instead of failin
   }
 });
 
+test('a legacy threshold-only recovery question is migrated before a resumed task is published', async () => {
+  const decisionId = 't-legacy-recovery:h1';
+  const request = {
+    kind: 'human_decision',
+    decisionId,
+    question: 'The recovery generation limit was reached. How should the controller go on?',
+    options: [{ id: 'supported_controller_replan', description: 'Continue with a supported controller replan.' }],
+    evidenceChecked: [],
+    relatedDecisionIds: [],
+  };
+  const values = {
+    humanRequest: request,
+    progress: [],
+    round: 1,
+    reviewRecovery: { checkpoints: [{ blockedReason: 'recovery_generation_limit' }] },
+    outcomes: [],
+    openDecisions: [],
+  };
+  const snapshot = {
+    values,
+    next: ['human_input'],
+    tasks: [{ interrupts: [{ value: request }] }],
+  };
+  const updates = [];
+  const resumes = [];
+  const orchestrator = {
+    graph: {
+      async getState() { return snapshot; },
+      async updateState(_config, patch, asNode) {
+        updates.push({ patch, asNode });
+        Object.assign(values, patch);
+        snapshot.next = ['decide'];
+        snapshot.tasks = [];
+      },
+    },
+    async getPause() { return null; },
+    async resume(args) { resumes.push(args); return { status: 'completed', text: 'Technical replanning resumed.' }; },
+  };
+  const seen = [];
+  await makeLeadExecutor({ orchestrator }).execute(pausedContext('t-legacy-recovery', { kind: 'human_decision', ...request }, { parts: [{ text: 'Continue' }] }), {
+    publish: (event) => seen.push(event),
+  });
+
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].asNode, 'human_input');
+  assert.equal(values.humanRequest, null);
+  assert.equal(seen[0].kind, 'task');
+  assert.equal(seen[0].data.status.state, TaskState.TASK_STATE_WORKING);
+  assert.equal(seen[0].data.metadata.pause, null);
+  assert.equal(seen.some((event) => statusText(event).includes(request.question)), false);
+  assert.equal(resumes[0].input.answer, 'Continue');
+  assert.equal(resumes[0].input.choice, undefined);
+  assert.equal(resumes[0].input.decisionId, undefined);
+  assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
+});
+
 test('a resumable run error becomes an error pause and a follow-up retries; otherwise FAILED', async () => {
   const seen = [];
   const long = 'x'.repeat(5000);
@@ -943,7 +1012,14 @@ test('a transient model capacity failure records a safe checkpoint retry and man
   recovery.stop(); db.close();
 });
 
-test('transient recovery pause text exposes exhausted recovery and manual classifications', () => {
+test('transient recovery pause text follows a scheduled retry instead of a stale exhausted flag', () => {
+  const scheduled = describePause('task-recovery', {
+    kind: 'transient_recovery', category: 'service', message: 'service unavailable', attempts: 5,
+    recoveryExhausted: true, automatic: false, nextAttemptAt: Date.parse('2027-01-01T00:05:00.000Z'),
+  });
+  assert.match(scheduled, /Next recovery attempt: 2027-01-01T00:05:00\.000Z/);
+  assert.match(scheduled, /The server will retry this checkpoint automatically/);
+  assert.doesNotMatch(scheduled, /exhausted|retry manually/i);
   const exhausted = describePause('task-recovery', {
     kind: 'transient_recovery', category: 'service', message: 'service unavailable', attempts: 5, recoveryExhausted: true,
   });
@@ -1713,6 +1789,16 @@ test('describePause explains automatic resume for a budget pause and keeps the o
   assert.match(on, /Send a message to this task to resume it immediately\./);
 });
 
+test('describePause gives an auth pause a local re-login action and automatic recovery details', () => {
+  const pause = { kind: 'waiting_for_auth', action: 'Open the local Accounts panel and sign in to alpha.' };
+  const off = describePause('t1', pause);
+  assert.match(off, /local Accounts panel and sign in to alpha/);
+  assert.match(off, /send a message to this task to retry/i);
+  const on = describePause('t1', pause, { autoResume: true, nextCheckAt: Date.parse('2027-01-01T00:00:00.000Z') });
+  assert.match(on, /checks account authentication and required model availability/);
+  assert.match(on, /Next authentication check: 2027-01-01T00:00:00\.000Z/);
+});
+
 test('a budget pause registers with the watcher and the loopback resume reaches the lead resume path', async () => {
   const dir = tmpDir();
   const resumes = [];
@@ -1782,13 +1868,13 @@ test('a human resume forgets the run and auto-resume off leaves no watcher and t
   }
 });
 
-test('startup registers INPUT_REQUIRED lead tasks paused for budget and skips other pauses', async () => {
+test('startup registers INPUT_REQUIRED lead tasks paused for budget or auth and skips other pauses', async () => {
   const dir = tmpDir();
   const stateFile = path.join(dir, 'state.sqlite');
   const seed = await openStateDatabase({ filePath: stateFile });
   const waiting = { state: TaskState.TASK_STATE_INPUT_REQUIRED, timestamp: new Date().toISOString() };
   const store = createTaskStore(seed, 'orchestrator');
-  for (const id of ['lead-budget', 'lead-human']) {
+  for (const id of ['lead-budget', 'lead-auth', 'lead-human']) {
     await store.save({ id, contextId: `c-${id}`, status: waiting, artifacts: [], history: [], metadata: {} }, CALL());
   }
   await seed.close();
@@ -1797,13 +1883,153 @@ test('startup registers INPUT_REQUIRED lead tasks paused for budget and skips ot
     stateFile,
     tokenFile: path.join(dir, 'token'),
     appServer: CHATGPT_APP_SERVER(),
-    orchestratorFactory: () => ({ async getPause(id) { return id === 'lead-budget' ? BUDGET_PAUSE : HUMAN_PAUSE; } }),
+    orchestratorFactory: () => ({ async getPause(id) { return id === 'lead-budget' ? BUDGET_PAUSE : id === 'lead-auth' ? { kind: 'waiting_for_auth' } : HUMAN_PAUSE; } }),
     budgetWatcherOptions: { intervalMs: 600_000 },
   });
   try {
     for (let i = 0; i < 50 && !runtime.budgetWatcher.status('lead-budget'); i++) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(runtime.budgetWatcher.status('lead-budget').state, 'waiting');
+    assert.equal(runtime.budgetWatcher.status('lead-auth').state, 'waiting');
     assert.equal(runtime.budgetWatcher.status('lead-human'), null);
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an auth pause waits for explicit account recovery and resumes through the automatic auth path once', async () => {
+  const dir = tmpDir();
+  const accountsDir = path.join(dir, 'accounts');
+  fs.mkdirSync(accountsDir);
+  const homeA = path.join(accountsDir, 'a');
+  const homeB = path.join(accountsDir, 'b');
+  fs.writeFileSync(path.join(accountsDir, 'profiles.json'), JSON.stringify({
+    version: 1, active: 'a', autoSwitch: true,
+    profiles: [{ name: 'a', home: homeA }, { name: 'b', home: homeB }],
+  }));
+  const auth = new Map([[homeA, true], [homeB, true]]);
+  const limits = new Map([[homeA, null], [homeB, RATE_LIMITS_OK]]);
+  const resumes = [];
+  let paused = true;
+  const authPause = { kind: 'waiting_for_auth', action: 'Open the local Accounts panel and sign in to b.' };
+  const orchestrator = {
+    async run(args) { return { runId: args.runId, status: 'input_required', text: '', rounds: 0, assignments: [], pause: authPause }; },
+    async getPause() { return paused ? authPause : null; },
+    async resume(args) { paused = false; resumes.push(args); return { runId: args.runId, status: 'completed', text: 'ok', rounds: 1, assignments: [] }; },
+  };
+  const runtime = await startServer({
+    listen: true, port: 0, stateFile: ':memory:', tokenFile: path.join(dir, 'token'), accountsDir, workspace: dir,
+    appServerFactory: (home) => ({
+      async start() {}, async getAccount() { return { account: { type: 'chatgpt' }, requiresOpenaiAuth: auth.get(home) === true }; },
+      async readRateLimits() { return limits.get(home) ?? null; }, async run() {}, async close() {},
+      async getVersion() { return null; }, async supervisorState() { return null; }, async processIdentity() { return null; },
+      async listHooks() { return []; }, async hookInventory() { return []; }, async listMcpServerNames() { return []; },
+      async mcpInventory() { return []; },
+    }),
+    readProfileLimits: async (home) => limits.get(home) ?? null,
+    readProfileState: async (home) => ({ requiresOpenaiAuth: auth.get(home) === true, limits: limits.get(home) ?? null }),
+    orchestratorFactory: () => orchestrator,
+    budgetWatcherOptions: { intervalMs: 80, switchDelayMs: 20, marginMs: 0 },
+  });
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const first = await handler.sendMessage({ message: userMessage('Continue existing task'), configuration: {} }, CALL());
+    assert.equal(first.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.match(statusText(first), /local Accounts panel and sign in to b/);
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    assert.equal(resumes.length, 0, 'no profile requiring auth may resume, even with rate limits present');
+    auth.set(homeB, false);
+    limits.set(homeB, RATE_LIMITS_OK);
+    for (let i = 0; i < 100 && resumes.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(resumes.length, 1);
+    assert.equal(resumes[0].resumeOrigin, 'automatic');
+    assert.match(resumes[0].input.answer, /Automatic resume: the account has been authenticated/);
+    assert.equal(runtime.accountProfiles.read().active, 'b');
+    assert.equal((await handler.getTask({ id: first.id }, CALL())).status.state, TaskState.TASK_STATE_COMPLETED);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(resumes.length, 1, 'the same waiting checkpoint resumes once');
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an auth recovery does not resume on a profile selected during active-account verification', async () => {
+  const dir = tmpDir();
+  const accountsDir = path.join(dir, 'accounts');
+  fs.mkdirSync(accountsDir);
+  const homeA = path.join(accountsDir, 'a');
+  const homeB = path.join(accountsDir, 'b');
+  const homeC = path.join(accountsDir, 'c');
+  fs.writeFileSync(path.join(accountsDir, 'profiles.json'), JSON.stringify({
+    version: 1,
+    active: 'a',
+    selectionRevision: 0,
+    autoSwitch: false,
+    profiles: [{ name: 'a', home: homeA }, { name: 'b', home: homeB }, { name: 'c', home: homeC }],
+  }));
+  const auth = new Map([[homeA, true], [homeB, true], [homeC, true]]);
+  const limits = new Map([[homeA, null], [homeB, null], [homeC, null]]);
+  const resumes = [];
+  const created = [];
+  let paused = true;
+  let holdNextARead = false;
+  let signalARead;
+  const aReadStarted = new Promise((resolve) => { signalARead = resolve; });
+  let releaseARead;
+  const aReadGate = new Promise((resolve) => { releaseARead = resolve; });
+  const authPause = { kind: 'waiting_for_auth', action: 'Open the local Accounts panel and sign in to a.' };
+  const orchestrator = {
+    async run(args) { return { runId: args.runId, status: 'input_required', text: '', rounds: 0, assignments: [], pause: authPause }; },
+    async getPause() { return paused ? authPause : null; },
+    async resume(args) { paused = false; resumes.push(args); return { runId: args.runId, status: 'completed', text: 'ok', rounds: 1, assignments: [] }; },
+  };
+  const runtime = await startServer({
+    listen: true, port: 0, stateFile: ':memory:', tokenFile: path.join(dir, 'token'), accountsDir, workspace: dir,
+    appServerFactory: (home) => {
+      created.push(home);
+      return {
+        async start() {},
+        async getAccount() { return { account: { type: 'chatgpt' }, requiresOpenaiAuth: auth.get(home) === true }; },
+        async readRateLimits() { return limits.get(home) ?? null; },
+        async run() {},
+        async close() {},
+        async getVersion() { return null; },
+        async supervisorState() { return null; },
+        async processIdentity() { return null; },
+        async listHooks() { return []; },
+        async hookInventory() { return []; },
+        async listMcpServerNames() { return []; },
+        async mcpInventory() { return []; },
+      };
+    },
+    readProfileState: async (home) => {
+      if (home === homeA && holdNextARead) {
+        holdNextARead = false;
+        signalARead();
+        await aReadGate;
+        return { requiresOpenaiAuth: false, limits: RATE_LIMITS_OK };
+      }
+      return { requiresOpenaiAuth: auth.get(home) === true, limits: limits.get(home) ?? null };
+    },
+    orchestratorFactory: () => orchestrator,
+    budgetWatcherOptions: { intervalMs: 1000, switchDelayMs: 25, marginMs: 0 },
+  });
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const first = await handler.sendMessage({ message: userMessage('Continue existing task'), configuration: {} }, CALL());
+    assert.equal(first.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    auth.set(homeA, false);
+    holdNextARead = true;
+    runtime.budgetWatcher.notePause(first.id, authPause);
+    await aReadStarted;
+    runtime.accountProfiles.setActive('c');
+    releaseARead();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(resumes.length, 0, 'A availability cannot authorize resume after C became active during the read');
+    assert.equal(runtime.accountProfiles.read().active, 'c');
+    assert.equal(runtime.switchingAppServer.getCodexHome(), homeA);
+    assert.deepEqual(created, [homeA]);
   } finally {
     await runtime.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -2034,6 +2260,85 @@ test('a budget pause with auto-switch on switches to another account and resumes
     assert.equal(runtime.accountProfiles.read().active, 'b');
     assert.equal(runtime.switchingAppServer.getCodexHome(), homeB);
     assert.deepEqual(created, [homeA, homeB]);
+  } finally {
+    await runtime.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the server forwards the watch selection pin when an owner changes profiles during availability lookup', async () => {
+  const dir = tmpDir();
+  const accountsDir = path.join(dir, 'accounts');
+  fs.mkdirSync(accountsDir);
+  const homeA = path.join(accountsDir, 'a');
+  const homeB = path.join(accountsDir, 'b');
+  const homeC = path.join(accountsDir, 'c');
+  fs.writeFileSync(path.join(accountsDir, 'profiles.json'), JSON.stringify({
+    version: 1,
+    active: 'a',
+    selectionRevision: 0,
+    autoSwitch: true,
+    profiles: [{ name: 'a', home: homeA }, { name: 'b', home: homeB }, { name: 'c', home: homeC }],
+  }));
+  const created = [];
+  const appServerFactory = (home) => {
+    created.push(home);
+    return {
+      async start() {},
+      async getAccount() { return { account: { type: 'chatgpt' } }; },
+      async readRateLimits() { return { ordinaryUsageAllowed: false, rateLimits: { rateLimitReachedType: 'rate_limit_reached' }, rateLimitsByLimitId: null }; },
+      async run() {},
+      async close() {},
+      async getVersion() { return null; },
+      async supervisorState() { return null; },
+      async processIdentity() { return null; },
+      async listHooks() { return []; },
+      async hookInventory() { return []; },
+      async listMcpServerNames() { return []; },
+      async mcpInventory() { return []; },
+    };
+  };
+  let signalBRead;
+  let releaseBRead;
+  const bReadStarted = new Promise((resolve) => { signalBRead = resolve; });
+  const bRead = new Promise((resolve) => { releaseBRead = resolve; });
+  const resumes = [];
+  let paused = true;
+  const orchestrator = {
+    async run(args) { return { runId: args.runId, status: 'waiting_for_budget', text: '', rounds: 0, assignments: [], pause: BUDGET_PAUSE }; },
+    async getPause() { return paused ? BUDGET_PAUSE : null; },
+    async resume(args) { paused = false; resumes.push(args); return { runId: args.runId, status: 'completed', text: 'ok', rounds: 1, assignments: [] }; },
+  };
+  const runtime = await startServer({
+    listen: true,
+    port: 0,
+    stateFile: ':memory:',
+    tokenFile: path.join(dir, 'token'),
+    accountsDir,
+    workspace: dir,
+    appServerFactory,
+    readProfileLimits: async (home) => {
+      if (home === homeB) {
+        signalBRead();
+        return bRead;
+      }
+      return null;
+    },
+    orchestratorFactory: () => orchestrator,
+    budgetWatcherOptions: { intervalMs: 1000, switchDelayMs: 10, marginMs: 0 },
+  });
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const first = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    assert.equal(first.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    await bReadStarted;
+    runtime.accountProfiles.setActive('c');
+    releaseBRead(RATE_LIMITS_OK);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(resumes.length, 0, 'an owner selection during availability lookup must cancel automatic resume');
+    assert.equal(runtime.accountProfiles.read().active, 'c', 'the automatic candidate must not overwrite owner selection');
+    assert.equal(runtime.switchingAppServer.getCodexHome(), homeA, 'a busy candidate must not rebind the provider wrapper');
+    assert.deepEqual(created, [homeA]);
   } finally {
     await runtime.close();
     fs.rmSync(dir, { recursive: true, force: true });

@@ -1,4 +1,8 @@
 {
+  "planningStatus": "archived",
+  "archivedAt": "2026-11-06",
+  "currentBacklogRef": "../../autonomous-delivery-backlog.md",
+  "archiveNote": "Historical package statuses and scope are preserved as evidence, not current scheduling instructions.",
   "schemaVersion": "harness-implementation-plan/v1",
   "status": "offline_source_accepted_live_pending",
   "scope": "single_project_first",

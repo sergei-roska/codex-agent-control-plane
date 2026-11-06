@@ -113,6 +113,41 @@ function createJournalTable(db) {
   if (!columns.some((column) => column.name === 'objective_sha256')) {
     db.exec('ALTER TABLE dispatch_journal ADD COLUMN objective_sha256 TEXT');
   }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dispatch_call_bindings (
+      invocation_id TEXT PRIMARY KEY,
+      attempt_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      assignment_id TEXT NOT NULL,
+      task_id TEXT,
+      account_id_sha256 TEXT NOT NULL,
+      bound_at TEXT NOT NULL,
+      UNIQUE (attempt_id, invocation_id)
+    );
+    CREATE INDEX IF NOT EXISTS dispatch_call_bindings_attempt_idx ON dispatch_call_bindings (attempt_id, bound_at, invocation_id);
+  `);
+  const bindingColumns = db.prepare("PRAGMA table_info('dispatch_call_bindings')").all();
+  if (bindingColumns.find((column) => column.name === 'task_id')?.notnull) {
+    db.transaction(() => {
+      db.exec(`
+        DROP INDEX IF EXISTS dispatch_call_bindings_attempt_idx;
+        ALTER TABLE dispatch_call_bindings RENAME TO dispatch_call_bindings_legacy;
+        CREATE TABLE dispatch_call_bindings (
+          invocation_id TEXT PRIMARY KEY,
+          attempt_id TEXT NOT NULL,
+          run_id TEXT NOT NULL,
+          assignment_id TEXT NOT NULL,
+          task_id TEXT,
+          account_id_sha256 TEXT NOT NULL,
+          bound_at TEXT NOT NULL,
+          UNIQUE (attempt_id, invocation_id)
+        );
+        INSERT INTO dispatch_call_bindings SELECT * FROM dispatch_call_bindings_legacy;
+        DROP TABLE dispatch_call_bindings_legacy;
+        CREATE INDEX dispatch_call_bindings_attempt_idx ON dispatch_call_bindings (attempt_id, bound_at, invocation_id);
+      `);
+    })();
+  }
 }
 
 async function openStateDatabase({ filePath } = {}) {
@@ -287,6 +322,41 @@ function requireFields(row) {
   }
 }
 
+const CALL_BINDING_FIELDS = ['invocationId', 'attemptId', 'runId', 'assignmentId', 'taskId', 'accountId', 'boundAt'];
+
+function normalizeCallBinding(row) {
+  for (const key of CALL_BINDING_FIELDS) {
+    if (key === 'taskId' && row?.taskId === null) continue;
+    if (typeof row?.[key] !== 'string' || !row[key]) throw new TypeError(`Call binding requires ${key}`);
+  }
+  if (!/^[0-9a-f]{64}$/.test(row.accountId)) throw new TypeError('Call binding accountId must be a SHA-256 digest');
+  const time = new Date(row.boundAt);
+  if (!Number.isFinite(time.getTime()) || time.toISOString() !== row.boundAt) throw new TypeError('Call binding boundAt must be an ISO timestamp');
+  return Object.fromEntries(CALL_BINDING_FIELDS.map((key) => [key, row[key]]));
+}
+
+function callBindingFromRow(row) {
+  if (!row) return null;
+  return {
+    invocationId: row.invocation_id,
+    attemptId: row.attempt_id,
+    runId: row.run_id,
+    assignmentId: row.assignment_id,
+    taskId: row.task_id,
+    accountId: row.account_id_sha256,
+    boundAt: row.bound_at,
+  };
+}
+
+class CallBindingConflictError extends Error {
+  constructor(invocationId) {
+    super(`Provider call binding conflict for invocation ${invocationId}`);
+    this.name = 'CallBindingConflictError';
+    this.code = 'call_binding_conflict';
+    this.invocationId = invocationId;
+  }
+}
+
 class JournalTransitionError extends Error {
   constructor(attempt, from, to, detail) {
     super(`Journal transition refused for ${attempt}: ${from} -> ${to}${detail ? ` (${detail})` : ''}`);
@@ -312,6 +382,12 @@ class DispatchJournal {
     this.markFinished = this.db.prepare(
       "UPDATE dispatch_journal SET state = 'finished', result_json = ?, updated_at = ? WHERE attempt_id = ? AND state IN ('submitting', 'submitted')");
     this.selectRun = this.db.prepare('SELECT * FROM dispatch_journal WHERE run_id = ? ORDER BY created_at, rowid');
+    this.insertCallBinding = this.db.prepare(`
+      INSERT OR IGNORE INTO dispatch_call_bindings
+        (invocation_id, attempt_id, run_id, assignment_id, task_id, account_id_sha256, bound_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    this.selectCallBinding = this.db.prepare('SELECT * FROM dispatch_call_bindings WHERE invocation_id = ?');
+    this.selectCallBindingsByAttempt = this.db.prepare('SELECT * FROM dispatch_call_bindings WHERE attempt_id = ? ORDER BY rowid');
   }
 
   recordSubmitting(row) {
@@ -351,11 +427,47 @@ class DispatchJournal {
   listByRun(runId) {
     return this.selectRun.all(runId).map(fromRow);
   }
+
+  recordCallBound(input) {
+    const row = normalizeCallBinding(input);
+    return this.db.transaction(() => {
+      const existing = this.getCallBinding(row.invocationId);
+      if (existing) {
+        if (CALL_BINDING_FIELDS.every((key) => existing[key] === row[key])) return existing;
+        throw new CallBindingConflictError(row.invocationId);
+      }
+      let attempt = this.get(row.attemptId);
+      if (!attempt || attempt.runId !== row.runId || attempt.assignmentId !== row.assignmentId
+        || attempt.state === 'finished'
+        || (row.taskId === null
+          ? attempt.role !== 'coordinator' || attempt.assignmentId !== `${row.runId}:lead-planning` || attempt.taskId !== null
+          : attempt.role === 'coordinator' || (attempt.taskId && attempt.taskId !== row.taskId))) {
+        throw new Error(`Provider call binding does not match an active dispatch attempt: ${row.attemptId}`);
+      }
+      if (row.taskId !== null && !attempt.taskId) {
+        this.recordSubmitted(row.attemptId, row.taskId);
+        attempt = this.get(row.attemptId);
+      }
+      this.insertCallBinding.run(row.invocationId, row.attemptId, row.runId, row.assignmentId, row.taskId, row.accountId, row.boundAt);
+      const saved = this.getCallBinding(row.invocationId);
+      if (saved && CALL_BINDING_FIELDS.every((key) => saved[key] === row[key])) return saved;
+      throw new CallBindingConflictError(row.invocationId);
+    })();
+  }
+
+  getCallBinding(invocationId) {
+    return callBindingFromRow(this.selectCallBinding.get(invocationId));
+  }
+
+  listCallBindingsByAttempt(attemptId) {
+    return this.selectCallBindingsByAttempt.all(attemptId).map(callBindingFromRow);
+  }
 }
 
 class InMemoryDispatchJournal {
   constructor() {
     this.rows = new Map();
+    this.callBindings = new Map();
   }
 
   recordSubmitting(row) {
@@ -413,6 +525,35 @@ class InMemoryDispatchJournal {
 
   listByRun(runId) {
     return [...this.rows.values()].filter((row) => row.runId === runId).map((row) => this.get(row.attemptId));
+  }
+
+  recordCallBound(input) {
+    const row = normalizeCallBinding(input);
+    const existing = this.callBindings.get(row.invocationId);
+    if (existing) {
+      if (CALL_BINDING_FIELDS.every((key) => existing[key] === row[key])) return { ...existing };
+      throw new CallBindingConflictError(row.invocationId);
+    }
+    const attempt = this.rows.get(row.attemptId);
+    if (!attempt || attempt.runId !== row.runId || attempt.assignmentId !== row.assignmentId
+      || attempt.state === 'finished'
+      || (row.taskId === null
+        ? attempt.role !== 'coordinator' || attempt.assignmentId !== `${row.runId}:lead-planning` || attempt.taskId !== null
+        : attempt.role === 'coordinator' || (attempt.taskId && attempt.taskId !== row.taskId))) {
+      throw new Error(`Provider call binding does not match an active dispatch attempt: ${row.attemptId}`);
+    }
+    if (row.taskId !== null && !attempt.taskId) this.recordSubmitted(row.attemptId, row.taskId);
+    this.callBindings.set(row.invocationId, row);
+    return { ...row };
+  }
+
+  getCallBinding(invocationId) {
+    const row = this.callBindings.get(invocationId);
+    return row ? { ...row } : null;
+  }
+
+  listCallBindingsByAttempt(attemptId) {
+    return [...this.callBindings.values()].filter((row) => row.attemptId === attemptId).map((row) => ({ ...row }));
   }
 }
 
@@ -474,6 +615,7 @@ module.exports = {
   DEFAULT_STATE_DB,
   DispatchJournal,
   InMemoryDispatchJournal,
+  CallBindingConflictError,
   JournalTransitionError,
   JOURNAL_STATES,
   assignmentId,

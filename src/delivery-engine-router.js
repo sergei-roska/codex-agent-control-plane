@@ -187,6 +187,11 @@ class DeliveryEngineRouter {
   getPause(runId) { return this.#route(runId).getPause?.(runId) || null; }
   requestPause(runId) { return this.#route(runId).requestPause?.(runId) === true; }
   cancelPauseRequest(runId) { return this.#route(runId).cancelPauseRequest?.(runId) === true; }
+  async requestCancel(runId, expectedControlRevision) {
+    const requestCancel = this.#route(runId).requestCancel;
+    if (typeof requestCancel !== 'function') throw Object.assign(new Error('Owner cancellation is unavailable'), { code: 'owner_control_unavailable' });
+    return requestCancel.call(this.#route(runId), runId, expectedControlRevision);
+  }
   async isResumable(runId) { return (await this.#route(runId).isResumable?.(runId)) === true; }
   getRecoveryCheckpoint(runId) { return this.#route(runId).getRecoveryCheckpoint?.(runId) || null; }
   consumeCompletedPauseRequest(runId) { return this.#route(runId).consumeCompletedPauseRequest?.(runId) === true; }

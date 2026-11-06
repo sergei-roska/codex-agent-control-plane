@@ -154,6 +154,7 @@ class ConcurrentDeliveryEngine {
     this.shutdownInitialProcessIdentity = copy(appServer.processIdentity?.() || null);
     this.ownerDecisionAuthorization = null;
     this.controllers = new Map();
+    this.cancellationTimers = new Map();
     this.runs = new Map();
     this.leadThreads = new Map();
     this.checkContract = new Map();
@@ -490,7 +491,9 @@ class ConcurrentDeliveryEngine {
           continue;
         }
         const controller = await this.#controller(run, { prepareThread: false });
-        if (objective.disposition === 'planning' || objective.disposition === 'executing') controller.start();
+        if (['planning', 'executing', 'draining'].includes(objective.disposition)) controller.start();
+        if (objective.disposition === 'draining') this.#scheduleCancellationReconciliation(run);
+        await this.#completeOwnerCancellation(run);
         results.push({ runId: row.run_id, state: controller.status().lastRecovery?.state || 'started' });
       } catch (cause) { results.push({ runId: row.run_id, state: 'unknown', reason: cause.code || 'recovery_failed' }); }
     }
@@ -534,6 +537,24 @@ class ConcurrentDeliveryEngine {
     const controller = this.controllers.get(runId);
     if (!controller || this.store.getObjective(this.projectId, controller.objectiveId)?.disposition !== 'paused_owner') return false;
     try { controller.resumeObjective(); this.#saveStatus(runId, 'running'); return true; } catch (_) { return false; }
+  }
+  async requestCancel(runId, expectedControlRevision) {
+    const run = this.#run(runId);
+    const controller = this.controllers.get(runId);
+    if (!run || !controller || controller.shutdownRequested) throw error('owner_control_unavailable');
+    const objective = this.store.getObjective(this.projectId, run.objectiveId);
+    if (!objective) throw error('concurrent_objective_missing');
+    const updated = await controller.cancelObjective({
+      expectedControlRevision, expectedOwnerGeneration: objective.ownerGeneration,
+    });
+    this.#saveStatus(runId, 'stopping');
+    this.#scheduleCancellationReconciliation(run);
+    const completed = await this.#completeOwnerCancellation(run);
+    if (completed?.disposition === 'draining') this.#scheduleCancellationReconciliation(run);
+    const status = this.controlStatus(runId);
+    return { engine: 'concurrent-v1', runId, projectId: this.projectId, sessionId: run.sessionId,
+      objectiveId: run.objectiveId, action: 'cancel', state: status?.disposition === 'canceled' ? 'applied' : 'requested',
+      acknowledged: true, disposition: status?.disposition || updated.objective.disposition, revisions: status?.revisions };
   }
   consumeCompletedPauseRequest() { return false; }
   getRecoveryCheckpoint(runId) {
@@ -653,9 +674,115 @@ class ConcurrentDeliveryEngine {
     const run = this.#run(runId);
     if (!run) return null;
     const objective = this.store.getObjective(this.projectId, run.objectiveId);
-    const inbox = this.controllers.get(runId)?.inbox || new DeliveryInbox(this.db, {
+    const controller = this.controllers.get(runId) || null;
+    const controllerProjection = controller?.status() || null;
+    const inbox = controller?.inbox || new DeliveryInbox(this.db, {
       projectId: this.projectId, objectiveId: run.objectiveId, sessionId: run.sessionId,
     });
+    const tasks = objective?.tasks || [];
+    const attempts = objective ? this.store.listAttempts(this.projectId, run.objectiveId) : [];
+    const waits = objective ? this.store.listBudgetWaits(this.projectId, run.objectiveId) : [];
+    const retries = objective ? this.store.listLifecycleRetries(this.projectId, run.objectiveId) : [];
+    const candidate = objective ? this.#latestCandidate(run.objectiveId) : null;
+    const finalizations = objective ? this.store.listFinalizations(this.projectId, run.objectiveId) : [];
+    const latestFinalization = finalizations.at(-1) || null;
+    const durableBinding = Boolean(run.leadThreadId && run.leadCodexHome && run.leadSettings
+      && run.leadSettings.threadId === run.leadThreadId && run.leadSettings.codexHome === run.leadCodexHome
+      && typeof run.leadSettings.accountId === 'string' && run.leadSettings.accountId.length > 0);
+    const activeWaits = waits.filter((wait) => wait.state === 'waiting');
+    const activeRetries = retries.filter((retry) => ['waiting', 'due', 'exhausted', 'strategy_due', 'blocked'].includes(retry.state));
+    const unsettledAttempts = attempts.filter((attempt) => ['claimed', 'running', 'settling', 'unknown'].includes(attempt.state));
+    const pendingTasks = tasks.filter((task) => ['draft', 'queued', 'ready', 'claimed', 'running', 'settling'].includes(task.state));
+    const pendingMessages = inbox.pending();
+    const pendingDecisions = this.store.listOwnerDecisions(this.projectId, run.objectiveId).filter((decision) => decision.state === 'pending');
+    const hasPlannerLedger = Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='delivery_planner_turns'").get());
+    const plannerTurns = hasPlannerLedger ? this.db.prepare(`SELECT turn_id,status FROM delivery_planner_turns
+      WHERE project_id=? AND session_id=? AND status IN ('active','unknown') ORDER BY started_at,turn_id`)
+      .all(this.projectId, run.sessionId) : null;
+    const hasCandidateIntents = Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='candidate_intents'").get());
+    const candidateIntents = hasCandidateIntents ? this.db.prepare(`SELECT intent_id,state FROM candidate_intents
+      WHERE project_id=? AND objective_id=? AND state IN ('prepared','applying','unknown','settling') ORDER BY created_at,intent_id`)
+      .all(this.projectId, run.objectiveId) : null;
+    let qualification = null;
+    if (objective && latestFinalization?.state === 'accepted') {
+      try {
+        qualification = this.store.currentFinalizationQualification(this.projectId, run.objectiveId,
+          { candidateStore: this.candidateStore, reviewStore: this.reviewStore });
+      } catch (_) { qualification = { current: false, reason: 'qualification_unavailable', historical: null }; }
+    }
+    const acceptedFinalization = latestFinalization?.state === 'accepted' && qualification?.current === true
+      && qualification.historical?.goalAchieved === true
+      ? { state: 'accepted', qualified: true, candidateId: qualification.historical.pins.candidate.candidateId,
+        fingerprint: latestFinalization.terminalDigest, result: qualification.historical }
+      : latestFinalization ? { state: latestFinalization.state, qualified: false,
+        reason: latestFinalization.state === 'accepted' ? qualification?.reason || 'qualification_unavailable' : null,
+        candidateId: latestFinalization.pins?.candidate?.candidateId || null }
+        : { state: 'none', qualified: false, reason: 'finalization_not_recorded', candidateId: null };
+    const finalizationPins = latestFinalization?.pins;
+    const checkEvidenceCurrent = Boolean(objective && candidate && finalizationPins
+      && finalizationPins.ownerGeneration === objective.ownerGeneration
+      && finalizationPins.controlRevision === objective.controlRevision
+      && finalizationPins.goalRevision === objective.goalRevision
+      && finalizationPins.planRevision === objective.planRevision
+      && finalizationPins.authorityRevision === objective.authorityRevision
+      && finalizationPins.requirementDigest === objective.requirementDigest
+      && finalizationPins.checksDigest === objective.checksDigest
+      && finalizationPins.candidate?.candidateId === candidate.candidateId
+      && finalizationPins.candidate?.manifestDigest === candidate.manifestDigest
+      && finalizationPins.candidate?.integrationGeneration === candidate.integrationGeneration);
+    const checkEvidence = checkEvidenceCurrent
+      ? latestFinalization.checkResult : null;
+    const checks = (run.contract?.requiredChecks || []).map((check) => {
+      const outcome = checkEvidence?.checkResults?.find((entry) => entry.id === check.id);
+      return { id: check.id, state: outcome?.result || 'unknown', candidateId: checkEvidence ? candidate.candidateId : null,
+        reason: outcome ? null : candidate ? 'no_result_for_current_candidate' : 'candidate_unknown' };
+    });
+    const disposition = objective?.disposition || 'unknown';
+    const phase = ({ accepted: 'terminal', partial: 'terminal', canceled: 'terminal', paused_owner: 'paused',
+      waiting_budget: 'waiting', waiting_owner: 'waiting', blocked_technical: 'blocked', validating: 'checking',
+      planning: 'active', executing: 'active', draining: 'stopping' })[disposition] || 'unknown';
+    const blockers = [
+      ...pendingTasks.map((task) => ({ kind: 'task_pending', taskId: task.taskId, state: task.state })),
+      ...tasks.filter((task) => ['blocked', 'failed'].includes(task.state))
+        .map((task) => ({ kind: task.state === 'blocked' ? 'task_blocked' : 'task_failed', taskId: task.taskId, state: task.state })),
+      ...unsettledAttempts.map((attempt) => ({ kind: 'attempt_unsettled', taskId: attempt.taskId, attemptId: attempt.attemptId, state: attempt.state })),
+      ...activeWaits.map((wait) => ({ kind: 'budget_wait', waitId: wait.waitId, state: wait.state, reasonCode: wait.reasonCode })),
+      ...activeRetries.map((retry) => ({ kind: 'lifecycle_retry', retryId: retry.retryId, state: retry.state, reasonCode: retry.failureCode })),
+      ...pendingDecisions.map((decision) => ({ kind: 'owner_decision', decisionId: decision.decisionId, state: decision.state })),
+      ...pendingMessages.map((message) => ({ kind: 'inbox_message', messageId: message.messageId, state: message.state })),
+      ...checks.filter((check) => check.state !== 'passed').map((check) => ({ kind: 'mandatory_check', checkId: check.id,
+        state: check.state, reason: check.reason })),
+      ...(latestFinalization?.state === 'rejected' ? [{ kind: 'finalization_rejected', state: 'rejected' }] : []),
+      ...(latestFinalization?.state === 'accepted' && !acceptedFinalization.qualified
+        ? [{ kind: 'finalization_qualification', state: 'unknown', reason: acceptedFinalization.reason }] : []),
+      ...(!candidate ? [{ kind: 'candidate', state: 'unknown', reason: 'candidate_unavailable' }] : []),
+      ...(plannerTurns || []).map((turn) => ({ kind: 'planner_turn', turnId: turn.turn_id, state: turn.status })),
+      ...(candidateIntents || []).map((intent) => ({ kind: 'candidate_publication', intentId: intent.intent_id, state: intent.state })),
+      ...(controllerProjection?.scheduler?.parked || []).map((attempt) => ({ kind: 'attempt_parked', attemptId: attempt.attemptId, reason: attempt.reason })),
+    ];
+    let nextAction;
+    if (['accepted', 'partial', 'canceled'].includes(disposition)) nextAction = { kind: 'none', state: 'terminal', reason: null };
+    else if (disposition === 'waiting_budget') nextAction = activeWaits.length
+      ? { kind: 'wait_for_budget', state: 'scheduled', at: Math.min(...activeWaits.map((wait) => wait.nextWakeAt)), reason: null }
+      : { kind: 'unknown', state: 'unknown', reason: 'budget_wait_record_missing' };
+    else if (disposition === 'paused_owner' || disposition === 'waiting_owner') nextAction = { kind: 'owner_action', state: 'required', reason: disposition };
+    else if (disposition === 'blocked_technical') nextAction = { kind: 'technical_recovery', state: 'required', reason: 'blocked_technical' };
+    else if (pendingDecisions.length) nextAction = { kind: 'owner_decision', state: 'required', reason: 'pending_owner_decision' };
+    else if (pendingMessages.length) nextAction = { kind: 'apply_inbox', state: 'pending', reason: 'unapplied_message' };
+    else if (unsettledAttempts.length) nextAction = { kind: 'reconcile_attempts', state: 'pending', reason: 'unsettled_attempts' };
+    else if (pendingTasks.length) nextAction = { kind: 'dispatch_tasks', state: 'pending', reason: 'runnable_or_pending_tasks' };
+    else if (tasks.some((task) => task.state === 'failed')) nextAction = { kind: 'technical_recovery', state: 'required', reason: 'failed_task' };
+    else if (tasks.some((task) => task.state === 'blocked')) nextAction = { kind: 'resolve_blocked_tasks', state: 'required', reason: 'blocked_tasks' };
+    else if (plannerTurns === null) nextAction = { kind: 'unknown', state: 'unknown', reason: 'planner_ledger_unavailable' };
+    else if (plannerTurns.length) nextAction = { kind: 'reconcile_planner', state: 'pending', reason: 'active_or_unknown_planner_turn' };
+    else if (candidateIntents === null) nextAction = { kind: 'unknown', state: 'unknown', reason: 'candidate_intent_ledger_unavailable' };
+    else if (candidateIntents.length) nextAction = { kind: 'reconcile_publication', state: 'pending', reason: 'candidate_publication_unsettled' };
+    else if (latestFinalization && ['unknown', 'checking', 'barrier', 'ready'].includes(latestFinalization.state)) {
+      nextAction = { kind: latestFinalization.state === 'unknown' ? 'reconcile_finalization' : 'finish_finalization',
+        state: latestFinalization.state, reason: latestFinalization.state === 'unknown' ? 'finalization_effect_unknown' : null };
+    } else if (activeRetries.length) nextAction = { kind: 'wait_for_retry', state: activeRetries[0].state,
+      at: activeRetries[0].nextWakeAt ?? null, reason: activeRetries[0].failureCode || null };
+    else nextAction = { kind: 'unknown', state: 'unknown', reason: 'no_durable_next_action' };
     const messages = inbox.messages({ limit: CONTROL_MESSAGE_LIMIT }).map((message) => ({ messageId: message.messageId,
       kind: message.kind, state: message.state, receivedAt: message.receivedAt, updatedAt: message.updatedAt,
       result: message.result }));
@@ -665,7 +792,23 @@ class ConcurrentDeliveryEngine {
       revisions: objective ? { planRevision: objective.planRevision,
         goalRevision: objective.goalRevision, controlRevision: objective.controlRevision,
         ownerGeneration: objective.ownerGeneration } : null,
-      inbox: inbox.messages(), messages, pending: inbox.pending(), disposition: objective?.disposition || 'missing' };
+      inbox: inbox.messages(), messages, pending: inbox.pending(), disposition: objective?.disposition || 'missing',
+      phase, nextAction, providerBinding: { state: durableBinding ? 'bound' : 'unknown',
+        account: durableBinding ? 'durably_bound' : 'unknown', codexHome: durableBinding ? 'durably_bound' : 'unknown',
+        reason: durableBinding ? null : 'durable_lead_binding_unavailable' },
+      waits: waits.map((wait) => ({ waitId: wait.waitId, state: wait.state, source: wait.source, provider: wait.provider, model: wait.model,
+        reasonCode: wait.reasonCode, nextWakeAt: wait.nextWakeAt })),
+      blockers, checks, candidate: candidate ? { state: candidate.status, candidateId: candidate.candidateId,
+        integrationGeneration: candidate.integrationGeneration, manifestDigest: candidate.manifestDigest,
+        checkIdentity: candidate.checkIdentity } : { state: 'unknown', reason: 'candidate_unavailable' },
+      finalization: acceptedFinalization,
+      planner: plannerTurns === null ? { state: 'unknown', reason: 'planner_ledger_unavailable' }
+        : { state: plannerTurns.length ? 'pending' : 'idle', activeOrUnknownTurns: plannerTurns },
+      publicationEffects: candidateIntents === null ? { state: 'unknown', reason: 'candidate_intent_ledger_unavailable' }
+        : { state: candidateIntents.length ? 'unknown' : 'settled', pending: candidateIntents },
+      controller: controllerProjection ? { state: 'available', running: controllerProjection.running,
+        plannerState: controllerProjection.lastPlanner?.state || 'unknown', recoveryState: controllerProjection.lastRecovery?.state || 'unknown' }
+        : { state: 'unknown', reason: 'controller_not_loaded' } };
   }
 
   runtimeProjection() {
@@ -820,6 +963,8 @@ class ConcurrentDeliveryEngine {
 
   async shutdown({ prepared = false } = {}) {
     this.fenceShutdown({ durable: false });
+    for (const timer of this.cancellationTimers.values()) clearTimeout(timer);
+    this.cancellationTimers.clear();
     const projections = [];
     const controllers = [...this.controllers.entries()];
     for (const [, controller] of controllers) controller.shutdown({ pause: false });
@@ -1370,13 +1515,25 @@ class ConcurrentDeliveryEngine {
       if (signal?.aborted) {
         const controller = this.controllers.get(run.runId);
         if (controller) await controller.cancelObjective().catch(() => {});
-        return { runId: run.runId, status: 'canceled', text: 'Cancellation was requested; provider effects are being reconciled.', rounds: 0, assignments: [] };
+        let completed = null;
+        try { completed = await this.#completeOwnerCancellation(run); } catch (_) { /* the durable request remains pending */ }
+        if (completed?.disposition !== 'canceled') this.#scheduleCancellationReconciliation(run);
+        if (completed?.disposition === 'draining') this.#scheduleCancellationReconciliation(run);
+        return completed?.disposition === 'canceled'
+          ? { runId: run.runId, status: 'canceled', text: 'Canceled by the owner.', rounds: 0, assignments: [] }
+          : { runId: run.runId, status: 'input_required', text: 'Cancellation is requested; downstream effects are still being reconciled.',
+            pause: { kind: 'owner_cancel', message: 'Cancellation is pending trusted effect settlement.' }, rounds: 0, assignments: [] };
       }
       const current = this.#run(run.runId);
       const objective = this.store.getObjective(this.projectId, run.objectiveId);
       if (!objective) throw error('concurrent_objective_missing');
       if (['accepted', 'partial'].includes(objective.disposition)) return this.#terminalResult(current);
       if (objective.disposition === 'canceled') return { runId: run.runId, status: 'canceled', text: 'Canceled by the owner.', rounds: 0, assignments: [] };
+      if (objective.disposition === 'draining') {
+        const completed = await this.#completeOwnerCancellation(run);
+        if (completed?.disposition === 'canceled') return { runId: run.runId, status: 'canceled', text: 'Canceled by the owner.', rounds: 0, assignments: [] };
+        this.#scheduleCancellationReconciliation(run);
+      }
       const ownerWait = this.#ownerDecisionWait(run);
       if (ownerWait) return ownerWait;
       const controller = this.controllers.get(run.runId);
@@ -1412,6 +1569,65 @@ class ConcurrentDeliveryEngine {
       if (['accepted', 'partial'].includes(refreshed.disposition)) return this.#terminalResult(this.#run(run.runId));
       await new Promise((resolve) => setTimeout(resolve, this.sleepMs));
     }
+  }
+
+  async #completeOwnerCancellation(run) {
+    const objective = this.store.getObjective(this.projectId, run.objectiveId);
+    const control = this.store.getLifecycleControl(this.projectId, run.objectiveId);
+    if (!objective || objective.disposition !== 'draining' || control?.cause !== 'owner_cancel'
+      || control.ownerGeneration !== objective.ownerGeneration || control.controlRevision !== objective.controlRevision) return objective;
+    const controller = this.controllers.get(run.runId);
+    if (controller?.cycle || controller?.planner?.inFlight || controller?.scheduler?.runPromise || controller?.scheduler?.inFlight?.size) return objective;
+    const attempts = this.store.listAttempts(this.projectId, run.objectiveId);
+    if (this.store.listClaims(this.projectId, run.objectiveId).some((claim) => ['active', 'expired', 'fenced'].includes(claim.state))
+      || attempts.some((attempt) => !['succeeded', 'failed', 'canceled'].includes(attempt.state))
+      || !this.#effectsSettled(objective, [])) return objective;
+    const plannerLedger = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='delivery_planner_turns'").get();
+    if (!plannerLedger || this.db.prepare(`SELECT 1 FROM delivery_planner_turns WHERE project_id=? AND session_id=?
+      AND status IN ('active','unknown') LIMIT 1`).get(this.projectId, run.sessionId)) return objective;
+    const recoveryLedger = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='delivery_lifecycle_planner_recoveries'").get();
+    if (!recoveryLedger || this.db.prepare(`SELECT 1 FROM delivery_lifecycle_planner_recoveries WHERE project_id=? AND session_id=?
+      AND state<>'reconciled' LIMIT 1`).get(this.projectId, run.sessionId)) return objective;
+    try {
+      const completed = this.store.completeCancellation(this.projectId, run.objectiveId, {
+        expectedControlRevision: objective.controlRevision, expectedOwnerGeneration: objective.ownerGeneration,
+      });
+      if (completed.disposition === 'canceled') {
+        const timer = this.cancellationTimers.get(run.runId);
+        if (timer) clearTimeout(timer);
+        this.cancellationTimers.delete(run.runId);
+      }
+      return completed;
+    } catch (cause) {
+      if (['cancel_effects_unsettled', 'cancel_tasks_unsettled', 'control_revision_stale', 'owner_generation_stale'].includes(cause.code)) return this.store.getObjective(this.projectId, run.objectiveId);
+      throw cause;
+    }
+  }
+
+  #scheduleCancellationReconciliation(run) {
+    if (this.cancellationTimers.has(run.runId)) return;
+    const timer = setTimeout(async () => {
+      this.cancellationTimers.delete(run.runId);
+      try {
+        const objective = this.store.getObjective(this.projectId, run.objectiveId);
+        if (!objective || objective.disposition !== 'draining') return;
+        const controller = this.controllers.get(run.runId);
+        if (controller && !controller.shutdownRequested) {
+          const unresolvedAttempts = this.store.listAttempts(this.projectId, run.objectiveId)
+            .some((attempt) => !['succeeded', 'failed', 'canceled'].includes(attempt.state));
+          if (!unresolvedAttempts) {
+            try { controller.lifecycle.recover(); } catch (_) { /* keep the durable request held */ }
+          }
+          controller.scheduler.wake();
+        }
+        const completed = await this.#completeOwnerCancellation(run);
+        if (completed?.disposition === 'draining') this.#scheduleCancellationReconciliation(run);
+      } catch (_) {
+        /* A closed local runtime leaves the durable request unresolved for its next owner. */
+      }
+    }, 1000);
+    timer.unref?.();
+    this.cancellationTimers.set(run.runId, timer);
   }
 
   async #advance(run, controller) {

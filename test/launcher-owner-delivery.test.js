@@ -117,6 +117,52 @@ test('POST validates scope, forwards stale revisions for durable replay, and val
   assert.equal((await api('POST', `/api/projects/${PROJECT}/delivery/steer`, { ...body, text: 'x'.repeat(2001) })).status, 400);
 });
 
+test('owner pause and resume proxy only exact current scopes and verify applied revisions', async () => {
+  const body = { runId: 'run-1', projectId: PROJECT, sessionId: 'session-1', objectiveId: 'objective-1', expectedControlRevision: 4 };
+  control.ack = { ...status({ disposition: 'paused_owner', revisions: { ...status().revisions, controlRevision: 5 } }),
+    action: 'pause', state: 'applied', acknowledged: true };
+  const paused = await api('POST', `/api/projects/${PROJECT}/delivery/control/pause`, body);
+  assert.equal(paused.status, 200);
+  assert.deepEqual([paused.body.action, paused.body.disposition, paused.body.revisions.controlRevision], ['pause', 'paused_owner', 5]);
+  assert.deepEqual(serverCalls.map(call => [call.method, call.url]), [
+    ['GET', '/control/delivery/run-1'], ['POST', '/control/delivery/run-1/pause'],
+  ]);
+  assert.deepEqual(serverCalls[1].body, body);
+  assert.equal(serverCalls[1].authorization, 'Bearer owner-token');
+
+  serverCalls = [];
+  control.status = status({ disposition: 'paused_owner', revisions: { ...status().revisions, controlRevision: 5 } });
+  control.ack = { ...status({ disposition: 'executing', revisions: { ...status().revisions, controlRevision: 6 } }),
+    action: 'resume', state: 'applied', acknowledged: true };
+  const resumed = await api('POST', `/api/projects/${PROJECT}/delivery/control/resume`, { ...body, expectedControlRevision: 5 });
+  assert.equal(resumed.status, 200);
+  assert.deepEqual([resumed.body.action, resumed.body.disposition, resumed.body.revisions.controlRevision], ['resume', 'executing', 6]);
+
+  serverCalls = [];
+  assert.equal((await api('POST', `/api/projects/${PROJECT}/delivery/control/pause`, body)).status, 409);
+  assert.deepEqual(serverCalls.map(call => call.method), ['GET']);
+  assert.equal((await api('POST', `/api/projects/${PROJECT}/delivery/control/pause`, { ...body, extra: true })).status, 400);
+  assert.equal((await api('POST', `/api/projects/${PROJECT}/delivery/control/unsupported`, body)).status, 404);
+});
+
+test('owner cancel proxy accepts only a scoped durable draining acknowledgement', async () => {
+  const body = { runId: 'run-1', projectId: PROJECT, sessionId: 'session-1', objectiveId: 'objective-1', expectedControlRevision: 4 };
+  control.ack = { ...status({ disposition: 'draining', revisions: { ...status().revisions, controlRevision: 5 } }),
+    action: 'cancel', state: 'requested', acknowledged: true };
+  const response = await api('POST', `/api/projects/${PROJECT}/delivery/control/cancel`, body);
+  assert.equal(response.status, 200);
+  assert.deepEqual([response.body.action, response.body.state, response.body.disposition, response.body.revisions.controlRevision],
+    ['cancel', 'requested', 'draining', 5]);
+  assert.deepEqual(serverCalls.map(call => [call.method, call.url]), [
+    ['GET', '/control/delivery/run-1'], ['POST', '/control/delivery/run-1/cancel'],
+  ]);
+  assert.deepEqual(serverCalls[1].body, body);
+
+  control.ack = { ...control.ack, state: 'applied' };
+  assert.equal((await api('POST', `/api/projects/${PROJECT}/delivery/control/cancel`, body)).status, 502);
+  assert.equal((await api('POST', `/api/projects/${PROJECT}/delivery/control/cancel`, { ...body, extra: true })).status, 400);
+});
+
 test('settings endpoint preserves valid owner fields, rejects invalid files and locks changes while running', async () => {
   const original = { version: 1, executionPermissions: 'strict', ownerChecks: ['npm test'], deliveryEngine: 'legacy' };
   projectStatus = 'stopped';

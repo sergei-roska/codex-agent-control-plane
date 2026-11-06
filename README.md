@@ -1,5 +1,11 @@
 # Codex Universal A2A Orchestrator
 
+Current development priorities: [autonomous delivery backlog](docs/autonomous-delivery-backlog.md).
+The [migration map](docs/autonomous-delivery-migration.md) preserves prior work;
+the [constraint inventory](docs/autonomous-delivery-constraints.md) records what
+needs to change and which invariants have concrete grounds. These are planned
+outcomes, not a claim that automatic two-account continuation is already qualified.
+
 This project runs the eight development-team roles adapted from `codex-universal` as independent Agent2Agent (A2A) agents. A read-only lead plans and dispatches bounded work to those agents over A2A. Every role runs in its own Codex App Server thread under the local Codex ChatGPT sign-in.
 
 ```text

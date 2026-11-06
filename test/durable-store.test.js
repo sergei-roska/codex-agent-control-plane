@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const Database = require('better-sqlite3');
 const { TaskState } = require('@a2a-js/sdk');
 const { ServerCallContext } = require('@a2a-js/sdk/server');
 const { Annotation, Command, END, START, StateGraph, interrupt } = require('@langchain/langgraph');
@@ -353,6 +354,99 @@ test('state database uses synchronous = FULL', async (t) => {
   const state = await openStateDatabase({ filePath: tempDb(t) });
   t.after(() => state.close());
   assert.equal(state.db.pragma('synchronous', { simple: true }), 2);
+});
+
+test('provider call bindings are append-only, replay-safe, correlated, and survive SQLite reopen', async (t) => {
+  const file = tempDb(t);
+  let state = await openStateDatabase({ filePath: file });
+  const journal = new DispatchJournal(state);
+  const attempt = { attemptId: 'run:r1:a0:t1', runId: 'run', assignmentId: 'run:r1:a0', role: 'orch-builder', sandbox: 'workspace-write', contextId: 'ctx' };
+  journal.recordSubmitting(attempt);
+  const binding = {
+    invocationId: 'invocation-1', attemptId: attempt.attemptId, runId: attempt.runId,
+    assignmentId: attempt.assignmentId, taskId: 'worker-task', accountId: 'a'.repeat(64),
+    boundAt: '2026-11-06T13:00:00.000Z',
+  };
+  const secondBinding = { ...binding, invocationId: 'invocation-2', accountId: 'b'.repeat(64) };
+  assert.deepEqual(journal.recordCallBound(binding), binding);
+  assert.deepEqual(journal.recordCallBound(binding), binding);
+  assert.equal(journal.get(attempt.attemptId).taskId, 'worker-task');
+  assert.throws(() => journal.recordCallBound({ ...binding, invocationId: 'invocation-other-task', taskId: 'different-worker-task' }), /does not match an active dispatch attempt/);
+  assert.equal(journal.get(attempt.attemptId).taskId, 'worker-task');
+  assert.throws(() => journal.recordCallBound({ ...binding, accountId: 'b'.repeat(64) }), { code: 'call_binding_conflict' });
+  assert.deepEqual(journal.recordCallBound(secondBinding), secondBinding);
+  assert.throws(() => journal.recordCallBound({ ...binding, invocationId: 'invocation-3', assignmentId: 'other' }), /does not match an active dispatch attempt/);
+  assert.deepEqual(journal.listCallBindingsByAttempt(attempt.attemptId), [binding, secondBinding]);
+  assert.equal(state.db.prepare('SELECT COUNT(*) AS count FROM dispatch_call_bindings').get().count, 2);
+  journal.recordSubmitted(attempt.attemptId, 'worker-task');
+  journal.recordFinished(attempt.attemptId, { outcome: 'completed' });
+  await state.close();
+
+  state = await openStateDatabase({ filePath: file });
+  t.after(() => state.close());
+  const reopened = new DispatchJournal(state);
+  assert.deepEqual(reopened.listCallBindingsByAttempt(attempt.attemptId), [binding, secondBinding]);
+  assert.deepEqual(reopened.recordCallBound(binding), binding);
+  assert.throws(() => reopened.recordCallBound({ ...binding, invocationId: 'invocation-3' }), /does not match an active dispatch attempt/);
+  const columns = state.db.prepare("PRAGMA table_info('dispatch_call_bindings')").all().map((column) => column.name);
+  assert.deepEqual(columns.sort(), ['account_id_sha256', 'attempt_id', 'assignment_id', 'bound_at', 'invocation_id', 'run_id', 'task_id'].sort());
+});
+
+test('lead planning call bindings retain a null A2A task across SQLite reopen', async (t) => {
+  const file = tempDb(t);
+  let state = await openStateDatabase({ filePath: file });
+  let journal = new DispatchJournal(state);
+  const runId = 'lead-run';
+  const attemptId = `${runId}:lead:attempt-1`;
+  const assignmentId = `${runId}:lead-planning`;
+  journal.recordSubmitting({ attemptId, runId, assignmentId, role: 'coordinator', sandbox: 'read-only', contextId: runId });
+  const binding = {
+    invocationId: 'lead-invocation-1', attemptId, runId, assignmentId, taskId: null,
+    accountId: 'c'.repeat(64), boundAt: '2026-11-06T13:00:00.000Z',
+  };
+  assert.deepEqual(journal.recordCallBound(binding), binding);
+  assert.equal(journal.get(attemptId).taskId, null);
+  assert.equal(journal.get(attemptId).state, 'submitting');
+  assert.throws(() => journal.recordCallBound({ ...binding, invocationId: 'lead-invocation-2', taskId: 'invented-task' }), /does not match an active dispatch attempt/);
+  await state.close();
+
+  state = await openStateDatabase({ filePath: file });
+  t.after(() => state.close());
+  journal = new DispatchJournal(state);
+  assert.deepEqual(journal.listCallBindingsByAttempt(attemptId), [binding]);
+  assert.equal(journal.get(attemptId).taskId, null);
+});
+
+test('provider call binding schema migration preserves worker rows and allows null lead task IDs', async (t) => {
+  const file = tempDb(t);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const legacyDb = new Database(file);
+  legacyDb.exec(`
+    CREATE TABLE dispatch_call_bindings (
+      invocation_id TEXT PRIMARY KEY,
+      attempt_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      assignment_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      account_id_sha256 TEXT NOT NULL,
+      bound_at TEXT NOT NULL,
+      UNIQUE (attempt_id, invocation_id)
+    );
+    CREATE INDEX dispatch_call_bindings_attempt_idx ON dispatch_call_bindings (attempt_id, bound_at, invocation_id);
+    INSERT INTO dispatch_call_bindings VALUES ('legacy-invocation', 'legacy-attempt', 'legacy-run', 'legacy-assignment', 'worker-task', printf('%064d', 0), '2026-11-06T13:00:00.000Z');
+  `);
+  legacyDb.close();
+
+  const state = await openStateDatabase({ filePath: file });
+  t.after(() => state.close());
+  const journal = new DispatchJournal(state);
+  assert.deepEqual(journal.getCallBinding('legacy-invocation'), {
+    invocationId: 'legacy-invocation', attemptId: 'legacy-attempt', runId: 'legacy-run',
+    assignmentId: 'legacy-assignment', taskId: 'worker-task', accountId: '0'.repeat(64),
+    boundAt: '2026-11-06T13:00:00.000Z',
+  });
+  const taskColumn = state.db.prepare("PRAGMA table_info('dispatch_call_bindings')").all().find((column) => column.name === 'task_id');
+  assert.equal(taskColumn.notnull, 0);
 });
 
 for (const [name, make] of [

@@ -127,24 +127,62 @@ test('a scheduler restart discovers durable backoff and resumes at its persisted
   restarted.stop(); secondDb.db.close(); fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('retry exhaustion is durable and owner cancellation removes a pending retry', async () => {
+test('a retry continues automatically after reaching the retry cap', async () => {
   const { db, store } = database();
   const c = clock();
   const resumed = [];
-  const recovery = createTransientRecovery({ store, clock: c, random: () => 0, baseDelayMs: 10, maxAttempts: 2,
-    canResume: async () => true, resumeRun: async (id) => { resumed.push(id); return true; } });
-  recovery.failure('exhausted', { category: 'service', cause: 'first', checkpointId: 'cp-e' });
-  recovery.markRunning('exhausted');
-  const exhausted = recovery.failure('exhausted', { category: 'service', cause: 'second', checkpointId: 'cp-e' });
-  assert.equal(exhausted.state, 'exhausted');
-  assert.equal(exhausted.attempts, 2);
-  recovery.failure('stopped', { category: 'capacity', cause: 'capacity', checkpointId: 'cp-s' });
-  recovery.forget('stopped');
-  await c.advance(10_000);
-  assert.deepEqual(resumed, []);
-  assert.equal(store.get('stopped'), null);
-  assert.equal(store.get('exhausted').state, 'exhausted');
+  const outcomes = [false, true];
+  const recovery = createTransientRecovery({ store, clock: c, random: () => 0, baseDelayMs: 10, maxDelayMs: 100, maxAttempts: 2,
+    canResume: async () => true,
+    resumeRun: async (id) => { resumed.push(id); return outcomes.shift(); },
+  });
+  const first = recovery.failure('capped', { category: 'service', cause: 'first', checkpointId: 'cp-e' });
+  assert.equal(first.next_attempt_at, c.now() + 5);
+  await c.advance(5);
+  assert.deepEqual(resumed, ['capped']);
+  const capped = store.get('capped');
+  assert.equal(capped.state, 'waiting');
+  assert.equal(capped.attempts, 2);
+  assert.equal(capped.next_attempt_at, c.now() + 100);
+  assert.equal(c.pending(), 1);
+  await c.advance(99);
+  assert.deepEqual(resumed, ['capped']);
+  await c.advance(1);
+  assert.deepEqual(resumed, ['capped', 'capped']);
+  assert.equal(store.get('capped').state, 'dispatched');
+  assert.equal(store.get('capped').attempts, 2);
   recovery.stop(); db.close();
+});
+
+test('SQLite restart schedules a capped retry at its persisted next action', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'transient-recovery-cap-'));
+  const file = path.join(dir, 'state.sqlite');
+  const firstDb = database(file);
+  const c = clock();
+  const prior = createTransientRecovery({ store: firstDb.store, clock: c, random: () => 0, baseDelayMs: 10, maxDelayMs: 100,
+    maxAttempts: 2, canResume: async () => true, resumeRun: async () => false });
+  prior.failure('run-capped-restart', { category: 'service', cause: 'first', checkpointId: 'cp-cap' });
+  prior.markRunning('run-capped-restart');
+  const capped = prior.failure('run-capped-restart', { category: 'service', cause: 'second', checkpointId: 'cp-cap' });
+  assert.equal(capped.attempts, 2);
+  assert.equal(capped.next_attempt_at, c.now() + 100);
+  const persistedAt = capped.next_attempt_at;
+  prior.stop(); firstDb.db.close();
+
+  const secondDb = database(file);
+  const resumed = [];
+  const restarted = createTransientRecovery({ store: secondDb.store, clock: c, random: () => 0, baseDelayMs: 10, maxDelayMs: 100,
+    maxAttempts: 2, canResume: async (_id, saved) => saved.checkpoint_id === 'cp-cap',
+    resumeRun: async (id) => { resumed.push(id); return true; },
+  });
+  restarted.start();
+  assert.equal(secondDb.store.get('run-capped-restart').next_attempt_at, persistedAt);
+  await c.advance(persistedAt - c.now() - 1);
+  assert.deepEqual(resumed, []);
+  await c.advance(1);
+  assert.deepEqual(resumed, ['run-capped-restart']);
+  assert.equal(secondDb.store.get('run-capped-restart').state, 'dispatched');
+  restarted.stop(); secondDb.db.close(); fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('owner pause suspends a waiting retry and canceling the pause makes the retry eligible again', async () => {
@@ -196,8 +234,9 @@ test('duplicate scheduling is serialized and failed message delivery consumes th
   release();
   for (let i = 0; i < 10; i += 1) await Promise.resolve();
   assert.equal(store.get('delivery').attempts, 2);
-  assert.equal(store.get('delivery').state, 'exhausted');
-  assert.equal(c.pending(), 0);
+  assert.equal(store.get('delivery').state, 'waiting');
+  assert.equal(store.get('delivery').next_attempt_at, c.now() + 5 * 60_000);
+  assert.equal(c.pending(), 1);
   recovery.stop(); db.close();
 });
 

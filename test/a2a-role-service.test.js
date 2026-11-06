@@ -2,6 +2,10 @@
 
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
 const { once } = require('node:events');
 const { test } = require('node:test');
 const express = require('express');
@@ -16,6 +20,11 @@ const { UsageLedger } = require('../src/usage-ledger');
 const { WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT } = require('../src/contracts');
 const { InMemoryStagingLog, StagingLog } = require('../src/staging-log');
 const { buildReport } = require('../src/staging-report');
+const { createSwitchingAppServer } = require('../src/app-server-switch');
+
+const providerFixtureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-role-provider-fixture-'));
+fs.writeFileSync(path.join(providerFixtureHome, 'auth.json'), JSON.stringify({ tokens: { account_id: 'a2a-role-test-account' } }));
+test.after(() => fs.rmSync(providerFixtureHome, { recursive: true, force: true }));
 
 const roles = new Map([
   ['orch-planner', { name: 'Planner', description: 'Plans work.', instructions: 'Plan.', model: 'test', effort: 'low', sandbox: 'read-only' }],
@@ -23,6 +32,19 @@ const roles = new Map([
 ]);
 
 function makeService(appServer, options = {}) {
+  const { rawAppServer = false, ...serviceOptions } = options;
+  const providerCallBindings = [];
+  if (!rawAppServer && appServer.callBindingVersion !== 'call-bound/v1') {
+    const targetAppServer = appServer;
+    const adapter = createSwitchingAppServer({
+      profiles: { activeHome: () => null },
+      baseOptions: { codexHome: providerFixtureHome },
+      onCallBound: async (record) => { providerCallBindings.push(record); },
+      create: () => targetAppServer,
+    });
+    if (typeof targetAppServer.getCodexHome === 'function') adapter.getCodexHome = () => targetAppServer.getCodexHome();
+    appServer = adapter;
+  }
   const app = express();
   const mounted = [];
   const originalUse = app.use.bind(app);
@@ -35,10 +57,10 @@ function makeService(appServer, options = {}) {
     appServer,
     workspace: process.cwd(),
     baseUrl: 'http://127.0.0.1:7777',
-    ...options,
+    ...serviceOptions,
   });
   const context = new ServerCallContext({ user: new UnauthenticatedUser() });
-  return { agents, context, mounted };
+  return { agents, context, mounted, providerCallBindings, appServer };
 }
 
 function message(text, parts, metadata) {
@@ -92,6 +114,94 @@ test('publishes distinct role cards and routes each task to its role', async () 
   assert.equal(reviewer.artifacts[0].parts[0].content.value, 'from orch-reviewer: review this');
   assert.deepEqual(calls.map((call) => call.role.id), ['orch-planner', 'orch-reviewer']);
   assert.equal(calls[0].cwd, process.cwd());
+});
+
+test('provider call binding reaches the selected target and carries hashed account/task correlation', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-provider-home-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ tokens: { account_id: 'private-test-account', access_token: 'do-not-store' } }));
+  const calls = [];
+  const bindings = [];
+  const appServer = createSwitchingAppServer({
+    profiles: { activeHome: () => home },
+    onCallBound: async (record) => { bindings.push(record); },
+    create: () => ({
+      async start() {},
+      async run(options) {
+        calls.push(options);
+        return { threadId: 'thread', turnId: 'turn', status: 'completed', text: 'ok' };
+      },
+    }),
+  });
+  await appServer.start();
+  const { agents, context } = makeService(appServer);
+  const result = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('run task', undefined, {
+    runId: 'run-1', attemptId: 'run-1:r1:a0:t1', assignmentId: 'run-1:r1:a0',
+  })), context));
+  assert.equal(result.status.state, 3);
+  assert.equal(calls.length, 1);
+  assert.equal(Object.hasOwn(calls[0], 'callBinding'), false);
+  assert.equal(bindings.length, 1);
+  assert.deepEqual({ runId: bindings[0].runId, attemptId: bindings[0].attemptId, assignmentId: bindings[0].assignmentId, taskId: bindings[0].taskId }, {
+    runId: 'run-1', attemptId: 'run-1:r1:a0:t1', assignmentId: 'run-1:r1:a0', taskId: result.id,
+  });
+  assert.equal(bindings[0].accountId, crypto.createHash('sha256').update('private-test-account').digest('hex'));
+  assert.match(bindings[0].invocationId, /^[0-9a-f-]{36}$/);
+  assert.equal(typeof bindings[0].boundAt, 'string');
+  assert.equal(JSON.stringify(bindings[0]).includes('do-not-store'), false);
+  assert.equal(JSON.stringify(bindings[0]).includes('private-test-account'), false);
+  assert.equal(JSON.stringify(bindings[0]).includes(home), false);
+});
+
+test('raw App Server adapters fail closed for correlated provider calls', async () => {
+  let calls = 0;
+  const { agents, context } = makeService({ async run() { calls += 1; return { status: 'completed', text: 'unsafe' }; } }, { rawAppServer: true });
+  const result = taskResult(await agents.get('orch-planner').handler.sendMessage(sendParams(message('run task', undefined, {
+    runId: 'run-1', attemptId: 'run-1:r1:a0:t1', assignmentId: 'run-1:r1:a0',
+  })), context));
+  assert.equal(result.status.state, 4);
+  assert.match(result.status.message.parts[0].content.value, /binding is unavailable/);
+  assert.equal(calls, 0);
+});
+
+test('a rejected continuation and fresh call bind two invocations to one A2A attempt', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-provider-retry-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ tokens: { account_id: 'retry-account' } }));
+  const calls = [];
+  const bindings = [];
+  const appServer = createSwitchingAppServer({
+    profiles: { activeHome: () => home },
+    onCallBound: async (record) => { bindings.push(record); },
+    create: () => ({
+      async start() {},
+      async run(options) {
+        calls.push(options);
+        if (options.threadId) throw Object.assign(new Error('thread no longer exists'), { failureClass: 'request_rejected' });
+        return okResult();
+      },
+    }),
+  });
+  await appServer.start();
+  const { agents, context } = makeService(appServer);
+  const attempt = { runId: 'run-2', assignmentId: 'run-2:r1:a0', attemptId: 'run-2:r1:a0:t1' };
+  const request = structured({
+    continuation: { ofAttemptId: 'previous-attempt', threadId: 'stale-thread', laneId: null, codexHome: home },
+  });
+  const result = taskResult(await agents.get('orch-planner').handler.sendMessage(
+    sendParams(message(request, undefined, attempt)), context,
+  ));
+  assert.equal(result.status.state, 3, JSON.stringify(result.status.message));
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].threadId, 'stale-thread');
+  assert.equal(calls[1].threadId, undefined);
+  assert.equal(bindings.length, 2);
+  assert.notEqual(bindings[0].invocationId, bindings[1].invocationId);
+  assert.deepEqual(bindings.map((row) => [row.runId, row.assignmentId, row.attemptId, row.taskId]), [
+    ['run-2', attempt.assignmentId, attempt.attemptId, result.id],
+    ['run-2', attempt.assignmentId, attempt.attemptId, result.id],
+  ]);
+  assert.equal(bindings[0].accountId, bindings[1].accountId);
 });
 
 test('serves a role Agent Card at its direct route before JSON-RPC middleware', async () => {
