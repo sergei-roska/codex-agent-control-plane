@@ -194,6 +194,10 @@ class DeliveryEngineRouter {
   }
   async isResumable(runId) { return (await this.#route(runId).isResumable?.(runId)) === true; }
   getRecoveryCheckpoint(runId) { return this.#route(runId).getRecoveryCheckpoint?.(runId) || null; }
+  getLegacyRecoveryGraph(runId) {
+    if (this.mapping(runId)?.engine === 'concurrent-v1') return null;
+    return this.legacyEngine.graph || null;
+  }
   consumeCompletedPauseRequest(runId) { return this.#route(runId).consumeCompletedPauseRequest?.(runId) === true; }
   getRunGoal(runId) { return this.mapping(runId)?.request?.goal || this.#route(runId).getRunGoal?.(runId) || null; }
   getRunDigest(runId) { return this.#route(runId).getRunDigest?.(runId) || null; }

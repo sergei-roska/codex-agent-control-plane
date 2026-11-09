@@ -16,6 +16,7 @@ const { scopedExecutionDetails } = require('../src/delivery-role-capabilities');
 const { LeadPlanner } = require('../src/lead-planner');
 const { VERSION, validatePlanDelta } = require('../src/delivery-contracts');
 const { checkSpecialistRequest } = require('../src/contracts');
+const { createProviderIdentityPin } = require('../src/delivery-provider-identity');
 
 function tempDir(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'server-delivery-engine-'));
@@ -763,6 +764,146 @@ test('Concurrent startup uses concurrent_candidates beside the legacy candidates
   assert.equal(candidate.candidateId, 'candidate-concurrent-test');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM concurrent_candidates').get().count, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM candidates WHERE candidate_id='legacy-candidate'").get().count, 1);
+});
+
+test('switching server composition supplies fresh account state and identity readers to the concurrent engine', async (t) => {
+  let engineOptions;
+  const factory = (options) => {
+    engineOptions = options;
+    return {
+      register() {}, async recoverStoredRuns() { return []; },
+      async run() { return { status: 'completed' }; }, async resume() { return { status: 'completed' }; },
+      fenceShutdown() {}, async prepareShutdown() {}, beginProviderShutdown() {},
+      async finishShutdown() { return { safeToRelease: true }; }, async shutdown() { return { safeToRelease: true }; },
+    };
+  };
+  const fx = await idleConcurrentServer(t, 'budget-account-composition', {}, { concurrentEngineFactory: factory });
+  await fx.runtime.close();
+  const switchingOptions = { ...fx.options, accountsDir: path.join(fx.root, 'accounts'),
+    appServerFactory: () => appServer({ getVersion: () => 'server-delivery-test/1',
+      resolveExecutionPermissions: async () => ({ mode: 'inherit', writerProfile: ':danger-full-access', sandboxMode: 'danger-full-access' }) }) };
+  delete switchingOptions.appServer;
+  const runtime = await startServer(switchingOptions);
+  t.after(async () => {
+    await runtime.close();
+  });
+  assert.ok(engineOptions.budgetAccounts);
+  assert.equal(engineOptions.budgetAccounts.profiles.codexDefaultHome.length > 0, true);
+  assert.equal(typeof engineOptions.budgetAccounts.readProfileState, 'function');
+  assert.deepEqual(engineOptions.budgetAccounts.providerIdentityFor('/account/home'), fx.options.providerIdentityPinFactory('/account/home').providerIdentity);
+  assert.equal(engineOptions.budgetAccounts.profiles.read().profiles.length, 0);
+});
+
+test('startServer close and reopen recovers a switched budget wait before dispatch', { timeout: 30000 }, async (t) => {
+  const root = tempDir(t);
+  const workspace = path.join(root, 'workspace');
+  const homeA = path.join(root, 'account-a');
+  const homeB = path.join(root, 'account-b');
+  const accountsDir = path.join(root, 'accounts');
+  const previousCodexHome = process.env.CODEX_HOME;
+  for (const home of [workspace, homeA, homeB]) fs.mkdirSync(home, { recursive: true });
+  createGitWorkspace(workspace);
+  for (const [home, account] of [[homeA, 'account-a'], [homeB, 'account-b']]) {
+    fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ tokens: { account_id: account } }));
+  }
+  process.env.CODEX_HOME = homeA;
+  fs.mkdirSync(accountsDir, { recursive: true });
+  fs.writeFileSync(path.join(accountsDir, 'profiles.json'), JSON.stringify({ version: 1, active: 'a',
+    selectionRevision: 1, autoSwitch: true, profiles: [{ name: 'a', home: homeA }, { name: 'b', home: homeB }] }));
+  const settingsFile = path.join(root, 'settings.json');
+  const roleOverridesFile = path.join(root, 'roles.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ version: 1, executionPermissions: 'inherit', deliveryEngine: 'concurrent-v1' }));
+  fs.writeFileSync(roleOverridesFile, JSON.stringify({ version: 1, roles: {
+    coordinator: { model: 'test-model', effort: 'low', fastMode: 'off' },
+    verifier: { model: 'test-model', effort: 'low', fastMode: 'off' },
+  } }));
+  const options = { listen: false, workspace, accountsDir, stateFile: path.join(root, 'state.sqlite'),
+    tokenFile: path.join(root, 'token'), workspaceLockDir: path.join(root, 'workspace-locks'),
+    deliveryStorageRoot: path.join(root, 'delivery-storage'), projectSettingsFile: settingsFile,
+    roleOverridesFile, autoResume: false,
+    readProfileState: async (home) => ({ requiresOpenaiAuth: false,
+      limits: { ordinaryUsageAllowed: home === homeB } }),
+    appServerFactory: (home) => {
+      let turn = 0;
+      let thread = 0;
+      const actualHome = home || homeA;
+      return {
+        async start() {}, async close() {}, getVersion: () => 'server-budget-restart/1', getCodexHome: () => actualHome,
+        async getAccount() { return { account: { type: 'chatgpt' }, requiresOpenaiAuth: false }; },
+        async readRateLimits() { return { ordinaryUsageAllowed: actualHome === homeB }; },
+        processIdentity: () => null,
+        resolveExecutionPermissions: async () => ({ mode: 'inherit', writerProfile: ':danger-full-access', sandboxMode: 'danger-full-access' }),
+        async prepareThread({ role }) { thread += 1; return { threadId: `${role.id || role.name}-${path.basename(actualHome)}-${thread}`, codexHome: actualHome }; },
+        async run(request) {
+          turn += 1;
+          const threadId = request.threadId;
+          const turnId = `server-budget-turn-${turn}`;
+          const processIdentity = readProcessIdentity(process.pid);
+          request.onTurnStart({ threadId, processIdentity });
+          return { threadId, turnId, status: 'completed',
+            text: JSON.stringify({ expected: JSON.parse(request.input.slice(request.input.indexOf('\n') + 1)).pins,
+              delta: null, dialogue: null, recovery: null, ownerDecision: null }),
+            execution: { threadId, turnId, processIdentity, turnStartSent: true, turnStartRejected: false, turnTerminal: true } };
+        },
+      };
+    },
+    orchestratorFactory: () => ({ async run() { return { status: 'completed' }; }, async resume() { return { status: 'completed' }; } }),
+  };
+  const runtimes = [];
+  t.after(async () => {
+    for (const runtime of runtimes.reverse()) await runtime.close().catch(() => {});
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+  });
+  try {
+    let runtime = await startServer(options);
+    runtimes.push(runtime);
+    const projectId = runtime.projectId;
+    const objectiveId = 'restart-budget-objective';
+    const runId = 'restart-budget-run';
+    const runPending = runtime.concurrentEngine.run({ runId, goal: 'Preserve a budget wait across server restart.',
+      contract: { requiredChecks: [] }, signal: new AbortController().signal,
+      engineMapping: { engine: 'concurrent-v1', projectId, objectiveId, sessionId: 'restart-budget-session' } });
+    await waitFor(() => runtime.concurrentEngine.controllers.has(runId), 'server did not create the concurrent controller');
+    assert.equal(runtime.concurrentEngine.requestPause(runId), true);
+    const pausedResult = await runPending;
+    assert.equal(pausedResult.pause?.kind, 'owner_pause');
+    const controller = runtime.concurrentEngine.controllers.get(runId);
+    await waitFor(() => !controller.planner.inFlight, 'planner did not settle after owner pause');
+    controller.shutdown({ pause: false });
+    const paused = runtime.concurrentEngine.store.getObjective(projectId, objectiveId);
+    const resumed = runtime.concurrentEngine.store.transitionLifecycleControl(projectId, objectiveId, {
+      action: 'resume', expectedOwnerGeneration: paused.ownerGeneration, expectedControlRevision: paused.controlRevision,
+    });
+    const wait = runtime.concurrentEngine.store.recordBudgetWait(projectId, objectiveId, {
+      waitId: 'restart-budget-wait', source: 'worker', provider: 'codex', model: 'test-model',
+      reasonCode: 'usage_limit', nextWakeAt: Date.now() - 1000,
+      expectedOwnerGeneration: resumed.ownerGeneration, expectedControlRevision: resumed.controlRevision,
+    });
+    const identityA = createProviderIdentityPin(homeA).providerIdentity;
+    const identityB = createProviderIdentityPin(homeB).providerIdentity;
+    const transition = runtime.concurrentEngine.providerTransitions.create({ projectId, transitionId: 'restart-budget-transition',
+      runId, objectiveId, sessionId: 'restart-budget-session', waitId: wait.waitId,
+      sourceAccountHash: identityA.accountId, targetAccountHash: identityB.accountId,
+      ownerGeneration: wait.ownerGeneration, controlRevision: wait.controlRevision, phase: 'intent' });
+    const token = await runtime.switchingAppServer.acquireTransitionGate(transition.transitionId);
+    assert.equal(await runtime.switchingAppServer.switchTo('b', runtime.accountProfiles.read(), token), 'switched');
+    runtime.concurrentEngine.providerTransitions.advance(projectId, transition, 'profile_switched');
+    assert.equal(runtime.switchingAppServer.releaseTransitionGate(token), true);
+    await runtime.close();
+    runtimes.pop();
+
+    runtime = await startServer(options);
+    runtimes.push(runtime);
+    assert.equal(runtime.concurrentEngine.providerTransitions.get(projectId), null);
+    assert.equal(runtime.concurrentEngine.store.listBudgetWaits(projectId, objectiveId)[0].state, 'woken');
+    assert.equal(runtime.concurrentEngine.store.getObjective(projectId, objectiveId).disposition, 'executing');
+    assert.equal(runtime.concurrentEngine.providerIdentity.accountId, identityB.accountId);
+    assert.equal(runtime.deliveryEngine, 'concurrent-v1');
+  } finally {
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+  }
 });
 
 test('concurrent engine admission recognizes persisted terminal legacy task states', { timeout: 60000 }, async (t) => {

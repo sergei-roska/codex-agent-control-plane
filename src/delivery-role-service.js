@@ -11,6 +11,7 @@ const { UserBuilder, jsonRpcHandler, agentCardHandler } = require('@a2a-js/sdk/s
 const { ClientFactory } = require('@a2a-js/sdk/client');
 const {
   WORKER_REPORT_SCHEMA, checkSpecialistRequest, normalizeSpecialistRequest, parseWorkerReport, pathsOutsideAllowed,
+  classifyCodexError,
 } = require('./contracts');
 const { isProcessGroupGone } = require('./process-quiescence');
 const { stableDigest } = require('./backlog-store');
@@ -756,6 +757,7 @@ class DeliveryRoleService {
       if (!record.providerInvocationStarted) record.terminalStatus = 'not_started';
       record.state = record.effectsSettled ? 'terminal' : 'unknown';
       record.failureCode = cause?.code || cause?.failureClass || 'delivery_role_execution_failed';
+      if (classifyCodexError(cause) === 'usage_limit') record.failureKind = 'usage_limit';
       record.failureMessage = String(cause?.message || cause).slice(0, 400);
       record.externalState = TaskState.TASK_STATE_FAILED;
       this.#set(record);
@@ -840,7 +842,8 @@ class DeliveryRoleService {
     }
     const terminalIdentity = this.#assertTerminalIdentity(record, { task, attempt, remote });
     if (!succeededRemotely) {
-      return this.#settleTerminalWithoutPublication(record, record.failureCode || 'role_report_or_turn_failed');
+      return this.#settleTerminalWithoutPublication(record, record.failureKind === 'usage_limit'
+        ? 'usage_limit' : record.failureCode || 'role_report_or_turn_failed');
     }
     const remoteArtifact = (remote.artifacts || []).find((item) => item.metadata?.executionId === record.attemptId
       && item.metadata?.requestDigest === record.requestDigest);

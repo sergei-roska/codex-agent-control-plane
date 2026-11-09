@@ -114,6 +114,24 @@ class DeliveryLifecycle {
     return wait;
   }
 
+  rescheduleBudgetWait(waitId, input) {
+    identity(waitId, 'budget_wait_id');
+    const normalized = this.#exact(input, ['delayMs', 'blockers'], 'budget_wait_reschedule_fields_invalid');
+    if (!Number.isSafeInteger(normalized.delayMs) || normalized.delayMs < 1
+      || normalized.delayMs > 30 * 24 * 60 * 60 * 1000) throw error('budget_wait_delay_invalid');
+    const nextWakeAt = this.now() + normalized.delayMs;
+    if (!Number.isSafeInteger(nextWakeAt) || nextWakeAt < 0) throw error('budget_wait_time_invalid');
+    const pins = this.#currentPins();
+    const wait = this.store.rescheduleBudgetWait(this.projectId, this.objectiveId, waitId, {
+      nextWakeAt, blockers: normalized.blockers,
+      expectedControlRevision: pins.expectedControlRevision,
+      expectedOwnerGeneration: pins.expectedOwnerGeneration,
+    });
+    this.disabledBudgetWaits.delete(waitId);
+    this.#schedule();
+    return wait;
+  }
+
   wakeBudget(waitId) {
     identity(waitId, 'budget_wait_id');
     const wait = this.store.listBudgetWaits(this.projectId, this.objectiveId).find((item) => item.waitId === waitId);

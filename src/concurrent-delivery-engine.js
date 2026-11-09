@@ -20,6 +20,8 @@ const { HUMAN_REASONS } = require('./contracts');
 const { VERSION, validateTask } = require('./delivery-contracts');
 const { canonicalRoleId, getRole } = require('./role-names');
 const { CONCURRENT_TABLES } = require('./concurrent-table-names');
+const { ProviderTransitionStore } = require('./provider-transition-store');
+const { extractBudgetBlockers, isBudgetAvailable } = require('./budget-watcher');
 
 const json = (value) => JSON.stringify(value);
 const canonical = (value) => {
@@ -99,7 +101,7 @@ function readOnlyTreeManifest(manifest) {
 
 class ConcurrentDeliveryEngine {
   constructor({ db, workspace, projectId, stateFile, storageRoot, baseUrl, authMiddleware, authToken,
-    appServer, providerIdentity, providerIdentityFor, roles, leadRole, admission, lanes, writerIsolation, executionPermissions = 'inherit',
+    appServer, providerIdentity, providerIdentityFor, budgetAccounts = null, roles, leadRole, admission, lanes, writerIsolation, executionPermissions = 'inherit',
     acceptanceScratch = null, evidenceStore = null, roleLimits = {}, maxActiveTurns = 12,
     plannerReservedSlots = 1, ownerCorrectionAuthorized = () => false, authenticateOwner = () => false,
     now = () => Date.now(), sleepMs = 40 } = {}) {
@@ -111,6 +113,11 @@ class ConcurrentDeliveryEngine {
       || typeof providerIdentity.accountId !== 'string' || !providerIdentity.accountId
       || typeof providerIdentity.codexHome !== 'string' || !providerIdentity.codexHome) throw new TypeError('Pinned provider identity is required');
     if (typeof providerIdentityFor !== 'function') throw new TypeError('providerIdentityFor must be a synchronous function');
+    if (budgetAccounts !== null && (!budgetAccounts.profiles || typeof budgetAccounts.profiles.read !== 'function'
+      || typeof budgetAccounts.profiles.activeHome !== 'function' || typeof budgetAccounts.profiles.codexDefaultHome !== 'string'
+      || typeof budgetAccounts.readProfileState !== 'function' || typeof budgetAccounts.providerIdentityFor !== 'function')) {
+      throw new TypeError('budgetAccounts must provide profiles, readProfileState and providerIdentityFor');
+    }
     if (!(roles instanceof Map) || !roles.size || !getRole(roles, 'verifier')) throw error('concurrent_verifier_role_required');
     if (!leadRole?.name || !leadRole?.model) throw error('concurrent_lead_role_required');
     if (!admission || !lanes || !writerIsolation) throw new TypeError('Writer admission and lane isolation are required');
@@ -139,6 +146,11 @@ class ConcurrentDeliveryEngine {
     this.appServer = appServer;
     this.providerIdentity = deepFreeze(normalizeProviderIdentity(providerIdentity));
     this.providerIdentityFor = providerIdentityFor;
+    this.budgetAccounts = budgetAccounts;
+    this.providerTransitions = new ProviderTransitionStore(db);
+    this.budgetWaitBackoffMs = 1000;
+    this.budgetWaitRetryAfter = new Map();
+    this.activeBudgetTransitionGate = null;
     this.roles = new Map([...roles.entries()].map(([key, role]) => [key, deepFreeze(copy(role))]));
     this.leadRole = deepFreeze(copy(leadRole));
     this.admission = admission;
@@ -154,6 +166,8 @@ class ConcurrentDeliveryEngine {
     this.shutdownInitialProcessIdentity = copy(appServer.processIdentity?.() || null);
     this.ownerDecisionAuthorization = null;
     this.controllers = new Map();
+    this.runDrivers = new Map();
+    this.driversStopping = false;
     this.cancellationTimers = new Map();
     this.runs = new Map();
     this.leadThreads = new Map();
@@ -475,6 +489,8 @@ class ConcurrentDeliveryEngine {
   }
 
   async recoverStoredRuns() {
+    await this.recoverBudgetWaitTransitions();
+    await this.processDueBudgetWaits();
     const rows = this.db.prepare("SELECT run_id FROM concurrent_delivery_runs WHERE project_id=? AND status IN ('prepared','running','paused','recovering') ORDER BY created_at,run_id")
       .all(this.projectId);
     const results = [];
@@ -491,8 +507,9 @@ class ConcurrentDeliveryEngine {
           continue;
         }
         const controller = await this.#controller(run, { prepareThread: false });
-        if (['planning', 'executing', 'draining'].includes(objective.disposition)) controller.start();
+        if (['planning', 'executing', 'draining', 'waiting_budget'].includes(objective.disposition)) controller.start();
         if (objective.disposition === 'draining') this.#scheduleCancellationReconciliation(run);
+        if (['planning', 'executing', 'waiting_budget'].includes(objective.disposition)) this.#startRecoveredRunDriver(run);
         await this.#completeOwnerCancellation(run);
         results.push({ runId: row.run_id, state: controller.status().lastRecovery?.state || 'started' });
       } catch (cause) { results.push({ runId: row.run_id, state: 'unknown', reason: cause.code || 'recovery_failed' }); }
@@ -502,6 +519,127 @@ class ConcurrentDeliveryEngine {
 
   async run(input = {}) { return this.#runFacade(input, false); }
   async resume(input = {}) { return this.#runFacade(input, true); }
+
+  #runDriver(run, signal = null, { background = false } = {}) {
+    let driver = this.runDrivers.get(run.runId);
+    if (!driver) {
+      driver = { signals: new Set(signal ? [signal] : []), background, promise: null };
+      this.runDrivers.set(run.runId, driver);
+      driver.promise = this.#waitForTerminal(run, driver).finally(() => {
+        if (this.runDrivers.get(run.runId) === driver) this.runDrivers.delete(run.runId);
+      });
+    } else {
+      if (signal) driver.signals.add(signal);
+      if (background) driver.background = true;
+    }
+    return driver.promise.finally(() => { if (signal) driver.signals.delete(signal); });
+  }
+
+  #startRecoveredRunDriver(run) {
+    const running = this.#runDriver(run, null, { background: true });
+    running.catch((cause) => {
+      if (this.shutdownRequested) return;
+      const objective = this.store.getObjective(this.projectId, run.objectiveId);
+      if (!objective || ['accepted', 'partial', 'canceled'].includes(objective.disposition)) return;
+      const failureCode = cause?.code || 'recovered_run_driver_failed';
+      const pause = { kind: 'error', message: 'Recovered delivery stopped before terminal settlement.', failureCode };
+      this.#savePause(run.runId, pause);
+      this.#saveStatus(run.runId, 'recovering');
+    });
+  }
+
+  async #drainRunDrivers({ backgroundOnly = false } = {}) {
+    const drivers = [...this.runDrivers.values()].filter((driver) => !backgroundOnly || driver.background);
+    await Promise.allSettled(drivers.map((driver) => driver.promise));
+  }
+
+  async processDueBudgetWaits(objectiveId = null) {
+    if (!this.budgetAccounts) return { state: 'disabled', processed: 0 };
+    const rows = this.db.prepare(`SELECT run_id FROM concurrent_delivery_runs WHERE project_id=?
+      ${objectiveId ? 'AND objective_id=?' : ''} ORDER BY created_at,run_id`)
+      .all(...(objectiveId ? [this.projectId, objectiveId] : [this.projectId]));
+    const results = [];
+    for (const row of rows) {
+      const run = this.#run(row.run_id);
+      if (!run) continue;
+      const waits = this.store.listBudgetWaits(this.projectId, run.objectiveId).filter((wait) => wait.state === 'waiting' && wait.nextWakeAt <= this.now());
+      for (const wait of waits) {
+        if ((this.budgetWaitRetryAfter.get(wait.waitId) || 0) > this.now()) continue;
+        try { results.push(await this.#processBudgetWait(run, wait)); }
+        catch (cause) { results.push({ runId: run.runId, waitId: wait.waitId, state: 'held', reason: cause.code || 'budget_wait_error' }); }
+      }
+    }
+    return { state: 'checked', processed: results.length, results };
+  }
+
+  async recoverBudgetWaitTransitions() {
+    const transition = this.providerTransitions.get(this.projectId);
+    if (!transition) return { state: 'none' };
+    if (!this.budgetAccounts) throw error('provider_transition_recovery_unavailable');
+    const run = this.#run(transition.runId);
+    const objective = run && this.store.getObjective(this.projectId, run.objectiveId);
+    const wait = run && this.store.listBudgetWaits(this.projectId, run.objectiveId).find((entry) => entry.waitId === transition.waitId);
+    if (!run || !objective || !wait || wait.state !== 'waiting' || objective.ownerGeneration !== transition.ownerGeneration
+      || objective.controlRevision !== transition.controlRevision) throw error('provider_transition_recovery_unsafe');
+    const candidates = await this.#budgetCandidates();
+    const target = candidates.find((entry) => entry.accountId === transition.targetAccountHash);
+    const models = this.#budgetModels();
+    if (!target || !target.known || target.state?.requiresOpenaiAuth === true
+      || !this.#isBudgetAvailable(target.state.limits, models)) throw error('provider_transition_target_unavailable');
+    if (!this.#budgetRebindSafe(run)) throw error('provider_transition_recovery_busy');
+    const token = this.activeBudgetTransitionGate?.transitionId === transition.transitionId
+      ? this.activeBudgetTransitionGate.token : await this.appServer.acquireTransitionGate(transition.transitionId);
+    this.activeBudgetTransitionGate = { transitionId: transition.transitionId, token };
+    let committed = false;
+    let reboundRun;
+    let retired;
+    try {
+      this.#assertBudgetPins(run, wait, objective);
+      if (!this.#budgetRebindSafe(run)) throw error('provider_transition_recovery_busy');
+      if (!await this.#isBudgetTargetAvailable(transition.targetAccountHash)) throw error('provider_transition_target_unavailable');
+      this.#assertBudgetPins(run, wait, objective);
+      let selectedProfileState = this.budgetAccounts.profiles.read();
+      let current = this.providerTransitions.get(this.projectId);
+      let activeIdentity = this.#budgetIdentity(this.budgetAccounts.profiles.activeHome() || this.budgetAccounts.profiles.codexDefaultHome);
+      if (current.phase === 'intent' && activeIdentity?.accountId === current.sourceAccountHash) {
+        const beforeSelection = selectedProfileState;
+        const result = await this.appServer.switchTo(target.name, beforeSelection, token);
+        this.#assertBudgetPins(run, wait, objective);
+        if (result !== 'switched' && result !== 'already_active') throw error('provider_transition_recovery_switch_failed');
+        selectedProfileState = this.budgetAccounts.profiles.read();
+        if (selectedProfileState.active !== target.name || selectedProfileState.selectionRevision !== beforeSelection.selectionRevision + 1) {
+          throw error('provider_transition_selection_stale');
+        }
+        this.#assertBudgetSelection(selectedProfileState);
+        if (!await this.#isBudgetTargetAvailable(transition.targetAccountHash)) throw error('provider_transition_target_unavailable');
+        this.#assertBudgetPins(run, wait, objective);
+        activeIdentity = this.#budgetIdentity(this.budgetAccounts.profiles.activeHome() || this.budgetAccounts.profiles.codexDefaultHome);
+      }
+      if (!activeIdentity || activeIdentity.accountId !== current.targetAccountHash) throw error('provider_transition_active_target_mismatch');
+      this.#assertBudgetSelection(selectedProfileState);
+      if (current.phase === 'intent') current = this.providerTransitions.advance(this.projectId, current, 'profile_switched');
+      const prepared = await this.#prepareBudgetLeadThread(run, activeIdentity, token);
+      this.#assertBudgetPins(run, wait, objective);
+      if (!this.#budgetRebindSafe(run)) throw error('provider_transition_recovery_busy');
+      this.#assertBudgetSelection(selectedProfileState);
+      if (!await this.#isBudgetTargetAvailable(transition.targetAccountHash)) throw error('provider_transition_target_unavailable');
+      this.#assertBudgetPins(run, wait, objective);
+      this.#assertBudgetSelection(selectedProfileState);
+      if (current.phase === 'profile_switched') current = this.providerTransitions.advance(this.projectId, current, 'thread_prepared');
+      reboundRun = this.#commitBudgetTransition(run, objective, wait, target, current, prepared);
+      this.#confirmBudgetProviderIdentity(activeIdentity);
+      this.leadThreads.set(run.runId, reboundRun.leadSettings);
+      committed = true;
+      retired = this.#retireBudgetController(run.runId);
+    } finally {
+      if (committed) {
+        this.appServer.releaseTransitionGate(token);
+        this.activeBudgetTransitionGate = null;
+      }
+    }
+    await this.#replaceBudgetController(reboundRun, retired);
+    return { state: 'recovered', runId: run.runId, waitId: wait.waitId };
+  }
 
   activeRuns() {
     return [...this.controllers.entries()].filter(([, controller]) => controller.running || controller.cycle)
@@ -524,7 +662,7 @@ class ConcurrentDeliveryEngine {
     if (!objective || ['accepted', 'partial', 'canceled'].includes(objective.disposition)) return null;
     const pendingDecision = this.store.pendingOwnerDecision(this.projectId, run.objectiveId);
     if (pendingDecision) return { kind: 'owner_decision', message: pendingDecision.request.question, decision: pendingDecision, replyPins: this.store.ownerDecisionPins(this.projectId, run.objectiveId) };
-    return run.pause || (objective.disposition === 'paused_owner' ? { kind: 'owner_pause', message: 'Paused by the owner' }
+    return (run.failure?.kind ? run.failure : null) || run.pause || (objective.disposition === 'paused_owner' ? { kind: 'owner_pause', message: 'Paused by the owner' }
       : objective.disposition === 'waiting_budget' ? { kind: 'waiting_for_budget', message: 'Waiting for provider budget' }
         : objective.disposition === 'blocked_technical' ? { kind: 'error', message: 'Concurrent delivery is blocked by an unresolved effect or failed task.' } : null);
   }
@@ -653,6 +791,7 @@ class ConcurrentDeliveryEngine {
       controller = controller || await this.#controller(run, { prepareThread: false });
       controller.adoptOwnerDecisionControl();
       controller.start(); controller.wake();
+      this.#startRecoveredRunDriver(run);
     } else {
       const controller = this.controllers.get(run.runId);
       if (!result.duplicate && controller?.ownerGeneration === this.store.getObjective(this.projectId, run.objectiveId).ownerGeneration) controller.adoptOwnerDecisionControl();
@@ -843,6 +982,7 @@ class ConcurrentDeliveryEngine {
       await Promise.allSettled([...controller.scheduler.inFlight.values()]);
     }
     await this.#drainRoleCalls();
+    await this.#drainRunDrivers({ backgroundOnly: true });
     if (this.roleService.active.size) throw error('concurrent_shutdown_unsafe');
     const saved = this.db.prepare('SELECT phase_json FROM concurrent_shutdown_phases WHERE project_id=?').get(this.projectId);
     const phase = saved ? JSON.parse(saved.phase_json) : { phase: 'prepared', attempts: [], identities: [] };
@@ -998,6 +1138,8 @@ class ConcurrentDeliveryEngine {
       projections.push({ runId, ...projection });
       if (projection.safeToRelease !== true) throw Object.assign(error('concurrent_shutdown_unsafe'), { projections });
     }
+    this.driversStopping = true;
+    await this.#drainRunDrivers();
     return { engine: 'concurrent-v1', projectId: this.projectId, safeToRelease: true, projections };
   }
 
@@ -1078,7 +1220,7 @@ class ConcurrentDeliveryEngine {
       controller.start();
     }
     this.#saveStatus(runId, 'running');
-    return this.#waitForTerminal(run, input.signal);
+    return this.#runDriver(run, input.signal);
   }
 
   #blockedResumeResult(run, reason) {
@@ -1343,6 +1485,8 @@ class ConcurrentDeliveryEngine {
         plannerRetryIdentity: () => ({ source: 'concurrent-engine', provider: 'app-server', model: lead.settings.model, kind: 'planner_invalid' }),
         effectsSettledForShutdown: ({ objective, attempts }) => this.#effectsSettled(objective, attempts),
         getAdmissionState: () => ({ admissionStopped: false, controllerWorkInFlight: false }) },
+      onSettledAttempt: ({ identity, result }) => this.#recordUsageLimitWait({ run, identity, result }),
+      processBudgetWaits: this.budgetAccounts ? () => this.processDueBudgetWaits(run.objectiveId) : null,
     });
     this.controllers.set(run.runId, controller);
     return controller;
@@ -1510,9 +1654,13 @@ class ConcurrentDeliveryEngine {
     return output;
   }
 
-  async #waitForTerminal(run, signal) {
+  async #waitForTerminal(run, driver) {
     for (;;) {
-      if (signal?.aborted) {
+      if (this.driversStopping) {
+        return { runId: run.runId, status: 'input_required', text: 'Delivery is stopping for server shutdown.',
+          pause: { kind: 'stopped', message: 'Delivery is stopping for server shutdown.' }, rounds: 0, assignments: [] };
+      }
+      if ([...driver.signals].some((signal) => signal?.aborted)) {
         const controller = this.controllers.get(run.runId);
         if (controller) await controller.cancelObjective().catch(() => {});
         let completed = null;
@@ -1523,6 +1671,10 @@ class ConcurrentDeliveryEngine {
           ? { runId: run.runId, status: 'canceled', text: 'Canceled by the owner.', rounds: 0, assignments: [] }
           : { runId: run.runId, status: 'input_required', text: 'Cancellation is requested; downstream effects are still being reconciled.',
             pause: { kind: 'owner_cancel', message: 'Cancellation is pending trusted effect settlement.' }, rounds: 0, assignments: [] };
+      }
+      if (this.shutdownRequested && driver.background) {
+        return { runId: run.runId, status: 'input_required', text: 'Delivery is stopping for server shutdown.',
+          pause: { kind: 'stopped', message: 'Delivery is stopping for server shutdown.' }, rounds: 0, assignments: [] };
       }
       const current = this.#run(run.runId);
       const objective = this.store.getObjective(this.projectId, run.objectiveId);
@@ -1539,6 +1691,16 @@ class ConcurrentDeliveryEngine {
       const controller = this.controllers.get(run.runId);
       if (!controller) throw error('concurrent_controller_missing');
       const status = controller.status();
+      const heldAttempt = status.lastAttemptFailure?.state === 'held' ? status.lastAttemptFailure : null;
+      const parkedAttempt = status.scheduler?.parked?.[0] || null;
+      if (heldAttempt || parkedAttempt) {
+        const failureCode = heldAttempt?.failureCode || parkedAttempt?.reason || 'concurrent_effect_unresolved';
+        const pause = { kind: 'error', message: 'Concurrent delivery is held for trusted recovery of an unresolved effect.',
+          failureCode, outcomeUnknown: true };
+        this.#savePause(run.runId, pause);
+        this.#saveStatus(run.runId, 'recovering');
+        return { runId: run.runId, status: 'input_required', text: pause.message, pause, rounds: 0, assignments: [] };
+      }
       if (objective.disposition === 'paused_owner') {
         const pause = { kind: 'owner_pause', message: 'Paused by the owner' };
         this.#saveStatus(run.runId, 'paused');
@@ -1565,9 +1727,35 @@ class ConcurrentDeliveryEngine {
         return { runId: run.runId, status: 'input_required', text: message, pause, rounds: 0, assignments: [] };
       }
       await this.#advance(run, controller);
+      if (this.shutdownRequested) continue;
       const refreshed = this.store.getObjective(this.projectId, run.objectiveId);
       if (['accepted', 'partial'].includes(refreshed.disposition)) return this.#terminalResult(this.#run(run.runId));
-      await new Promise((resolve) => setTimeout(resolve, this.sleepMs));
+      const refreshedPause = this.getPause(run.runId);
+      if (refreshedPause?.kind === 'error') {
+        return { runId: run.runId, status: 'input_required', text: refreshedPause.message,
+          pause: refreshedPause, rounds: 0, assignments: [] };
+      }
+      if (driver.background && ['planning', 'executing'].includes(refreshed.disposition)) {
+        const controller = this.controllers.get(run.runId);
+        const active = this.store.listClaims(this.projectId, run.objectiveId).some((claim) => ['active', 'expired', 'fenced'].includes(claim.state))
+          || this.store.listAttempts(this.projectId, run.objectiveId).some((attempt) => ['claimed', 'running', 'settling', 'unknown'].includes(attempt.state));
+        const capable = refreshed.tasks.some((task) => ['draft', 'queued', 'ready', 'claimed', 'running', 'settling'].includes(task.state));
+        if (!active && !capable && !controller?.cycle && !controller?.planner?.inFlight
+          && !controller?.scheduler?.runPromise && !controller?.scheduler?.inFlight?.size) {
+          const pause = { kind: 'error', message: 'Recovered delivery has no actionable work to advance.',
+            failureCode: 'recovered_run_no_actionable_work' };
+          this.#savePause(run.runId, pause);
+          this.#saveStatus(run.runId, 'recovering');
+          return { runId: run.runId, status: 'input_required', text: pause.message, pause, rounds: 0, assignments: [] };
+        }
+      }
+      const nextWakeAt = refreshed.disposition === 'waiting_budget'
+        ? this.store.listBudgetWaits(this.projectId, run.objectiveId)
+          .filter((wait) => wait.state === 'waiting').reduce((earliest, wait) => Math.min(earliest, wait.nextWakeAt), Infinity)
+        : null;
+      const delay = nextWakeAt === null ? this.sleepMs
+        : Math.min(1000, Math.max(this.sleepMs, Number.isFinite(nextWakeAt) ? nextWakeAt - this.now() : 1000));
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 
@@ -1631,9 +1819,11 @@ class ConcurrentDeliveryEngine {
   }
 
   async #advance(run, controller) {
+    if (this.shutdownRequested) return;
     const objective = this.store.getObjective(this.projectId, run.objectiveId);
     if (!objective || !['planning', 'executing'].includes(objective.disposition) || this.store.pendingOwnerDecision(this.projectId, run.objectiveId)) return;
     if (await this.#syncOwnerCorrection(run, controller) !== true) return;
+    if (this.shutdownRequested) return;
     if (controller.inbox.projection().wakeup) return;
     const active = this.store.listClaims(this.projectId, run.objectiveId).some((claim) => ['active', 'expired', 'fenced'].includes(claim.state))
       || this.store.listAttempts(this.projectId, run.objectiveId).some((attempt) => ['claimed', 'running', 'settling', 'unknown'].includes(attempt.state));
@@ -1653,6 +1843,7 @@ class ConcurrentDeliveryEngine {
     }
     const fence = controller.shutdown({ pause: false });
     if (controller.cycle || controller.scheduler.runPromise) return;
+    if (this.shutdownRequested) return;
     const drained = controller.lifecycle.shutdownProjection();
     if (drained.safeToRelease !== true || fence.effectsSettled !== true) return;
     if (captureManifest(this.workspace).digest !== candidate.manifestDigest) {
@@ -1667,6 +1858,7 @@ class ConcurrentDeliveryEngine {
       this.#savePause(run.runId, { kind: 'error', message: 'Final review closure did not freeze after controller shutdown.' });
       return;
     }
+    if (this.shutdownRequested) return;
     const result = await this.#finalize(run, candidate, controller);
     if (result?.state === 'accepted') {
       this.#saveTerminal(run.runId, result);
@@ -2200,6 +2392,364 @@ class ConcurrentDeliveryEngine {
       throw error('concurrent_provider_identity_changed');
     }
     return this.providerIdentity;
+  }
+
+  #budgetModels() {
+    const models = new Set([this.leadRole.model]);
+    for (const role of this.roles.values()) {
+      const model = role.model || role.selectedModel;
+      if (typeof model === 'string' && model) models.add(model);
+    }
+    return [...models].sort();
+  }
+
+  #budgetIdentity(home) {
+    if (typeof home !== 'string' || !home) return null;
+    try {
+      const value = this.budgetAccounts.providerIdentityFor(home);
+      if (!value || typeof value.accountId !== 'string' || !/^[a-f0-9]{64}$/.test(value.accountId)
+        || typeof value.codexHome !== 'string' || !value.codexHome) return null;
+      return { accountId: value.accountId, codexHome: value.codexHome };
+    } catch (_) { return null; }
+  }
+
+  #confirmBudgetProviderIdentity(identity) {
+    const confirmed = deepFreeze(normalizeProviderIdentity(identity));
+    this.providerIdentity = confirmed;
+    this.providerIdentityFor = () => {
+      const home = this.budgetAccounts.profiles.activeHome() || this.budgetAccounts.profiles.codexDefaultHome;
+      const current = this.#budgetIdentity(home);
+      if (!current) throw error('concurrent_provider_identity_changed');
+      return current;
+    };
+  }
+
+  async #budgetCandidates() {
+    const accounts = this.budgetAccounts;
+    let profileState;
+    try { profileState = accounts.profiles.read(); } catch (_) { return []; }
+    if (!profileState || !Array.isArray(profileState.profiles) || typeof profileState.selectionRevision !== 'number') return [];
+    const definitions = profileState.profiles.map((profile) => ({ name: profile.name, home: profile.home }))
+      .filter((profile) => typeof profile.name === 'string' && typeof profile.home === 'string' && profile.home);
+    definitions.push({ name: null, home: accounts.profiles.codexDefaultHome });
+    const seenHomes = new Set();
+    const candidates = [];
+    for (const definition of definitions) {
+      if (seenHomes.has(definition.home)) continue;
+      seenHomes.add(definition.home);
+      const identity = this.#budgetIdentity(definition.home);
+      if (!identity) continue;
+      let state = null;
+      try { state = await accounts.readProfileState(identity.codexHome); } catch (_) { /* unknown account state */ }
+      const validSnapshot = state && Object.hasOwn(state, 'limits')
+        && typeof state.requiresOpenaiAuth === 'boolean';
+      candidates.push({ ...definition, ...identity, state: validSnapshot ? state : null,
+        known: validSnapshot && state.requiresOpenaiAuth === false && state.limits !== null });
+    }
+    const counts = new Map();
+    for (const candidate of candidates) counts.set(candidate.accountId, (counts.get(candidate.accountId) || 0) + 1);
+    return candidates.map((candidate) => ({ ...candidate, known: candidate.known && counts.get(candidate.accountId) === 1 }));
+  }
+
+  async #budgetBlockers(candidates = null) {
+    const availableCandidates = candidates || await this.#budgetCandidates();
+    const models = this.#budgetModels();
+    const blockers = [];
+    for (const candidate of availableCandidates) {
+      if (!candidate.known || candidate.state?.requiresOpenaiAuth === true) continue;
+      try {
+        blockers.push(...extractBudgetBlockers(candidate.state.limits, {
+          accountIdHash: `sha256:${candidate.accountId}`, provider: 'codex', models,
+        }));
+      } catch (_) { /* ambiguous or malformed account data is unknown */ }
+    }
+    return blockers;
+  }
+
+  async #recordUsageLimitWait({ run, identity, result }) {
+    if (result?.failureKind !== 'usage_limit' || !identity || identity.objectiveId !== run.objectiveId) return false;
+    const attempt = this.store.listAttempts(this.projectId, run.objectiveId).find((entry) => entry.attemptId === identity.attemptId);
+    if (!attempt || attempt.state !== 'failed' || attempt.outcome?.failureKind !== 'usage_limit'
+      || attempt.effect?.effectsSettled !== true) throw error('usage_limit_settlement_untrusted');
+    const objective = this.store.getObjective(this.projectId, run.objectiveId);
+    if (!objective || !['planning', 'executing'].includes(objective.disposition)
+      || this.store.listBudgetWaits(this.projectId, run.objectiveId).some((wait) => wait.state === 'waiting')) return false;
+    const task = objective.tasks.find((entry) => entry.taskId === attempt.taskId);
+    const role = task && this.roleFor(task.role);
+    const model = role?.model || role?.selectedModel || this.leadRole.model;
+    const blockers = await this.#budgetBlockers();
+    const current = this.store.getObjective(this.projectId, run.objectiveId);
+    if (!current || current.ownerGeneration !== objective.ownerGeneration || current.controlRevision !== objective.controlRevision
+      || !['planning', 'executing'].includes(current.disposition)
+      || this.store.listBudgetWaits(this.projectId, run.objectiveId).some((wait) => wait.state === 'waiting')) return false;
+    const controller = this.controllers.get(run.runId);
+    if (!controller || controller.shutdownRequested) return false;
+    controller.lifecycle.recordBudgetWait({ waitId: `usage-${sha256(attempt.attemptId).slice(0, 32)}`,
+      source: 'worker', provider: 'codex', model, reasonCode: 'usage_limit', delayMs: this.budgetWaitBackoffMs,
+      ...(blockers.length ? { blockers } : {}) });
+    return true;
+  }
+
+  async #processBudgetWait(run, wait) {
+    const initial = this.store.getObjective(this.projectId, run.objectiveId);
+    if (!initial || initial.disposition !== 'waiting_budget' || initial.ownerGeneration !== wait.ownerGeneration
+      || initial.controlRevision !== wait.controlRevision) return { runId: run.runId, waitId: wait.waitId, state: 'stale' };
+    const models = this.#budgetModels();
+    const candidates = await this.#budgetCandidates();
+    const available = candidates.filter((candidate) => candidate.known && candidate.state?.requiresOpenaiAuth === false
+      && this.#isBudgetAvailable(candidate.state.limits, models));
+    let profileState = null;
+    let activeHome = null;
+    try {
+      profileState = this.budgetAccounts.profiles.read();
+      activeHome = this.budgetAccounts.profiles.activeHome()
+        || (profileState?.active === null ? this.budgetAccounts.profiles.codexDefaultHome : null);
+    } catch (_) { /* unknown selection is never used to switch */ }
+    const selectionKnown = profileState && Number.isSafeInteger(profileState.selectionRevision)
+      && typeof profileState.autoSwitch === 'boolean';
+    const activeIdentity = this.#budgetIdentity(activeHome);
+    const active = activeIdentity && available.find((candidate) => candidate.accountId === activeIdentity.accountId);
+    if (active) {
+      this.#wakeBudgetWait(run, wait, initial);
+      return { runId: run.runId, waitId: wait.waitId, state: 'woken', accountId: active.accountId };
+    }
+    const target = selectionKnown && profileState.autoSwitch === true
+      ? available.find((candidate) => candidate.accountId !== activeIdentity?.accountId) : null;
+    if (!target) {
+      const refreshed = await this.#budgetBlockers(candidates);
+      const blockers = refreshed.length ? refreshed : wait.blockers || [];
+      this.#assertBudgetPins(run, wait, initial);
+      if (!blockers.length) {
+        const delay = Math.min(60000, Math.max(1000, this.budgetWaitBackoffMs));
+        this.budgetWaitRetryAfter.set(wait.waitId, this.now() + delay);
+        this.budgetWaitBackoffMs = Math.min(60000, delay * 2);
+        return { runId: run.runId, waitId: wait.waitId, state: 'held', reason: 'budget_state_unknown', retryAfter: this.now() + delay };
+      }
+      const controller = this.controllers.get(run.runId);
+      if (!controller) throw error('budget_controller_unavailable');
+      const delay = Math.min(60000, Math.max(1000, this.budgetWaitBackoffMs));
+      controller.lifecycle.rescheduleBudgetWait(wait.waitId, { delayMs: delay, blockers });
+      this.budgetWaitRetryAfter.delete(wait.waitId);
+      this.budgetWaitBackoffMs = Math.min(60000, delay * 2);
+      return { runId: run.runId, waitId: wait.waitId, state: 'rescheduled', delayMs: delay };
+    }
+    return this.#transitionBudgetWait(run, wait, initial, target, profileState);
+  }
+
+  #assertBudgetPins(run, wait, objective) {
+    const current = this.store.getObjective(this.projectId, run.objectiveId);
+    const saved = this.store.listBudgetWaits(this.projectId, run.objectiveId).find((entry) => entry.waitId === wait.waitId);
+    if (!current || !saved || saved.state !== 'waiting' || current.disposition !== 'waiting_budget'
+      || current.ownerGeneration !== objective.ownerGeneration || current.controlRevision !== objective.controlRevision
+      || saved.ownerGeneration !== wait.ownerGeneration || saved.controlRevision !== wait.controlRevision) throw error('budget_wait_controlled');
+    return current;
+  }
+
+  #assertBudgetSelection(expected) {
+    let current;
+    try { current = this.budgetAccounts.profiles.read(); } catch (_) { throw error('provider_transition_selection_unknown'); }
+    if (!current || current.active !== expected.active || current.selectionRevision !== expected.selectionRevision
+      || current.autoSwitch !== expected.autoSwitch) throw error('provider_transition_selection_stale');
+    return current;
+  }
+
+  #budgetRebindSafe(run) {
+    const currentObjective = this.store.getObjective(this.projectId, run.objectiveId);
+    if (!currentObjective || currentObjective.disposition !== 'waiting_budget') return false;
+    const runs = this.db.prepare('SELECT run_id,objective_id,session_id,status FROM concurrent_delivery_runs WHERE project_id=?')
+      .all(this.projectId);
+    const safeDormant = new Set(['paused_owner', 'waiting_budget', 'blocked_technical', 'accepted', 'partial', 'canceled']);
+    for (const entry of runs) {
+      const sibling = this.#run(entry.run_id);
+      const objective = this.store.getObjective(this.projectId, entry.objective_id);
+      const controller = this.controllers.get(entry.run_id);
+      if (!sibling || !objective) return false;
+      if (controller?.cycle || controller?.planner?.inFlight || controller?.scheduler?.runPromise || controller?.scheduler?.inFlight?.size) return false;
+      if (entry.run_id !== run.runId && !safeDormant.has(objective.disposition)) return false;
+      if (this.store.pendingOwnerDecision(this.projectId, entry.objective_id)) return false;
+      if (this.store.listClaims(this.projectId, entry.objective_id).some((claim) => ['active', 'expired', 'fenced'].includes(claim.state))) return false;
+      const attempts = this.store.listAttempts(this.projectId, entry.objective_id);
+      if (attempts.some((attempt) => !['succeeded', 'failed', 'canceled'].includes(attempt.state))
+        || !this.#effectsSettled(objective, attempts.filter((attempt) => !['succeeded', 'failed', 'canceled'].includes(attempt.state)))) return false;
+      const turnTable = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='delivery_planner_turns'").get();
+      if (!turnTable || this.db.prepare(`SELECT 1 FROM delivery_planner_turns WHERE project_id=? AND session_id=?
+        AND status NOT IN ('complete','stale','reconciled_no_effect') LIMIT 1`).get(this.projectId, sibling.sessionId)) return false;
+      const recoveryTable = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='delivery_lifecycle_planner_recoveries'").get();
+      if (!recoveryTable || this.db.prepare(`SELECT 1 FROM delivery_lifecycle_planner_recoveries WHERE project_id=? AND session_id=?
+        AND state<>'reconciled' LIMIT 1`).get(this.projectId, sibling.sessionId)) return false;
+      const inboxState = this.db.prepare(`SELECT 1 FROM delivery_inbox_state WHERE project_id=? AND session_id=? AND objective_id=?`).get(this.projectId, sibling.sessionId, entry.objective_id);
+      if (!inboxState || this.db.prepare(`SELECT 1 FROM delivery_inbox_messages WHERE project_id=? AND session_id=? AND objective_id=?
+        AND state IN ('received','blocked') LIMIT 1`).get(this.projectId, sibling.sessionId, entry.objective_id)) return false;
+    }
+    return true;
+  }
+
+  async #transitionBudgetWait(run, wait, objective, target, selection) {
+    if (!this.appServer.acquireTransitionGate || !this.appServer.releaseTransitionGate || !this.appServer.switchTo) throw error('provider_transition_gate_unavailable');
+    if (!this.#budgetRebindSafe(run)) return { runId: run.runId, waitId: wait.waitId, state: 'deferred', reason: 'project_not_quiescent' };
+    const transitionId = `budget-${sha256(`${run.runId}:${wait.waitId}:${wait.controlRevision}:${target.accountId}`).slice(0, 32)}`;
+    const token = await this.appServer.acquireTransitionGate(transitionId);
+    this.activeBudgetTransitionGate = { transitionId, token };
+    let record = null;
+    let switched = false;
+    let committed = false;
+    let reboundRun;
+    let retired;
+    try {
+      this.#assertBudgetPins(run, wait, objective);
+      const currentSelection = this.budgetAccounts.profiles.read();
+      if (currentSelection.active !== selection.active || currentSelection.selectionRevision !== selection.selectionRevision
+        || currentSelection.autoSwitch !== true || !this.#budgetRebindSafe(run)) throw error('provider_transition_selection_stale');
+      if (!await this.#isBudgetTargetAvailable(target.accountId)) throw error('provider_transition_target_unavailable');
+      this.#assertBudgetPins(run, wait, objective);
+      this.#assertBudgetSelection(currentSelection);
+      const source = this.#budgetIdentity(this.budgetAccounts.profiles.activeHome() || this.budgetAccounts.profiles.codexDefaultHome);
+      if (!source || source.accountId === target.accountId) throw error('provider_transition_source_unknown');
+      record = this.providerTransitions.create({ projectId: this.projectId, transitionId, runId: run.runId,
+        objectiveId: run.objectiveId, sessionId: run.sessionId, waitId: wait.waitId,
+        sourceAccountHash: source.accountId, targetAccountHash: target.accountId,
+        ownerGeneration: objective.ownerGeneration, controlRevision: objective.controlRevision, phase: 'intent' });
+      this.#assertBudgetPins(run, wait, objective);
+      if (!this.#budgetRebindSafe(run)) throw error('provider_transition_project_busy');
+      const selected = await this.appServer.switchTo(target.name, selection, token);
+      this.#assertBudgetPins(run, wait, objective);
+      if (selected !== 'switched' && selected !== 'already_active') throw error('provider_transition_switch_failed');
+      switched = true;
+      const selectedState = this.budgetAccounts.profiles.read();
+      if (selectedState.active !== target.name || selectedState.selectionRevision !== selection.selectionRevision + 1) {
+        throw error('provider_transition_selection_stale');
+      }
+      record = this.providerTransitions.advance(this.projectId, record, 'profile_switched');
+      const activeIdentity = this.#budgetIdentity(this.budgetAccounts.profiles.activeHome() || this.budgetAccounts.profiles.codexDefaultHome);
+      if (!activeIdentity || activeIdentity.accountId !== target.accountId) throw error('provider_transition_active_target_mismatch');
+      const prepared = await this.#prepareBudgetLeadThread(run, activeIdentity, token);
+      this.#assertBudgetPins(run, wait, objective);
+      if (!this.#budgetRebindSafe(run)) throw error('provider_transition_project_busy');
+      this.#assertBudgetSelection(selectedState);
+      if (!await this.#isBudgetTargetAvailable(target.accountId)) throw error('provider_transition_target_unavailable');
+      this.#assertBudgetPins(run, wait, objective);
+      this.#assertBudgetSelection(selectedState);
+      record = this.providerTransitions.advance(this.projectId, record, 'thread_prepared');
+      const transition = record;
+      reboundRun = this.#commitBudgetTransition(run, objective, wait, target, transition, prepared);
+      this.#confirmBudgetProviderIdentity(activeIdentity);
+      this.leadThreads.set(run.runId, reboundRun.leadSettings);
+      committed = true;
+      retired = this.#retireBudgetController(run.runId);
+    } finally {
+      if (!switched && record?.phase === 'intent') {
+        this.providerTransitions.clear(this.projectId, { transitionId: record.transitionId, phase: record.phase,
+          ownerGeneration: record.ownerGeneration, controlRevision: record.controlRevision });
+      }
+      if (!switched || committed) {
+        this.appServer.releaseTransitionGate(token);
+        this.activeBudgetTransitionGate = null;
+      }
+    }
+    await this.#replaceBudgetController(reboundRun, retired);
+    return { runId: run.runId, waitId: wait.waitId, state: 'rebound', accountId: target.accountId };
+  }
+
+  #retireBudgetController(runId) {
+    const previous = this.controllers.get(runId);
+    if (!previous) return null;
+    const running = previous.running;
+    previous.shutdown({ pause: false });
+    this.controllers.delete(runId);
+    return { running };
+  }
+
+  async #replaceBudgetController(run, retired) {
+    if (!retired) return;
+    const controller = await this.#controller(run, { prepareThread: false });
+    controller.inbox.signal('lifecycle.budget.wake');
+    if (retired.running) {
+      controller.start();
+      this.#startRecoveredRunDriver(run);
+    }
+  }
+
+  async #isBudgetTargetAvailable(accountId) {
+    const candidates = await this.#budgetCandidates();
+    const candidate = candidates.find((entry) => entry.accountId === accountId);
+    return Boolean(candidate?.known && candidate.state?.requiresOpenaiAuth === false
+      && this.#isBudgetAvailable(candidate.state.limits, this.#budgetModels()));
+  }
+
+  #isBudgetAvailable(snapshot, models) {
+    if (!isBudgetAvailable(snapshot, models)) return false;
+    if (snapshot?.ordinaryUsageAllowed === true) return true;
+    const wanted = new Set(models);
+    const generic = snapshot?.rateLimits;
+    if (generic && typeof generic === 'object' && Object.hasOwn(generic, 'rateLimitReachedType')
+      && generic.rateLimitReachedType === null) return true;
+    const covered = new Set();
+    for (const item of Object.values(snapshot?.rateLimitsByLimitId || {})) {
+      if (item && wanted.has(item.normalModelSlug) && Object.hasOwn(item, 'rateLimitReachedType')
+        && item.rateLimitReachedType === null) covered.add(item.normalModelSlug);
+    }
+    return [...wanted].every((model) => covered.has(model));
+  }
+
+  async #prepareBudgetLeadThread(run, identity, token) {
+    const settings = { model: this.leadRole.model, effort: this.leadRole.effort || this.leadRole.reasoningEffort || null,
+      fast: this.leadRole.fast ?? this.leadRole.fastMode ?? null, executionPermissions: this.executionPermissions,
+      selectedSkills: this.#leadSkills(), selectedMcpTools: this.#leadMcpTools(), codexHome: identity.codexHome };
+    const role = copy(this.leadRole);
+    this.#assertRoleSettings(role, settings, 'concurrent_lead_settings_mismatch');
+    if (typeof this.appServer.prepareThreadForTransition !== 'function') throw error('provider_transition_prepare_unavailable');
+    const prepared = await this.appServer.prepareThreadForTransition(token, { role, cwd: this.workspace, permissionWorkspace: this.workspace,
+      selectedSkills: settings.selectedSkills, selectedMcpTools: settings.selectedMcpTools,
+      executionPermissions: this.executionPermissions, ...(this.appServer.getCodexHome ? { captureCodexHome: true } : {}) });
+    const actualHome = prepared.codexHome ?? identity.codexHome;
+    if (actualHome !== identity.codexHome || !prepared.threadId) throw error('provider_transition_thread_invalid');
+    const prior = this.#leadThread(run);
+    if (!prior || prepared.threadId === prior.threadId) throw error('concurrent_lead_thread_not_fresh');
+    return { threadId: prepared.threadId, accountId: identity.accountId, codexHome: actualHome, settings,
+      settingsDigest: stableDigest(settings), transportKey: `lead:${this.projectId}:${run.sessionId}:${identity.accountId}:${actualHome}` };
+  }
+
+  #commitBudgetTransition(run, objective, wait, target, transition, prepared = null) {
+    if (transition.phase !== 'thread_prepared') throw error('provider_transition_thread_not_prepared');
+    const identity = this.#budgetIdentity(target.home);
+    const nextLead = prepared || this.#leadThread(run);
+    if (!identity || identity.accountId !== transition.targetAccountHash || nextLead.accountId !== identity.accountId) throw error('provider_transition_identity_mismatch');
+    const rawBefore = this.db.prepare(`SELECT lead_thread_id,lead_codex_home,lead_settings_json FROM concurrent_delivery_runs
+      WHERE project_id=? AND run_id=?`).get(this.projectId, run.runId);
+    const tx = this.db.transaction(() => {
+      const current = this.#assertBudgetPins(run, wait, objective);
+      if (current.ownerGeneration !== transition.ownerGeneration || current.controlRevision !== transition.controlRevision
+        || this.providerTransitions.get(this.projectId)?.phase !== 'thread_prepared') throw error('provider_transition_pins_stale');
+      const update = this.db.prepare(`UPDATE concurrent_delivery_runs SET lead_thread_id=?,lead_codex_home=?,lead_settings_json=?,updated_at=?
+        WHERE project_id=? AND run_id=? AND lead_thread_id=? AND lead_codex_home=? AND lead_settings_json=?`)
+        .run(nextLead.threadId, nextLead.codexHome, json(nextLead), this.now(), this.projectId, run.runId,
+          rawBefore.lead_thread_id, rawBefore.lead_codex_home, rawBefore.lead_settings_json);
+      if (update.changes !== 1) throw error('concurrent_lead_thread_conflict');
+      this.store.events.appendInTransaction(this.projectId, { eventType: 'planner.provider_rebound', objectRevision: current.controlRevision + 1,
+        payload: { objectiveId: run.objectiveId, runId: run.runId, ownerGeneration: current.ownerGeneration,
+          controlRevision: current.controlRevision, priorBinding: this.#leadThread(run), currentBinding: nextLead },
+        dedupeKey: `concurrent:${run.objectiveId}:budget-provider-rebind:${wait.waitId}` });
+      this.store.wakeBudgetWait(this.projectId, run.objectiveId, wait.waitId, {
+        expectedControlRevision: current.controlRevision, expectedOwnerGeneration: current.ownerGeneration });
+      this.providerTransitions.clear(this.projectId, { transitionId: transition.transitionId, phase: transition.phase,
+        ownerGeneration: transition.ownerGeneration, controlRevision: transition.controlRevision });
+      return this.#run(run.runId);
+    });
+    return tx.immediate();
+  }
+
+  #wakeBudgetWait(run, wait, objective) {
+    this.#assertBudgetPins(run, wait, objective);
+    const result = this.store.wakeBudgetWait(this.projectId, run.objectiveId, wait.waitId, {
+      expectedControlRevision: objective.controlRevision, expectedOwnerGeneration: objective.ownerGeneration,
+    });
+    this.budgetWaitRetryAfter.delete(wait.waitId);
+    const controller = this.controllers.get(run.runId);
+    if (controller) {
+      controller.inbox.signal('lifecycle.budget.wake'); controller.scheduler.wake(); controller.wake('lifecycle.budget.wake');
+      this.#startRecoveredRunDriver(run);
+    }
+    return result;
   }
   #assertRoleSettings(role, settings, code) {
     if (canonical(effectiveRoleSettings(role)) !== canonical(pinnedRoleSettings(settings))) throw error(code);

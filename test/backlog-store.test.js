@@ -873,6 +873,69 @@ test('budget wait blockers persist across SQLite reopen and validate exact uniqu
   assert.deepEqual(reopened.listBudgetWaits(projectId, objectiveId)[0].blockers, [first, second]);
 });
 
+test('pending budget waits reschedule with current pins and persist updated blockers and time', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-wait-reschedule-'));
+  const file = path.join(directory, 'state.sqlite');
+  let currentDb;
+  t.after(() => {
+    if (currentDb?.open) currentDb.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const { db, store } = fixture(file, { now: () => 200 });
+  currentDb = db;
+  const originalBlocker = { accountIdHash: `sha256:${'a'.repeat(64)}`, provider: 'provider-a', model: 'model-a',
+    windowId: 'short', reasonCode: 'rate_limit', resetsAt: 150 };
+  const freshBlocker = { ...originalBlocker, windowId: 'weekly', reasonCode: 'quota.exhausted', resetsAt: 500 };
+  store.recordBudgetWait(projectId, objectiveId, { waitId: 'reschedule-me', source: 'planner', provider: 'provider-a',
+    model: 'model-a', reasonCode: 'rate_limit', nextWakeAt: 150, blockers: [originalBlocker],
+    expectedControlRevision: 1, expectedOwnerGeneration: 0 });
+
+  const updated = store.rescheduleBudgetWait(projectId, objectiveId, 'reschedule-me', {
+    nextWakeAt: 600, blockers: [freshBlocker], expectedControlRevision: 1, expectedOwnerGeneration: 0,
+  });
+  assert.equal(updated.state, 'waiting');
+  assert.equal(updated.nextWakeAt, 600);
+  assert.deepEqual(updated.blockers, [freshBlocker]);
+  assert.equal(updated.source, 'planner');
+  assert.equal(updated.provider, 'provider-a');
+  assert.equal(updated.model, 'model-a');
+  assert.equal(updated.reasonCode, 'rate_limit');
+  assert.equal(updated.resumeDisposition, 'executing');
+  assert.equal(store.getObjective(projectId, objectiveId).disposition, 'waiting_budget');
+  assert.equal(store.events.replay(projectId).filter((event) => event.eventType === 'objective.budget_woken').length, 0);
+
+  assert.throws(() => store.rescheduleBudgetWait(projectId, objectiveId, 'reschedule-me', {
+    nextWakeAt: 700, blockers: [originalBlocker], expectedControlRevision: 2, expectedOwnerGeneration: 0,
+  }), { code: 'control_revision_stale' });
+  assert.throws(() => store.rescheduleBudgetWait(projectId, objectiveId, 'reschedule-me', {
+    nextWakeAt: 700, blockers: [], expectedControlRevision: 1, expectedOwnerGeneration: 0,
+  }), { code: 'budget_wait_blockers_invalid' });
+  assert.throws(() => store.rescheduleBudgetWait(projectId, objectiveId, 'missing-wait', {
+    nextWakeAt: 700, blockers: [originalBlocker], expectedControlRevision: 1, expectedOwnerGeneration: 0,
+  }), { code: 'budget_wait_missing' });
+  const objectiveRow = db.prepare('SELECT record_json FROM backlog_objectives WHERE project_id=? AND objective_id=?').get(projectId, objectiveId);
+  const wrongStateObjective = JSON.parse(objectiveRow.record_json);
+  wrongStateObjective.disposition = 'executing';
+  db.prepare('UPDATE backlog_objectives SET record_json=? WHERE project_id=? AND objective_id=?')
+    .run(JSON.stringify(wrongStateObjective), projectId, objectiveId);
+  assert.throws(() => store.rescheduleBudgetWait(projectId, objectiveId, 'reschedule-me', {
+    nextWakeAt: 700, blockers: [originalBlocker], expectedControlRevision: 1, expectedOwnerGeneration: 0,
+  }), { code: 'budget_wait_controlled' });
+  wrongStateObjective.disposition = 'waiting_budget';
+  db.prepare('UPDATE backlog_objectives SET record_json=? WHERE project_id=? AND objective_id=?')
+    .run(JSON.stringify(wrongStateObjective), projectId, objectiveId);
+  store.advanceOwnerGeneration(projectId, objectiveId, 0);
+  assert.throws(() => store.rescheduleBudgetWait(projectId, objectiveId, 'reschedule-me', {
+    nextWakeAt: 700, blockers: [originalBlocker], expectedControlRevision: 1, expectedOwnerGeneration: 1,
+  }), { code: 'owner_generation_stale' });
+  db.close();
+  currentDb = new Database(file);
+  const reopened = new BacklogStore(currentDb, { now: () => 900 });
+  const saved = reopened.listBudgetWaits(projectId, objectiveId)[0];
+  assert.equal(saved.nextWakeAt, 600);
+  assert.deepEqual(saved.blockers, [freshBlocker]);
+});
+
 test('typed retry records require current pins and block after bounded strategy exhaustion', (t) => {
   let clock = 100;
   const { db, store } = fixture(':memory:', { now: () => clock, maxLifecycleStrategies: 2 });

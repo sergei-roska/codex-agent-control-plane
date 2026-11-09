@@ -28,6 +28,8 @@ function createSwitchingAppServer({
   let inFlight = 0;
   let swapping = null;
   let closed = false;
+  let transitionGate = null;
+  let drainWaiter = null;
   const expectedHomePreflightErrors = new WeakSet();
 
   function accountIdForGeneration(home) {
@@ -114,7 +116,11 @@ function createSwitchingAppServer({
   }
 
   async function tracked(method, args) {
+    if (closed) throw Object.assign(new Error('App Server is closed'), { code: 'provider_closed' });
+    if (transitionGate) throw Object.assign(new Error('Provider transition is in progress'), { code: 'provider_transition_in_progress' });
     await settle();
+    if (closed) throw Object.assign(new Error('App Server is closed'), { code: 'provider_closed' });
+    if (transitionGate) throw Object.assign(new Error('Provider transition is in progress'), { code: 'provider_transition_in_progress' });
     const options = args[0] && typeof args[0] === 'object' && !Array.isArray(args[0]) ? args[0] : null;
     const expectedCodexHome = options?.expectedCodexHome;
     const callBinding = method === 'run' ? options?.callBinding : null;
@@ -187,6 +193,75 @@ function createSwitchingAppServer({
         : result;
     } finally {
       inFlight -= 1;
+      if (inFlight === 0 && drainWaiter) {
+        drainWaiter.resolve();
+        drainWaiter = null;
+      }
+    }
+  }
+
+  async function trackedTransitionPrepare(token, args) {
+    if (closed) throw Object.assign(new Error('App Server is closed'), { code: 'provider_closed' });
+    if (!transitionGate || transitionGate.token !== token) {
+      throw Object.assign(new Error('Provider transition token is invalid'), { code: 'provider_transition_in_progress' });
+    }
+    const options = args[0] && typeof args[0] === 'object' && !Array.isArray(args[0]) ? args[0] : null;
+    const captureCodexHome = options?.captureCodexHome === true;
+    let targetArgs = args;
+    if (options && 'captureCodexHome' in options) {
+      const { captureCodexHome: _captureCodexHome, ...callOptions } = options;
+      targetArgs = [callOptions, ...args.slice(1)];
+    }
+    const target = instance();
+    const identityHome = currentIdentityHome;
+    inFlight += 1;
+    try {
+      if (!transitionGate || transitionGate.token !== token) {
+        throw Object.assign(new Error('Provider transition token is no longer active'), { code: 'provider_transition_in_progress' });
+      }
+      const result = await target.prepareThread(...targetArgs);
+      return captureCodexHome && result && typeof result === 'object' && !Array.isArray(result)
+        ? { ...result, codexHome: identityHome }
+        : result;
+    } finally {
+      inFlight -= 1;
+      if (inFlight === 0 && drainWaiter) {
+        drainWaiter.resolve();
+        drainWaiter = null;
+      }
+    }
+  }
+
+  function waitForDrain() {
+    if (inFlight === 0) return Promise.resolve();
+    if (!drainWaiter) {
+      let resolve;
+      const promise = new Promise((r) => { resolve = r; });
+      drainWaiter = { promise, resolve };
+    }
+    return drainWaiter.promise;
+  }
+
+  function trackedPassThrough(method, args) {
+    if (closed) throw Object.assign(new Error('App Server is closed'), { code: 'provider_closed' });
+    if (transitionGate) throw Object.assign(new Error('Provider transition is in progress'), { code: 'provider_transition_in_progress' });
+    const target = instance();
+    inFlight += 1;
+    const finish = () => {
+      inFlight -= 1;
+      if (inFlight === 0 && drainWaiter) {
+        drainWaiter.resolve();
+        drainWaiter = null;
+      }
+    };
+    try {
+      const result = target[method](...args);
+      if (result && typeof result.then === 'function') return Promise.resolve(result).finally(finish);
+      finish();
+      return result;
+    } catch (error) {
+      finish();
+      throw error;
     }
   }
 
@@ -214,7 +289,10 @@ function createSwitchingAppServer({
     if (sameSelection(state, selected)) profiles.setActive(name);
   }
 
-  async function switchTo(name, expectedSelection = null) {
+  async function switchTo(name, expectedSelection = null, transitionToken = null) {
+    if (closed) return 'busy';
+    if (transitionToken !== null && (!transitionGate || transitionGate.token !== transitionToken)) return 'busy';
+    if (transitionGate && transitionGate.token !== transitionToken) return 'busy';
     const before = profiles.read();
     const expected = expectedSelection || before;
     if (!sameSelection(before, expected)) return 'busy';
@@ -242,12 +320,31 @@ function createSwitchingAppServer({
   const wrapper = {
     run: (...args) => tracked('run', args),
     prepareThread: (...args) => tracked('prepareThread', args),
+    prepareThreadForTransition: (token, ...args) => trackedTransitionPrepare(token, args),
     execCommand: (...args) => tracked('execCommand', args),
     resolveExecutionPermissions: (...args) => tracked('resolveExecutionPermissions', args),
     readConfig: (...args) => tracked('readConfig', args),
     switchTo,
+    async acquireTransitionGate(transitionId) {
+      if (closed) throw Object.assign(new Error('App Server is closed'), { code: 'provider_closed' });
+      if (transitionGate) throw Object.assign(new Error('Provider transition is in progress'), { code: 'provider_transition_in_progress' });
+      const gate = { transitionId, token: Object.freeze({}) };
+      transitionGate = gate;
+      await waitForDrain();
+      if (closed || transitionGate !== gate) {
+        throw Object.assign(new Error('Provider transition is no longer active'), { code: 'provider_transition_in_progress' });
+      }
+      return gate.token;
+    },
+    releaseTransitionGate(token) {
+      if (!transitionGate || transitionGate.token !== token || closed || inFlight > 0) return false;
+      transitionGate = null;
+      return true;
+    },
     async close() {
       closed = true;
+      transitionGate = { token: null };
+      await waitForDrain();
       if (swapping) await swapping;
       const target = current;
       current = null;
@@ -261,12 +358,12 @@ function createSwitchingAppServer({
     },
     callBindingVersion: 'call-bound/v1',
   };
-  // Plain pass-throughs: the supervised App Server owns their semantics.
+  // Every provider operation shares the transition admission and drain accounting.
   for (const method of [
     'start', 'getAccount', 'readRateLimits', 'getVersion', 'supervisorState', 'resetSupervisor', 'processIdentity',
     'listHooks', 'hookInventory', 'listMcpServerNames', 'mcpInventory', 'mcpServerStatus', '_request',
   ]) {
-    wrapper[method] = (...args) => instance()[method](...args);
+    wrapper[method] = (...args) => trackedPassThrough(method, args);
   }
   wrapper.isExpectedHomePreflightError = (cause) => Boolean(cause && typeof cause === 'object' && expectedHomePreflightErrors.has(cause));
   return wrapper;

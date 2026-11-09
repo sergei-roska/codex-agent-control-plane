@@ -185,6 +185,19 @@ test('runLegacy pins an old task to legacy but never overrides an existing mappi
   assert.equal(concurrentCalls.length, 2);
 });
 
+test('legacy recovery graph lookup follows the pinned engine', async (t) => {
+  const db = new Database(':memory:');
+  t.after(() => db.close());
+  const legacyGraph = { legacy: true };
+  const legacy = { graph: legacyGraph, run: async () => ({}), resume: async () => ({}) };
+  const concurrent = { run: async () => ({}), resume: async () => ({}) };
+  const router = new DeliveryEngineRouter({ db, projectId: PROJECT, defaultEngine: 'concurrent-v1', legacyEngine: legacy, concurrentEngine: concurrent });
+  await router.runLegacy({ runId: 'legacy-recovery' });
+  await router.run({ runId: 'concurrent-recovery' });
+  assert.equal(router.getLegacyRecoveryGraph('legacy-recovery'), legacyGraph);
+  assert.equal(router.getLegacyRecoveryGraph('concurrent-recovery'), null);
+});
+
 test('new concurrent intake is refused while the host publication fence is closed', async (t) => {
   const db = new Database(':memory:');
   t.after(() => db.close());

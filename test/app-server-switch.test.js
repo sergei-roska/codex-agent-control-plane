@@ -249,6 +249,78 @@ test('close closes the current instance', async () => {
   assert.equal(created[0].closed, true);
 });
 
+test('transition gate closes admission, drains admitted calls, and authorizes only its live token', async () => {
+  const { wrapper, created, profiles } = harness();
+  const held = wrapper.run({ hold: true });
+  await new Promise((r) => setImmediate(r));
+  const acquisition = wrapper.acquireTransitionGate('transition-1');
+  let acquired = false;
+  acquisition.then(() => { acquired = true; });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(acquired, false);
+
+  await assert.rejects(wrapper.run({}), (error) => error.code === 'provider_transition_in_progress');
+  assert.deepEqual(created[0].calls, ['run']);
+  created[0].gate.resolve();
+  await held;
+  const token = await acquisition;
+  const before = profiles.read();
+  assert.equal(await wrapper.switchTo('b', before), 'busy');
+  assert.deepEqual(profiles.read(), before);
+  assert.equal(await wrapper.switchTo('b', before, {}), 'busy');
+  assert.equal(wrapper.releaseTransitionGate({}), false);
+  assert.equal(await wrapper.switchTo('b', before, token), 'switched');
+  assert.equal(wrapper.releaseTransitionGate(token), true);
+  assert.equal(wrapper.releaseTransitionGate(token), false);
+  assert.equal(await wrapper.switchTo('c', profiles.read(), token), 'busy');
+  assert.deepEqual(await wrapper.run({}), { home: '/h/b' });
+});
+
+test('transition token authorizes only tracked thread preparation while the gate is closed', async () => {
+  const { wrapper, created, profiles } = harness();
+  const token = await wrapper.acquireTransitionGate('transition-prepare');
+  assert.equal(await wrapper.switchTo('b', profiles.read(), token), 'switched');
+  await assert.rejects(wrapper.prepareThread({}), (error) => error.code === 'provider_transition_in_progress');
+  await assert.rejects(wrapper.prepareThreadForTransition({}, {}), (error) => error.code === 'provider_transition_in_progress');
+
+  const preparing = wrapper.prepareThreadForTransition(token, { captureCodexHome: true, hold: true });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(wrapper.inFlight, 1);
+  assert.deepEqual(created[0].calls, ['prepareThread']);
+  assert.equal(wrapper.releaseTransitionGate(token), false);
+  created[0].gate.resolve();
+  assert.deepEqual(await preparing, { home: '/h/b', threadId: 'thread-/h/b', codexHome: '/h/b' });
+  assert.equal(wrapper.releaseTransitionGate(token), true);
+  await assert.rejects(wrapper.prepareThreadForTransition(token, {}), (error) => error.code === 'provider_transition_in_progress');
+});
+
+test('transition gate tracks and refuses pass-through provider reads', async () => {
+  const { wrapper, created } = harness();
+  const read = wrapper.getAccount();
+  const acquisition = wrapper.acquireTransitionGate('transition-read');
+  assert.throws(() => wrapper.readRateLimits(), (error) => error.code === 'provider_transition_in_progress');
+  const token = await acquisition;
+  assert.deepEqual(await read, { home: null });
+  assert.throws(() => wrapper.getVersion(), (error) => error.code === 'provider_transition_in_progress');
+  assert.equal(created[0].calls.length, 0);
+  assert.equal(wrapper.releaseTransitionGate(token), true);
+  assert.equal(wrapper.getVersion(), 'v-null');
+});
+
+test('close closes admission and waits for a pending gate drain', async () => {
+  const { wrapper, created } = harness();
+  const held = wrapper.run({ hold: true });
+  await new Promise((r) => setImmediate(r));
+  const acquisition = wrapper.acquireTransitionGate('transition-close');
+  const closing = wrapper.close();
+  await assert.rejects(wrapper.run({}), (error) => error.code === 'provider_closed');
+  created[0].gate.resolve();
+  await held;
+  await assert.rejects(acquisition, (error) => error.code === 'provider_transition_in_progress');
+  await closing;
+  assert.equal(created[0].closed, true);
+});
+
 function providerHarness(t, { onCallBound } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switch-provider-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

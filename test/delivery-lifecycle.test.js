@@ -111,6 +111,42 @@ test('explicit blocker windows survive projections and a second wait after wake'
   assert.equal(f.store.listBudgetWaits(projectId, objectiveId)[1].state, 'waiting');
 });
 
+test('rescheduling refreshes blockers and timer without waking a budget wait', (t) => {
+  let clock = 100;
+  const accountIdHash = `sha256:${'a'.repeat(64)}`;
+  const oldBlocker = { accountIdHash, provider: 'provider-a', model: 'model-a', windowId: 'short', reasonCode: 'rate_limit', resetsAt: 150 };
+  const freshBlocker = { ...oldBlocker, windowId: 'weekly', reasonCode: 'quota.exhausted', resetsAt: 500 };
+  const f = fixture({ now: () => clock });
+  t.after(() => { f.lifecycle.close(); f.db.close(); });
+  f.lifecycle.recordBudgetWait({ waitId: 'refresh-me', source: 'planner', provider: 'provider-a',
+    model: 'model-a', reasonCode: 'rate_limit', delayMs: 50, blockers: [oldBlocker] });
+
+  clock = 150;
+  assert.equal(f.lifecycle.wakeBudget('refresh-me').reason, 'trusted_eligibility_not_true');
+  assert.equal(f.lifecycle.disabledBudgetWaits.has('refresh-me'), true);
+  const updated = f.lifecycle.rescheduleBudgetWait('refresh-me', { delayMs: 200, blockers: [freshBlocker] });
+  assert.equal(updated.nextWakeAt, 350);
+  assert.deepEqual(updated.blockers, [freshBlocker]);
+  assert.equal(updated.state, 'waiting');
+  assert.equal(f.lifecycle.disabledBudgetWaits.has('refresh-me'), false);
+  assert.ok(f.lifecycle.timer);
+  assert.equal(f.store.getObjective(projectId, objectiveId).disposition, 'waiting_budget');
+  assert.equal(f.store.events.replay(projectId).filter((event) => event.eventType === 'objective.budget_woken').length, 0);
+
+  const before = f.store.listBudgetWaits(projectId, objectiveId)[0];
+  assert.throws(() => f.lifecycle.rescheduleBudgetWait('refresh-me', { delayMs: 0, blockers: [oldBlocker] }),
+    { code: 'budget_wait_delay_invalid' });
+  assert.throws(() => f.lifecycle.rescheduleBudgetWait('refresh-me', { delayMs: 10, blockers: [] }),
+    { code: 'budget_wait_blockers_invalid' });
+  assert.deepEqual(f.store.listBudgetWaits(projectId, objectiveId)[0], before);
+
+  f.lifecycle.budgetWakeEligibility = () => true;
+  clock = 350;
+  assert.equal(f.lifecycle.wakeBudget('refresh-me').state, 'woken');
+  assert.throws(() => f.lifecycle.rescheduleBudgetWait('refresh-me', { delayMs: 200, blockers: [freshBlocker] }),
+    { code: 'budget_wait_not_pending' });
+});
+
 test('a later owner pause pins out an earlier budget wake and leaves the wait durable', (t) => {
   let clock = 100;
   let wakes = 0;

@@ -56,7 +56,9 @@ const AUTO_AUTH_RESUME_TEXT = 'Automatic resume: the account has been authentica
 const TERMINAL_STORED_TASK_STATES = new Set(['TASK_STATE_COMPLETED', 'TASK_STATE_FAILED', 'TASK_STATE_CANCELED']);
 
 async function migrateLegacyRecoveryQuestion(orchestrator, runId) {
-  const graph = orchestrator?.graph;
+  const graph = typeof orchestrator?.getLegacyRecoveryGraph === 'function'
+    ? orchestrator.getLegacyRecoveryGraph(runId)
+    : orchestrator?.graph;
   if (!graph || typeof graph.getState !== 'function' || typeof graph.updateState !== 'function') return false;
   const config = { configurable: { thread_id: runId } };
   const snapshot = await graph.getState(config);
@@ -841,7 +843,7 @@ function makeLeadExecutor({ orchestrator, loadTask, durabilityTimeoutMs = 2000, 
         }
         try { livePause = (await orchestrator.getPause?.(taskId)) || null; } catch (_) { livePause = null; }
         // The checkpoint is authoritative; the stored task metadata is only a fallback.
-        effectivePause = livePause || requestContext.task.metadata?.pause || null;
+        effectivePause = livePause || (recoveryQuestionMigrated ? null : requestContext.task.metadata?.pause) || null;
       }
       const pauseKind = effectivePause?.kind;
       const automaticResume = requestContext.userMessage?.metadata?.autoResume;
@@ -1540,6 +1542,11 @@ async function startServer({
         db: state.db, workspace, projectId: normalizedProjectId, stateFile: state.filePath, storageRoot,
         baseUrl, authMiddleware, authToken, appServer,
         providerIdentity: identityPin.providerIdentity, providerIdentityFor: identityPin.providerIdentityFor,
+        ...(switching ? { budgetAccounts: {
+          profiles: accountProfiles,
+          readProfileState: readProfileState || readAccountStateOfHome,
+          providerIdentityFor: (home) => providerIdentityPinFactory(home).providerIdentity,
+        } } : {}),
         roles, leadRole, admission, lanes, writerIsolation: isolation, executionPermissions,
         acceptanceScratch, evidenceStore,
       });

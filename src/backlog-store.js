@@ -996,6 +996,48 @@ class BacklogStore {
     return this.db.prepare('SELECT record_json FROM backlog_budget_waits WHERE project_id=? AND objective_id=? ORDER BY created_at,wait_id').all(projectId, objectiveId).map((row) => decode(row.record_json));
   }
 
+  rescheduleBudgetWait(projectId, objectiveId, waitId, input) {
+    const update = exactRecord(input, ['nextWakeAt', 'blockers', 'expectedControlRevision', 'expectedOwnerGeneration'], 'budget_wait_reschedule_fields_invalid');
+    boundedIdentity(waitId, 'budget_wait_id_invalid');
+    update.blockers = normalizeBudgetBlockers(update.blockers);
+    if (!Number.isSafeInteger(update.nextWakeAt) || update.nextWakeAt < 0
+      || !Number.isSafeInteger(update.expectedControlRevision) || update.expectedControlRevision < 0
+      || !Number.isSafeInteger(update.expectedOwnerGeneration) || update.expectedOwnerGeneration < 0) {
+      throw recordError('budget_wait_reschedule_invalid');
+    }
+    const tx = this.db.transaction(() => {
+      const objectiveRow = this.#objectiveRow(projectId, objectiveId);
+      if (!objectiveRow) throw recordError('objective_missing');
+      const objective = decode(objectiveRow.record_json);
+      const control = this.getLifecycleControl(projectId, objectiveId);
+      const row = this.db.prepare(`SELECT state,control_revision,owner_generation,next_wake_at,record_json
+        FROM backlog_budget_waits WHERE project_id=? AND objective_id=? AND wait_id=?`).get(projectId, objectiveId, waitId);
+      if (!row) throw recordError('budget_wait_missing');
+      const record = decode(row.record_json);
+      if (row.state !== 'waiting') throw recordError('budget_wait_not_pending');
+      if (objective.disposition !== 'waiting_budget' || control?.cause !== 'budget_wait') throw recordError('budget_wait_controlled');
+      if (objective.controlRevision !== update.expectedControlRevision || row.control_revision !== update.expectedControlRevision
+        || record.controlRevision !== update.expectedControlRevision || control.controlRevision !== update.expectedControlRevision) {
+        throw recordError('control_revision_stale');
+      }
+      if (objectiveRow.owner_generation !== update.expectedOwnerGeneration || row.owner_generation !== update.expectedOwnerGeneration
+        || record.ownerGeneration !== update.expectedOwnerGeneration || control.ownerGeneration !== update.expectedOwnerGeneration) {
+        throw recordError('owner_generation_stale');
+      }
+      const updatedAt = this.now();
+      if (!Number.isSafeInteger(updatedAt) || updatedAt < 0) throw recordError('budget_wait_time_invalid');
+      const updated = { ...record, nextWakeAt: update.nextWakeAt, blockers: update.blockers, updatedAt };
+      const result = this.db.prepare(`UPDATE backlog_budget_waits SET next_wake_at=?,record_json=?,updated_at=?
+        WHERE project_id=? AND objective_id=? AND wait_id=? AND state='waiting' AND control_revision=?
+          AND owner_generation=? AND next_wake_at=? AND record_json=?`)
+        .run(update.nextWakeAt, encode(updated), updatedAt, projectId, objectiveId, waitId,
+          update.expectedControlRevision, update.expectedOwnerGeneration, row.next_wake_at, row.record_json);
+      if (result.changes !== 1) throw recordError('budget_wait_stale');
+      return updated;
+    });
+    return tx.immediate();
+  }
+
   wakeBudgetWait(projectId, objectiveId, waitId, pins) {
     const expected = exactRecord(pins, ['expectedControlRevision', 'expectedOwnerGeneration'], 'budget_wake_pins_invalid');
     boundedIdentity(waitId, 'budget_wait_id_invalid');

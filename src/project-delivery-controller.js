@@ -8,11 +8,14 @@ const { DeliveryLifecycle } = require('./delivery-lifecycle');
 const copy = (value) => JSON.parse(JSON.stringify(value));
 
 class ProjectDeliveryController {
-  constructor({ store, executor, projectId, objectiveId, sessionId, inbox, planner, lifecycle, lifecycleOptions = {}, runTurn, settingsFor, contextFor, reconcilePriorTurn, authorizeRecovery, trustedPreDispatchError, providerThreadId, schedulerOptions = {}, authenticateOwner, onOwnerCorrection = () => {}, now = () => Date.now() } = {}) {
+  constructor({ store, executor, projectId, objectiveId, sessionId, inbox, planner, lifecycle, lifecycleOptions = {}, runTurn, settingsFor, contextFor, reconcilePriorTurn, authorizeRecovery, trustedPreDispatchError, providerThreadId, schedulerOptions = {}, authenticateOwner, onOwnerCorrection = () => {}, onSettledAttempt = () => {}, processBudgetWaits = null, now = () => Date.now() } = {}) {
     if (!store || !executor) throw new TypeError('ProjectDeliveryController requires store and executor');
     if (!projectId || !objectiveId || !sessionId) throw new TypeError('Project, objective and session identity are required');
     if (typeof onOwnerCorrection !== 'function') throw new TypeError('Owner correction hook must be a function');
     this.onOwnerCorrection = onOwnerCorrection;
+    this.onSettledAttempt = onSettledAttempt;
+    this.processBudgetWaits = typeof processBudgetWaits === 'function' ? processBudgetWaits : null;
+    this.budgetWaitTimer = null;
     this.store = store;
     this.executor = executor;
     this.projectId = projectId;
@@ -108,6 +111,7 @@ class ProjectDeliveryController {
     if (this.lastRecovery.state === 'stale') return this.status();
     this.runGeneration += 1;
     this.running = true;
+    this.#scheduleBudgetWaitPoll();
     this.scheduler.start();
     for (const attempt of this.store.listAttempts(this.projectId, this.objectiveId).filter((item) => item.state === 'unknown')) {
       this.#scheduleUnknownReconciliation(attempt.attemptId);
@@ -155,6 +159,7 @@ class ProjectDeliveryController {
     this.running = false;
     this.runGeneration += 1;
     this.cyclePending = false;
+    if (this.budgetWaitTimer) { clearTimeout(this.budgetWaitTimer); this.budgetWaitTimer = null; }
     if (this.busyRetryTimer) { clearTimeout(this.busyRetryTimer); this.busyRetryTimer = null; }
     this.scheduler.stop();
     for (const timer of this.reconciliationTimers.values()) clearTimeout(timer);
@@ -211,6 +216,7 @@ class ProjectDeliveryController {
     }
     if (!this.shutdownRequested && this.planner.inFlight) this.inbox.signal('controller.shutdown');
     this.shutdownRequested = true;
+    if (this.budgetWaitTimer) { clearTimeout(this.budgetWaitTimer); this.budgetWaitTimer = null; }
     this.runGeneration += 1;
     this.running = false;
     this.cyclePending = false;
@@ -352,6 +358,9 @@ class ProjectDeliveryController {
         const timer = this.reconciliationTimers.get(attemptId);
         if (timer) clearTimeout(timer);
         this.reconciliationTimers.delete(attemptId);
+        if (result?.state === 'failed' && result.result?.failureKind === 'usage_limit') {
+          await this.onSettledAttempt({ identity: args[0], result: copy(result.result) });
+        }
         this.inbox.signal('attempt.settled');
         this.wake();
       } else if (result?.state === 'unknown' && args[0]?.attemptId) {
@@ -360,6 +369,17 @@ class ProjectDeliveryController {
       return result;
     };
     return { getAttempt: (...args) => original.getAttempt(...args), execute: wrap('execute'), reconcile: wrap('reconcile'), poll: wrap('poll') };
+  }
+
+  #scheduleBudgetWaitPoll() {
+    if (!this.processBudgetWaits || !this.running || this.shutdownRequested || this.budgetWaitTimer) return;
+    this.budgetWaitTimer = setTimeout(async () => {
+      this.budgetWaitTimer = null;
+      if (!this.running || this.shutdownRequested) return;
+      try { await this.processBudgetWaits(this.objectiveId); } catch (_) { /* durable wait remains pending */ }
+      this.#scheduleBudgetWaitPoll();
+    }, 1000);
+    this.budgetWaitTimer.unref?.();
   }
 
   #scheduleBusyRetry() {

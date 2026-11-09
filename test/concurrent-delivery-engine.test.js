@@ -120,8 +120,8 @@ async function createHarness(t, { appServer = {}, providerIdentity, providerIden
     engine, lead, roles: configuredRoles };
   t.after(async () => {
     await engine.shutdown().catch(() => {});
-    await new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
-    db.close();
+    if (server.listening) await new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
+    if (db.open) db.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
   return fx;
@@ -995,6 +995,53 @@ function facadePlannerResult(options, turnId) {
     execution: { threadId, turnId, processIdentity, turnStartSent: true, turnStartRejected: false, turnTerminal: true } };
 }
 
+test('stored-run recovery and interactive facades share one terminal driver', { timeout: 15000 }, async (t) => {
+  const verifierEntered = deferred();
+  const releaseVerifier = deferred();
+  t.after(() => releaseVerifier.resolve());
+  const calls = [];
+  const fx = await createHarness(t, { appServer: { async run(options) {
+    const role = options.role.id;
+    calls.push(role);
+    const threadId = options.threadId || `${role}-thread`;
+    const turnId = `shared-driver-${role}-${calls.length}`;
+    const processIdentity = readProcessIdentity(process.pid);
+    if (role === 'lead') return facadePlannerResult(options, turnId);
+    assert.equal(role, 'verifier');
+    options.onTurnStart({ threadId, processIdentity });
+    const details = scopedExecutionDetails(options.deliveryCapability);
+    assert.equal(details.verifyCandidate(), true);
+    verifierEntered.resolve();
+    await releaseVerifier.promise;
+    return { threadId, turnId, status: 'completed', text: JSON.stringify({ outcome: 'completed',
+      summary: 'VERDICT: pass\nFrozen candidate checked.', filesChanged: [], filesInspected: ['source.txt', 'verify-source.js'],
+      checks: [{ command: 'review-scope', result: 'passed', detail: 'Inspected the frozen candidate.' }],
+      risks: [], scopeExpansion: [], decisionRequest: null }),
+    execution: { threadId, turnId, processIdentity, turnStartSent: true, turnStartRejected: false, turnTerminal: true } };
+  } } });
+  const abort = new AbortController();
+  const running = fx.engine.run(facadeIntake(abort.signal));
+  await verifierEntered.promise;
+  const driver = fx.engine.runDrivers.get('pause-facade-run');
+  assert.ok(driver);
+  assert.deepEqual(await fx.engine.recoverStoredRuns(), [{ runId: 'pause-facade-run', state: 'checked' }]);
+  const resumed = fx.engine.resume({ runId: 'pause-facade-run', signal: abort.signal });
+  assert.equal(fx.engine.runDrivers.get('pause-facade-run'), driver);
+  assert.equal(fx.engine.runDrivers.size, 1);
+
+  releaseVerifier.resolve();
+  const [runResult, resumeResult] = await Promise.all([running, resumed]);
+  assert.equal(runResult.disposition, 'accepted', JSON.stringify({ runResult, resumeResult,
+    objective: fx.engine.store.getObjective(projectId, 'engine-objective-1'),
+    controller: fx.engine.controllers.get('pause-facade-run')?.status(),
+    finalizations: fx.engine.store.listFinalizations(projectId, 'engine-objective-1') }));
+  assert.deepEqual(resumeResult, runResult);
+  assert.ok(calls.filter((role) => role === 'lead').length >= 1);
+  assert.equal(calls.filter((role) => role === 'verifier').length, 1);
+  assert.equal(fx.engine.store.getObjective(projectId, 'engine-objective-1').disposition, 'accepted');
+  assert.equal(fx.engine.store.events.replay(projectId).filter((event) => event.eventType === 'objective.accepted').length, 1);
+});
+
 test('revision-pinned owner cancel stays draining until the admitted planner turn settles', { timeout: 10000 }, async (t) => {
   const entered = deferred();
   const release = deferred();
@@ -1020,7 +1067,7 @@ test('revision-pinned owner cancel stays draining until the admitted planner tur
   assert.equal(calls, 1);
 });
 
-async function createPausedFacadeHarness(t, { appServer = {} } = {}) {
+async function createPausedFacadeHarness(t, { appServer = {}, stopEngine = true } = {}) {
   const fx = await createHarness(t, { appServer: { async run(options) { return facadePlannerResult(options, 'initial-pause-turn'); }, ...appServer } });
   const abort = new AbortController();
   const pending = fx.engine.run(facadeIntake(abort.signal));
@@ -1028,9 +1075,314 @@ async function createPausedFacadeHarness(t, { appServer = {} } = {}) {
     && fx.db.prepare("SELECT status FROM delivery_planner_turns WHERE status='complete'").get(), 'initial planner did not complete');
   assert.equal(fx.engine.requestPause('pause-facade-run'), true);
   assert.equal((await pending).pause.kind, 'owner_pause');
-  await fx.engine.shutdown();
+  if (stopEngine) await fx.engine.shutdown();
+  else fx.engine.controllers.get('pause-facade-run').shutdown({ pause: false });
   return fx;
 }
+
+async function createBudgetWaitHarness(t, { delayedPrepare = null } = {}) {
+  const fx = await createPausedFacadeHarness(t, { stopEngine: false });
+  const homes = { a: '/tmp/budget-account-a', b: '/tmp/budget-account-b', system: '/tmp/budget-system-home' };
+  const hashes = { a: 'a'.repeat(64), b: 'b'.repeat(64), system: 'c'.repeat(64) };
+  const state = { version: 1, active: 'a', selectionRevision: 1, autoSwitch: true,
+    profiles: [{ name: 'a', home: homes.a }, { name: 'b', home: homes.b }] };
+  const profiles = {
+    codexDefaultHome: homes.system,
+    read: () => structuredClone(state),
+    activeHome: () => state.profiles.find((profile) => profile.name === state.active)?.home || null,
+  };
+  const identityFor = (home) => ({ accountId: hashes[Object.keys(homes).find((key) => homes[key] === home)], codexHome: home });
+  const limits = new Map([[homes.a, { ordinaryUsageAllowed: false }],
+    [homes.b, { ordinaryUsageAllowed: true }], [homes.system, { ordinaryUsageAllowed: false }]]);
+  fx.engine.budgetAccounts = { profiles, providerIdentityFor: identityFor,
+    async readProfileState(home) { return { requiresOpenaiAuth: false, limits: limits.get(home) ?? null }; } };
+  fx.engine.providerIdentityFor = () => identityFor(profiles.activeHome() || profiles.codexDefaultHome);
+  fx.engine.providerIdentity = Object.freeze(identityFor(profiles.activeHome() || profiles.codexDefaultHome));
+  fx.engine.appServer.acquireTransitionGate = async (transitionId) => {
+    if (fx.engine.activeBudgetTransitionGate) throw Object.assign(new Error('gate busy'), { code: 'provider_transition_in_progress' });
+    return Object.freeze({ transitionId });
+  };
+  fx.engine.appServer.releaseTransitionGate = (token) => {
+    assert.ok(token);
+    fx.engine.activeBudgetTransitionGate = null;
+    return true;
+  };
+  fx.engine.appServer.switchTo = async (name, expected, token) => {
+    assert.ok(token);
+    if (state.selectionRevision !== expected.selectionRevision || state.active !== expected.active) return 'busy';
+    state.active = name;
+    state.selectionRevision += 1;
+    return 'switched';
+  };
+  let prepared = 0;
+  fx.engine.appServer.getCodexHome = () => profiles.activeHome() || profiles.codexDefaultHome;
+  fx.engine.appServer.prepareThread = async ({ role }) => {
+    prepared += 1;
+    if (delayedPrepare) await delayedPrepare(prepared);
+    return { threadId: `${role.id}-budget-${prepared}`, codexHome: fx.engine.appServer.getCodexHome() };
+  };
+  fx.engine.appServer.prepareThreadForTransition = async (token, options) => {
+    assert.ok(token);
+    return fx.engine.appServer.prepareThread(options);
+  };
+  const objective = fx.engine.store.getObjective(projectId, 'engine-objective-1');
+  const resumed = fx.engine.store.transitionLifecycleControl(projectId, objective.objectiveId, { action: 'resume',
+    expectedOwnerGeneration: objective.ownerGeneration, expectedControlRevision: objective.controlRevision });
+  const controller = fx.engine.controllers.get('pause-facade-run');
+  controller.controlRevision = resumed.controlRevision;
+  controller.lifecycle.controlRevision = resumed.controlRevision;
+  const wait = fx.engine.store.recordBudgetWait(projectId, resumed.objectiveId, { waitId: 'budget-transition-wait',
+    source: 'worker', provider: 'codex', model: 'test-model', reasonCode: 'usage_limit', nextWakeAt: Date.now() - 1,
+    expectedControlRevision: resumed.controlRevision, expectedOwnerGeneration: resumed.ownerGeneration,
+    blockers: [{ accountIdHash: `sha256:${hashes.a}`, provider: 'codex', model: 'test-model',
+      windowId: 'ordinary_usage', reasonCode: 'ordinary_usage_blocked', resetsAt: null }] });
+  fx.budgetState = { homes, hashes, state, profiles, wait, limits, preparedCount: () => prepared };
+  return fx;
+}
+
+async function reopenBudgetEngineHarness(t, fx) {
+  const db = new Database(path.join(fx.storageRoot, 'state.sqlite'));
+  const app = express();
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  let engine = null;
+  t.after(async () => {
+    await engine?.shutdown().catch(() => {});
+    if (server.listening) await new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
+    if (db.open) db.close();
+  });
+  const admission = new WriterAdmission({ db, workspace: fx.workspace });
+  const lanes = new LaneManager({ db, workspace: fx.workspace, admission, mode: 'worktree',
+    lanesRoot: path.join(fx.storageRoot, 'lanes'), links: [] });
+  let gate = null;
+  const appServer = { ...fx.engine.appServer,
+    async acquireTransitionGate(transitionId) {
+      if (gate) throw Object.assign(new Error('gate busy'), { code: 'provider_transition_in_progress' });
+      gate = Object.freeze({ transitionId });
+      return gate;
+    },
+    releaseTransitionGate(token) { if (gate !== token) return false; gate = null; return true; },
+    async switchTo(name, expected, token) {
+      assert.equal(token, gate);
+      const current = fx.budgetState.profiles.read();
+      if (current.active !== expected.active || current.selectionRevision !== expected.selectionRevision) return 'busy';
+      fx.budgetState.state.active = name;
+      fx.budgetState.state.selectionRevision += 1;
+      return 'switched';
+    },
+  };
+  const identity = fx.engine.budgetAccounts.providerIdentityFor(fx.budgetState.profiles.activeHome());
+  engine = new ConcurrentDeliveryEngine({ db, workspace: fx.workspace, projectId, stateFile: path.join(fx.storageRoot, 'state.sqlite'),
+    storageRoot: fx.storageRoot, baseUrl: `http://127.0.0.1:${server.address().port}`, authMiddleware: auth,
+    authToken: 'concurrent-test-token', appServer, providerIdentity: identity,
+    providerIdentityFor: () => fx.engine.budgetAccounts.providerIdentityFor(
+      fx.budgetState.profiles.activeHome() || fx.budgetState.profiles.codexDefaultHome),
+    budgetAccounts: fx.engine.budgetAccounts, roles: fx.engine.roles, leadRole: fx.lead,
+    admission, lanes, writerIsolation: { mode: 'worktree' }, sleepMs: 10 });
+  engine.register(app);
+  return engine;
+}
+
+test('due budget wait safely switches to an available account and preserves the run identity', { timeout: 15000 }, async (t) => {
+  const fx = await createBudgetWaitHarness(t);
+  const beforeRun = fx.engine.controlStatus('pause-facade-run');
+  const beforeObjective = fx.engine.store.getObjective(projectId, 'engine-objective-1');
+  const result = await fx.engine.processDueBudgetWaits();
+  assert.equal(result.results[0].state, 'rebound');
+  assert.equal(fx.budgetState.state.active, 'b');
+  assert.equal(fx.engine.store.listBudgetWaits(projectId, 'engine-objective-1')[0].state, 'woken');
+  assert.equal(fx.engine.store.getObjective(projectId, 'engine-objective-1').disposition, 'executing');
+  assert.equal(fx.engine.controlStatus('pause-facade-run').runId, beforeRun.runId);
+  assert.equal(fx.engine.store.getObjective(projectId, 'engine-objective-1').checkIdentity, beforeObjective.checkIdentity);
+  assert.equal(fx.db.prepare('SELECT lead_thread_id FROM concurrent_delivery_runs WHERE run_id=?').get('pause-facade-run').lead_thread_id,
+    'lead-budget-1');
+  assert.equal(fx.engine.providerTransitions.get(projectId), null);
+  assert.equal(fx.engine.activeBudgetTransitionGate, null);
+  const rebound = fx.engine.store.events.replay(projectId).find((event) => event.eventType === 'planner.provider_rebound');
+  assert.ok(rebound);
+  assert.equal(rebound.objectRevision, rebound.payload.controlRevision + 1);
+});
+
+for (const recovery of [false, true]) test(`automatic budget ${recovery ? 'recovery' : 'rebind'} replaces the active planner with the committed provider thread`, { timeout: 15000 }, async (t) => {
+  const fx = await createBudgetWaitHarness(t);
+  const row = fx.db.prepare('SELECT lead_settings_json FROM concurrent_delivery_runs WHERE run_id=?').get('pause-facade-run');
+  const lead = JSON.parse(row.lead_settings_json);
+  lead.accountId = fx.budgetState.hashes.a;
+  lead.codexHome = fx.budgetState.homes.a;
+  lead.settings.codexHome = fx.budgetState.homes.a;
+  fx.db.prepare('UPDATE concurrent_delivery_runs SET lead_codex_home=?,lead_settings_json=? WHERE run_id=?')
+    .run(lead.codexHome, JSON.stringify(lead), 'pause-facade-run');
+  fx.engine.leadThreads.delete('pause-facade-run');
+  const accounts = fx.engine.budgetAccounts;
+  fx.engine.budgetAccounts = null;
+  await fx.engine.recoverStoredRuns();
+  fx.engine.budgetAccounts = accounts;
+  const previous = fx.engine.controllers.get('pause-facade-run');
+  assert.equal(previous.running, true);
+  await waitFor(() => !previous.cycle && !previous.scheduler.runPromise, 'waiting controller did not settle');
+  const threads = [];
+  const gatesAtDispatch = [];
+  fx.engine.appServer.run = async (options) => {
+    gatesAtDispatch.push(fx.engine.activeBudgetTransitionGate);
+    threads.push(options.threadId);
+    return facadePlannerResult(options, `budget-rebound-turn-${threads.length}`);
+  };
+  const revision = fx.engine.store.getObjective(projectId, 'engine-objective-1').controlRevision;
+  if (recovery) {
+    const { hashes, wait } = fx.budgetState;
+    fx.engine.providerTransitions.create({ projectId, transitionId: 'active-controller-recovery', runId: 'pause-facade-run',
+      objectiveId: 'engine-objective-1', sessionId: 'pause-facade-session', waitId: wait.waitId,
+      sourceAccountHash: hashes.a, targetAccountHash: hashes.b, ownerGeneration: wait.ownerGeneration,
+      controlRevision: wait.controlRevision, phase: 'intent' });
+    assert.equal((await fx.engine.recoverBudgetWaitTransitions()).state, 'recovered');
+  } else {
+    const result = await fx.engine.processDueBudgetWaits();
+    assert.equal(result.results[0].state, 'rebound', JSON.stringify(result));
+  }
+  await waitFor(() => threads.length > 0, 'rebound planner did not start');
+  await waitFor(() => fx.db.prepare("SELECT status FROM delivery_planner_turns WHERE provider_thread_id=? AND status='complete'")
+    .get('lead-budget-1'), 'rebound planner did not complete');
+  assert.equal(threads[0], 'lead-budget-1');
+  assert.equal(gatesAtDispatch[0], null);
+  assert.notEqual(fx.engine.controllers.get('pause-facade-run'), previous);
+  assert.equal(fx.engine.store.getObjective(projectId, 'engine-objective-1').controlRevision, revision);
+});
+
+test('reset hints without explicit availability only reschedule the pending budget wait', { timeout: 15000 }, async (t) => {
+  const fx = await createBudgetWaitHarness(t);
+  fx.budgetState.limits.set(fx.budgetState.homes.b, { rateLimits: { primary: { resetsAt: Date.now() + 60000, usedPercent: 100 } } });
+  const result = await fx.engine.processDueBudgetWaits();
+  assert.equal(result.results[0].state, 'rescheduled', JSON.stringify(result));
+  assert.equal(fx.budgetState.state.active, 'a');
+  const saved = fx.engine.store.listBudgetWaits(projectId, 'engine-objective-1')[0];
+  assert.equal(saved.state, 'waiting');
+  assert.ok(saved.nextWakeAt > Date.now());
+  assert.equal(fx.engine.store.getObjective(projectId, 'engine-objective-1').disposition, 'waiting_budget');
+  assert.equal(fx.engine.store.events.replay(projectId).some((event) => event.eventType === 'objective.budget_woken'), false);
+  assert.ok(saved.blockers.some((blocker) => blocker.accountIdHash === `sha256:${fx.budgetState.hashes.a}`));
+});
+
+test('unknown budget reads reschedule with prior valid blockers instead of writing empty blockers', { timeout: 15000 }, async (t) => {
+  const fx = await createBudgetWaitHarness(t);
+  for (const home of Object.values(fx.budgetState.homes)) fx.budgetState.limits.set(home, null);
+  const result = await fx.engine.processDueBudgetWaits();
+  assert.equal(result.results[0].state, 'rescheduled');
+  const saved = fx.engine.store.listBudgetWaits(projectId, 'engine-objective-1')[0];
+  assert.equal(saved.state, 'waiting');
+  assert.ok(saved.blockers.length > 0, 'prior valid blocker evidence is retained');
+  assert.ok(saved.nextWakeAt > Date.now());
+  assert.equal(fx.engine.store.events.replay(projectId).some((event) => event.eventType === 'objective.budget_woken'), false);
+});
+
+test('budget availability remains unknown without explicit auth clearance', { timeout: 15000 }, async (t) => {
+  const fx = await createBudgetWaitHarness(t);
+  fx.engine.budgetAccounts.readProfileState = async (home) => ({ limits: fx.budgetState.limits.get(home) ?? null });
+  const result = await fx.engine.processDueBudgetWaits();
+  assert.equal(result.results[0].state, 'rescheduled');
+  assert.equal(fx.budgetState.state.active, 'a');
+  assert.equal(fx.engine.store.listBudgetWaits(projectId, 'engine-objective-1')[0].state, 'waiting');
+  assert.equal(fx.engine.store.events.replay(projectId).some((event) => event.eventType === 'objective.budget_woken'), false);
+});
+
+test('available active account wakes without selecting a blocked alternate account', { timeout: 15000 }, async (t) => {
+  const fx = await createBudgetWaitHarness(t);
+  fx.budgetState.limits.set(fx.budgetState.homes.a, { ordinaryUsageAllowed: true });
+  fx.budgetState.limits.set(fx.budgetState.homes.b, { ordinaryUsageAllowed: false });
+  const result = await fx.engine.processDueBudgetWaits();
+  assert.equal(result.results[0].state, 'woken');
+  assert.equal(fx.budgetState.state.active, 'a');
+  assert.equal(fx.engine.store.listBudgetWaits(projectId, 'engine-objective-1')[0].state, 'woken');
+  assert.equal(fx.engine.providerTransitions.get(projectId), null);
+});
+
+test('an active sibling run defers project-wide account switching', { timeout: 15000 }, async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  t.after(() => release.resolve());
+  const fx = await createBudgetWaitHarness(t);
+  fx.engine.appServer.run = async (options) => {
+    entered.resolve();
+    await release.promise;
+    return facadePlannerResult(options, 'active-sibling-turn');
+  };
+  const abort = new AbortController();
+  const sibling = fx.engine.run({ runId: 'active-sibling-run', goal: 'Hold a sibling planner turn.',
+    contract: { requiredChecks: [] }, signal: abort.signal,
+    engineMapping: { engine: 'concurrent-v1', projectId, objectiveId: 'active-sibling-objective', sessionId: 'active-sibling-session' } });
+  await entered.promise;
+  const result = await fx.engine.processDueBudgetWaits('engine-objective-1');
+  assert.equal(result.results[0].state, 'deferred');
+  assert.equal(result.results[0].reason, 'project_not_quiescent');
+  assert.equal(fx.budgetState.state.active, 'a');
+  assert.equal(fx.engine.store.listBudgetWaits(projectId, 'engine-objective-1')[0].state, 'waiting');
+  release.resolve();
+  abort.abort();
+  await sibling;
+});
+
+for (const phase of ['intent', 'profile_switched']) test(`budget transition recovery handles persisted ${phase} phase`, { timeout: 15000 }, async (t) => {
+  const fx = await createBudgetWaitHarness(t);
+  const { hashes, homes, state, wait } = fx.budgetState;
+  const record = fx.engine.providerTransitions.create({ projectId, transitionId: `recover-${phase}`, runId: 'pause-facade-run',
+    objectiveId: 'engine-objective-1', sessionId: 'pause-facade-session', waitId: wait.waitId,
+    sourceAccountHash: hashes.a, targetAccountHash: hashes.b, ownerGeneration: wait.ownerGeneration,
+    controlRevision: wait.controlRevision, phase: 'intent' });
+  if (phase === 'profile_switched') {
+    state.active = 'b';
+    state.selectionRevision += 1;
+    fx.engine.providerTransitions.advance(projectId, record, 'profile_switched');
+  }
+  const result = await fx.engine.recoverBudgetWaitTransitions();
+  assert.equal(result.state, 'recovered');
+  assert.equal(state.active, 'b');
+  assert.equal(fx.engine.store.listBudgetWaits(projectId, 'engine-objective-1')[0].state, 'woken');
+  assert.equal(fx.engine.providerTransitions.get(projectId), null);
+  assert.equal(fx.engine.activeBudgetTransitionGate, null);
+  assert.equal(fx.db.prepare('SELECT lead_codex_home FROM concurrent_delivery_runs WHERE run_id=?').get('pause-facade-run').lead_codex_home, homes.b);
+});
+
+test('server-style engine reopen recovers a persisted profile switch before stored runs dispatch', { timeout: 20000 }, async (t) => {
+  const fx = await createBudgetWaitHarness(t);
+  const { hashes, homes, state, wait } = fx.budgetState;
+  const record = fx.engine.providerTransitions.create({ projectId, transitionId: 'restart-budget-rebind', runId: 'pause-facade-run',
+    objectiveId: 'engine-objective-1', sessionId: 'pause-facade-session', waitId: wait.waitId,
+    sourceAccountHash: hashes.a, targetAccountHash: hashes.b, ownerGeneration: wait.ownerGeneration,
+    controlRevision: wait.controlRevision, phase: 'intent' });
+  state.active = 'b';
+  state.selectionRevision += 1;
+  fx.engine.providerTransitions.advance(projectId, record, 'profile_switched');
+  await fx.engine.shutdown();
+  await new Promise((resolve) => { fx.server.closeAllConnections(); fx.server.close(resolve); });
+  fx.db.close();
+
+  const engine = await reopenBudgetEngineHarness(t, fx);
+  const results = await engine.recoverStoredRuns();
+  assert.equal(engine.providerTransitions.get(projectId), null);
+  assert.equal(engine.store.listBudgetWaits(projectId, 'engine-objective-1')[0].state, 'woken');
+  assert.equal(engine.store.getObjective(projectId, 'engine-objective-1').disposition, 'executing');
+  assert.equal(engine.providerIdentity.codexHome, homes.b);
+  assert.equal(results.some((entry) => entry.state === 'unknown'), false, JSON.stringify(results));
+});
+
+for (const action of ['pause', 'cancel']) test(`owner ${action} during budget thread preparation keeps the transition gated and does not wake`, { timeout: 15000 }, async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  t.after(() => release.resolve());
+  const fx = await createBudgetWaitHarness(t, { delayedPrepare: async () => { entered.resolve(); await release.promise; } });
+  const before = fx.engine.store.getObjective(projectId, 'engine-objective-1');
+  const processing = fx.engine.processDueBudgetWaits();
+  await entered.promise;
+  fx.engine.store.requestControl(projectId, before.objectiveId, action, before.controlRevision);
+  release.resolve();
+  const result = await processing;
+  assert.equal(result.results[0].state, 'held');
+  assert.equal(fx.engine.store.getObjective(projectId, before.objectiveId).disposition,
+    action === 'pause' ? 'paused_owner' : 'draining');
+  assert.equal(fx.engine.store.listBudgetWaits(projectId, before.objectiveId)[0].state, 'waiting');
+  assert.equal(fx.engine.store.events.replay(projectId).some((event) => event.eventType === 'objective.budget_woken'), false);
+  assert.ok(fx.engine.providerTransitions.get(projectId));
+  assert.ok(fx.engine.activeBudgetTransitionGate);
+});
 
 test('concurrent status uses persisted phase, wait, task, and provider binding facts', { timeout: 15000 }, async (t) => {
   const fx = await createPausedFacadeHarness(t);
@@ -2158,16 +2510,27 @@ for (const mode of ['answer', 'replace', 'replace-drift', 'reopen']) test(`owner
   assert.equal((await post('decision', request)).body.duplicate, true);
   assert.equal((await post('decision', { ...request, optionId: 'change' })).status, 409);
   if (mode === 'replace' || mode === 'reopen') {
-    await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(engine.store.pendingOwnerDecision(projectId, realObjectiveId), null);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (mode === 'reopen') await waitFor(() => engine.getPause(runId)?.kind === 'error',
+      'unresolved verifier effect did not become an honest error pause');
+    assert.equal(engine.runDrivers.size, 0, 'a settled owner decision must not leave a polling driver');
+    assert.ok(plannerCalls > callsAtWait);
     assert.equal(engine.store.getObjective(projectId, realObjectiveId).disposition, 'executing');
     assert.equal(engine.store.listFinalizations(projectId, realObjectiveId).length, 0);
     assert.equal(verifierCalls, 0);
+    if (mode === 'reopen') {
+      assert.equal(engine.getPause(runId)?.kind, 'error');
+      assert.equal(engine.getPause(runId)?.outcomeUnknown, true);
+      await assert.rejects(engine.shutdown(), { code: 'concurrent_shutdown_unsafe' });
+      return;
+    }
     await engine.shutdown();
     return;
   }
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const accepted = await engine.resume({ runId });
+  await waitFor(() => engine.store.getObjective(projectId, realObjectiveId).disposition === 'accepted',
+    'resolved owner decision did not continue automatically to acceptance');
+  const accepted = engine.getRunDigest(runId);
   assert.equal(accepted.disposition, 'accepted', JSON.stringify(accepted));
   assert.equal(investigationCalls, 1); assert.ok(verifierCalls > 0);
   const proof = fx.db.prepare('SELECT result_json FROM concurrent_finalization_check_proofs').get();

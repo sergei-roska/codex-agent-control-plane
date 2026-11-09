@@ -1,9 +1,9 @@
 # Autonomous delivery backlog
 
-Status: active development backlog. Baseline: `ab5c195` (2026-11-06).
-Implementation has started, but end-to-end implementation and activation remain
-pending. Existing source and test evidence below establish reusable components,
-not an end-to-end shipped autonomy claim.
+Status: functional qualification complete; runtime activation remains
+unperformed. Baseline: `ab5c195` (2026-11-06). The deterministic and composed
+scenarios below establish tested functional behavior, not deployment or
+production readiness.
 The source-backed constraint and gap inventory is
 [autonomous-delivery-constraints.md](autonomous-delivery-constraints.md).
 Migration from earlier development backlogs is recorded in
@@ -23,8 +23,8 @@ or technical failure into successful completion.
 
 ## Priority and dependency map
 
-All items are pending for the end-to-end objective, even where a source
-component is already implemented. Dependencies below are functional
+Component completion alone did not satisfy the objective; AD-08 now verifies
+the integrated lifecycle and recovery paths. Dependencies below are functional
 prerequisites; shared-file ordering belongs in implementation briefs and is not
 an extra product gate.
 
@@ -44,13 +44,13 @@ AD-01..AD-07 --> AD-08 Integrated release qualification
 | ID | Priority | Depends on | State |
 | --- | --- | --- | --- |
 | AD-01 | P0 | - | complete |
-| AD-02 | P0 | AD-01 | in_progress |
-| AD-03 | P0 | AD-02 | in_progress |
-| AD-04 | P0 | AD-01 | in_progress |
-| AD-05 | P0 | AD-01 | in_progress |
+| AD-02 | P0 | AD-01 | complete |
+| AD-03 | P0 | AD-02 | complete |
+| AD-04 | P0 | AD-01 | complete |
+| AD-05 | P0 | AD-01 | complete |
 | AD-06 | P0 | AD-01 | complete |
-| AD-07 | P1 | AD-01 | in_progress |
-| AD-08 | P0 | AD-01..AD-07 | pending |
+| AD-07 | P1 | AD-01 | complete |
+| AD-08 | P0 | AD-01..AD-07 | complete |
 
 ### AD-01 - Durable objective identity, scope, and execution lineage [P0]
 
@@ -178,15 +178,17 @@ bucket remains blocked, do not dispatch that operation. Repeated resets and
 re-exhaustion re-arm the durable wait rather than ending the objective.
 
 **Implementation progress (2026-11-06).** `BacklogStore` and
-`DeliveryLifecycle` now persist up to 64 explicit blocker windows per budget
-wait, including hashed account identity, provider/model/window/reason and reset
-hint. Reset timestamps remain hints; lifecycle wake still requires literal
-`true` from the authoritative eligibility callback and matching owner/control
-pins. SQLite reopen and re-exhaustion are covered; focused store/lifecycle
-suites passed 72/72 and Sol independently approved the storage slice after a
-sparse-array validation fix. Concurrent-engine account eligibility, provider
-rebind, server restart recovery and wake wiring remain open. See
-`.agents/teamwork/AD-03-account-wait-20261106/durable-wait/`.
+`DeliveryLifecycle` persist up to 64 explicit blocker windows per budget wait,
+including hashed account identity, provider/model/window/reason and reset hint.
+Reset timestamps remain hints; wake requires explicit provider availability,
+explicit auth clearance, and matching owner/control pins. The concurrent engine
+records only trusted usage-limit failures, safely rebinds through a project-wide
+admission gate and transition journal, and recovers on startup. Engine SQLite
+reopen and real `startServer` close/reopen recovery both pass. Verification:
+engine 68/68, wrapper 23/23, relevant storage/lifecycle/role/blocker/journal
+suites 176/176, and server composition/restart 2/2. Independent read-only review
+found no actionable defects. No live provider was used. See
+`.agents/teamwork/AD-03-account-wait-20261106/handoff.md`.
 
 ### AD-04 - Autonomous diagnosis, repair, and substantiated owner questions [P0]
 
@@ -277,10 +279,13 @@ the regression proving automatic settlement after proof availability with no
 send. The authenticated host and launcher now expose a revision-pinned cancel
 action, and UI/status distinguish a pending drain from confirmed cancellation.
 The focused cancellation, control, and UI suites passed 177/177; real-browser
-acceptance passed 1/1. The legacy budget watcher now rechecks entry identity
-after awaited account switching, and its 33-test suite passes. Legacy cancel
-integration and composed pause/cancel versus budget-resume/account-failover
-races remain open for AD-08 qualification.
+acceptance passed 1/1. The legacy budget watcher rechecks entry identity after
+awaited account switching. Legacy cancel remains terminal through a real server
+restart, and authenticated concurrent pause/cancel races against automatic
+budget eligibility pass without wake, switch, or another attempt. Named server
+race/restart cases passed 2/2, `test/budget-watcher.test.js` passed 45/45, and
+the composed control-race suite passed 3/3. AD-05 is complete; see
+`.agents/teamwork/AD-05-control-reconciliation-20261106/handoff.md`.
 
 ### AD-06 - Accepted means all required work and checks are accepted [P0]
 
@@ -360,8 +365,9 @@ and launcher expose revision-pinned pause, resume, and cancel controls, and the
 backlog UI distinguishes applied, draining, stale, and unknown outcomes without
 blindly retrying. Focused route/UI tests passed 16/16, the real engine cancel
 drain test passed, the combined control/reconciliation suites passed 177/177,
-and the changed launcher passed browser acceptance 1/1. Composed automatic-
-resume and account-failover races remain open. See
+and the changed launcher passed browser acceptance 1/1. The real host-route
+pause/cancel race against automatic account eligibility passed in the composed
+server fixture. AD-07 is complete; see
 `.agents/teamwork/AD-07-research-20261106/`.
 
 ### AD-08 - Integrated fire-and-forget release qualification [P0]
@@ -402,3 +408,23 @@ repeat failure. Each must retain an honest non-accepted state until resolved.
 No efficiency, cost, broad model-quality, live-provider, or production claim
 follows from this functional scenario. Use matched trials for those separate
 questions and preserve unknown measurements as unknown.
+
+**Implementation progress (2026-11-06).** The integrated deterministic release
+scenario passed 1/1 through the real `startServer` concurrent-v1 composition:
+A exhaustion, automatic A-to-B transfer, B exhaustion, durable wait across
+server close/reopen, restored account availability, and automatic acceptance of
+the same objective with its pinned verifier check. Three implementation
+attempts remain traceable to account/thread identities, one candidate intent is
+applied, and finalization is accepted exactly once. A budget rebind event
+revision mismatch that blocked verifier lineage authorization was repaired and
+is asserted by the release test. Recovered runs and interactive facades share a
+per-run terminal driver; the full concurrent engine suite passed 72/72.
+
+The composed pause/cancel race passed 3/3. Existing-profile re-login and
+automatic auth recovery passed 1/1 on the supported legacy auth path; the
+concurrent engine currently has no auth-specific durable wait. Stale reset
+hints, unknown dispatch effects, genuine owner decisions, failed checks, and
+repeated failure remain nonaccepted under their focused suites. The combined
+release/control/auth command passed 5/5, and the independent Luna review found
+no actionable defects. No runtime was activated and no live provider or real
+quota was used. See `.agents/teamwork/AD-08-integrated-release/handoff.md`.

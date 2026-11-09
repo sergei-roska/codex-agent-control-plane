@@ -1,5 +1,7 @@
 'use strict';
 
+const { createHash } = require('node:crypto');
+
 const MAX_TIMER_MS = 2_147_483_647;
 
 const REAL_CLOCK = {
@@ -23,6 +25,72 @@ function parseResetsAt(value) {
     return Number.isNaN(parsed) ? null : parsed;
   }
   return null;
+}
+
+function extractBudgetBlockers(response, { accountIdHash, provider, models } = {}) {
+  if (typeof accountIdHash !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(accountIdHash)) {
+    throw new TypeError('budget_wait_account_hash_invalid');
+  }
+  const validIdentity = (value) => typeof value === 'string'
+    && value.length > 0 && value.length <= 128 && !/[\x00-\x20\x7f]/.test(value);
+  if (!validIdentity(provider)) throw new TypeError('budget_wait_provider_invalid');
+  if (!Array.isArray(models) || models.length === 0
+    || models.some((model) => !validIdentity(model)) || new Set(models).size !== models.length) {
+    throw new TypeError('budget_wait_models_invalid');
+  }
+
+  const byModel = new Map(models.map((model) => [model, []]));
+  if (response && typeof response === 'object' && !Array.isArray(response)) {
+    const snapshots = [];
+    if (response.rateLimits && typeof response.rateLimits === 'object' && !Array.isArray(response.rateLimits)) {
+      snapshots.push({ snapshot: response.rateLimits, sourceId: 'rate_limit', model: null });
+    }
+    const byId = response.rateLimitsByLimitId;
+    if (byId && typeof byId === 'object' && !Array.isArray(byId)) {
+      const entries = Object.entries(byId).sort(([left], [right]) => left.localeCompare(right));
+      for (const [key, snapshot] of entries) {
+        if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) continue;
+        const model = typeof snapshot.normalModelSlug === 'string' ? snapshot.normalModelSlug : null;
+        const sourceId = `limit_${createHash('sha256').update(key).digest('hex').slice(0, 24)}`;
+        snapshots.push({ snapshot, sourceId, model });
+      }
+    }
+
+    const add = (model, windowId, reasonCode, resetsAt) => {
+      const parsed = parseResetsAt(resetsAt);
+      const reset = parsed === null ? null : Math.trunc(parsed);
+      byModel.get(model).push({ accountIdHash, provider, model, windowId, reasonCode,
+        resetsAt: Number.isSafeInteger(reset) && reset >= 0 ? reset : null });
+    };
+    const reachedForModel = new Set();
+    for (const { snapshot, sourceId, model: snapshotModel } of snapshots) {
+      if (snapshotModel !== null && !byModel.has(snapshotModel)) continue;
+      if (snapshot.rateLimitReachedType === null || snapshot.rateLimitReachedType === undefined
+        || snapshot.rateLimitReachedType === '') continue;
+      const targetModels = snapshotModel === null ? models : [snapshotModel];
+      for (const model of targetModels) {
+        reachedForModel.add(model);
+        const windows = ['primary', 'secondary'].filter((key) => snapshot[key] && typeof snapshot[key] === 'object'
+          && !Array.isArray(snapshot[key]));
+        if (windows.length === 0) add(model, sourceId, 'rate_limit_reached', snapshot.resetsAt);
+        else for (const key of windows) add(model, `${sourceId}_${key}`, 'rate_limit_reached', snapshot[key].resetsAt);
+      }
+    }
+    if (response.ordinaryUsageAllowed === false) {
+      for (const model of models) {
+        if (!reachedForModel.has(model)) add(model, 'ordinary_usage', 'ordinary_usage_blocked', null);
+      }
+    }
+  }
+
+  const unique = new Map();
+  for (const model of models) {
+    for (const blocker of byModel.get(model)) {
+      const identity = JSON.stringify([blocker.accountIdHash, blocker.provider, blocker.model, blocker.windowId]);
+      if (!unique.has(identity)) unique.set(identity, blocker);
+    }
+  }
+  return [...unique.values()];
 }
 
 /**
@@ -375,4 +443,4 @@ function createBudgetWatcher({
   return { start, stop, notePause, forget, status };
 }
 
-module.exports = { createBudgetWatcher, isBudgetAvailable, parseResetsAt };
+module.exports = { createBudgetWatcher, extractBudgetBlockers, isBudgetAvailable, parseResetsAt };

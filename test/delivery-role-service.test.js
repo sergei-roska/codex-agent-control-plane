@@ -377,6 +377,37 @@ test('known host rejection before AppServer invocation settles failed without re
   assert.equal(fx.store.listAttempts(PROJECT, OBJECTIVE).find((item) => item.attemptId === fx.claim.attempt.attemptId).state, 'failed');
 });
 
+for (const evidence of ['typed usage-limit', 'bare 429']) {
+  test(`terminal ${evidence} failure preserves only trusted usage-limit evidence`, async (t) => {
+    const threadId = `usage-limit-${evidence.replaceAll(' ', '-')}`;
+    const turnId = `${threadId}-turn`;
+    const cause = Object.assign(new Error('Provider rate limit failure'), {
+      code: 'provider_error', statusCode: 429, threadId, turnId,
+      execution: { turnStartSent: true, turnStartRejected: false, turnTerminal: true,
+        processIdentity: readProcessIdentity(process.pid), threadId, turnId },
+      ...(evidence === 'typed usage-limit' ? { codexError: { codexErrorInfo: {
+        usageLimitExceeded: { httpStatusCode: 429 },
+      } } } : {}),
+    });
+    const fx = await fixture(t, { appServer: { getCodexHome: () => SETTINGS.codexHome, async run(options) {
+      options.onTurnStart({ threadId, processIdentity: cause.execution.processIdentity });
+      throw cause;
+    } } });
+    const id = identity(fx);
+    const sent = await fx.executor.execute(id);
+    assert.equal(sent.state, 'submitted');
+    const execution = fx.service.getExecution(id.attemptId);
+    assert.equal(execution.state, 'terminal');
+    if (evidence === 'typed usage-limit') assert.equal(execution.failureKind, 'usage_limit');
+    else assert.equal(Object.hasOwn(execution, 'failureKind'), false);
+
+    const settled = await fx.executor.poll(id);
+    assert.equal(settled.state, 'failed');
+    assert.equal(settled.result.failureKind, evidence === 'typed usage-limit' ? 'usage_limit' : 'provider_error');
+    assert.equal(fx.service.getExecution(id.attemptId).effectsSettled, true);
+  });
+}
+
 test('configured read-only role executes against an immutable candidate copy', async (t) => {
   const fx = await fixture(t, { role: 'explorer', reportText: report([]) });
   const original = fs.readFileSync(path.join(fx.workspace, 'source.txt'), 'utf8');

@@ -17,6 +17,8 @@ const { validateAcceptanceContract } = require('../src/acceptance');
 const { createRuntimeIdentity } = require('../src/runtime-identity');
 const { createAuthMiddleware } = require('../src/local-auth');
 const { parseTrialRunIds } = require('../src/aut03-lead-skill');
+const Database = require('better-sqlite3');
+const { DeliveryEngineRouter } = require('../src/delivery-engine-router');
 
 // Test files run in parallel processes; keep workspace locks private to this process.
 process.env.CODEX_A2A_WORKSPACE_LOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-ws-lock-'));
@@ -918,6 +920,54 @@ test('a legacy threshold-only recovery question is migrated before a resumed tas
   assert.equal(seen.some((event) => statusText(event).includes(request.question)), false);
   assert.equal(resumes[0].input.answer, 'Continue');
   assert.equal(resumes[0].input.choice, undefined);
+  assert.equal(resumes[0].input.decisionId, undefined);
+  assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
+});
+
+test('the production router migrates a legacy recovery question before stale decision validation', async (t) => {
+  const decisionId = 't-routed-recovery:h1';
+  const request = {
+    kind: 'human_decision', decisionId,
+    question: 'The recovery generation limit was reached. How should the controller go on?',
+    options: [{ id: 'supported_controller_replan', description: 'Continue with a supported controller replan.' }],
+    evidenceChecked: [], relatedDecisionIds: [],
+  };
+  const values = { humanRequest: request, progress: [], round: 1,
+    reviewRecovery: { checkpoints: [{ blockedReason: 'recovery_generation_limit' }] }, outcomes: [], openDecisions: [] };
+  const snapshot = { values, next: ['human_input'], tasks: [{ interrupts: [{ value: request }] }] };
+  const updates = [];
+  const resumes = [];
+  const legacyEngine = {
+    graph: {
+      async getState() { return snapshot; },
+      async updateState(_config, patch) {
+        updates.push(patch);
+        Object.assign(values, patch);
+        snapshot.next = ['decide'];
+        snapshot.tasks = [];
+      },
+    },
+    async run() {},
+    async getPause() { return null; },
+    async resume(args) { resumes.push(args); return { status: 'completed', text: 'Technical replanning resumed.' }; },
+  };
+  const db = new Database(':memory:');
+  t.after(() => db.close());
+  const router = new DeliveryEngineRouter({ db, projectId: '0123456789', legacyEngine });
+  await router.runLegacy({ runId: 't-routed-recovery' });
+  const seen = [];
+  await makeLeadExecutor({ orchestrator: router }).execute(pausedContext('t-routed-recovery',
+    { kind: 'human_decision', ...request }, { parts: [{ text: 'Continue' }], metadata: { decisionId: 'stale-decision-id' } }), {
+    publish: (event) => seen.push(event),
+  });
+
+  assert.equal(updates.length, 1);
+  assert.equal(values.humanRequest, null);
+  assert.equal(snapshot.tasks.flatMap((task) => task.interrupts || []).some((entry) => entry.value?.decisionId === decisionId), false);
+  assert.equal(seen[0].kind, 'task');
+  assert.equal(seen[0].data.status.state, TaskState.TASK_STATE_WORKING);
+  assert.equal(seen.some((event) => statusText(event).includes(request.question)), false);
+  assert.equal(resumes.length, 1);
   assert.equal(resumes[0].input.decisionId, undefined);
   assert.equal(lastStatus(seen).status.state, TaskState.TASK_STATE_COMPLETED);
 });
@@ -2263,6 +2313,184 @@ test('a budget pause with auto-switch on switches to another account and resumes
   } finally {
     await runtime.close();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an explicit cancel wins while the legacy budget watcher is blocked in an account switch', async (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const accountsDir = path.join(dir, 'accounts');
+  fs.mkdirSync(accountsDir);
+  const homeA = path.join(accountsDir, 'a');
+  const homeB = path.join(accountsDir, 'b');
+  const blockedLimits = { ordinaryUsageAllowed: false, rateLimits: { rateLimitReachedType: 'rate_limit_reached' }, rateLimitsByLimitId: null };
+  fs.writeFileSync(path.join(accountsDir, 'profiles.json'), JSON.stringify({
+    version: 1,
+    active: 'a',
+    autoSwitch: true,
+    profiles: [{ name: 'a', home: homeA }, { name: 'b', home: homeB }],
+  }));
+
+  let signalSwitchStarted;
+  let releaseSwitch;
+  const switchStarted = new Promise((resolve) => { signalSwitchStarted = resolve; });
+  const switchGate = new Promise((resolve) => { releaseSwitch = resolve; });
+  const resumes = [];
+  const orchestrator = {
+    async run(args) { return { runId: args.runId, status: 'waiting_for_budget', text: '', rounds: 0, assignments: [], pause: BUDGET_PAUSE }; },
+    async getPause() { return BUDGET_PAUSE; },
+    async resume(args) { resumes.push(args); return { runId: args.runId, status: 'completed', text: 'ok', rounds: 1, assignments: [] }; },
+  };
+  const runtime = await startServer({
+    listen: false,
+    stateFile: ':memory:',
+    tokenFile: path.join(dir, 'token'),
+    accountsDir,
+    workspace: dir,
+    appServerFactory: (home) => ({
+      async start() {},
+      async getAccount() { return { account: { type: 'chatgpt' } }; },
+      async readRateLimits() { return home === homeA ? blockedLimits : RATE_LIMITS_OK; },
+      async run() {},
+      async close() {
+        if (home === homeA) {
+          signalSwitchStarted();
+          await switchGate;
+        }
+      },
+      async getVersion() { return null; },
+      async supervisorState() { return null; },
+      async processIdentity() { return null; },
+      async listHooks() { return []; },
+      async hookInventory() { return []; },
+      async listMcpServerNames() { return []; },
+      async mcpInventory() { return []; },
+    }),
+    readProfileLimits: async (home) => home === homeB ? RATE_LIMITS_OK : blockedLimits,
+    orchestratorFactory: () => orchestrator,
+    budgetWatcherOptions: { intervalMs: 20, switchDelayMs: 0, marginMs: 0 },
+  });
+  try {
+    const handler = runtime.leadAgent.requestHandler;
+    const first = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    assert.equal(first.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.equal(first.metadata.pause.kind, 'waiting_for_budget');
+
+    await switchStarted;
+    const canceled = await handler.cancelTask({ id: first.id }, CALL());
+    assert.equal(canceled.status.state, TaskState.TASK_STATE_CANCELED);
+
+    releaseSwitch();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const final = await handler.getTask({ id: first.id }, CALL());
+    assert.equal(final.status.state, TaskState.TASK_STATE_CANCELED);
+    assert.equal(resumes.length, 0, 'a canceled task must not be resumed after the account switch settles');
+  } finally {
+    releaseSwitch();
+    await runtime.close();
+  }
+});
+
+test('an explicit cancel during a legacy account switch stays canceled after server restart', async (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const accountsDir = path.join(dir, 'accounts');
+  fs.mkdirSync(accountsDir);
+  const homeA = path.join(accountsDir, 'a');
+  const homeB = path.join(accountsDir, 'b');
+  const stateFile = path.join(dir, 'state.sqlite');
+  const blockedLimits = { ordinaryUsageAllowed: false, rateLimits: { rateLimitReachedType: 'rate_limit_reached' }, rateLimitsByLimitId: null };
+  fs.writeFileSync(path.join(accountsDir, 'profiles.json'), JSON.stringify({
+    version: 1,
+    active: 'a',
+    autoSwitch: true,
+    profiles: [{ name: 'a', home: homeA }, { name: 'b', home: homeB }],
+  }));
+
+  let signalSwitchStarted;
+  let signalSwitchSettled;
+  let releaseSwitch;
+  const switchStarted = new Promise((resolve) => { signalSwitchStarted = resolve; });
+  const switchSettled = new Promise((resolve) => { signalSwitchSettled = resolve; });
+  const switchGate = new Promise((resolve) => { releaseSwitch = resolve; });
+  let blockedCloseSeen = false;
+  const resumes = [];
+  let runs = 0;
+  const orchestrator = {
+    async run(args) {
+      runs += 1;
+      return { runId: args.runId, status: 'waiting_for_budget', text: '', rounds: 0, assignments: [], pause: BUDGET_PAUSE };
+    },
+    async getPause() { return BUDGET_PAUSE; },
+    async resume(args) { resumes.push(args); return { runId: args.runId, status: 'completed', text: 'ok', rounds: 1, assignments: [] }; },
+  };
+  const appServerFactory = (home) => ({
+    async start() {},
+    async getAccount() { return { account: { type: 'chatgpt' } }; },
+    async readRateLimits() { return home === homeA ? blockedLimits : RATE_LIMITS_OK; },
+    async run() {},
+    async close() {
+      if (home === homeA && !blockedCloseSeen) {
+        blockedCloseSeen = true;
+        signalSwitchStarted();
+        await switchGate;
+        signalSwitchSettled();
+      }
+    },
+    async getVersion() { return null; },
+    async supervisorState() { return null; },
+    async processIdentity() { return null; },
+    async listHooks() { return []; },
+    async hookInventory() { return []; },
+    async listMcpServerNames() { return []; },
+    async mcpInventory() { return []; },
+  });
+  const options = {
+    listen: false,
+    stateFile,
+    tokenFile: path.join(dir, 'token'),
+    accountsDir,
+    workspace: dir,
+    appServerFactory,
+    readProfileLimits: async (home) => home === homeB ? RATE_LIMITS_OK : blockedLimits,
+    orchestratorFactory: () => orchestrator,
+    budgetWatcherOptions: { intervalMs: 20, switchDelayMs: 0, marginMs: 0 },
+  };
+  let runtime = null;
+  let restarted = null;
+  try {
+    runtime = await startServer(options);
+    const handler = runtime.leadAgent.requestHandler;
+    const first = await handler.sendMessage({ message: userMessage('Build it'), configuration: {} }, CALL());
+    assert.equal(first.status.state, TaskState.TASK_STATE_INPUT_REQUIRED);
+    assert.equal(first.metadata.pause.kind, 'waiting_for_budget');
+
+    await switchStarted;
+    const canceled = await handler.cancelTask({ id: first.id }, CALL());
+    assert.equal(canceled.status.state, TaskState.TASK_STATE_CANCELED);
+
+    releaseSwitch();
+    await switchSettled;
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const beforeRestart = await handler.getTask({ id: first.id }, CALL());
+    assert.equal(beforeRestart.status.state, TaskState.TASK_STATE_CANCELED);
+    assert.equal(resumes.length, 0, 'the settled account switch must not resume a canceled task');
+    await runtime.close();
+    runtime = null;
+
+    restarted = await startServer(options);
+    const afterRestart = await restarted.leadAgent.requestHandler.getTask({ id: first.id }, CALL());
+    assert.equal(afterRestart.status.state, TaskState.TASK_STATE_CANCELED);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const afterWatcherInterval = await restarted.leadAgent.requestHandler.getTask({ id: first.id }, CALL());
+    assert.equal(afterWatcherInterval.status.state, TaskState.TASK_STATE_CANCELED);
+    assert.equal(runs, 1, 'restart must not dispatch the canceled task again');
+    assert.equal(resumes.length, 0, 'restart must not resume the canceled task');
+  } finally {
+    releaseSwitch();
+    if (restarted) await restarted.close();
+    if (runtime) await runtime.close();
   }
 });
 

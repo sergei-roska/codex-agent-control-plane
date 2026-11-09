@@ -2,7 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createBudgetWatcher, isBudgetAvailable, parseResetsAt } = require('../src/budget-watcher');
+const { createHash } = require('node:crypto');
+const { createBudgetWatcher, extractBudgetBlockers, isBudgetAvailable, parseResetsAt } = require('../src/budget-watcher');
 
 const MODELS = ['gpt-6-luna', 'gpt-6.1-sol'];
 const T0 = 1_800_000_000_000;
@@ -90,6 +91,76 @@ test('resetsAt accepts epoch seconds, epoch ms and ISO strings', () => {
   assert.equal(parseResetsAt('2027-01-15T08:00:00.000Z'), Date.parse('2027-01-15T08:00:00.000Z'));
   assert.equal(parseResetsAt('nonsense'), null);
   assert.equal(parseResetsAt(null), null);
+});
+
+test('blocker extraction emits generic short and weekly windows with normalized reset hints', () => {
+  const blockers = extractBudgetBlockers({
+    rateLimits: {
+      rateLimitReachedType: 'rate_limit_reached',
+      primary: { resetsAt: 1_800_000_000 },
+      secondary: { resetsAt: '2027-01-15T08:00:00.000Z' },
+    },
+  }, { accountIdHash: `sha256:${'a'.repeat(64)}`, provider: 'codex', models: ['gpt-6-luna'] });
+  assert.deepEqual(blockers, [
+    { accountIdHash: `sha256:${'a'.repeat(64)}`, provider: 'codex', model: 'gpt-6-luna',
+      windowId: 'rate_limit_primary', reasonCode: 'rate_limit_reached', resetsAt: 1_800_000_000_000 },
+    { accountIdHash: `sha256:${'a'.repeat(64)}`, provider: 'codex', model: 'gpt-6-luna',
+      windowId: 'rate_limit_secondary', reasonCode: 'rate_limit_reached', resetsAt: Date.parse('2027-01-15T08:00:00.000Z') },
+  ]);
+});
+
+test('blocker extraction scopes model-specific snapshots and excludes unrelated models', () => {
+  const blockers = extractBudgetBlockers({ rateLimitsByLimitId: {
+    luna: { normalModelSlug: 'gpt-6-luna', rateLimitReachedType: 'limited', primary: { resetsAt: 1800 } },
+    other: { normalModelSlug: 'gpt-other', rateLimitReachedType: 'limited', primary: { resetsAt: 1900 } },
+  } }, { accountIdHash: `sha256:${'b'.repeat(64)}`, provider: 'codex', models: MODELS });
+  assert.deepEqual(blockers.map(({ model, windowId, resetsAt }) => ({ model, windowId, resetsAt })), [
+    { model: 'gpt-6-luna', windowId: `limit_${createHash('sha256').update('luna').digest('hex').slice(0, 24)}_primary`, resetsAt: 1_800_000 },
+  ]);
+});
+
+test('blocker extraction emits a source blocker for explicit no-window and ordinary blocks', () => {
+  assert.deepEqual(extractBudgetBlockers({ rateLimits: { rateLimitReachedType: 'limited' } }, {
+    accountIdHash: `sha256:${'c'.repeat(64)}`, provider: 'codex', models: ['gpt-6-luna'],
+  }).map(({ windowId, reasonCode }) => ({ windowId, reasonCode })), [
+    { windowId: 'rate_limit', reasonCode: 'rate_limit_reached' },
+  ]);
+  assert.deepEqual(extractBudgetBlockers({ ordinaryUsageAllowed: false }, {
+    accountIdHash: `sha256:${'c'.repeat(64)}`, provider: 'codex', models: MODELS,
+  }).map(({ model, windowId, reasonCode }) => ({ model, windowId, reasonCode })), [
+    { model: MODELS[0], windowId: 'ordinary_usage', reasonCode: 'ordinary_usage_blocked' },
+    { model: MODELS[1], windowId: 'ordinary_usage', reasonCode: 'ordinary_usage_blocked' },
+  ]);
+});
+
+test('blocker extraction ignores reset-only, null, ambiguous, and unrelated responses', () => {
+  const options = { accountIdHash: `sha256:${'d'.repeat(64)}`, provider: 'codex', models: MODELS };
+  assert.deepEqual(extractBudgetBlockers({ rateLimits: { primary: { resetsAt: 1800, usedPercent: 100 } } }, options), []);
+  assert.deepEqual(extractBudgetBlockers(null, options), []);
+  assert.deepEqual(extractBudgetBlockers({ ordinaryUsageAllowed: null, rateLimits: { primary: { resetsAt: 1800 } } }, options), []);
+  assert.deepEqual(extractBudgetBlockers({ rateLimitsByLimitId: {
+    other: { normalModelSlug: 'gpt-other', rateLimitReachedType: 'limited' },
+  } }, options), []);
+});
+
+test('blocker extraction validates identity, preserves source windows, and deduplicates exact records', () => {
+  const accountIdHash = `sha256:${'e'.repeat(64)}`;
+  const options = { accountIdHash, provider: 'codex', models: ['gpt-6-luna'] };
+  assert.throws(() => extractBudgetBlockers({ ordinaryUsageAllowed: false }, { ...options, accountIdHash: 'bad' }), /account_hash/);
+  assert.throws(() => extractBudgetBlockers({}, { ...options, provider: 'bad provider' }), /provider/);
+  assert.throws(() => extractBudgetBlockers({}, { ...options, models: ['gpt-6-luna', 'gpt-6-luna'] }), /models/);
+  const response = { rateLimitsByLimitId: {
+    first: { normalModelSlug: 'gpt-6-luna', rateLimitReachedType: 'limited', primary: { resetsAt: 1800 } },
+    second: { normalModelSlug: 'gpt-6-luna', rateLimitReachedType: 'limited', primary: { resetsAt: 1900 } },
+  } };
+  const blockers = extractBudgetBlockers(response, options);
+  assert.deepEqual(blockers, extractBudgetBlockers(response, options));
+  assert.equal(blockers.length, 2);
+  assert.equal(new Set(blockers.map((blocker) => blocker.windowId)).size, 2);
+  assert.ok(blockers.every((blocker) => blocker.windowId.endsWith('_primary')));
+  assert.equal(new Set(blockers.map((blocker) => JSON.stringify([
+    blocker.accountIdHash, blocker.provider, blocker.model, blocker.windowId,
+  ]))).size, blockers.length);
 });
 
 for (const [label, make] of [
