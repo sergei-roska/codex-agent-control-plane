@@ -1,0 +1,14 @@
+# Current state
+
+Live launcher8081; project3d9c2e759c server3002 PID471212 running concurrent-v1. Startup successfully settled prior terminal engineer attempt with preserved history, using original group death and receipt proof. No direct DB edits. No commits.
+
+Root changes: output manifest canonical sort; mirror full-path sort; shared workspace observation uses Git-aware captureManifest instead of scanning ignored .venv; startup reconciles prepared terminal shutdown attempts, accepting only restart-orphaned lanes with prepared evidence and original identity. Bounded cause code now visible on startup errors.
+Baselines in /tmp/harness-repair-baseline (temporary, may disappear).
+Tests: output artifacts13 passed; role45 passed before workspace capture change; subsequent acceptance/role combined62 passed1 failed due changed expected error code, expectation corrected and affected test1 passed; restart recovery1 passed. Immediate/late shutdown and unsafe startup tests passed before latest workspace capture change. Final affected verification pending review.
+
+Fresh actual task1585b714-d6fe-4640-a4d8-883fd471e5fd context5d86db71-b406-43a3-8d95-03d75acfc1e1 paused with path_unsafe from planner. No new worker attempt. Agent planner_path_fix investigating actual output and recovery. Diagnostic request /tmp/harness-repair-request.json, response /tmp/harness-repair-response.json contain only generated task. Required check existing .agents/teamwork/live-lead-recovery/evidence/check-diagnostic.cjs. Do not resume earlier diagnostics with obsolete check contracts.
+Next: obtain planner fix, review and targeted tests; root reloads safely and completes actual acceptance. Do not mark harness fixed until accepted real run.
+
+## Latest live checkpoint
+Server1767311 port3002 running concurrent-v1. Actual task275f8476-4379-49b4-bb06-2b8bcbff6179 objective delivery-e0f037f14a11df53bb4fd0da6f873b6c paused blocked_technical. Engineer succeeded and candidate candidate-attempt-65ad4cd2dcf6c2681d758f20468ad96f published; heartbeat observed beyond30s. Verifier attempt-d5b47aa4f27eb0b79ee386c1feb13b9b claimed but no send intent/execution: normalizeSpecialistRequest rejected inputs>20 because frozen candidate has210 files. planner_path_fix compacted verifier inputs to manifest reference, regression212files running; now assigned safe pre-dispatch claimed/no-intent recovery before root runtime actions. review agent requested independent review. Do not edit live DB or report completion.
+Final affected root tests76 passed; scheduler/controller/executor82 passed; server focused recovery4 passed before final prompt then3 passed after prompt. No commits. Latest response /tmp/harness-repair-response-3.json. Baselines /tmp/harness-repair-baseline and /tmp/task-scheduler.before-lease-renewal.js. Current docs earlier PID/status superseded by this checkpoint.

@@ -1,0 +1,710 @@
+TAP version 13
+# Subtest: publishes distinct role cards and routes each task to its role
+ok 1 - publishes distinct role cards and routes each task to its role
+  ---
+  duration_ms: 32.797212
+  type: 'test'
+  ...
+# Subtest: serves a role Agent Card at its direct route before JSON-RPC middleware
+ok 2 - serves a role Agent Card at its direct route before JSON-RPC middleware
+  ---
+  duration_ms: 5.730777
+  type: 'test'
+  ...
+# Subtest: reports App Server errors and unsupported non-text input as failed tasks
+ok 3 - reports App Server errors and unsupported non-text input as failed tasks
+  ---
+  duration_ms: 5.524818
+  type: 'test'
+  ...
+# Subtest: only a completed Codex status maps to A2A completed
+ok 4 - only a completed Codex status maps to A2A completed
+  ---
+  duration_ms: 14.701786
+  type: 'test'
+  ...
+# Subtest: rejects a second active message for the same task without interrupting the first run
+ok 5 - rejects a second active message for the same task without interrupting the first run
+  ---
+  duration_ms: 4.857988
+  type: 'test'
+  ...
+# Subtest: reserves taskId before SDK task-store awaits and lets only the original request complete
+ok 6 - reserves taskId before SDK task-store awaits and lets only the original request complete
+  ---
+  duration_ms: 4.208961
+  type: 'test'
+  ...
+# Subtest: cancelTask aborts the running Codex request and stores canceled status
+ok 7 - cancelTask aborts the running Codex request and stores canceled status
+  ---
+  duration_ms: 13.436335
+  type: 'test'
+  ...
+# Subtest: cancel publishes exactly one terminal canceled event
+ok 8 - cancel publishes exactly one terminal canceled event
+  ---
+  duration_ms: 5.539001
+  type: 'test'
+  ...
+# Subtest: real A2A SDK client exchanges a role card and task over local HTTP
+ok 9 - real A2A SDK client exchanges a role card and task over local HTTP
+  ---
+  duration_ms: 71.274015
+  type: 'test'
+  ...
+# Subtest: passes the worker report schema and tags the result artifact with contract metadata
+ok 10 - passes the worker report schema and tags the result artifact with contract metadata
+  ---
+  duration_ms: 8.545529
+  type: 'test'
+  ...
+# Subtest: failed status messages carry failureKind and codexErrorInfo metadata
+ok 11 - failed status messages carry failureKind and codexErrorInfo metadata
+  ---
+  duration_ms: 31.463641
+  type: 'test'
+  ...
+# Subtest: maps supervisor_exhausted to its own failureKind with no workspace effects
+ok 12 - maps supervisor_exhausted to its own failureKind with no workspace effects
+  ---
+  duration_ms: 7.98631
+  type: 'test'
+  ...
+# Subtest: marks an active writable worker failure with unknown outcome as interrupted
+ok 13 - marks an active writable worker failure with unknown outcome as interrupted
+  ---
+  duration_ms: 46.992423
+  type: 'test'
+  ...
+# Subtest: uses taskStoreFactory per role and defaults to an in-memory store
+ok 14 - uses taskStoreFactory per role and defaults to an in-memory store
+  ---
+  duration_ms: 4.733929
+  type: 'test'
+  ...
+# Subtest: a second writer on another role waits for the first; a read-only role runs concurrently
+ok 15 - a second writer on another role waits for the first; a read-only role runs concurrently
+  ---
+  duration_ms: 68.681909
+  type: 'test'
+  ...
+# Subtest: writers submitted under two different lead contexts and tasks are serialized workspace-wide
+ok 16 - writers submitted under two different lead contexts and tasks are serialized workspace-wide
+  ---
+  duration_ms: 65.120048
+  type: 'test'
+  ...
+# Subtest: an unknown writer outcome blocks the next writer until the process group is proven gone
+ok 17 - an unknown writer outcome blocks the next writer until the process group is proven gone
+  ---
+  duration_ms: 30.952451
+  type: 'test'
+  ...
+# Subtest: a fenced context is refused without running
+ok 18 - a fenced context is refused without running
+  ---
+  duration_ms: 3.499402
+  type: 'test'
+  ...
+# Subtest: canceling a writer while it waits for admission cancels it without running
+ok 19 - canceling a writer while it waits for admission cancels it without running
+  ---
+  duration_ms: 97.27031
+  type: 'test'
+  ...
+# Subtest: records one worker usage row and attaches usage, permissionEvents, provenance to the artifact
+ok 20 - records one worker usage row and attaches usage, permissionEvents, provenance to the artifact
+  ---
+  duration_ms: 4.740135
+  type: 'test'
+  ...
+# Subtest: a thrown run error still records a row and carries usage on the failure status
+ok 21 - a thrown run error still records a row and carries usage on the failure status
+  ---
+  duration_ms: 4.074615
+  type: 'test'
+  ...
+# Subtest: missing usage is recorded as nulls with token source unavailable; retries count the context
+ok 22 - missing usage is recorded as nulls with token source unavailable; retries count the context
+  ---
+  duration_ms: 4.558664
+  type: 'test'
+  ...
+# Subtest: a ledger failure never changes the task outcome
+ok 23 - a ledger failure never changes the task outcome
+  ---
+  duration_ms: 3.288886
+  type: 'test'
+  ...
+# Subtest: a turn/start rejected by the server (known outcome) releases the writer
+ok 24 - a turn/start rejected by the server (known outcome) releases the writer
+  ---
+  duration_ms: 3.471484
+  type: 'test'
+  ...
+# Subtest: a release() that throws once falls back to unresolved + reconcile instead of leaving the row active
+ok 25 - a release() that throws once falls back to unresolved + reconcile instead of leaving the row active
+  ---
+  duration_ms: 3.631845
+  type: 'test'
+  ...
+# Subtest: a second turn on the same A2A task is recorded under its own turn id
+ok 26 - a second turn on the same A2A task is recorded under its own turn id
+  ---
+  duration_ms: 3.769471
+  type: 'test'
+  ...
+# Subtest: an input error writes one pre-turn row with outcome input_error and turns 0
+ok 27 - an input error writes one pre-turn row with outcome input_error and turns 0
+  ---
+  duration_ms: 3.623529
+  type: 'test'
+  ...
+# Subtest: a fenced writer writes a refused row that counts toward later retries of the context
+ok 28 - a fenced writer writes a refused row that counts toward later retries of the context
+  ---
+  duration_ms: 4.486958
+  type: 'test'
+  ...
+# Subtest: a writer canceled while waiting for admission writes a canceled row; a queued writer records queue wait
+ok 29 - a writer canceled while waiting for admission writes a canceled row; a queued writer records queue wait
+  ---
+  duration_ms: 178.843981
+  type: 'test'
+  ...
+# Subtest: a read-only role records null queue wait and passes startup fields through
+ok 30 - a read-only role records null queue wait and passes startup fields through
+  ---
+  duration_ms: 4.058703
+  type: 'test'
+  ...
+# Subtest: a JSON request with requireAcceptance but no allowedFiles still fails with guarantee_unavailable
+ok 31 - a JSON request with requireAcceptance but no allowedFiles still fails with guarantee_unavailable
+  ---
+  duration_ms: 7.869533
+  type: 'test'
+  ...
+# Subtest: skill pin mismatches are skill_pin_drift; skill shape errors stay skill_invalid
+ok 32 - skill pin mismatches are skill_pin_drift; skill shape errors stay skill_invalid
+  ---
+  duration_ms: 10.339119
+  type: 'test'
+  ...
+# Subtest: structured request failures stop before admission and the model with specific codes
+ok 33 - structured request failures stop before admission and the model with specific codes
+  ---
+  duration_ms: 17.860968
+  type: 'test'
+  ...
+# Subtest: a writer request refused before admission leaves the workspace unheld
+ok 34 - a writer request refused before admission leaves the workspace unheld
+  ---
+  duration_ms: 2.842586
+  type: 'test'
+  ...
+# Subtest: a valid structured writer request whose delta leaves allowedFiles completes with an attested_scope_violation
+ok 35 - a valid structured writer request whose delta leaves allowedFiles completes with an attested_scope_violation
+  ---
+  duration_ms: 4.822977
+  type: 'test'
+  ...
+# Subtest: a structured writer request inside allowedFiles has no violations; an unknown delta is UNKNOWN
+ok 36 - a structured writer request inside allowedFiles has no violations; an unknown delta is UNKNOWN
+  ---
+  duration_ms: 9.331388
+  type: 'test'
+  ...
+# Subtest: an invalid report drops the contract label and records report_invalid
+ok 37 - an invalid report drops the contract label and records report_invalid
+  ---
+  duration_ms: 3.055232
+  type: 'test'
+  ...
+# Subtest: legacy plain text keeps running with boundary legacy and no predicate records
+ok 38 - legacy plain text keeps running with boundary legacy and no predicate records
+  ---
+  duration_ms: 4.225595
+  type: 'test'
+  ...
+# Subtest: records live activity for a worker turn and ends it on success and error
+ok 39 - records live activity for a worker turn and ends it on success and error
+  ---
+  duration_ms: 8.113995
+  type: 'test'
+  ...
+# Subtest: ends the live activity of a canceled worker turn
+ok 40 - ends the live activity of a canceled worker turn
+  ---
+  duration_ms: 3.919114
+  type: 'test'
+  ...
+# Subtest: effective roles with a project override reach appServer.run and the base roles stay untouched
+ok 41 - effective roles with a project override reach appServer.run and the base roles stay untouched
+  ---
+  duration_ms: 8.90477
+  type: 'test'
+  ...
+# Subtest: auditor refuses plain text and missing or routine review context before model execution
+ok 42 - auditor refuses plain text and missing or routine review context before model execution
+  ---
+  duration_ms: 7.962468
+  type: 'test'
+  ...
+# Subtest: auditor accepts a stable scoped owner review; investigation and pinned checks preserve their distinct semantics
+ok 43 - auditor accepts a stable scoped owner review; investigation and pinned checks preserve their distinct semantics
+  ---
+  duration_ms: 207.628485
+  type: 'test'
+  ...
+# Subtest: auditor report contract keeps supplemental and reused evidence separate from required checks
+ok 44 - auditor report contract keeps supplemental and reused evidence separate from required checks
+  ---
+  duration_ms: 146.764922
+  type: 'test'
+  ...
+# Subtest: auditor runtime rejects an embellished verdict line and inconclusive evidence
+ok 45 - auditor runtime rejects an embellished verdict line and inconclusive evidence
+  ---
+  duration_ms: 89.494662
+  type: 'test'
+  ...
+# Subtest: auditor rejects escaped targets and a scope changed during the read-only turn
+ok 46 - auditor rejects escaped targets and a scope changed during the read-only turn
+  ---
+  duration_ms: 29.426949
+  type: 'test'
+  ...
+# Subtest: exclusive auditor reservation blocks an attempted change-and-restore during the review turn
+ok 47 - exclusive auditor reservation blocks an attempted change-and-restore during the review turn
+  ---
+  duration_ms: 27.842741
+  type: 'test'
+  ...
+# Subtest: auditor continuations require a known unchanged originating review target
+ok 48 - auditor continuations require a known unchanged originating review target
+  ---
+  duration_ms: 48.704719
+  type: 'test'
+  ...
+# Subtest: direct review continuations bind thread lane and codex home to their origin attempt
+not ok 49 - direct review continuations bind thread lane and codex home to their origin attempt
+  ---
+  duration_ms: 30.021165
+  type: 'test'
+  location: '/home/sr/Projects/Workspace/codex-agent-control-plane/test/a2a-role-service.test.js:1416:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      {
+        codexHome: 'home-A',
+        laneId: null,
+    +   mcpToolPins: [],
+        threadId: 'thread-2'
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    threadId: 'thread-2'
+    laneId: ~
+    codexHome: 'home-A'
+  actual:
+    threadId: 'thread-2'
+    laneId: ~
+    codexHome: 'home-A'
+    mcpToolPins:
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/a2a-role-service.test.js:1448:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: direct review resumable context distinguishes unknown bindings from proven tuple mismatches
+ok 50 - direct review resumable context distinguishes unknown bindings from proven tuple mismatches
+  ---
+  duration_ms: 225.810237
+  type: 'test'
+  ...
+# Subtest: auditor continuations fail closed for missing, other-run, corrupt, and ambiguous origins
+ok 51 - auditor continuations fail closed for missing, other-run, corrupt, and ambiguous origins
+  ---
+  duration_ms: 93.424379
+  type: 'test'
+  ...
+# Subtest: direct verifier continuation requires its originating target and preserves same-target control
+not ok 52 - direct verifier continuation requires its originating target and preserves same-target control
+  ---
+  duration_ms: 7.845975
+  type: 'test'
+  location: '/home/sr/Projects/Workspace/codex-agent-control-plane/test/a2a-role-service.test.js:1610:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    same-target verifier continuation reaches the injected App Server boundary
+    
+    1 !== 2
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 2
+  actual: 1
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/a2a-role-service.test.js:1689:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: direct verifier continuation fails closed for missing, cross-run, corrupt, and ambiguous origins
+ok 53 - direct verifier continuation fails closed for missing, cross-run, corrupt, and ambiguous origins
+  ---
+  duration_ms: 56.376748
+  type: 'test'
+  ...
+# Subtest: successful audit events retain checkpoint correlation without creating problem entries
+ok 54 - successful audit events retain checkpoint correlation without creating problem entries
+  ---
+  duration_ms: 53.007841
+  type: 'test'
+  ...
+# Subtest: pinned-check fallback continuations fail closed when origin evidence is missing
+ok 55 - pinned-check fallback continuations fail closed when origin evidence is missing
+  ---
+  duration_ms: 3.414994
+  type: 'test'
+  ...
+# Subtest: pinned-check fallback continuation accepts a known unchanged origin
+ok 56 - pinned-check fallback continuation accepts a known unchanged origin
+  ---
+  duration_ms: 30.356716
+  type: 'test'
+  ...
+# Subtest: verifier binds coverage to the post-verification target after an authorized test-file write
+ok 57 - verifier binds coverage to the post-verification target after an authorized test-file write
+  ---
+  duration_ms: 6.084231
+  type: 'test'
+  ...
+# Subtest: a writable verifier accepts a collected empty lane only with stable scope coverage
+ok 58 - a writable verifier accepts a collected empty lane only with stable scope coverage
+  ---
+  duration_ms: 4.053955
+  type: 'test'
+  ...
+# Subtest: pinned-check fallback reviewer holds the workspace exclusively while ordinary explorer remains concurrent
+ok 59 - pinned-check fallback reviewer holds the workspace exclusively while ordinary explorer remains concurrent
+  ---
+  duration_ms: 5.712377
+  type: 'test'
+  ...
+# Subtest: pinned-check fallback exposes reservation refusal as unknown coverage
+ok 60 - pinned-check fallback exposes reservation refusal as unknown coverage
+  ---
+  duration_ms: 3.57959
+  type: 'test'
+  ...
+# Subtest: canceling an auditor turn reconciles and releases its exclusive reservation
+ok 61 - canceling an auditor turn reconciles and releases its exclusive reservation
+  ---
+  duration_ms: 4.932685
+  type: 'test'
+  ...
+# Subtest: auditor refuses an active writer and required staging log failures cannot accept a review
+ok 62 - auditor refuses an active writer and required staging log failures cannot accept a review
+  ---
+  duration_ms: 9.179832
+  type: 'test'
+  ...
+# Subtest: staging events correlate direct audits and store bounded redacted report summaries
+ok 63 - staging events correlate direct audits and store bounded redacted report summaries
+  ---
+  duration_ms: 115.266985
+  type: 'test'
+  ...
+# Subtest: non-auditor direct calls retain plain-text support and emit best-effort role telemetry
+ok 64 - non-auditor direct calls retain plain-text support and emit best-effort role telemetry
+  ---
+  duration_ms: 3.989502
+  type: 'test'
+  ...
+# Subtest: forwards the App Server surface to the current instance
+ok 65 - forwards the App Server surface to the current instance
+  ---
+  duration_ms: 2.980467
+  type: 'test'
+  ...
+# Subtest: no switch while a run is in flight; the next run after it switches
+ok 66 - no switch while a run is in flight; the next run after it switches
+  ---
+  duration_ms: 3.226443
+  type: 'test'
+  ...
+# Subtest: an in-flight execCommand also blocks the swap
+ok 67 - an in-flight execCommand also blocks the swap
+  ---
+  duration_ms: 0.746126
+  type: 'test'
+  ...
+# Subtest: two concurrent starts after a switch create one new instance
+ok 68 - two concurrent starts after a switch create one new instance
+  ---
+  duration_ms: 0.463275
+  type: 'test'
+  ...
+# Subtest: switchTo returns busy, switched and already_active
+ok 69 - switchTo returns busy, switched and already_active
+  ---
+  duration_ms: 0.933986
+  type: 'test'
+  ...
+# Subtest: close closes the current instance
+ok 70 - close closes the current instance
+  ---
+  duration_ms: 0.410094
+  type: 'test'
+  ...
+# Subtest: parseProcStat handles parentheses and spaces in the command name
+ok 71 - parseProcStat handles parentheses and spaces in the command name
+  ---
+  duration_ms: 2.117946
+  type: 'test'
+  ...
+# Subtest: readProcessIdentity reads pgid and start time of a detached child
+ok 72 - readProcessIdentity reads pgid and start time of a detached child
+  ---
+  duration_ms: 5.628857
+  type: 'test'
+  ...
+# Subtest: readProcessIdentity falls back for an unreadable pid
+ok 73 - readProcessIdentity falls back for an unreadable pid
+  ---
+  duration_ms: 0.302419
+  type: 'test'
+  ...
+# Subtest: isProcessGroupGone is false while alive and true after the group dies
+ok 74 - isProcessGroupGone is false while alive and true after the group dies
+  ---
+  duration_ms: 8.075606
+  type: 'test'
+  ...
+# Subtest: a grandchild keeps the group alive after the leader dies; orphan kill refuses (fail closed)
+ok 75 - a grandchild keeps the group alive after the leader dies; orphan kill refuses (fail closed)
+  ---
+  duration_ms: 70.540626
+  type: 'test'
+  ...
+# Subtest: killOrphanProcessGroup refuses a group led by our own child
+ok 76 - killOrphanProcessGroup refuses a group led by our own child
+  ---
+  duration_ms: 2.399767
+  type: 'test'
+  ...
+# Subtest: a wrong start time proves the group gone and is never killed
+ok 77 - a wrong start time proves the group gone and is never killed
+  ---
+  duration_ms: 1.725372
+  type: 'test'
+  ...
+# Subtest: killOrphanProcessGroup never kills a live leader with unknown start time
+ok 78 - killOrphanProcessGroup never kills a live leader with unknown start time
+  ---
+  duration_ms: 1.455916
+  type: 'test'
+  ...
+# Subtest: EPERM is treated conservatively as not gone
+ok 79 - EPERM is treated conservatively as not gone
+  ---
+  duration_ms: 0.139915
+  type: 'test'
+  ...
+# Subtest: isProcessGroupGone is unproven (false) for pgid <= 1 or non-integer
+ok 80 - isProcessGroupGone is unproven (false) for pgid <= 1 or non-integer
+  ---
+  duration_ms: 0.287456
+  type: 'test'
+  ...
+# Subtest: killOrphanProcessGroup requires pgid === pid and pgid > 1
+ok 81 - killOrphanProcessGroup requires pgid === pid and pgid > 1
+  ---
+  duration_ms: 0.215799
+  type: 'test'
+  ...
+# Subtest: killOrphanProcessGroup never kills when /proc is unreadable
+ok 82 - killOrphanProcessGroup never kills when /proc is unreadable
+  ---
+  duration_ms: 0.287121
+  type: 'test'
+  ...
+# Subtest: PGID reuse: leader alive with another start time is not signaled and the group counts as gone
+ok 83 - PGID reuse: leader alive with another start time is not signaled and the group counts as gone
+  ---
+  duration_ms: 0.393434
+  type: 'test'
+  ...
+# Subtest: leader dead but group answers: no signal
+ok 84 - leader dead but group answers: no signal
+  ---
+  duration_ms: 0.292129
+  type: 'test'
+  ...
+# Subtest: killOrphanProcessGroup signals only a live leader with the matching start time
+ok 85 - killOrphanProcessGroup signals only a live leader with the matching start time
+  ---
+  duration_ms: 0.206472
+  type: 'test'
+  ...
+# Subtest: createBase captures modification, deletion, untracked; skips ignored
+ok 86 - createBase captures modification, deletion, untracked; skips ignored
+  ---
+  duration_ms: 77.457016
+  type: 'test'
+  ...
+# Subtest: shared repo index, HEAD, refs, stash and config are untouched by every operation
+ok 87 - shared repo index, HEAD, refs, stash and config are untouched by every operation
+  ---
+  duration_ms: 163.184896
+  type: 'test'
+  ...
+# Subtest: two lanes from one base: binary file, delete and new file, both apply in sequence
+ok 88 - two lanes from one base: binary file, delete and new file, both apply in sequence
+  ---
+  duration_ms: 198.744917
+  type: 'test'
+  ...
+# Subtest: a lane edit of a file the shared tree changed meanwhile is a conflict and leaves the tree byte-identical
+ok 89 - a lane edit of a file the shared tree changed meanwhile is a conflict and leaves the tree byte-identical
+  ---
+  duration_ms: 134.945278
+  type: 'test'
+  ...
+# Subtest: a new file that already exists in the shared tree is reported as a conflict path
+ok 90 - a new file that already exists in the shared tree is reported as a conflict path
+  ---
+  duration_ms: 104.391354
+  type: 'test'
+  ...
+# Subtest: a patch applies when the shared tree differs from the base only in unrelated files
+ok 91 - a patch applies when the shared tree differs from the base only in unrelated files
+  ---
+  duration_ms: 104.121558
+  type: 'test'
+  ...
+# Subtest: an empty patch applies without git
+ok 92 - an empty patch applies without git
+  ---
+  duration_ms: 0.693301
+  type: 'test'
+  ...
+# Subtest: ignored .venv is symlinked into the lane and never shows up in collectPatch
+ok 93 - ignored .venv is symlinked into the lane and never shows up in collectPatch
+  ---
+  duration_ms: 107.977239
+  type: 'test'
+  ...
+# Subtest: executable bit change and a file name with spaces round-trip
+ok 94 - executable bit change and a file name with spaces round-trip
+  ---
+  duration_ms: 101.05612
+  type: 'test'
+  ...
+# Subtest: an unborn HEAD repository works end to end
+ok 95 - an unborn HEAD repository works end to end
+  ---
+  duration_ms: 102.830829
+  type: 'test'
+  ...
+# Subtest: a workspace in a subdirectory gets the right prefix and workspacePath
+ok 96 - a workspace in a subdirectory gets the right prefix and workspacePath
+  ---
+  duration_ms: 135.689328
+  type: 'test'
+  ...
+# Subtest: removeLane of a vanished lane deletes only its admin dir and leaves other worktrees alone
+ok 97 - removeLane of a vanished lane deletes only its admin dir and leaves other worktrees alone
+  ---
+  duration_ms: 183.778945
+  type: 'test'
+  ...
+# Subtest: inspectRepo rejects a non-git directory and a repo with submodules
+ok 98 - inspectRepo rejects a non-git directory and a repo with submodules
+  ---
+  duration_ms: 64.03151
+  type: 'test'
+  ...
+# \# timing ms: createBase=54 addLane=56 collectPatch=46 applyPatch=21 total=177
+# Subtest: timing: createBase + addLane + collectPatch + applyPatch on ~1000 files
+ok 99 - timing: createBase + addLane + collectPatch + applyPatch on ~1000 files
+  ---
+  duration_ms: 364.22017
+  type: 'test'
+  ...
+# Subtest: hooks and fsmonitor configured in the repo are never run by any module call
+ok 100 - hooks and fsmonitor configured in the repo are never run by any module call
+  ---
+  duration_ms: 143.013177
+  type: 'test'
+  ...
+# Subtest: a nested .git directory or file is refused
+ok 101 - a nested .git directory or file is refused
+  ---
+  duration_ms: 119.259578
+  type: 'test'
+  ...
+# Subtest: a nested repository staged as a gitlink is refused at the index level
+ok 102 - a nested repository staged as a gitlink is refused at the index level
+  ---
+  duration_ms: 115.606932
+  type: 'test'
+  ...
+# Subtest: ignored directories are not inspected; the same content in a tracked-visible dir is refused
+ok 103 - ignored directories are not inspected; the same content in a tracked-visible dir is refused
+  ---
+  duration_ms: 159.836242
+  type: 'test'
+  ...
+# Subtest: absolute and escaping symlinks are refused, in-tree relative ones allowed
+ok 104 - absolute and escaping symlinks are refused, in-tree relative ones allowed
+  ---
+  duration_ms: 138.58373
+  type: 'test'
+  ...
+# Subtest: the linked env dir is skipped by the safety scan when excluded
+ok 105 - the linked env dir is skipped by the safety scan when excluded
+  ---
+  duration_ms: 85.379875
+  type: 'test'
+  ...
+# Subtest: a rewritten lane .git pointer cannot redirect git; the admin dir comes from the shared repo
+ok 106 - a rewritten lane .git pointer cannot redirect git; the admin dir comes from the shared repo
+  ---
+  duration_ms: 101.027708
+  type: 'test'
+  ...
+# Subtest: renames show as delete plus add
+ok 107 - renames show as delete plus add
+  ---
+  duration_ms: 80.27659
+  type: 'test'
+  ...
+# Subtest: detached apply reports its pid through onSpawn and applies
+ok 108 - detached apply reports its pid through onSpawn and applies
+  ---
+  duration_ms: 98.510431
+  type: 'test'
+  ...
+# Subtest: a non-zero apply exit after a passing check is reported as partial
+ok 109 - a non-zero apply exit after a passing check is reported as partial
+  ---
+  duration_ms: 87.349156
+  type: 'test'
+  ...
+1..109
+# tests 109
+# suites 0
+# pass 107
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3042.248279

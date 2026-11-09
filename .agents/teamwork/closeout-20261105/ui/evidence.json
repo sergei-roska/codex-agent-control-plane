@@ -1,0 +1,33 @@
+{
+  "capturedAt": "2026-11-05T14:17:53Z",
+  "before": {
+    "launcher8082": "absent",
+    "project3002": "absent",
+    "projectStatus": "stopped",
+    "readiness": "stopped",
+    "taskReady": false,
+    "runtimeCodexHome": "absent"
+  },
+  "attempts": [
+    {
+      "result": "failed",
+      "reason": "Configured private CODEX_HOME did not exist; project process exited before readiness.",
+      "evidence": "status-after-start.json"
+    },
+    {
+      "result": "ready",
+      "runtime": "/home/sr/codex-work/harness-ui-runtime-20261104",
+      "credentialHandling": "Private copy of existing auth/config/installation files; source files and global settings untouched."
+    }
+  ],
+  "after": {
+    "launcher": {"url": "http://127.0.0.1:8082/", "pid": 1301491, "process": "node launcher.js"},
+    "project": {"id": "88ae4d8dfe", "workspace": "/home/sr/Projects/Workspace/harness-ready-20261104", "port": 3002, "pid": 1336040, "status": "running", "readiness": "ready", "taskReady": true, "deliveryEngine": "concurrent-v1"},
+    "privateRuntimeSettings": {"approval_policy": "never", "default_permissions": ":danger-full-access", "workspaceTrust": "trusted", "workspaceTrustPath": "/home/sr/Projects/Workspace/harness-ready-20261104", "authMode": "private copy of existing account auth", "modelTurns": 0},
+    "startupNote": "The launcher source checkout .codex is intentionally untrusted in this isolated CODEX_HOME; its project-local config/hooks/exec policies are disabled.",
+    "http": {"uiRoot": 200, "css": 200, "js": 200, "projectAgentCard": 200},
+    "listeners": ["127.0.0.1:8082", "127.0.0.1:3002"],
+    "projectGitStatus": "clean"
+  },
+  "files": ["status-after-start.json", "status-final.json", "start-response.json", "start-response-2.json", "agent-card.json", "launcher.log", "handoff.md"]
+}

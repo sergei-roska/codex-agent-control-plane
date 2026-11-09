@@ -1,0 +1,11 @@
+{
+  "missing": [],
+  "changed": [
+    "src/task-scheduler.js",
+    "test/task-scheduler.test.js"
+  ],
+  "scheduler": {
+    "src/task-scheduler.js": "1c3a434795a1118028d6e95249806b563ddb29a7afc22d6e4f6b5c345cf2d3f4",
+    "test/task-scheduler.test.js": "7f9b81de5223c118634cf367cd497552b9f5c88c40fd5b7cfa8d72e9a618e59a"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "taskId": "1953bdb5-2031-4468-b63f-52e22678ac50",
+  "status": "accepted",
+  "candidateId": "candidate-base-baf7bd177399eb3aed6e4c53",
+  "manifestDigest": "055d0689d8cacf79fc12358da6454b5fe253891cbf7e8c9e114743fe1f2a19fb",
+  "verifierChecks": [
+    "dccourts-182-composer-project-validate",
+    "dccourts-182-composer-relock",
+    "dccourts-182-upstream-kernel"
+  ],
+  "finalChecks": [
+    "dccourts-182-composer-project-validate",
+    "dccourts-182-composer-relock",
+    "dccourts-182-upstream-kernel"
+  ],
+  "shutdown": "released",
+  "databaseBackup": {
+    "path": "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/runner/1953bdb5-2031-4468-b63f-52e22678ac50.state.sqlite",
+    "sha256": "bf52b14265e08a48153b535e46fe92f4e016cf039a5f999335491ee790794428",
+    "bytes": 3567616
+  },
+  "finalPatchSha256": "ebb982adb8f5042b549bc35f79e521939088315c5e30107f1bd384a8fb3fa32f",
+  "scope": "Staged candidate completion followed by fresh native verification, not uninterrupted autonomous replay."
+}

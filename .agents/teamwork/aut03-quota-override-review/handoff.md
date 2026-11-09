@@ -1,0 +1,9 @@
+# Handoff: AUT-03 quota-policy review
+
+Status: APPROVE. Static read-only protocol review completed. No task, test, service, model call, or trial gate change was made.
+
+Read: `docs/evidence/aut-03/paired-trial-declaration.md:3,19,21,86` and `docs/evidence/aut-03/trial-entry.json:107,153,352-361` consistently record the owner's supersession of displayed primary/weekly percentage stops. Percentages remain evidence; an explicit provider quota-exhausted response stops the cohort with no retry or account switch. Older threshold-triggered deferral and stop observations remain historical records. The original worker-dispatch deviation and both revised-cohort-1 outputs remain excluded.
+
+Read: `docs/evidence/aut-03/trial-server.js:112-150` injects one direct App Server pinned to `/home/sr/.codex`, verifies the ChatGPT Team plan, disables account switching, sets `autoResume: false`, and clears worker roles. `src/contracts.js:1029-1041` classifies explicit usage-limit responses; `src/lead-graph.js:2649-2653,3854-3864` parks the run on such a response; `src/server.js:797-818` omits the budget watcher when autoResume is false. The unchanged helper still caps turn/start submissions at three and enforces the existing thread tool policy. The declaration retains 240 seconds per task, 500000 measured tokens per task, 4000000 per cohort, empty read-only workspace, and no-command/no-dispatch controls.
+
+Ran (read-only static): current declaration SHA-256 `f16e036c08bce2b799bf81c27a932488176e5b46ffb176ee521410c814d882c6`, cap review, prompt manifest, and runtime pin hashes match `trial-entry.json`; all 141 source, 2 binary, 2 helper, 16 input, 4 prompt-text, and 2 settings hashes match. `s0.baselineCaptureAllowed=false`; all `trialGateOpened` and `trialTaskStarted` fields in deferredStart, quotaStopObservation, and ownerOverride are false. No blocker found.

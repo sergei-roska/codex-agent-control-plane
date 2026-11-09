@@ -1,0 +1,37 @@
+diff --git a/composer.json b/composer.json
+index 2685433be..17859ed7e 100644
+--- a/composer.json
++++ b/composer.json
+@@ -219,6 +219,9 @@
+       "drupal/select2": {
+         "https://www.drupal.org/project/select2/issues/3484551": "https://www.drupal.org/files/issues/2024-10-30/bef-pager-3484551-0_0.patch"
+       },
++      "drupal/shs": {
++        "Preselect stored values and preserve valid references": "patches/shs-3620147-preselect-stored-values.patch"
++      },
+       "drupal/better_exposed_filters": {
+         "https://www.drupal.org/project/i/3291146": "https://www.drupal.org/files/issues/2024-07-24/better_exposed_filters-undefined_array_key-3291146-20.patch"
+       },
+diff --git a/patches.lock.json b/patches.lock.json
+index e81fec89c..39ec320f0 100644
+--- a/patches.lock.json
++++ b/patches.lock.json
+@@ -98,6 +98,18 @@
+                 }
+             }
+         ],
++        "drupal/shs": [
++            {
++                "package": "drupal/shs",
++                "description": "Preselect stored values and preserve valid references",
++                "url": "patches/shs-3620147-preselect-stored-values.patch",
++                "sha256": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
++                "depth": 1,
++                "extra": {
++                    "provenance": "root"
++                }
++            }
++        ],
+         "drupal/better_exposed_filters": [
+             {
+                 "package": "drupal/better_exposed_filters",

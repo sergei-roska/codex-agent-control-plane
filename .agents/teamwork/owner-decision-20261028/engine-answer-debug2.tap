@@ -1,0 +1,21 @@
+TAP version 13
+# Subtest: owner decision real engine answer retains mandatory acceptance and authenticated controls
+not ok 1 - owner decision real engine answer retains mandatory acceptance and authenticated controls
+  ---
+  duration_ms: 38.818292
+  type: 'test'
+  location: '/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:1443:70'
+  failureType: 'testCodeFailure'
+  error: 'delivery_role_description_required'
+  code: 'delivery_role_description_required'
+  stack: |-
+    error (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:34:55)
+    DeliveryRoleService.register (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:741:72)
+    ConcurrentDeliveryEngine.register (/home/sr/Projects/Workspace/codex-agent-control-plane/src/concurrent-delivery-engine.js:251:43)
+    createHarness (/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:116:10)
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:1482:14)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+# Interrupted while running: test/concurrent-delivery-engine.test.js at /home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:1:1

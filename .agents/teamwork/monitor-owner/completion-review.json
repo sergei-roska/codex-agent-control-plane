@@ -1,0 +1,19 @@
+{
+  "kind": "risk_change",
+  "checkpointId": "m4-t312e1c2b2a-completion-authority",
+  "reason": "Turn-aware completion fences execution leases against delayed or misbound results. Require independent verification followed by an authority audit before dependent recovery and quota transitions.",
+  "paths": [
+    "src/teamwork/state/execution_control.py",
+    "tests/state/test_execution_control.py"
+  ],
+  "evidenceIds": [
+    "a125b4c6-f640-45ae-a106-22f97837f8e9:r137:a0",
+    "a125b4c6-f640-45ae-a106-22f97837f8e9:r134:a0"
+  ],
+  "prerequisiteFor": [
+    "m4-r20-integrated-authority-persistence",
+    "m4-t312d2-lifecycle-authority",
+    "m4-t312e1-dispatch-stop-evidence",
+    "m4-t312e1c2b1-first-turn-authority"
+  ]
+}

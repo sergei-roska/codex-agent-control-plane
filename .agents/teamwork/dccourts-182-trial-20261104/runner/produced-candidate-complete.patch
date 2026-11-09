@@ -1,0 +1,349 @@
+diff --git a/composer.json b/composer.json
+index 2685433be..17859ed7e 100644
+--- a/composer.json
++++ b/composer.json
+@@ -219,6 +219,9 @@
+       "drupal/select2": {
+         "https://www.drupal.org/project/select2/issues/3484551": "https://www.drupal.org/files/issues/2024-10-30/bef-pager-3484551-0_0.patch"
+       },
++      "drupal/shs": {
++        "Preselect stored values and preserve valid references": "patches/shs-3620147-preselect-stored-values.patch"
++      },
+       "drupal/better_exposed_filters": {
+         "https://www.drupal.org/project/i/3291146": "https://www.drupal.org/files/issues/2024-07-24/better_exposed_filters-undefined_array_key-3291146-20.patch"
+       },
+diff --git a/patches.lock.json b/patches.lock.json
+index e81fec89c..e599fdc88 100644
+--- a/patches.lock.json
++++ b/patches.lock.json
+@@ -1,5 +1,5 @@
+ {
+-    "_hash": "fee4166f27e9a764b2b196f42055de4c3ee8202edd8352146f29443b5a4b8378",
++    "_hash": "dfc37cfe6cd7e4cdd678e03a170003d2398cea74c9e5967cae5244b0c203869d",
+     "patches": {
+         "drupal/core": [
+             {
+@@ -98,6 +98,18 @@
+                 }
+             }
+         ],
++        "drupal/shs": [
++            {
++                "package": "drupal/shs",
++                "description": "Preselect stored values and preserve valid references",
++                "url": "patches/shs-3620147-preselect-stored-values.patch",
++                "sha256": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
++                "depth": 1,
++                "extra": {
++                    "provenance": "root"
++                }
++            }
++        ],
+         "drupal/better_exposed_filters": [
+             {
+                 "package": "drupal/better_exposed_filters",
+diff --git a/patches/shs-3620147-preselect-stored-values.patch b/patches/shs-3620147-preselect-stored-values.patch
+new file mode 100644
+index 000000000..7034c004d
+--- /dev/null
++++ b/patches/shs-3620147-preselect-stored-values.patch
+@@ -0,0 +1,299 @@
++diff --git a/src/Plugin/Field/FieldWidget/OptionsShsWidget.php b/src/Plugin/Field/FieldWidget/OptionsShsWidget.php
++index 45ada6282a39c06742a5b59b12a9b45e3ef615b2..e5be53c5fc850a2c7db475dbdbf946b7d78a6a0b 100644
++--- a/src/Plugin/Field/FieldWidget/OptionsShsWidget.php
+++++ b/src/Plugin/Field/FieldWidget/OptionsShsWidget.php
++@@ -4,6 +4,7 @@ namespace Drupal\shs\Plugin\Field\FieldWidget;
++ 
++ use Drupal\Component\Utility\Html;
++ use Drupal\Component\Utility\NestedArray;
+++use Drupal\Core\Entity\EntityTypeManagerInterface;
++ use Drupal\Core\Entity\FieldableEntityInterface;
++ use Drupal\Core\Field\FieldDefinitionInterface;
++ use Drupal\Core\Field\FieldItemListInterface;
++@@ -52,8 +53,10 @@ class OptionsShsWidget extends OptionsSelectWidget implements ContainerFactoryPl
++    *   Third party settings.
++    * @param \Drupal\shs\WidgetDefaults $widget_defaults
++    *   The widget defaults SHS service.
+++   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
+++   *   The entity_type.manager service.
++    */
++-  public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, array $third_party_settings, WidgetDefaults $widget_defaults) {
+++  public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, array $third_party_settings, WidgetDefaults $widget_defaults, protected EntityTypeManagerInterface $entityTypeManager) {
++     parent::__construct($plugin_id, $plugin_definition, $field_definition, $settings, $third_party_settings);
++ 
++     $this->widgetDefaults = $widget_defaults;
++@@ -71,7 +74,8 @@ class OptionsShsWidget extends OptionsSelectWidget implements ContainerFactoryPl
++       $configuration['field_definition'],
++       $configuration['settings'],
++       $configuration['third_party_settings'],
++-      $container->get('shs.widget_defaults')
+++      $container->get('shs.widget_defaults'),
+++      $container->get('entity_type.manager'),
++     );
++   }
++ 
++@@ -398,4 +402,42 @@ class OptionsShsWidget extends OptionsSelectWidget implements ContainerFactoryPl
++     return $this->options = [];
++   }
++ 
+++  /**
+++   * {@inheritDoc}
+++   */
+++  protected function getSelectedOptions(FieldItemListInterface $items): array {
+++    // ::getOptions() deliberately returns an empty list because the options are
+++    // loaded via AJAX once the widget initializes in the browser. The parent
+++    // implementation validates every stored value against that list, so it
+++    // would discard all of them and the widget would render empty on edit
+++    // forms.
+++    //
+++    // Values referencing an entity that no longer exists still have to be
+++    // dropped. Keeping them makes the reference constraint reject the save
+++    // ("The referenced entity (taxonomy_term: X) does not exist."), so the
+++    // entity can no longer be saved at all. That is the bug #3359851 fixed by
+++    // removing this override, and testEditNodeWithDeletedTerm covers it.
+++    //
+++    // Load only the referenced entities, never the full option list, so the
+++    // memory saving from #3517342 is preserved. formElement() loads the same
+++    // entities again to build the parent chain, so that reuses them from the
+++    // static cache instead of querying the database a second time.
+++    $selected_options = [];
+++    foreach ($items as $item) {
+++      $value = $item->{$this->column};
+++      if ($value !== NULL) {
+++        $selected_options[] = $value;
+++      }
+++    }
+++    if (empty($selected_options)) {
+++      return [];
+++    }
+++
+++    $existing = $this->entityTypeManager
+++      ->getStorage($this->getFieldSetting('target_type'))
+++      ->loadMultiple($selected_options);
+++
+++    return array_values(array_filter($selected_options, static fn ($id): bool => isset($existing[$id])));
+++  }
+++
++ }
++diff --git a/tests/src/Kernel/OptionsShsWidgetDefaultValueTest.php b/tests/src/Kernel/OptionsShsWidgetDefaultValueTest.php
++new file mode 100644
++index 0000000000000000000000000000000000000000..1ccd93db9b52d8058a04c95ee4492d6d6a109b3a
++--- /dev/null
+++++ b/tests/src/Kernel/OptionsShsWidgetDefaultValueTest.php
++@@ -0,0 +1,216 @@
+++<?php
+++
+++declare(strict_types=1);
+++
+++namespace Drupal\Tests\shs\Kernel;
+++
+++use Drupal\Core\Entity\Entity\EntityFormDisplay;
+++use Drupal\Core\Field\FieldStorageDefinitionInterface;
+++use Drupal\Core\Form\FormState;
+++use Drupal\KernelTests\KernelTestBase;
+++use PHPUnit\Framework\Attributes\Group;
+++use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
+++use Drupal\entity_test\Entity\EntityTest;
+++use Drupal\field\Entity\FieldConfig;
+++use Drupal\field\Entity\FieldStorageConfig;
+++use Drupal\taxonomy\Entity\Term;
+++use Drupal\taxonomy\Entity\Vocabulary;
+++
+++/**
+++ * Tests that the widget preselects the values already stored on the entity.
+++ *
+++ * @see \Drupal\shs\Plugin\Field\FieldWidget\OptionsShsWidget
+++ */
+++#[Group('shs')]
+++#[RunTestsInSeparateProcesses]
+++class OptionsShsWidgetDefaultValueTest extends KernelTestBase {
+++
+++  /**
+++   * The name of the entity reference field under test.
+++   */
+++  protected const FIELD_NAME = 'field_shs_terms';
+++
+++  /**
+++   * {@inheritdoc}
+++   */
+++  protected static $modules = [
+++    'system',
+++    'user',
+++    'field',
+++    'text',
+++    'filter',
+++    'taxonomy',
+++    'entity_test',
+++    'shs',
+++  ];
+++
+++  /**
+++   * The terms available in the vocabulary, keyed by delta.
+++   *
+++   * @var \Drupal\taxonomy\TermInterface[]
+++   */
+++  protected array $terms = [];
+++
+++  /**
+++   * {@inheritdoc}
+++   */
+++  protected function setUp(): void {
+++    parent::setUp();
+++
+++    $this->installEntitySchema('user');
+++    $this->installEntitySchema('entity_test');
+++    $this->installEntitySchema('taxonomy_term');
+++    $this->installConfig(['field', 'filter', 'taxonomy']);
+++
+++    Vocabulary::create(['vid' => 'tags', 'name' => 'Tags'])->save();
+++    foreach (['First term', 'Second term', 'Third term'] as $name) {
+++      $term = Term::create(['vid' => 'tags', 'name' => $name]);
+++      $term->save();
+++      $this->terms[] = $term;
+++    }
+++
+++    FieldStorageConfig::create([
+++      'field_name' => static::FIELD_NAME,
+++      'entity_type' => 'entity_test',
+++      'type' => 'entity_reference',
+++      'settings' => ['target_type' => 'taxonomy_term'],
+++      'cardinality' => FieldStorageDefinitionInterface::CARDINALITY_UNLIMITED,
+++    ])->save();
+++
+++    FieldConfig::create([
+++      'field_name' => static::FIELD_NAME,
+++      'entity_type' => 'entity_test',
+++      'bundle' => 'entity_test',
+++      'settings' => [
+++        'handler' => 'default:taxonomy_term',
+++        'handler_settings' => ['target_bundles' => ['tags' => 'tags']],
+++      ],
+++    ])->save();
+++  }
+++
+++  /**
+++   * Stored values must be exposed as the default value of the form element.
+++   */
+++  public function testStoredValuesArePreselected(): void {
+++    $entity = EntityTest::create([
+++      static::FIELD_NAME => [
+++        ['target_id' => $this->terms[0]->id()],
+++        ['target_id' => $this->terms[1]->id()],
+++      ],
+++    ]);
+++    $entity->save();
+++    $entity = EntityTest::load($entity->id());
+++
+++    $element = $this->buildWidget($entity);
+++    $expected = array_column($entity->get(static::FIELD_NAME)->getValue(), 'target_id');
+++
+++    $this->assertSame($expected, array_values((array) $element['#default_value']));
+++    $this->assertSame($expected, array_values((array) $element['#shs']['defaultValue']));
+++  }
+++
+++  /**
+++   * The first select must be preselected instead of falling back to "- None -".
+++   */
+++  public function testStoredValueIsUsedAsParentDefault(): void {
+++    $entity = EntityTest::create([
+++      static::FIELD_NAME => [['target_id' => $this->terms[0]->id()]],
+++    ]);
+++    $entity->save();
+++    $entity = EntityTest::load($entity->id());
+++
+++    $element = $this->buildWidget($entity);
+++
+++    $this->assertSame(
+++      (string) $this->terms[0]->id(),
+++      (string) $element['#shs']['parents'][0][0]['defaultValue']
+++    );
+++  }
+++
+++  /**
+++   * An entity without stored values must still render an empty widget.
+++   */
+++  public function testEmptyFieldHasNoDefaultValue(): void {
+++    $entity = EntityTest::create();
+++    $entity->save();
+++    $entity = EntityTest::load($entity->id());
+++
+++    $element = $this->buildWidget($entity);
+++
+++    $this->assertSame('', $element['#default_value']);
+++    $this->assertSame('_none', $element['#shs']['parents'][0][0]['defaultValue']);
+++  }
+++
+++  /**
+++   * References to deleted terms must not be preselected.
+++   *
+++   * Preselecting them would make the entity reference constraint reject the
+++   * save.
+++   *
+++   * @see https://www.drupal.org/project/shs/issues/3359851
+++   */
+++  public function testDeletedTermIsNotPreselected(): void {
+++    $entity = EntityTest::create([
+++      static::FIELD_NAME => [
+++        ['target_id' => $this->terms[0]->id()],
+++        ['target_id' => $this->terms[1]->id()],
+++      ],
+++    ]);
+++    $entity->save();
+++    $entity = EntityTest::load($entity->id());
+++    $this->terms[0]->delete();
+++
+++    $element = $this->buildWidget($entity);
+++
+++    $this->assertSame([$this->terms[1]->id()], array_values((array) $element['#default_value']));
+++  }
+++
+++  /**
+++   * The widget must not load the full option list to render the form element.
+++   *
+++   * Only the selected terms may be loaded. formElement() always unsets
+++   * #options, so the entity memory cache is checked instead.
+++   *
+++   * @see https://www.drupal.org/project/shs/issues/3517342
+++   */
+++  public function testOptionListIsNotLoaded(): void {
+++    $entity = EntityTest::create([
+++      static::FIELD_NAME => [['target_id' => $this->terms[0]->id()]],
+++    ]);
+++    $entity->save();
+++    $entity = EntityTest::load($entity->id());
+++    $this->container->get('entity_type.manager')->getStorage('taxonomy_term')->resetCache();
+++    $memory_cache = $this->container->get('entity.memory_cache');
+++
+++    $this->buildWidget($entity);
+++
+++    $this->assertNotFalse($memory_cache->get('values:taxonomy_term:' . $this->terms[0]->id()));
+++    $this->assertFalse($memory_cache->get('values:taxonomy_term:' . $this->terms[1]->id()));
+++    $this->assertFalse($memory_cache->get('values:taxonomy_term:' . $this->terms[2]->id()));
+++  }
+++
+++  /**
+++   * Builds the SHS widget form element for the given entity.
+++   *
+++   * @param \Drupal\entity_test\Entity\EntityTest $entity
+++   *   The entity to build the widget for.
+++   *
+++   * @return array
+++   *   The render array of the widget element.
+++   */
+++  protected function buildWidget(EntityTest $entity): array {
+++    $display = EntityFormDisplay::create([
+++      'targetEntityType' => 'entity_test',
+++      'bundle' => 'entity_test',
+++      'mode' => 'default',
+++      'status' => TRUE,
+++    ]);
+++    $display->setComponent(static::FIELD_NAME, ['type' => 'options_shs']);
+++
+++    $form = [];
+++    $form_state = new FormState();
+++    $display->buildForm($entity, $form, $form_state);
+++
+++    return $form[static::FIELD_NAME]['widget'];
+++  }
+++
+++}

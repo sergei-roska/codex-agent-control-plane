@@ -1,0 +1,1 @@
+Own test/owner-decision-restart.test.js. Qualify real disposable startServer and SQLite close/reopen at owner decision, authenticated response, and mandatory acceptance. No source or other test changes; no broad suite or live services.

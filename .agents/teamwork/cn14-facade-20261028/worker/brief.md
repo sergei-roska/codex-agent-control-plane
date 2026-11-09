@@ -1,0 +1,1 @@
+Repair only engine facade pause/resume and regression tests. Preserve admitted calls and durable uncertainty guards. Parent brief: ../brief.md. No Git mutation or live provider calls. Root owns all other product files.

@@ -1,0 +1,8 @@
+{
+  "at": "2026-10-28T23:17:14.245665+00:00",
+  "source": "fresh launcher /api/accounts?force=1 backed by account/rateLimits/read",
+  "primaryRemainingPercent": 100,
+  "secondaryRemainingPercent": 54,
+  "owner": "Explicit continue instruction",
+  "taskId": "8341e45b-e3fa-4a69-89a0-649d9635c93b"
+}

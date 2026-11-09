@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "codexVersion": "0.163.0",
+  "modelTurns": 0,
+  "configRead": {
+    "cwd": "/home/sr/Projects/Workspace/codex-agent-control-plane",
+    "default_permissions": ":danger-full-access",
+    "approval_policy": "never",
+    "workspaceTrust": "trusted"
+  },
+  "permissionProfileList": [
+    {
+      "id": ":read-only",
+      "allowed": true
+    },
+    {
+      "id": ":workspace",
+      "allowed": true
+    },
+    {
+      "id": ":danger-full-access",
+      "allowed": true
+    }
+  ],
+  "commandExec": [
+    {
+      "policy": "legacy strict read-only-workspace networkAccess=false",
+      "command": [
+        "/usr/bin/true"
+      ],
+      "exitCode": 0
+    },
+    {
+      "permissionProfile": ":read-only",
+      "command": [
+        "/usr/bin/true"
+      ],
+      "exitCode": 0
+    }
+  ],
+  "ephemeralThreadStart": [
+    {
+      "requestSandbox": "workspace-write",
+      "resultSandbox": {
+        "type": "workspaceWrite",
+        "writableRoots": [],
+        "networkAccess": false,
+        "excludeTmpdirEnvVar": false,
+        "excludeSlashTmp": false
+      },
+      "approvalPolicy": "never"
+    },
+    {
+      "requestPermissions": ":read-only",
+      "resultSandbox": {
+        "type": "readOnly",
+        "networkAccess": false
+      },
+      "approvalPolicy": "never"
+    }
+  ],
+  "limits": "No turn/start issued. Does not establish actual agent tool behavior; final mock-wire tests and owned native command probes still required."
+}

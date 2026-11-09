@@ -14,6 +14,9 @@ const DEFAULT_LAUNCHER_PORT = 3100;
 const START_TIMEOUT_MS = 45_000;
 const STOP_TIMEOUT_MS = 25_000;
 const OUTPUT_LIMIT = 64 * 1024;
+const OUTPUT_TAIL_LINES = 3;
+const OUTPUT_TAIL_CHARS = 400;
+const STDERR_FLUSH_MS = 250;
 
 function within(parent, candidate) {
   const relative = path.relative(parent, candidate);
@@ -45,6 +48,14 @@ function discoverAtlassianConfigPath(env = process.env, homeDirectory = os.homed
   catch (_) { return null; }
 }
 
+// Port named by the Atlassian OAuth redirect URI ('80' when implicit), or null when the file cannot be read as that config.
+function atlassianRedirectPort(configPath) {
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    return new URL(config.redirectUri).port || '80';
+  } catch (_) { return null; }
+}
+
 class LauncherRuntime {
   constructor({
     appRoot = path.resolve(__dirname, '..'),
@@ -70,6 +81,7 @@ class LauncherRuntime {
     this.projectPath = null;
     this.port = null;
     this.error = null;
+    this.notice = null;
     this.child = null;
     this.pairingUrl = null;
     this.operation = null;
@@ -153,6 +165,7 @@ class LauncherRuntime {
       recentProjects: this.recentProjects(),
       canStop: Boolean(this.child),
       ...(this.baseRef ? { baseRef: this.baseRef } : {}),
+      ...(this.notice ? { notice: this.notice } : {}),
     };
   }
 
@@ -169,6 +182,7 @@ class LauncherRuntime {
   async _start({ projectPath, port }) {
     this.status = 'starting';
     this.error = null;
+    this.notice = null;
     this.pairingUrl = null;
     this.stdout = '';
     this.stderr = '';
@@ -230,7 +244,13 @@ class LauncherRuntime {
       };
       if (!Object.prototype.hasOwnProperty.call(env, 'CODEX_ATLASSIAN_CONFIG')) {
         const discoveredConfigPath = discoverAtlassianConfigPath(env);
-        if (discoveredConfigPath) env.CODEX_ATLASSIAN_CONFIG = discoveredConfigPath;
+        if (discoveredConfigPath) {
+          // The server refuses a config whose redirect port differs from the dashboard port, so an
+          // auto-discovered config is skipped for other ports; an explicit one still fails loudly.
+          const redirectPort = atlassianRedirectPort(discoveredConfigPath);
+          if (redirectPort === null || redirectPort === String(targetPort)) env.CODEX_ATLASSIAN_CONFIG = discoveredConfigPath;
+          else this.notice = `Atlassian is off for port ${targetPort}: its OAuth redirect is registered for port ${redirectPort}. Use that port to connect Atlassian.`;
+        }
       }
       delete env.CODEX_A2A_WORKSPACE_LOCK_DIR;
       const child = this.spawnImpl(process.execPath, [path.join(this.appRoot, 'src', 'launcher-runtime.js'), '--dashboard-child'], {
@@ -287,6 +307,16 @@ class LauncherRuntime {
     if (kind === 'stdout') this.stdout = bounded; else this.stderr = bounded;
   }
 
+  // Short, redacted tail of the child's stderr for startup failures.
+  _stderrTail() {
+    const lines = this.stderr.split(/\r?\n/).map((line) => line.replace(/[\u0000-\u001f\u007f]/g, ' ').trim()).filter(Boolean);
+    const text = lines.slice(-OUTPUT_TAIL_LINES).join(' | ')
+      .replace(/(pair=)[A-Za-z0-9_-]+/gi, '$1[redacted]')
+      .replace(/Bearer\s+[A-Za-z0-9_-]+/gi, 'Bearer [redacted]')
+      .replace(/((?:access_token|refresh_token|client_secret|password|secret|token)["']?\s*[:=]\s*["']?)[^\s"',;&]+/gi, '$1[redacted]');
+    return text.length > OUTPUT_TAIL_CHARS ? `...${text.slice(-OUTPUT_TAIL_CHARS)}` : text;
+  }
+
   async _freshPairingUrl(tokenFile, port) {
     const token = readAuthToken({ filePath: tokenFile });
     const controller = new AbortController();
@@ -317,15 +347,24 @@ class LauncherRuntime {
         error ? reject(error) : resolve(value);
       };
       const onError = () => finish(new Error('Could not start the project server process.'));
-      const onExit = (code, signal) => {
+      const reportExit = (code, signal) => {
         const occupied = /EADDRINUSE/.test(`${this.stdout}\n${this.stderr}`);
         const loginNeeded = /requires an authenticated ChatGPT account|not logged in|login required/i.test(this.stderr);
         const codexMissing = /spawn codex ENOENT|codex.*not found|codex.*ENOENT/i.test(this.stderr);
+        const tail = this._stderrTail();
         finish(new Error(occupied
           ? `Dashboard port ${port} is already in use. Stop its owner or choose another port, such as 3001.`
           : (loginNeeded ? 'Sign in to Codex with ChatGPT, then start the project again.'
             : (codexMissing ? 'The Codex CLI is not installed or is not available on PATH.'
-              : `Project server exited during startup (${signal || code || 'unknown'}).`))));
+              : `Project server exited during startup (${signal || code || 'unknown'}).${tail ? ` Server output: ${tail}` : ''}`))));
+      };
+      const onExit = (code, signal) => {
+        // The exit event can precede the final stderr chunks, so give the pipe a moment to drain.
+        const stderr = child.stderr;
+        if (!stderr || stderr.readableEnded || stderr.destroyed) { reportExit(code, signal); return; }
+        const flush = setTimeout(() => reportExit(code, signal), STDERR_FLUSH_MS);
+        flush.unref?.();
+        stderr.once('end', () => { clearTimeout(flush); reportExit(code, signal); });
       };
       child.once('error', onError);
       child.once('exit', onExit);

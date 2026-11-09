@@ -1,0 +1,1494 @@
+TAP version 13
+# Subtest: publishes distinct role cards and routes each task to its role
+ok 1 - publishes distinct role cards and routes each task to its role
+  ---
+  duration_ms: 37.938645
+  type: 'test'
+  ...
+# Subtest: serves a role Agent Card at its direct route before JSON-RPC middleware
+ok 2 - serves a role Agent Card at its direct route before JSON-RPC middleware
+  ---
+  duration_ms: 6.42213
+  type: 'test'
+  ...
+# Subtest: reports App Server errors and unsupported non-text input as failed tasks
+ok 3 - reports App Server errors and unsupported non-text input as failed tasks
+  ---
+  duration_ms: 8.853295
+  type: 'test'
+  ...
+# Subtest: only a completed Codex status maps to A2A completed
+ok 4 - only a completed Codex status maps to A2A completed
+  ---
+  duration_ms: 16.625935
+  type: 'test'
+  ...
+# Subtest: rejects a second active message for the same task without interrupting the first run
+ok 5 - rejects a second active message for the same task without interrupting the first run
+  ---
+  duration_ms: 4.815563
+  type: 'test'
+  ...
+# Subtest: reserves taskId before SDK task-store awaits and lets only the original request complete
+ok 6 - reserves taskId before SDK task-store awaits and lets only the original request complete
+  ---
+  duration_ms: 7.576432
+  type: 'test'
+  ...
+# Subtest: cancelTask aborts the running Codex request and stores canceled status
+ok 7 - cancelTask aborts the running Codex request and stores canceled status
+  ---
+  duration_ms: 10.942663
+  type: 'test'
+  ...
+# Subtest: cancel publishes exactly one terminal canceled event
+ok 8 - cancel publishes exactly one terminal canceled event
+  ---
+  duration_ms: 4.679219
+  type: 'test'
+  ...
+# Subtest: real A2A SDK client exchanges a role card and task over local HTTP
+ok 9 - real A2A SDK client exchanges a role card and task over local HTTP
+  ---
+  duration_ms: 72.409348
+  type: 'test'
+  ...
+# Subtest: passes the worker report schema and tags the result artifact with contract metadata
+ok 10 - passes the worker report schema and tags the result artifact with contract metadata
+  ---
+  duration_ms: 9.975977
+  type: 'test'
+  ...
+# Subtest: failed status messages carry failureKind and codexErrorInfo metadata
+ok 11 - failed status messages carry failureKind and codexErrorInfo metadata
+  ---
+  duration_ms: 37.425337
+  type: 'test'
+  ...
+# Subtest: maps supervisor_exhausted to its own failureKind with no workspace effects
+ok 12 - maps supervisor_exhausted to its own failureKind with no workspace effects
+  ---
+  duration_ms: 11.972002
+  type: 'test'
+  ...
+# Subtest: marks an active writable worker failure with unknown outcome as interrupted
+ok 13 - marks an active writable worker failure with unknown outcome as interrupted
+  ---
+  duration_ms: 85.49481
+  type: 'test'
+  ...
+# Subtest: uses taskStoreFactory per role and defaults to an in-memory store
+ok 14 - uses taskStoreFactory per role and defaults to an in-memory store
+  ---
+  duration_ms: 6.034963
+  type: 'test'
+  ...
+# Subtest: shared execution target uses admitted workspace while the default target uses an available lane
+ok 15 - shared execution target uses admitted workspace while the default target uses an available lane
+  ---
+  duration_ms: 12.0043
+  type: 'test'
+  ...
+# Subtest: a second writer on another role waits for the first; a read-only role runs concurrently
+ok 16 - a second writer on another role waits for the first; a read-only role runs concurrently
+  ---
+  duration_ms: 68.986919
+  type: 'test'
+  ...
+# Subtest: writers submitted under two different lead contexts and tasks are serialized workspace-wide
+ok 17 - writers submitted under two different lead contexts and tasks are serialized workspace-wide
+  ---
+  duration_ms: 66.91995
+  type: 'test'
+  ...
+# Subtest: an unknown writer outcome blocks the next writer until the process group is proven gone
+ok 18 - an unknown writer outcome blocks the next writer until the process group is proven gone
+  ---
+  duration_ms: 32.966433
+  type: 'test'
+  ...
+# Subtest: a fenced context is refused without running
+ok 19 - a fenced context is refused without running
+  ---
+  duration_ms: 5.897823
+  type: 'test'
+  ...
+# Subtest: canceling a writer while it waits for admission cancels it without running
+ok 20 - canceling a writer while it waits for admission cancels it without running
+  ---
+  duration_ms: 98.276421
+  type: 'test'
+  ...
+# Subtest: records one worker usage row and attaches usage, permissionEvents, provenance to the artifact
+ok 21 - records one worker usage row and attaches usage, permissionEvents, provenance to the artifact
+  ---
+  duration_ms: 6.827524
+  type: 'test'
+  ...
+# Subtest: a thrown run error still records a row and carries usage on the failure status
+ok 22 - a thrown run error still records a row and carries usage on the failure status
+  ---
+  duration_ms: 4.911909
+  type: 'test'
+  ...
+# Subtest: missing usage is recorded as nulls with token source unavailable; retries count the context
+ok 23 - missing usage is recorded as nulls with token source unavailable; retries count the context
+  ---
+  duration_ms: 5.358944
+  type: 'test'
+  ...
+# Subtest: a ledger failure never changes the task outcome
+ok 24 - a ledger failure never changes the task outcome
+  ---
+  duration_ms: 3.009087
+  type: 'test'
+  ...
+# Subtest: a turn/start rejected by the server (known outcome) releases the writer
+ok 25 - a turn/start rejected by the server (known outcome) releases the writer
+  ---
+  duration_ms: 3.851844
+  type: 'test'
+  ...
+# Subtest: a release() that throws once falls back to unresolved + reconcile instead of leaving the row active
+ok 26 - a release() that throws once falls back to unresolved + reconcile instead of leaving the row active
+  ---
+  duration_ms: 5.022053
+  type: 'test'
+  ...
+# Subtest: a second turn on the same A2A task is recorded under its own turn id
+ok 27 - a second turn on the same A2A task is recorded under its own turn id
+  ---
+  duration_ms: 6.040977
+  type: 'test'
+  ...
+# Subtest: an input error writes one pre-turn row with outcome input_error and turns 0
+ok 28 - an input error writes one pre-turn row with outcome input_error and turns 0
+  ---
+  duration_ms: 5.263917
+  type: 'test'
+  ...
+# Subtest: a fenced writer writes a refused row that counts toward later retries of the context
+ok 29 - a fenced writer writes a refused row that counts toward later retries of the context
+  ---
+  duration_ms: 6.754635
+  type: 'test'
+  ...
+# Subtest: a writer canceled while waiting for admission writes a canceled row; a queued writer records queue wait
+ok 30 - a writer canceled while waiting for admission writes a canceled row; a queued writer records queue wait
+  ---
+  duration_ms: 180.661562
+  type: 'test'
+  ...
+# Subtest: a read-only role records null queue wait and passes startup fields through
+ok 31 - a read-only role records null queue wait and passes startup fields through
+  ---
+  duration_ms: 4.638219
+  type: 'test'
+  ...
+# Subtest: a JSON request with requireAcceptance but no allowedFiles still fails with guarantee_unavailable
+ok 32 - a JSON request with requireAcceptance but no allowedFiles still fails with guarantee_unavailable
+  ---
+  duration_ms: 9.193351
+  type: 'test'
+  ...
+# Subtest: skill pin mismatches are skill_pin_drift; skill shape errors stay skill_invalid
+ok 33 - skill pin mismatches are skill_pin_drift; skill shape errors stay skill_invalid
+  ---
+  duration_ms: 10.944455
+  type: 'test'
+  ...
+# Subtest: structured request failures stop before admission and the model with specific codes
+ok 34 - structured request failures stop before admission and the model with specific codes
+  ---
+  duration_ms: 18.867423
+  type: 'test'
+  ...
+# Subtest: a writer request refused before admission leaves the workspace unheld
+ok 35 - a writer request refused before admission leaves the workspace unheld
+  ---
+  duration_ms: 3.38494
+  type: 'test'
+  ...
+# Subtest: a valid structured writer request whose delta leaves allowedFiles completes with an attested_scope_violation
+ok 36 - a valid structured writer request whose delta leaves allowedFiles completes with an attested_scope_violation
+  ---
+  duration_ms: 4.885778
+  type: 'test'
+  ...
+# Subtest: a structured writer request inside allowedFiles has no violations; an unknown delta is UNKNOWN
+ok 37 - a structured writer request inside allowedFiles has no violations; an unknown delta is UNKNOWN
+  ---
+  duration_ms: 8.305907
+  type: 'test'
+  ...
+# Subtest: an invalid report drops the contract label and records report_invalid
+ok 38 - an invalid report drops the contract label and records report_invalid
+  ---
+  duration_ms: 3.402967
+  type: 'test'
+  ...
+# Subtest: legacy plain text keeps running with boundary legacy and no predicate records
+ok 39 - legacy plain text keeps running with boundary legacy and no predicate records
+  ---
+  duration_ms: 3.335016
+  type: 'test'
+  ...
+# Subtest: records live activity for a worker turn and ends it on success and error
+ok 40 - records live activity for a worker turn and ends it on success and error
+  ---
+  duration_ms: 11.826424
+  type: 'test'
+  ...
+# Subtest: ends the live activity of a canceled worker turn
+ok 41 - ends the live activity of a canceled worker turn
+  ---
+  duration_ms: 4.319587
+  type: 'test'
+  ...
+# Subtest: effective roles with a project override reach appServer.run and the base roles stay untouched
+ok 42 - effective roles with a project override reach appServer.run and the base roles stay untouched
+  ---
+  duration_ms: 6.814798
+  type: 'test'
+  ...
+# Subtest: auditor refuses plain text and missing or routine review context before model execution
+ok 43 - auditor refuses plain text and missing or routine review context before model execution
+  ---
+  duration_ms: 7.729829
+  type: 'test'
+  ...
+# Subtest: auditor accepts a stable scoped owner review; investigation and pinned checks preserve their distinct semantics
+ok 44 - auditor accepts a stable scoped owner review; investigation and pinned checks preserve their distinct semantics
+  ---
+  duration_ms: 280.876942
+  type: 'test'
+  ...
+# Subtest: auditor report contract keeps supplemental and reused evidence separate from required checks
+ok 45 - auditor report contract keeps supplemental and reused evidence separate from required checks
+  ---
+  duration_ms: 233.878601
+  type: 'test'
+  ...
+# Subtest: auditor runtime rejects an embellished verdict line and inconclusive evidence
+ok 46 - auditor runtime rejects an embellished verdict line and inconclusive evidence
+  ---
+  duration_ms: 164.895117
+  type: 'test'
+  ...
+# Subtest: auditor rejects escaped targets and a scope changed during the read-only turn
+ok 47 - auditor rejects escaped targets and a scope changed during the read-only turn
+  ---
+  duration_ms: 35.359229
+  type: 'test'
+  ...
+# Subtest: exclusive auditor reservation blocks an attempted change-and-restore during the review turn
+ok 48 - exclusive auditor reservation blocks an attempted change-and-restore during the review turn
+  ---
+  duration_ms: 28.738179
+  type: 'test'
+  ...
+# Subtest: auditor continuations require a known unchanged originating review target
+ok 49 - auditor continuations require a known unchanged originating review target
+  ---
+  duration_ms: 64.024156
+  type: 'test'
+  ...
+# Subtest: direct review continuations bind thread lane and codex home to their origin attempt
+ok 50 - direct review continuations bind thread lane and codex home to their origin attempt
+  ---
+  duration_ms: 107.423123
+  type: 'test'
+  ...
+# Subtest: direct review resumable context distinguishes unknown bindings from proven tuple mismatches
+ok 51 - direct review resumable context distinguishes unknown bindings from proven tuple mismatches
+  ---
+  duration_ms: 294.026674
+  type: 'test'
+  ...
+# Subtest: auditor continuations fail closed for missing, other-run, corrupt, and ambiguous origins
+ok 52 - auditor continuations fail closed for missing, other-run, corrupt, and ambiguous origins
+  ---
+  duration_ms: 138.95041
+  type: 'test'
+  ...
+# Subtest: direct verifier continuation requires its originating target and preserves same-target control
+ok 53 - direct verifier continuation requires its originating target and preserves same-target control
+  ---
+  duration_ms: 9.687263
+  type: 'test'
+  ...
+# Subtest: direct verifier continuation fails closed for missing, cross-run, corrupt, and ambiguous origins
+ok 54 - direct verifier continuation fails closed for missing, cross-run, corrupt, and ambiguous origins
+  ---
+  duration_ms: 57.880948
+  type: 'test'
+  ...
+# Subtest: successful audit events retain checkpoint correlation without creating problem entries
+ok 55 - successful audit events retain checkpoint correlation without creating problem entries
+  ---
+  duration_ms: 88.094969
+  type: 'test'
+  ...
+# Subtest: pinned-check fallback continuations fail closed when origin evidence is missing
+ok 56 - pinned-check fallback continuations fail closed when origin evidence is missing
+  ---
+  duration_ms: 3.686688
+  type: 'test'
+  ...
+# Subtest: pinned-check fallback continuation accepts a known unchanged origin
+ok 57 - pinned-check fallback continuation accepts a known unchanged origin
+  ---
+  duration_ms: 40.297063
+  type: 'test'
+  ...
+# Subtest: verifier binds coverage to the post-verification target after an authorized test-file write
+ok 58 - verifier binds coverage to the post-verification target after an authorized test-file write
+  ---
+  duration_ms: 4.565862
+  type: 'test'
+  ...
+# Subtest: a writable verifier accepts a collected empty lane only with stable scope coverage
+ok 59 - a writable verifier accepts a collected empty lane only with stable scope coverage
+  ---
+  duration_ms: 4.757847
+  type: 'test'
+  ...
+# Subtest: pinned-check fallback reviewer holds the workspace exclusively while ordinary explorer remains concurrent
+ok 60 - pinned-check fallback reviewer holds the workspace exclusively while ordinary explorer remains concurrent
+  ---
+  duration_ms: 6.109987
+  type: 'test'
+  ...
+# Subtest: pinned-check fallback exposes reservation refusal as unknown coverage
+ok 61 - pinned-check fallback exposes reservation refusal as unknown coverage
+  ---
+  duration_ms: 2.942556
+  type: 'test'
+  ...
+# Subtest: canceling an auditor turn reconciles and releases its exclusive reservation
+ok 62 - canceling an auditor turn reconciles and releases its exclusive reservation
+  ---
+  duration_ms: 4.317177
+  type: 'test'
+  ...
+# Subtest: auditor refuses an active writer and required staging log failures cannot accept a review
+ok 63 - auditor refuses an active writer and required staging log failures cannot accept a review
+  ---
+  duration_ms: 11.555783
+  type: 'test'
+  ...
+# Subtest: staging events correlate direct audits and store bounded redacted report summaries
+ok 64 - staging events correlate direct audits and store bounded redacted report summaries
+  ---
+  duration_ms: 165.917249
+  type: 'test'
+  ...
+# Subtest: non-auditor direct calls retain plain-text support and emit best-effort role telemetry
+ok 65 - non-auditor direct calls retain plain-text support and emit best-effort role telemetry
+  ---
+  duration_ms: 3.657055
+  type: 'test'
+  ...
+# Subtest: performs initialize handshake and completes a turn
+ok 66 - performs initialize handshake and completes a turn
+  ---
+  duration_ms: 41.497788
+  type: 'test'
+  ...
+# Subtest: resolves Fast on from advertised metadata and sends the actual tier id
+ok 67 - resolves Fast on from advertised metadata and sends the actual tier id
+  ---
+  duration_ms: 4.986345
+  type: 'test'
+  ...
+# Subtest: Fast off explicitly selects the standard turn tier
+ok 68 - Fast off explicitly selects the standard turn tier
+  ---
+  duration_ms: 5.000465
+  type: 'test'
+  ...
+# Subtest: Fast on with unknown capability metadata fails before creating a turn
+ok 69 - Fast on with unknown capability metadata fails before creating a turn
+  ---
+  duration_ms: 3.278384
+  type: 'test'
+  ...
+# Subtest: account usage handshake uses one ephemeral read-only low-effort turn in a disposable cwd
+ok 70 - account usage handshake uses one ephemeral read-only low-effort turn in a disposable cwd
+  ---
+  duration_ms: 7.123937
+  type: 'test'
+  ...
+# Subtest: waits for thread-scoped background terminal cleanup before resolving
+ok 71 - waits for thread-scoped background terminal cleanup before resolving
+  ---
+  duration_ms: 6.547792
+  type: 'test'
+  ...
+# Subtest: reports cleanup RPC failure with the confirmed model outcome preserved
+ok 72 - reports cleanup RPC failure with the confirmed model outcome preserved
+  ---
+  duration_ms: 4.647194
+  type: 'test'
+  ...
+# Subtest: quarantines new turns after cleanup failure while existing threads finish, then clears on replacement
+ok 73 - quarantines new turns after cleanup failure while existing threads finish, then clears on replacement
+  ---
+  duration_ms: 6.14573
+  type: 'test'
+  ...
+# Subtest: rechecks quarantine after awaited setup before admitting a turn
+ok 74 - rechecks quarantine after awaited setup before admitting a turn
+  ---
+  duration_ms: 5.942643
+  type: 'test'
+  ...
+# Subtest: cleanup ignores an abort signal but reports it after acknowledgement
+ok 75 - cleanup ignores an abort signal but reports it after acknowledgement
+  ---
+  duration_ms: 4.682262
+  type: 'test'
+  ...
+# Subtest: failed terminal carries confirmed cleanup receipt
+ok 76 - failed terminal carries confirmed cleanup receipt
+  ---
+  duration_ms: 3.758087
+  type: 'test'
+  ...
+# Subtest: bounds cleanup RPC time and preserves the terminal outcome
+ok 77 - bounds cleanup RPC time and preserves the terminal outcome
+  ---
+  duration_ms: 19.473882
+  type: 'test'
+  ...
+# Subtest: does not send cleanup after the run generation has changed
+ok 78 - does not send cleanup after the run generation has changed
+  ---
+  duration_ms: 3.563352
+  type: 'test'
+  ...
+# Subtest: cleanup receipt rejects malformed responses and generation or process replacement
+    # Subtest: malformed
+    ok 1 - malformed
+      ---
+      duration_ms: 4.893954
+      type: 'test'
+      ...
+    # Subtest: generation
+    ok 2 - generation
+      ---
+      duration_ms: 3.624467
+      type: 'test'
+      ...
+    # Subtest: process
+    ok 3 - process
+      ---
+      duration_ms: 3.277885
+      type: 'test'
+      ...
+    # Subtest: missing
+    ok 4 - missing
+      ---
+      duration_ms: 3.404717
+      type: 'test'
+      ...
+    1..4
+ok 79 - cleanup receipt rejects malformed responses and generation or process replacement
+  ---
+  duration_ms: 16.410737
+  type: 'test'
+  ...
+# Subtest: routes concurrent turns to their owning run
+ok 80 - routes concurrent turns to their owning run
+  ---
+  duration_ms: 4.191296
+  type: 'test'
+  ...
+# Subtest: reuses a supplied thread without starting another thread
+ok 81 - reuses a supplied thread without starting another thread
+  ---
+  duration_ms: 5.274499
+  type: 'test'
+  ...
+# Subtest: resumes an unknown thread once, then reuses it
+ok 82 - resumes an unknown thread once, then reuses it
+  ---
+  duration_ms: 3.368569
+  type: 'test'
+  ...
+# Subtest: does not resume a thread started in this process
+ok 83 - does not resume a thread started in this process
+  ---
+  duration_ms: 3.133581
+  type: 'test'
+  ...
+# Subtest: automatically starts a replacement child after an unexpected exit
+ok 84 - automatically starts a replacement child after an unexpected exit
+  ---
+  duration_ms: 3.850202
+  type: 'test'
+  ...
+# Subtest: starts a replacement child on the next run after a turn timeout
+ok 85 - starts a replacement child on the next run after a turn timeout
+  ---
+  duration_ms: 29.910949
+  type: 'test'
+  ...
+# Subtest: allows a turn to complete after the RPC timeout window
+ok 86 - allows a turn to complete after the RPC timeout window
+  ---
+  duration_ms: 48.457509
+  type: 'test'
+  ...
+# Subtest: rejects an invalid turn timeout
+ok 87 - rejects an invalid turn timeout
+  ---
+  duration_ms: 3.297156
+  type: 'test'
+  ...
+# Subtest: reads the turn timeout from CODEX_A2A_TURN_TIMEOUT_MS
+ok 88 - reads the turn timeout from CODEX_A2A_TURN_TIMEOUT_MS
+  ---
+  duration_ms: 1.909121
+  type: 'test'
+  ...
+# Subtest: does not spawn a replacement when closed during child recovery
+ok 89 - does not spawn a replacement when closed during child recovery
+  ---
+  duration_ms: 2.484183
+  type: 'test'
+  ...
+# Subtest: propagates a thread/resume RPC error without starting a new thread
+ok 90 - propagates a thread/resume RPC error without starting a new thread
+  ---
+  duration_ms: 3.172838
+  type: 'test'
+  ...
+# Subtest: readRateLimits returns the result or null on error
+ok 91 - readRateLimits returns the result or null on error
+  ---
+  duration_ms: 3.689138
+  type: 'test'
+  ...
+# Subtest: returns schema-shaped fail-closed responses to server requests
+ok 92 - returns schema-shaped fail-closed responses to server requests
+  ---
+  duration_ms: 3.480669
+  type: 'test'
+  ...
+# Subtest: rejects overlapping runs on the same thread
+ok 93 - rejects overlapping runs on the same thread
+  ---
+  duration_ms: 2.723745
+  type: 'test'
+  ...
+# Subtest: interrupts a turn when cancellation arrives before turn/start responds
+ok 94 - interrupts a turn when cancellation arrives before turn/start responds
+  ---
+  duration_ms: 34.138099
+  type: 'test'
+  ...
+# Subtest: surfaces failed turns with the server error
+ok 95 - surfaces failed turns with the server error
+  ---
+  duration_ms: 2.922756
+  type: 'test'
+  ...
+# Subtest: keeps codexErrorInfo on a failed turn error
+ok 96 - keeps codexErrorInfo on a failed turn error
+  ---
+  duration_ms: 3.438997
+  type: 'test'
+  ...
+# Subtest: fails pending requests after an unexpected subprocess exit
+ok 97 - fails pending requests after an unexpected subprocess exit
+  ---
+  duration_ms: 2.096109
+  type: 'test'
+  ...
+# Subtest: marks an unexpected exit during a turn as an unknown outcome
+ok 98 - marks an unexpected exit during a turn as an unknown outcome
+  ---
+  duration_ms: 4.624234
+  type: 'test'
+  ...
+# Subtest: times out a turn that never completes and requests interruption
+ok 99 - times out a turn that never completes and requests interruption
+  ---
+  duration_ms: 4.303318
+  type: 'test'
+  ...
+# Subtest: turn timeout signals the whole process group
+ok 100 - turn timeout signals the whole process group
+  ---
+  duration_ms: 4.787586
+  type: 'test'
+  ...
+# Subtest: falls back to child.kill when the child has no pid
+ok 101 - falls back to child.kill when the child has no pid
+  ---
+  duration_ms: 24.143296
+  type: 'test'
+  ...
+# Subtest: turn/start RPC timeout terminates the group and reports an unknown outcome
+ok 102 - turn/start RPC timeout terminates the group and reports an unknown outcome
+  ---
+  duration_ms: 34.705987
+  type: 'test'
+  ...
+# Subtest: onTurnStart runs before turn/start is written and receives the identity
+ok 103 - onTurnStart runs before turn/start is written and receives the identity
+  ---
+  duration_ms: 4.511475
+  type: 'test'
+  ...
+# Subtest: a throwing onTurnStart prevents turn/start and is rethrown with execution
+ok 104 - a throwing onTurnStart prevents turn/start and is rethrown with execution
+  ---
+  duration_ms: 2.467821
+  type: 'test'
+  ...
+# Subtest: failed turns carry execution with a confirmed terminal
+ok 105 - failed turns carry execution with a confirmed terminal
+  ---
+  duration_ms: 4.948683
+  type: 'test'
+  ...
+# Subtest: confirmed interrupt yields an AbortError with a terminal and no unknown outcome
+ok 106 - confirmed interrupt yields an AbortError with a terminal and no unknown outcome
+  ---
+  duration_ms: 11.730482
+  type: 'test'
+  ...
+# Subtest: unconfirmed interrupt terminates the child and reports an unknown outcome
+ok 107 - unconfirmed interrupt terminates the child and reports an unknown outcome
+  ---
+  duration_ms: 62.661689
+  type: 'test'
+  ...
+# Subtest: derives per-turn tokens from total deltas on a new thread and a second turn
+ok 108 - derives per-turn tokens from total deltas on a new thread and a second turn
+  ---
+  duration_ms: 3.127526
+  type: 'test'
+  ...
+# Subtest: usage carries the context size and window from the last-request breakdown
+ok 109 - usage carries the context size and window from the last-request breakdown
+  ---
+  duration_ms: 5.20661
+  type: 'test'
+  ...
+# Subtest: a resumed thread with unknown baseline reports null tokens but keeps the raw total
+ok 110 - a resumed thread with unknown baseline reports null tokens but keeps the raw total
+  ---
+  duration_ms: 1.920722
+  type: 'test'
+  ...
+# Subtest: no token updates leaves tokens null, never zero
+ok 111 - no token updates leaves tokens null, never zero
+  ---
+  duration_ms: 1.692349
+  type: 'test'
+  ...
+# Subtest: records a blocked hook run with provenance
+ok 112 - records a blocked hook run with provenance
+  ---
+  duration_ms: 2.428123
+  type: 'test'
+  ...
+# Subtest: records declined and hook-blocked tool items
+ok 113 - records declined and hook-blocked tool items
+  ---
+  duration_ms: 2.023947
+  type: 'test'
+  ...
+# Subtest: a failed command without a hook block or sandbox denial is not a permission event
+ok 114 - a failed command without a hook block or sandbox denial is not a permission event
+  ---
+  duration_ms: 3.167427
+  type: 'test'
+  ...
+# Subtest: legacy approval requests get the schema decline and are recorded
+ok 115 - legacy approval requests get the schema decline and are recorded
+  ---
+  duration_ms: 2.157442
+  type: 'test'
+  ...
+# Subtest: records declined approval requests and non-approved auto reviews
+ok 116 - records declined approval requests and non-approved auto reviews
+  ---
+  duration_ms: 1.922541
+  type: 'test'
+  ...
+# Subtest: truncates, redacts and caps permission events
+ok 117 - truncates, redacts and caps permission events
+  ---
+  duration_ms: 3.926859
+  type: 'test'
+  ...
+# Subtest: reports permissionConfig for read-only and workspace-write roles
+ok 118 - reports permissionConfig for read-only and workspace-write roles
+  ---
+  duration_ms: 2.672091
+  type: 'test'
+  ...
+# Subtest: attaches permission events to thrown errors
+ok 119 - attaches permission events to thrown errors
+  ---
+  duration_ms: 3.662362
+  type: 'test'
+  ...
+# Subtest: listHooks sanitizes metadata and hookInventory caches per cwd
+ok 120 - listHooks sanitizes metadata and hookInventory caches per cwd
+  ---
+  duration_ms: 2.858406
+  type: 'test'
+  ...
+# Subtest: a JSON-RPC error answering turn/start marks execution.turnStartRejected and is not unknown
+ok 121 - a JSON-RPC error answering turn/start marks execution.turnStartRejected and is not unknown
+  ---
+  duration_ms: 2.491915
+  type: 'test'
+  ...
+# Subtest: a turn/start timeout does not set turnStartRejected
+ok 122 - a turn/start timeout does not set turnStartRejected
+  ---
+  duration_ms: 32.207281
+  type: 'test'
+  ...
+# Subtest: usage.turns is 0 when the run failed before turn/start and 1 once it was sent
+ok 123 - usage.turns is 0 when the run failed before turn/start and 1 once it was sent
+  ---
+  duration_ms: 4.111187
+  type: 'test'
+  ...
+# Subtest: stdin error during a turn reports an unknown outcome and terminates the group
+ok 124 - stdin error during a turn reports an unknown outcome and terminates the group
+  ---
+  duration_ms: 26.783787
+  type: 'test'
+  ...
+# Subtest: stdout error during a turn reports an unknown outcome and terminates the group
+ok 125 - stdout error during a turn reports an unknown outcome and terminates the group
+  ---
+  duration_ms: 26.342103
+  type: 'test'
+  ...
+# Subtest: invalid JSONL during a turn reports an unknown outcome and terminates the group
+ok 126 - invalid JSONL during a turn reports an unknown outcome and terminates the group
+  ---
+  duration_ms: 27.667221
+  type: 'test'
+  ...
+# Subtest: stdout close during a turn reports an unknown outcome and terminates the group
+ok 127 - stdout close during a turn reports an unknown outcome and terminates the group
+  ---
+  duration_ms: 29.531309
+  type: 'test'
+  ...
+# Subtest: delayed SIGKILL after the leader exited does not signal by number
+ok 128 - delayed SIGKILL after the leader exited does not signal by number
+  ---
+  duration_ms: 1202.388896
+  type: 'test'
+  ...
+# Subtest: delayed SIGKILL after pid reuse (different start time) does not signal
+ok 129 - delayed SIGKILL after pid reuse (different start time) does not signal
+  ---
+  duration_ms: 1202.035402
+  type: 'test'
+  ...
+# Subtest: delayed SIGKILL with the leader alive and the same start time signals the group
+ok 130 - delayed SIGKILL with the leader alive and the same start time signals the group
+  ---
+  duration_ms: 1201.987751
+  type: 'test'
+  ...
+# Subtest: a null start time identity never signals by number
+ok 131 - a null start time identity never signals by number
+  ---
+  duration_ms: 1202.2797
+  type: 'test'
+  ...
+# Subtest: pins approvalsReviewer to user on thread/start, thread/resume, and turn/start for both roles
+ok 132 - pins approvalsReviewer to user on thread/start, thread/resume, and turn/start for both roles
+  ---
+  duration_ms: 2.557058
+  type: 'test'
+  ...
+# Subtest: inherits trusted native writer and inspector profiles on new and resumed threads
+ok 133 - inherits trusted native writer and inspector profiles on new and resumed threads
+  ---
+  duration_ms: 2.71863
+  type: 'test'
+  ...
+# Subtest: legacy workspace-write grants verifier network access while preserving native roots and other roles
+ok 134 - legacy workspace-write grants verifier network access while preserving native roots and other roles
+  ---
+  duration_ms: 2.334299
+  type: 'test'
+  ...
+# Subtest: legacy danger-full-access verifier policy remains full-access without a synthetic workspace policy
+ok 135 - legacy danger-full-access verifier policy remains full-access without a synthetic workspace policy
+  ---
+  duration_ms: 1.342346
+  type: 'test'
+  ...
+# Subtest: a continued strict verifier thread updates its policy to network access without widening roots
+ok 136 - a continued strict verifier thread updates its policy to network access without widening roots
+  ---
+  duration_ms: 1.554288
+  type: 'test'
+  ...
+# Subtest: updates a loaded strict thread before using inherited native permissions
+ok 137 - updates a loaded strict thread before using inherited native permissions
+  ---
+  duration_ms: 1.757717
+  type: 'test'
+  ...
+# Subtest: reuses the applied policy for a loaded thread without settings updates
+ok 138 - reuses the applied policy for a loaded thread without settings updates
+  ---
+  duration_ms: 1.539143
+  type: 'test'
+  ...
+# Subtest: close() with a leader exiting on SIGTERM SIGKILLs the group from the exit handler
+ok 139 - close() with a leader exiting on SIGTERM SIGKILLs the group from the exit handler
+  ---
+  duration_ms: 1.952942
+  type: 'test'
+  ...
+# Subtest: _signalOwnGroup decisions: stale exit, reused pid, mismatched identity, unreadable /proc
+ok 140 - _signalOwnGroup decisions: stale exit, reused pid, mismatched identity, unreadable /proc
+  ---
+  duration_ms: 5.615941
+  type: 'test'
+  ...
+# Subtest: SIGTERM with a mismatching childIdentity sends no numeric signal
+ok 141 - SIGTERM with a mismatching childIdentity sends no numeric signal
+  ---
+  duration_ms: 2.377237
+  type: 'test'
+  ...
+# Subtest: survivors of a termination are attached to the failed run error
+ok 142 - survivors of a termination are attached to the failed run error
+  ---
+  duration_ms: 1143.679252
+  type: 'test'
+  ...
+# Subtest: tool output token limit follows CODEX_A2A_TOOL_OUTPUT_LIMIT
+ok 143 - tool output token limit follows CODEX_A2A_TOOL_OUTPUT_LIMIT
+  ---
+  duration_ms: 2.70585
+  type: 'test'
+  ...
+# Subtest: thread/start carries the fixed per-role tool config
+ok 144 - thread/start carries the fixed per-role tool config
+  ---
+  duration_ms: 1.421629
+  type: 'test'
+  ...
+# Subtest: missing tools table means empty allowlist and skills off; skills true keeps the listing
+ok 145 - missing tools table means empty allowlist and skills off; skills true keeps the listing
+  ---
+  duration_ms: 1.44577
+  type: 'test'
+  ...
+# Subtest: thread/resume carries the tool config after a child replacement
+ok 146 - thread/resume carries the tool config after a child replacement
+  ---
+  duration_ms: 1.131255
+  type: 'test'
+  ...
+# Subtest: enumeration failure refuses the turn when MCP limits cannot be enforced
+ok 147 - enumeration failure refuses the turn when MCP limits cannot be enforced
+  ---
+  duration_ms: 1.211741
+  type: 'test'
+  ...
+# Subtest: a selected connector gets its url, exact enabled_tools and required false
+ok 148 - a selected connector gets its url, exact enabled_tools and required false
+  ---
+  duration_ms: 10.468809
+  type: 'test'
+  ...
+# Subtest: a configured connector with no selected tool is disabled, as is one the role does not allow
+ok 149 - a configured connector with no selected tool is disabled, as is one the role does not allow
+  ---
+  duration_ms: 4.726031
+  type: 'test'
+  ...
+# Subtest: P-39: an allowed server that is in no catalog is disabled instead of keeping every tool
+ok 150 - P-39: an allowed server that is in no catalog is disabled instead of keeping every tool
+  ---
+  duration_ms: 1.584824
+  type: 'test'
+  ...
+# Subtest: connector selections are rejected before launch when outside the role ceiling or the allowlist
+ok 151 - connector selections are rejected before launch when outside the role ceiling or the allowlist
+  ---
+  duration_ms: 1.845205
+  type: 'test'
+  ...
+# Subtest: Drupal tool selection keeps its stdio config and required true, next to a connector
+ok 152 - Drupal tool selection keeps its stdio config and required true, next to a connector
+  ---
+  duration_ms: 2.789541
+  type: 'test'
+  ...
+# Subtest: mcpServerStatus lists status for a thread
+ok 153 - mcpServerStatus lists status for a thread
+  ---
+  duration_ms: 1.360204
+  type: 'test'
+  ...
+# Subtest: mcpServerAuthStatus reads one server without a thread
+ok 154 - mcpServerAuthStatus reads one server without a thread
+  ---
+  duration_ms: 1.425335
+  type: 'test'
+  ...
+# Subtest: mcpOauthLoginStart sends mcpServer/oauth/login and returns the authorization url
+ok 155 - mcpOauthLoginStart sends mcpServer/oauth/login and returns the authorization url
+  ---
+  duration_ms: 2.22219
+  type: 'test'
+  ...
+# Subtest: selected skills are explicit turn inputs with scoped boundary and hash provenance
+ok 156 - selected skills are explicit turn inputs with scoped boundary and hash provenance
+  ---
+  duration_ms: 5.681427
+  type: 'test'
+  ...
+# Subtest: the lead-only pinned skill is a turn input while lead skill tools stay disabled
+ok 157 - the lead-only pinned skill is a turn input while lead skill tools stay disabled
+  ---
+  duration_ms: 3.599948
+  type: 'test'
+  ...
+# Subtest: selected skill shape, path, duplicate ids, and hashes are validated before launch
+ok 158 - selected skill shape, path, duplicate ids, and hashes are validated before launch
+  ---
+  duration_ms: 2.359242
+  type: 'test'
+  ...
+# Subtest: no selected skills preserves the original plain text turn input and telemetry shape
+ok 159 - no selected skills preserves the original plain text turn input and telemetry shape
+  ---
+  duration_ms: 2.98923
+  type: 'test'
+  ...
+# Subtest: a thread created without skills keeps the boundary for a later selected-skill turn
+ok 160 - a thread created without skills keeps the boundary for a later selected-skill turn
+  ---
+  duration_ms: 6.700194
+  type: 'test'
+  ...
+# Subtest: reports startupMs and coldStart on the first run of a process only
+ok 161 - reports startupMs and coldStart on the first run of a process only
+  ---
+  duration_ms: 1.823855
+  type: 'test'
+  ...
+# Subtest: supervisor F1: late old-generation exit cannot release a pending replacement start
+ok 162 - supervisor F1: late old-generation exit cannot release a pending replacement start
+  ---
+  duration_ms: 1.730848
+  type: 'test'
+  ...
+# Subtest: supervisor F1: callers during backoff and probe share one owner and one spawn
+ok 163 - supervisor F1: callers during backoff and probe share one owner and one spawn
+  ---
+  duration_ms: 1.876135
+  type: 'test'
+  ...
+# Subtest: supervisor F1: concurrent callers during a held probe initialize only one generation
+ok 164 - supervisor F1: concurrent callers during a held probe initialize only one generation
+  ---
+  duration_ms: 1.48032
+  type: 'test'
+  ...
+# Subtest: supervisor F1: a synchronous old exit cannot release a hung replacement exit deadline
+ok 165 - supervisor F1: a synchronous old exit cannot release a hung replacement exit deadline
+  ---
+  duration_ms: 3.393711
+  type: 'test'
+  ...
+# Subtest: supervisor F2: fail-safe settles runs and records unreaped at the injected exit deadline
+ok 166 - supervisor F2: fail-safe settles runs and records unreaped at the injected exit deadline
+  ---
+  duration_ms: 2.351163
+  type: 'test'
+  ...
+# Subtest: supervisor F3: invalid JSONL in turn/start response chunk rejects and removes the run
+ok 167 - supervisor F3: invalid JSONL in turn/start response chunk rejects and removes the run
+  ---
+  duration_ms: 2.335952
+  type: 'test'
+  ...
+# Subtest: supervisor F3: initialize response followed by invalid JSONL cannot mark start running
+ok 168 - supervisor F3: initialize response followed by invalid JSONL cannot mark start running
+  ---
+  duration_ms: 1.46174
+  type: 'test'
+  ...
+# Subtest: supervisor F3: rejected turn/start is marked before same-chunk process failure
+ok 169 - supervisor F3: rejected turn/start is marked before same-chunk process failure
+  ---
+  duration_ms: 1.77127
+  type: 'test'
+  ...
+# Subtest: supervisor F3: a synchronous turn/start write failure stays known and unsent
+ok 170 - supervisor F3: a synchronous turn/start write failure stays known and unsent
+  ---
+  duration_ms: 1.871702
+  type: 'test'
+  ...
+# Subtest: supervisor: repeated crashes inside the window back off, then exhaust the budget
+ok 171 - supervisor: repeated crashes inside the window back off, then exhaust the budget
+  ---
+  duration_ms: 3.005479
+  type: 'test'
+  ...
+# Subtest: supervisor: crashes spread outside the window never exhaust the budget
+ok 172 - supervisor: crashes spread outside the window never exhaust the budget
+  ---
+  duration_ms: 2.94265
+  type: 'test'
+  ...
+# Subtest: supervisor: a probe after the cooldown recovers and resets the budget; callers share one spawn
+ok 173 - supervisor: a probe after the cooldown recovers and resets the budget; callers share one spawn
+  ---
+  duration_ms: 2.780763
+  type: 'test'
+  ...
+# Subtest: supervisor: a failed probe doubles the cooldown up to the cap
+ok 174 - supervisor: a failed probe doubles the cooldown up to the cap
+  ---
+  duration_ms: 11.525442
+  type: 'test'
+  ...
+# Subtest: supervisor: a leader that never exits is bypassed after exitWaitMs with an unreaped event
+ok 175 - supervisor: a leader that never exits is bypassed after exitWaitMs with an unreaped event
+  ---
+  duration_ms: 3.142109
+  type: 'test'
+  ...
+# Subtest: supervisor: only a run that sent turn/start gets outcomeUnknown after a shared process failure
+ok 176 - supervisor: only a run that sent turn/start gets outcomeUnknown after a shared process failure
+  ---
+  duration_ms: 2.255327
+  type: 'test'
+  ...
+# Subtest: supervisor: usage_limit, rpc_timeout, request_rejected and domain_failure neither restart nor charge
+ok 177 - supervisor: usage_limit, rpc_timeout, request_rejected and domain_failure neither restart nor charge
+  ---
+  duration_ms: 23.935928
+  type: 'test'
+  ...
+# Subtest: supervisor: a turn/start timeout is charged as turn_start_unknown and carries the generation
+ok 178 - supervisor: a turn/start timeout is charged as turn_start_unknown and carries the generation
+  ---
+  duration_ms: 2.649531
+  type: 'test'
+  ...
+# Subtest: supervisor: resetSupervisor clears exhaustion and the window
+ok 179 - supervisor: resetSupervisor clears exhaustion and the window
+  ---
+  duration_ms: 3.327506
+  type: 'test'
+  ...
+# Subtest: classifyFailure assigns one class per failure shape
+ok 180 - classifyFailure assigns one class per failure shape
+  ---
+  duration_ms: 0.760741
+  type: 'test'
+  ...
+# Subtest: execCommand sends command/exec with the given sandbox policy and returns the buffered result
+ok 181 - execCommand sends command/exec with the given sandbox policy and returns the buffered result
+  ---
+  duration_ms: 1.724628
+  type: 'test'
+  ...
+# Subtest: laneSandboxPolicy makes every field explicit
+ok 182 - laneSandboxPolicy makes every field explicit
+  ---
+  duration_ms: 0.147909
+  type: 'test'
+  ...
+# Subtest: run() sends a supplied sandboxPolicy instead of the role default
+ok 183 - run() sends a supplied sandboxPolicy instead of the role default
+  ---
+  duration_ms: 1.834573
+  type: 'test'
+  ...
+# Subtest: codexHome sets CODEX_HOME in the spawn env; without it the options are unchanged
+ok 184 - codexHome sets CODEX_HOME in the spawn env; without it the options are unchanged
+  ---
+  duration_ms: 2.240861
+  type: 'test'
+  ...
+# Subtest: loginStart, loginCancel and logout send the account RPCs
+ok 185 - loginStart, loginCancel and logout send the account RPCs
+  ---
+  duration_ms: 1.50464
+  type: 'test'
+  ...
+# Subtest: onNotification receives unclaimed notifications, survives handler errors and unsubscribes
+ok 186 - onNotification receives unclaimed notifications, survives handler errors and unsubscribes
+  ---
+  duration_ms: 2.264377
+  type: 'test'
+  ...
+# Subtest: e2e real stack
+    # Subtest: happy path: dispatch explorer, then finish
+    ok 1 - happy path: dispatch explorer, then finish
+      ---
+      duration_ms: 307.215791
+      type: 'test'
+      ...
+    # Subtest: transient capacity failure retries the same real Lead checkpoint automatically
+    ok 2 - transient capacity failure retries the same real Lead checkpoint automatically
+      ---
+      duration_ms: 5974.043195
+      type: 'test'
+      ...
+    # Subtest: explicit rateLimitExceeded uses transient recovery
+    ok 3 - explicit rateLimitExceeded uses transient recovery
+      ---
+      duration_ms: 5290.700514
+      type: 'test'
+      ...
+    # Subtest: anonymous nested HTTP 429 preserves legacy budget handling
+    ok 4 - anonymous nested HTTP 429 preserves legacy budget handling
+      ---
+      duration_ms: 39.334494
+      type: 'test'
+      ...
+    # Subtest: human decision: pause, answer, finish
+    ok 5 - human decision: pause, answer, finish
+      ---
+      duration_ms: 104.766785
+      type: 'test'
+      ...
+    # Subtest: wrong decisionId keeps the task waiting without calling the lead
+    ok 6 - wrong decisionId keeps the task waiting without calling the lead
+      ---
+      duration_ms: 77.902068
+      type: 'test'
+      ...
+    # Subtest: usage limit pauses for budget and resumes on the next message
+    ok 7 - usage limit pauses for budget and resumes on the next message
+      ---
+      duration_ms: 60.681981
+      type: 'test'
+      ...
+    # Subtest: restart: reconciliation, resume, and the writer is not re-sent
+    ok 8 - restart: reconciliation, resume, and the writer is not re-sent
+      ---
+      duration_ms: 184.758221
+      type: 'test'
+      ...
+    1..8
+ok 187 - e2e real stack
+  ---
+  duration_ms: 12049.344033
+  type: 'test'
+  ...
+# Subtest: launcher exits promptly with a port hint and no ready log when binding fails
+ok 188 - launcher exits promptly with a port hint and no ready log when binding fails
+  ---
+  duration_ms: 553.840638
+  type: 'test'
+  ...
+# Subtest: launcher becomes ready on a free port and shuts down cleanly
+ok 189 - launcher becomes ready on a free port and shuts down cleanly
+  ---
+  duration_ms: 461.323259
+  type: 'test'
+  ...
+# Subtest: loads all eight source roles with valid model, effort, and sandbox settings
+ok 190 - loads all eight source roles with valid model, effort, and sandbox settings
+  ---
+  duration_ms: 5.626063
+  type: 'test'
+  ...
+# Subtest: resolved role instructions define A2A runtime behavior and an absolute local team-rules path
+ok 191 - resolved role instructions define A2A runtime behavior and an absolute local team-rules path
+  ---
+  duration_ms: 2.902078
+  type: 'test'
+  ...
+# Subtest: implementation roles allow only explicitly authorized local Git actions and stop on denied operations
+ok 192 - implementation roles allow only explicitly authorized local Git actions and stop on denied operations
+  ---
+  duration_ms: 1.208176
+  type: 'test'
+  ...
+# Subtest: profile model and effort values are unchanged by inlining the team rules
+ok 193 - profile model and effort values are unchanged by inlining the team rules
+  ---
+  duration_ms: 1.204963
+  type: 'test'
+  ...
+# Subtest: profiles work from a copied directory without the original source pack
+ok 194 - profiles work from a copied directory without the original source pack
+  ---
+  duration_ms: 8.089766
+  type: 'test'
+  ...
+# Subtest: rejects profiles with missing required settings
+ok 195 - rejects profiles with missing required settings
+  ---
+  duration_ms: 6.130569
+  type: 'test'
+  ...
+# Subtest: shipped roles have their curated MCP allowlists and skills off
+ok 196 - shipped roles have their curated MCP allowlists and skills off
+  ---
+  duration_ms: 2.173613
+  type: 'test'
+  ...
+# Subtest: parses an a2a_tools table and treats a missing table as deny-all
+ok 197 - parses an a2a_tools table and treats a missing table as deny-all
+  ---
+  duration_ms: 14.358499
+  type: 'test'
+  ...
+# Subtest: rejects malformed a2a_tools tables
+ok 198 - rejects malformed a2a_tools tables
+  ---
+  duration_ms: 34.316529
+  type: 'test'
+  ...
+# Subtest: canonical role names and labels retain legacy ID compatibility
+ok 199 - canonical role names and labels retain legacy ID compatibility
+  ---
+  duration_ms: 2.305505
+  type: 'test'
+  ...
+# Subtest: role defaults implement the Luna to Terra to Sol model ladder with Fast disabled
+ok 200 - role defaults implement the Luna to Terra to Sol model ladder with Fast disabled
+  ---
+  duration_ms: 0.883567
+  type: 'test'
+  ...
+# Subtest: legacy-named custom profiles normalize IDs while checking their source filenames
+ok 201 - legacy-named custom profiles normalize IDs while checking their source filenames
+  ---
+  duration_ms: 6.643987
+  type: 'test'
+  ...
+# Subtest: accepts safe custom machine IDs and falls back to the ID without display_name
+ok 202 - accepts safe custom machine IDs and falls back to the ID without display_name
+  ---
+  duration_ms: 6.726891
+  type: 'test'
+  ...
+# Subtest: an integrated lane: lane cwd and policy, attested delta, removed lane, live activity and provenance
+ok 203 - an integrated lane: lane cwd and policy, attested delta, removed lane, live activity and provenance
+  ---
+  duration_ms: 288.240731
+  type: 'test'
+  ...
+# Subtest: two writers of one wave run concurrently, finish interleaved, and integrate one at a time
+ok 204 - two writers of one wave run concurrently, finish interleaved, and integrate one at a time
+  ---
+  duration_ms: 324.472167
+  type: 'test'
+  ...
+# Subtest: a lane without changes is not integrated, claims no effects, and the attested scope passes
+ok 205 - a lane without changes is not integrated, claims no effects, and the attested scope passes
+  ---
+  duration_ms: 99.619422
+  type: 'test'
+  ...
+# Subtest: a lane patch outside allowedFiles is refused whole: shared tree untouched, settle.lane_scope fails
+ok 206 - a lane patch outside allowedFiles is refused whole: shared tree untouched, settle.lane_scope fails
+  ---
+  duration_ms: 105.271508
+  type: 'test'
+  ...
+# Subtest: an owner edit of the same lines mid-turn ends in integration_conflict with the row released
+ok 207 - an owner edit of the same lines mid-turn ends in integration_conflict with the row released
+  ---
+  duration_ms: 150.213968
+  type: 'test'
+  ...
+# Subtest: failed, interrupted, and canceled lane turns keep their lane and integrate nothing
+ok 208 - failed, interrupted, and canceled lane turns keep their lane and integrate nothing
+  ---
+  duration_ms: 189.500597
+  type: 'test'
+  ...
+# Subtest: a fenced context is refused at prepare without a lane row or a turn
+ok 209 - a fenced context is refused at prepare without a lane row or a turn
+  ---
+  duration_ms: 18.737901
+  type: 'test'
+  ...
+# Subtest: a legacy plain-text writer runs in shared mode under admission for the whole turn
+ok 210 - a legacy plain-text writer runs in shared mode under admission for the whole turn
+  ---
+  duration_ms: 34.273032
+  type: 'test'
+  ...
+# Subtest: a new App Server version is re-probed once; a failing probe sends the attempt to shared mode
+ok 211 - a new App Server version is re-probed once; a failing probe sends the attempt to shared mode
+  ---
+  duration_ms: 65.025724
+  type: 'test'
+  ...
+# Subtest: a stored failed probe is not reused: the next process re-probes and a pass replaces it
+ok 212 - a stored failed probe is not reused: the next process re-probes and a pass replaces it
+  ---
+  duration_ms: 256.647881
+  type: 'test'
+  ...
+# Subtest: trusted native full access selects cooperative lanes without claiming confinement
+ok 213 - trusted native full access selects cooperative lanes without claiming confinement
+  ---
+  duration_ms: 29.049052
+  type: 'test'
+  ...
+# Subtest: after a failed re-probe a version is not probed again within the process
+ok 214 - after a failed re-probe a version is not probed again within the process
+  ---
+  duration_ms: 20.480667
+  type: 'test'
+  ...
+# Subtest: the integration records a pending turn start before spawn and the real apply identity on spawn
+ok 215 - the integration records a pending turn start before spawn and the real apply identity on spawn
+  ---
+  duration_ms: 158.294514
+  type: 'test'
+  ...
+# Subtest: mode selection: shared by setting, unsupported App Server, nested workspace, or a failing probe
+ok 216 - mode selection: shared by setting, unsupported App Server, nested workspace, or a failing probe
+  ---
+  duration_ms: 300.471506
+  type: 'test'
+  ...
+# Subtest: lanes root, links, and retention settings
+ok 217 - lanes root, links, and retention settings
+  ---
+  duration_ms: 20.736003
+  type: 'test'
+  ...
+# Subtest: startup recovery: live rows are orphaned (orphan group killed), integrating rows resolve through their execution row
+ok 218 - startup recovery: live rows are orphaned (orphan group killed), integrating rows resolve through their execution row
+  ---
+  duration_ms: 560.597484
+  type: 'test'
+  ...
+# Subtest: retention removes kept lanes older than the limit, only inside the lanes root
+ok 219 - retention removes kept lanes older than the limit, only inside the lanes root
+  ---
+  duration_ms: 229.128288
+  type: 'test'
+  ...
+# Subtest: the lane store keeps exactly the designed columns
+ok 220 - the lane store keeps exactly the designed columns
+  ---
+  duration_ms: 0.796052
+  type: 'test'
+  ...
+# Subtest: one mutex per real workspace serializes work from separate managers
+ok 221 - one mutex per real workspace serializes work from separate managers
+  ---
+  duration_ms: 33.801978
+  type: 'test'
+  ...
+# Subtest: a usage-limited lane writer reports a continuation with its thread, lane, and home
+ok 222 - a usage-limited lane writer reports a continuation with its thread, lane, and home
+  ---
+  duration_ms: 73.806111
+  type: 'test'
+  ...
+# Subtest: a continuation adopts the old lane: same path, old row continued, partial file visible, thread resumed
+ok 223 - a continuation adopts the old lane: same path, old row continued, partial file visible, thread resumed
+  ---
+  duration_ms: 174.618207
+  type: 'test'
+  ...
+# Subtest: a different App Server home starts a fresh thread in the adopted lane
+ok 224 - a different App Server home starts a fresh thread in the adopted lane
+  ---
+  duration_ms: 102.468757
+  type: 'test'
+  ...
+# Subtest: a rejected thread resume falls back to a fresh thread
+ok 225 - a rejected thread resume falls back to a fresh thread
+  ---
+  duration_ms: 110.914392
+  type: 'test'
+  ...
+# Subtest: adoption is refused for a wrong state or owner and falls back to a fresh lane
+ok 226 - adoption is refused for a wrong state or owner and falls back to a fresh lane
+  ---
+  duration_ms: 276.078531
+  type: 'test'
+  ...
+# Subtest: a shared writer and a read-only role continue by resuming their thread
+ok 227 - a shared writer and a read-only role continue by resuming their thread
+  ---
+  duration_ms: 69.917225
+  type: 'test'
+  ...
+# Subtest: retention never removes an adopted path while another row references it
+ok 228 - retention never removes an adopted path while another row references it
+  ---
+  duration_ms: 135.269548
+  type: 'test'
+  ...
+# Subtest: a lane table created before continued_from gains the column
+ok 229 - a lane table created before continued_from gains the column
+  ---
+  duration_ms: 0.667497
+  type: 'test'
+  ...
+# Subtest: a completed lane writer publishes thread, lane, and home as continuation metadata
+ok 230 - a completed lane writer publishes thread, lane, and home as continuation metadata
+  ---
+  duration_ms: 74.22183
+  type: 'test'
+  ...
+# Subtest: a scope continuation resumes the thread with the scope note and a fresh lane after an integrated lane
+ok 231 - a scope continuation resumes the thread with the scope note and a fresh lane after an integrated lane
+  ---
+  duration_ms: 274.137806
+  type: 'test'
+  ...
+# Subtest: a scope continuation adopts a kept lane and resumes the thread
+ok 232 - a scope continuation adopts a kept lane and resumes the thread
+  ---
+  duration_ms: 92.515283
+  type: 'test'
+  ...
+# Subtest: a scope continuation on another home starts a fresh thread with the scope note
+ok 233 - a scope continuation on another home starts a fresh thread with the scope note
+  ---
+  duration_ms: 130.865791
+  type: 'test'
+  ...
+# Subtest: a scope continuation with a removed lane row starts a fresh thread and lane
+ok 234 - a scope continuation with a removed lane row starts a fresh thread and lane
+  ---
+  duration_ms: 140.273587
+  type: 'test'
+  ...
+# Subtest: a failed turn publishes its thread as continuation metadata for any failure kind
+ok 235 - a failed turn publishes its thread as continuation metadata for any failure kind
+  ---
+  duration_ms: 69.382044
+  type: 'test'
+  ...
+1..235
+# tests 247
+# suites 0
+# pass 247
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 12727.304491

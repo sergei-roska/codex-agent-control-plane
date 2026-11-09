@@ -1,0 +1,5 @@
+# CN-05 task executor
+
+Implement the local per-attempt execution adapter in `src/task-executor.js` with focused tests in `test/task-executor.test.js`. Root owns Git and tracked docs. Do not edit backlog/contracts/legacy code or candidate-store files. Use disposable SQLite and fake transport only. No startup wiring or real service/network/model/target actions.
+
+Required behavior: accept only durable claimed attempts; revalidate task/control/generation/lease/settings and role; pin resolved settings before send; commit deterministic context, request digest, journal identity and exclusive send intent before network; reconcile interrupted sends by deterministic lookup without blind resend; validate remote identity; settle exactly once only with trusted injected result/effect evidence; preserve unknown claims/capacity on ambiguity, abort timeout, and shared transport failure; fan shared failures to every affected attempt. Test causal barriers rather than sleeps. Report exact commands, API, limits, and fake-vs-installed boundary.

@@ -1,0 +1,54 @@
+--- .agents/teamwork/cn14-facade-20261028/correction/project-delivery-controller.js	2026-10-28 10:08:24.160616148 +0200
++++ src/project-delivery-controller.js	2026-10-28 10:12:38.665872227 +0200
+@@ -8,9 +8,11 @@
+ const copy = (value) => JSON.parse(JSON.stringify(value));
+ 
+ class ProjectDeliveryController {
+-  constructor({ store, executor, projectId, objectiveId, sessionId, inbox, planner, lifecycle, lifecycleOptions = {}, runTurn, settingsFor, contextFor, reconcilePriorTurn, authorizeRecovery, providerThreadId, schedulerOptions = {}, authenticateOwner, now = () => Date.now() } = {}) {
++  constructor({ store, executor, projectId, objectiveId, sessionId, inbox, planner, lifecycle, lifecycleOptions = {}, runTurn, settingsFor, contextFor, reconcilePriorTurn, authorizeRecovery, providerThreadId, schedulerOptions = {}, authenticateOwner, onOwnerCorrection = () => {}, now = () => Date.now() } = {}) {
+     if (!store || !executor) throw new TypeError('ProjectDeliveryController requires store and executor');
+     if (!projectId || !objectiveId || !sessionId) throw new TypeError('Project, objective and session identity are required');
++    if (typeof onOwnerCorrection !== 'function') throw new TypeError('Owner correction hook must be a function');
++    this.onOwnerCorrection = onOwnerCorrection;
+     this.store = store;
+     this.executor = executor;
+     this.projectId = projectId;
+@@ -254,7 +256,15 @@
+     return { state: 'idle', reason: 'no_trigger' };
+   }
+ 
+-  async #applyOwnerCorrections() {
++  applyPendingOwnerCorrections() {
++    if (this.shutdownRequested) throw Object.assign(new Error('controller_shutdown'), { code: 'controller_shutdown' });
++    this.#applyOwnerCorrections();
++  }
++
++  #applyOwnerCorrections() {
++    if (this.store.getObjective(this.projectId, this.objectiveId)?.ownerGeneration !== this.ownerGeneration) {
++      throw Object.assign(new Error('owner_generation_stale'), { code: 'owner_generation_stale' });
++    }
+     for (const message of this.inbox.pending()) {
+       if (message.kind !== 'owner_correction') continue;
+       try {
+@@ -262,7 +272,21 @@
+         if (typeof this.store.applyOwnerCorrection !== 'function') throw Object.assign(new Error('owner_correction_extension_unavailable'), { code: 'owner_correction_extension_unavailable' });
+         const correction = { ...message.payload.correction, sourceMessageId: message.messageId };
+         const apply = this.store.db.transaction(() => {
++          const prior = this.store.getObjective(this.projectId, this.objectiveId);
++          if (prior?.ownerGeneration !== this.ownerGeneration || prior.controlRevision !== this.controlRevision) {
++            throw Object.assign(new Error('lifecycle_identity_changed'), { code: 'lifecycle_identity_changed' });
++          }
+           const current = this.store.applyOwnerCorrection(this.projectId, this.objectiveId, correction);
++          const result = this.onOwnerCorrection({ prior: copy(prior), current: copy(current), message: copy(message) });
++          if (result && typeof result.then === 'function') {
++            result.catch?.(() => {});
++            throw Object.assign(new Error('owner_correction_hook_async'), { code: 'owner_correction_hook_async' });
++          }
++          const refreshed = this.store.getObjective(this.projectId, this.objectiveId);
++          if (refreshed?.ownerGeneration !== this.ownerGeneration || refreshed.controlRevision !== current.controlRevision
++            || refreshed.goalRevision !== current.goalRevision || refreshed.requirementDigest !== current.requirementDigest) {
++            throw Object.assign(new Error('lifecycle_identity_changed'), { code: 'lifecycle_identity_changed' });
++          }
+           this.inbox.markApplied(message.messageId, 'received', { goalRevision: current.goalRevision, controlRevision: current.controlRevision });
+           this.inbox.signal('owner.correction.applied');
+           return current;

@@ -1,0 +1,38 @@
+{
+  "baseline_failures": [
+    "a completed lane writer publishes thread, lane, and home as continuation metadata",
+    "a usage-limited lane writer reports a continuation with its thread, lane, and home",
+    "direct review continuations bind thread lane and codex home to their origin attempt",
+    "direct verifier continuation requires its originating target and preserves same-target control",
+    "enumeration failure still sends apps/plugins/skills overrides and marks enforced false",
+    "every shipped role and the lead have an empty MCP allowlist and skills off",
+    "rejects malformed a2a_tools tables",
+    "selected skills are explicit turn inputs with scoped boundary and hash provenance"
+  ],
+  "matching_baseline_failures": [
+    "a completed lane writer publishes thread, lane, and home as continuation metadata",
+    "a usage-limited lane writer reports a continuation with its thread, lane, and home",
+    "direct review continuations bind thread lane and codex home to their origin attempt",
+    "direct verifier continuation requires its originating target and preserves same-target control",
+    "enumeration failure still sends apps/plugins/skills overrides and marks enforced false",
+    "every shipped role and the lead have an empty MCP allowlist and skills off",
+    "rejects malformed a2a_tools tables",
+    "selected skills are explicit turn inputs with scoped boundary and hash provenance"
+  ],
+  "additional_failures_before_fixture_repair": [
+    "disabled by default: the policy and exec request are exactly the agent check defaults and no scratch is recorded",
+    "enabled: policy, env, and a fresh directory that is removed after a pass",
+    "launcher becomes ready on a free port and shuts down cleanly",
+    "the first valid proposal is pinned, published, ignored later, and run through execCommand only"
+  ],
+  "fixture_repair_checks": {
+    "acceptance_scratch": "15/15 passed",
+    "lead_graph": "276/276 passed"
+  },
+  "unrelated_launcher_startup_recheck": "2/2 passed",
+  "source_runtime_probe": {
+    "exitCode": 0,
+    "stdout": "anyio_portal=passed\nloopback_bind=passed\noutside_write=denied errno=30\n",
+    "stderr": ""
+  }
+}

@@ -1,0 +1,29 @@
+{
+    "_hash": "b9bbadb1090d14d636f20ed5320c34a2a55132b1a490fac5249943bd3b5d7c99",
+    "patches": {
+        "drupal/shs": [
+            {
+                "package": "drupal/shs",
+                "description": "Upstream MR 59 validation probe",
+                "url": "patches/dccourts-182-mr59.diff",
+                "sha256": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ],
+        "drupal/core": [
+            {
+                "package": "drupal/core",
+                "description": "Existing record metadata probe",
+                "url": "patches/core-metadata-probe.patch",
+                "sha256": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+                "depth": 2,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ]
+    }
+}

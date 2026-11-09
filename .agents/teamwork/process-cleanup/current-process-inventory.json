@@ -1,0 +1,166 @@
+{
+  "at": "2026-10-19T12:13:56.620899+00:00",
+  "processes": [
+    {
+      "pid": 89417,
+      "ppid": 8856,
+      "pgid": 89417,
+      "startTime": "378579",
+      "cwd": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mveyab12-20d64239 (deleted)",
+      "program": "codex-linux-sandbox",
+      "pytest": false,
+      "memory": {
+        "State": "S (sleeping)",
+        "VmRSS": "21024 kB"
+      },
+      "owners": [
+        {
+          "path": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mveyab12-20d64239",
+          "lane_id": "lane-mveyab12-20d64239",
+          "task_id": "5713de8f-c874-46fd-b9bb-c1158ff86d36",
+          "lane_state": "integrated",
+          "status_state": "TASK_STATE_COMPLETED",
+          "dispatch_state": "finished"
+        }
+      ]
+    },
+    {
+      "pid": 89438,
+      "ppid": 89417,
+      "pgid": 89438,
+      "startTime": "378584",
+      "cwd": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mveyab12-20d64239 (deleted)",
+      "program": "bwrap",
+      "pytest": false,
+      "memory": {
+        "State": "S (sleeping)",
+        "VmRSS": "2152 kB"
+      },
+      "owners": [
+        {
+          "path": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mveyab12-20d64239",
+          "lane_id": "lane-mveyab12-20d64239",
+          "task_id": "5713de8f-c874-46fd-b9bb-c1158ff86d36",
+          "lane_state": "integrated",
+          "status_state": "TASK_STATE_COMPLETED",
+          "dispatch_state": "finished"
+        }
+      ]
+    },
+    {
+      "pid": 141572,
+      "ppid": 8856,
+      "pgid": 141572,
+      "startTime": "759962",
+      "cwd": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf0nd7a-d0bf12bb",
+      "program": "codex-linux-sandbox",
+      "pytest": false,
+      "memory": {
+        "State": "S (sleeping)",
+        "VmRSS": "20968 kB"
+      },
+      "owners": [
+        {
+          "path": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf0nd7a-d0bf12bb",
+          "lane_id": "lane-mvf0nd7a-d0bf12bb",
+          "task_id": "c09a8bfe-63ce-4af1-907c-7b89c1b0bf8a",
+          "lane_state": "not_integrated",
+          "status_state": "TASK_STATE_COMPLETED",
+          "dispatch_state": "finished"
+        }
+      ]
+    },
+    {
+      "pid": 141576,
+      "ppid": 141572,
+      "pgid": 141576,
+      "startTime": "759964",
+      "cwd": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf0nd7a-d0bf12bb",
+      "program": "bwrap",
+      "pytest": false,
+      "memory": {
+        "State": "S (sleeping)",
+        "VmRSS": "2152 kB"
+      },
+      "owners": [
+        {
+          "path": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf0nd7a-d0bf12bb",
+          "lane_id": "lane-mvf0nd7a-d0bf12bb",
+          "task_id": "c09a8bfe-63ce-4af1-907c-7b89c1b0bf8a",
+          "lane_state": "not_integrated",
+          "status_state": "TASK_STATE_COMPLETED",
+          "dispatch_state": "finished"
+        }
+      ]
+    },
+    {
+      "pid": 141577,
+      "ppid": 141576,
+      "pgid": 141577,
+      "startTime": "759964",
+      "cwd": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf0nd7a-d0bf12bb",
+      "program": "codex-linux-sandbox",
+      "pytest": false,
+      "memory": {
+        "State": "S (sleeping)",
+        "VmRSS": "19504 kB"
+      },
+      "owners": [
+        {
+          "path": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf0nd7a-d0bf12bb",
+          "lane_id": "lane-mvf0nd7a-d0bf12bb",
+          "task_id": "c09a8bfe-63ce-4af1-907c-7b89c1b0bf8a",
+          "lane_state": "not_integrated",
+          "status_state": "TASK_STATE_COMPLETED",
+          "dispatch_state": "finished"
+        }
+      ]
+    },
+    {
+      "pid": 141578,
+      "ppid": 141577,
+      "pgid": 141577,
+      "startTime": "759965",
+      "cwd": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf0nd7a-d0bf12bb",
+      "program": "uv",
+      "pytest": true,
+      "memory": {
+        "State": "S (sleeping)",
+        "VmRSS": "26204 kB"
+      },
+      "owners": [
+        {
+          "path": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf0nd7a-d0bf12bb",
+          "lane_id": "lane-mvf0nd7a-d0bf12bb",
+          "task_id": "c09a8bfe-63ce-4af1-907c-7b89c1b0bf8a",
+          "lane_state": "not_integrated",
+          "status_state": "TASK_STATE_COMPLETED",
+          "dispatch_state": "finished"
+        }
+      ]
+    },
+    {
+      "pid": 141582,
+      "ppid": 141578,
+      "pgid": 141577,
+      "startTime": "759970",
+      "cwd": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf0nd7a-d0bf12bb",
+      "program": "python",
+      "pytest": false,
+      "memory": {
+        "State": "S (sleeping)",
+        "VmRSS": "98444 kB"
+      },
+      "owners": [
+        {
+          "path": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf0nd7a-d0bf12bb",
+          "lane_id": "lane-mvf0nd7a-d0bf12bb",
+          "task_id": "c09a8bfe-63ce-4af1-907c-7b89c1b0bf8a",
+          "lane_state": "not_integrated",
+          "status_state": "TASK_STATE_COMPLETED",
+          "dispatch_state": "finished"
+        }
+      ]
+    }
+  ]
+}

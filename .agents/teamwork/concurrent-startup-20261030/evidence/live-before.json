@@ -1,0 +1,83 @@
+{
+  "capturedAt": "2026-10-30T10:07:56.955Z",
+  "tables": {
+    "tasks": {
+      "rows": 21,
+      "digest": "88a7da9132d1849f63c4c6732c4a334dfea404a365259cb0cd07167796a1bad8"
+    },
+    "candidates": {
+      "rows": 8,
+      "digest": "8061d6c0f8d41469728fabfcacadc14fa996886515993011e9bf3f57f4b3aefb"
+    },
+    "delivery_output_publications": {
+      "rows": 1,
+      "digest": "488b932eba4c929c849a1990c9c089228282fc6717f542ddb61f80ed6869113d"
+    },
+    "delivery_planner_turns": {
+      "rows": 9,
+      "digest": "62792d158ff5a4c1f11ec3b52a270b78a61060262421ee561f87d38c2b9f18b7"
+    }
+  },
+  "objectives": [
+    {
+      "objectiveId": "delivery-1b0c9912fcf4af350c24c3226567ec62",
+      "disposition": "canceled",
+      "ownerGeneration": 0,
+      "controlRevision": 2
+    },
+    {
+      "objectiveId": "delivery-0b9e1ae01a0c51eab5a05ee522caf4c6",
+      "disposition": "canceled",
+      "ownerGeneration": 0,
+      "controlRevision": 2
+    },
+    {
+      "objectiveId": "delivery-3c2bf73aaf2251230fcf49f930ef5c75",
+      "disposition": "paused_owner",
+      "ownerGeneration": 0,
+      "controlRevision": 2
+    },
+    {
+      "objectiveId": "delivery-6edb56ae07584e8f190df4d1f831fd99",
+      "disposition": "paused_owner",
+      "ownerGeneration": 0,
+      "controlRevision": 2
+    },
+    {
+      "objectiveId": "delivery-ee7694b237f433e236f323397fca1415",
+      "disposition": "paused_owner",
+      "ownerGeneration": 0,
+      "controlRevision": 2
+    },
+    {
+      "objectiveId": "delivery-e6bc98145f9d83e411cfe8e3cfbbacf2",
+      "disposition": "paused_owner",
+      "ownerGeneration": 0,
+      "controlRevision": 2
+    },
+    {
+      "objectiveId": "delivery-e0f037f14a11df53bb4fd0da6f873b6c",
+      "disposition": "blocked_technical",
+      "ownerGeneration": 0,
+      "controlRevision": 1
+    }
+  ],
+  "attempts": [
+    {
+      "attemptId": "attempt-e30eed82342888cfe70a775e602fcdbc",
+      "state": "failed"
+    },
+    {
+      "attemptId": "attempt-a5e3cddbd7a2052b2407414f9a1d16f1",
+      "state": "failed"
+    },
+    {
+      "attemptId": "attempt-65ad4cd2dcf6c2681d758f20468ad96f",
+      "state": "succeeded"
+    },
+    {
+      "attemptId": "attempt-d5b47aa4f27eb0b79ee386c1feb13b9b",
+      "state": "claimed"
+    }
+  ]
+}

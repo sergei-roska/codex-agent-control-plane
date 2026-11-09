@@ -1,0 +1,29 @@
+{
+  "baseline": "4192a08",
+  "focused_schema": {
+    "command": "node --test --test-name-pattern='planner sends a strict usable schema' test/server-delivery-engine.test.js",
+    "result": "pass",
+    "tests": 1
+  },
+  "contracts": {
+    "command": "node --test test/delivery-contracts.test.js",
+    "result": "pass",
+    "tests": 16
+  },
+  "recovery": {
+    "command": "node --test test/concurrent-recovery-acceptance.test.js",
+    "result": "pass",
+    "tests": 1
+  },
+  "syntax": {
+    "command": "node --check src/concurrent-delivery-engine.js && node --check test/server-delivery-engine.test.js",
+    "result": "pass"
+  },
+  "frozen_sha256": {
+    "src/concurrent-delivery-engine.js": "7c9a3787f105c18c708819edab6dfe5aedb9c9e50849ef9d1dcc44cf9db99baa",
+    "test/server-delivery-engine.test.js": "7edbc07c2a76f78b2ce8cf44e5e3422f47d105336bd5ccb4a5406ab941c4de5a"
+  },
+  "live_calls": false,
+  "runtime_restart": false,
+  "replay_or_db_mutation": false
+}

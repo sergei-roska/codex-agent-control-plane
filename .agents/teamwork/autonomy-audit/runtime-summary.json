@@ -1,0 +1,117 @@
+{
+  "observedAt": "2026-10-21T08:52:50.105249+00:00",
+  "project": "c65886082e",
+  "incident": {
+    "taskId": "44ea79b5-3cc6-4ee7-a0e3-8a14404342ff",
+    "latestStatus": "TASK_STATE_COMPLETED",
+    "history": [
+      {
+        "messageId": "web-1792568314223",
+        "role": "ROLE_USER"
+      },
+      {
+        "messageId": "44ea79b5-3cc6-4ee7-a0e3-8a14404342ff-error-pause-1792568535142",
+        "role": "ROLE_AGENT",
+        "text": "The run stopped on an error (CodexAppServerError): Selected model is at capacity. Please try a different model.\nSend a message to this task to retry the failed step.\nAnswer with: npm run ask -- --task 44ea79b5-3cc6-4ee7-a0e3-8a14404342ff \"<answer>\""
+      },
+      {
+        "messageId": "capacity-retry-1792570357985",
+        "role": "ROLE_USER"
+      }
+    ],
+    "turns": [
+      {
+        "role": "coordinator",
+        "model": "gpt-6.1-sol",
+        "startedAt": "2026-10-21T07:38:34.315Z",
+        "elapsedMs": 58283,
+        "outcome": "completed"
+      },
+      {
+        "role": "coordinator",
+        "model": "gpt-6.1-sol",
+        "startedAt": "2026-10-21T07:40:46.127Z",
+        "elapsedMs": 37084,
+        "outcome": "completed"
+      },
+      {
+        "role": "coordinator",
+        "model": "gpt-6.1-sol",
+        "startedAt": "2026-10-21T07:42:07.039Z",
+        "elapsedMs": 8092,
+        "outcome": "error"
+      },
+      {
+        "role": "coordinator",
+        "model": "gpt-6.1-sol",
+        "startedAt": "2026-10-21T08:12:38.026Z",
+        "elapsedMs": 43352,
+        "outcome": "completed"
+      }
+    ]
+  },
+  "escalations": [
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h1",
+      "reason": "infeasible_requirement"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h2",
+      "reason": "infeasible_requirement"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h3",
+      "reason": "infeasible_requirement"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h4",
+      "reason": "infeasible_requirement"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h5",
+      "reason": "infeasible_requirement"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h6",
+      "reason": "infeasible_requirement"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h7",
+      "reason": "loop_detected"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h8",
+      "reason": "infeasible_requirement"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h9",
+      "reason": "infeasible_requirement"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h10",
+      "reason": "infeasible_requirement"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h11",
+      "reason": "infeasible_requirement"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h12",
+      "reason": "infeasible_requirement"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h13",
+      "reason": "credentials_or_access"
+    },
+    {
+      "id": "9e2c8b53-458b-4ccf-924b-ee13639510df:h14",
+      "reason": "paid_resources"
+    }
+  ],
+  "reasonCounts": {
+    "infeasible_requirement": 11,
+    "loop_detected": 1,
+    "credentials_or_access": 1,
+    "paid_resources": 1
+  }
+}

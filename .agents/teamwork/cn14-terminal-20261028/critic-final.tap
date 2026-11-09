@@ -1,0 +1,52 @@
+✔ shutdown no-publication recovery integrates owned lost acknowledgement (5254.079796ms)
+✔ shutdown no-publication recovery integrates cooperative lost acknowledgement (5191.064241ms)
+✔ shutdown no-publication recovery integrates unknown lost acknowledgement (5362.401873ms)
+✔ shutdown no-publication recovery integrates publication lost acknowledgement (5192.894238ms)
+✔ shutdown no-publication recovery integrates pending-inbox lost acknowledgement (5160.087605ms)
+✔ shutdown no-publication recovery integrates reopen lost acknowledgement (5183.064511ms)
+✔ owner pause facade resumes reused controller without overlapping planner calls (110.908405ms)
+✔ owner pause facade resumes reopened SQLite without overlapping planner calls (126.207574ms)
+Agent execution failed for message 58f4b34e68f906e33790cb8b059460c6ac7ea45b480362493ab3ea3ea535ac1e: Error: delivery_role_objective_inactive
+    at error (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:34:55)
+    at #snapshot (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:162:94)
+    at #execute (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:586:35)
+    at Object.execute (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:743:61)
+    at DefaultRequestHandler._runExecutor (/home/sr/Projects/Workspace/codex-agent-control-plane/node_modules/@a2a-js/sdk/dist/server/index.cjs:2971:24)
+    at DefaultRequestHandler.sendMessage (/home/sr/Projects/Workspace/codex-agent-control-plane/node_modules/@a2a-js/sdk/dist/server/index.cjs:3146:10)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async _JsonRpcTransportHandler.handle (/home/sr/Projects/Workspace/codex-agent-control-plane/node_modules/@a2a-js/sdk/dist/server/express/index.cjs:1984:35)
+    at async /home/sr/Projects/Workspace/codex-agent-control-plane/node_modules/@a2a-js/sdk/dist/server/express/index.cjs:3466:35 {
+  code: 'delivery_role_objective_inactive'
+}
+✔ owner pause facade retains admitted worker completion (406.658179ms)
+✔ owner pause facade retains admitted worker unknown effects (163.574376ms)
+✔ owner pause facade resume preserves owner-stop-unknown boundary (186.545053ms)
+✔ owner pause facade resume preserves technical boundary (179.610505ms)
+✔ owner pause facade resume preserves budget boundary (194.787446ms)
+✔ staged shutdown retains older and newly started provider groups across preparation reopen (42.659646ms)
+✔ staged shutdown drains executor callback promises after scheduler scan has returned (45.702915ms)
+✔ terminal failure requires independent original group death, preserves drift and replays executor closure (198.447491ms)
+✔ shutdown terminal failure denies receipt (126.409626ms)
+✔ shutdown terminal failure denies receipt-generation (103.416066ms)
+✔ shutdown terminal failure denies receipt-turn (102.7711ms)
+✔ shutdown terminal failure denies escaped (120.385694ms)
+✔ shutdown terminal failure denies owner (102.284883ms)
+✔ shutdown terminal failure denies request (102.256729ms)
+✔ shutdown terminal failure denies settings (100.562603ms)
+✔ shutdown terminal failure denies publication (98.415181ms)
+✔ shutdown preparation excludes succeeded read-only execution with an actual qualified receipt (65.388395ms)
+✔ shutdown reconciliation revalidates request after lane completion await (102.395679ms)
+✔ shutdown reconciliation revalidates settings after lane completion await (103.759506ms)
+✔ shutdown reconciliation revalidates receipt after lane completion await (103.697161ms)
+✔ shutdown writable reconciliation refuses unavailable shared workspace observation (103.740946ms)
+✔ cooperative held lost acknowledgement retries staged close after original provider group death with immediate provider close (10547.852991ms)
+✔ cooperative held lost acknowledgement retries staged close after original provider group death with late provider close (10509.703386ms)
+✔ released shutdown phase permits fresh host intake on the same workspace and database (701.763808ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 33122.740227

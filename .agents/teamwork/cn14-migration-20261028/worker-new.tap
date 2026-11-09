@@ -1,0 +1,11 @@
+✔ failed additive mapping migration preserves claims and evidence across reopen and retry (21.740896ms)
+✔ composed engines fence mixed intake and workspace aliases while an independent project runs (205.255726ms)
+✔ held concurrent writer prevents legacy publication through the composed router (254.79131ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 899.374907

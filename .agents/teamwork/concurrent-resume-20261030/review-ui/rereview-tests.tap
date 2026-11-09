@@ -1,0 +1,37 @@
+✔ decision submit preserves its draft after network failure (4.412083ms)
+✔ decision submit preserves its draft after HTTP error response (1.307994ms)
+✔ decision submit preserves its draft after application failure response (1.203677ms)
+✔ decision submit preserves its draft after A2A task still paused on error (1.354611ms)
+✔ decision submit preserves its draft after A2A error pause without a pause message (1.268552ms)
+✔ decision submit clears only the submitted draft after acknowledged continuation (1.838928ms)
+✔ decision submit keeps edits made while the request is pending (1.26687ms)
+✔ decision submit does not apply an old response to a changed session (1.133795ms)
+✔ an intermediate working poll preserves the option when the same error pause returns (1.472966ms)
+✔ a changed decision is rendered after the pending submission settles (1.487557ms)
+✔ an older project request cannot release the newer request busy state (2.004699ms)
+✔ an older decision submit cannot release a newer project decision submit (1.554247ms)
+✔ request cleanup rechecks ownership after a deferred session poll (1.349533ms)
+▶ new session controls
+  ✔ enables New session after the matching owner pause is parked (3.488878ms)
+  ✔ sends the next goal with a fresh context and no old task continuation fields (1.128051ms)
+  ✔ enables a confirmed stopped pause with a numeric task state (0.791682ms)
+  ✔ keeps New session disabled while the pause is pending or workers are running (1.644566ms)
+  ✔ rejects stale situations from another task or project (3.79434ms)
+  ✔ keeps the action disabled for unsettled sends and pending turns (3.488417ms)
+  ✔ preserves terminal-session behavior without requiring a situation (0.812314ms)
+✔ new session controls (16.176606ms)
+▶ acceptance checks in the composer
+  ✔ sends one command per line as checks and clears the box (1.091243ms)
+  ✔ omits the field for an empty or blank box so the project defaults apply (2.625731ms)
+  ✔ sends checks with a follow-up run but never with a resume of a paused task (1.859688ms)
+  ✔ hides the checks box in scout mode (2.116542ms)
+  ✔ the page declares the textarea with the host-execution hint (0.25703ms)
+✔ acceptance checks in the composer (8.357172ms)
+ℹ tests 25
+ℹ suites 2
+ℹ pass 25
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 80.790198

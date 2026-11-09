@@ -1,0 +1,135 @@
+TAP version 13
+# Subtest: owner decision survives real host and SQLite reopen and resumes mandatory acceptance
+not ok 1 - owner decision survives real host and SQLite reopen and resumes mandatory acceptance
+  ---
+  duration_ms: 532.089794
+  type: 'test'
+  location: '/home/sr/Projects/Workspace/codex-agent-control-plane/test/owner-decision-restart.test.js:62:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"status":503,"body":{"error":"delivery_control_unavailable"}}
+    
+    503 !== 200
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 200
+  actual: 503
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/owner-decision-restart.test.js:153:51)
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+# Subtest: owner decision rejects routine without creating a wait
+ok 2 - owner decision rejects routine without creating a wait
+  ---
+  duration_ms: 13.920679
+  type: 'test'
+  ...
+# Subtest: owner decision rejects no-investigation without creating a wait
+ok 3 - owner decision rejects no-investigation without creating a wait
+  ---
+  duration_ms: 4.31912
+  type: 'test'
+  ...
+# Subtest: owner decision rejects unknown-evidence without creating a wait
+ok 4 - owner decision rejects unknown-evidence without creating a wait
+  ---
+  duration_ms: 4.930518
+  type: 'test'
+  ...
+# Subtest: owner decision rejects untrusted without creating a wait
+ok 5 - owner decision rejects untrusted without creating a wait
+  ---
+  duration_ms: 3.624351
+  type: 'test'
+  ...
+# Subtest: owner decision rejects writable without creating a wait
+ok 6 - owner decision rejects writable without creating a wait
+  ---
+  duration_ms: 3.399428
+  type: 'test'
+  ...
+# Subtest: owner decision rejects stale-investigation without creating a wait
+ok 7 - owner decision rejects stale-investigation without creating a wait
+  ---
+  duration_ms: 3.973148
+  type: 'test'
+  ...
+# Subtest: owner decision rejects obligation without creating a wait
+ok 8 - owner decision rejects obligation without creating a wait
+  ---
+  duration_ms: 6.587546
+  type: 'test'
+  ...
+# Subtest: owner decision rejects option without creating a wait
+ok 9 - owner decision rejects option without creating a wait
+  ---
+  duration_ms: 2.724506
+  type: 'test'
+  ...
+# Subtest: owner decision rejects extra without creating a wait
+ok 10 - owner decision rejects extra without creating a wait
+  ---
+  duration_ms: 3.689165
+  type: 'test'
+  ...
+# Subtest: owner request fences direct claims and finalization even if disposition is corrupted
+ok 11 - owner request fences direct claims and finalization even if disposition is corrupted
+  ---
+  duration_ms: 4.922436
+  type: 'test'
+  ...
+# Subtest: owner replies require exact authorization, scope, option, request and current pins
+ok 12 - owner replies require exact authorization, scope, option, request and current pins
+  ---
+  duration_ms: 10.262363
+  type: 'test'
+  ...
+# Subtest: owner reply preserves later pause
+ok 13 - owner reply preserves later pause
+  ---
+  duration_ms: 7.092623
+  type: 'test'
+  ...
+# Subtest: owner reply preserves later stop
+ok 14 - owner reply preserves later stop
+  ---
+  duration_ms: 6.476562
+  type: 'test'
+  ...
+# Subtest: owner reply preserves later cancel
+ok 15 - owner reply preserves later cancel
+  ---
+  duration_ms: 4.122511
+  type: 'test'
+  ...
+# Subtest: changed goal requires authenticated replacement with revalidated investigation and retained history
+ok 16 - changed goal requires authenticated replacement with revalidated investigation and retained history
+  ---
+  duration_ms: 10.760585
+  type: 'test'
+  ...
+# Subtest: planner request registration is atomic, consumes trigger and makes no owner wait model loop
+ok 17 - planner request registration is atomic, consumes trigger and makes no owner wait model loop
+  ---
+  duration_ms: 13.25838
+  type: 'test'
+  ...
+# Subtest: owner wait survives SQLite reopen with immutable digest and exact reply pins
+ok 18 - owner wait survives SQLite reopen with immutable digest and exact reply pins
+  ---
+  duration_ms: 8.773507
+  type: 'test'
+  ...
+1..18
+# tests 18
+# suites 0
+# pass 17
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 900.739171

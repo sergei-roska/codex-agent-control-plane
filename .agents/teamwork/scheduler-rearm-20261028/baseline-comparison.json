@@ -1,0 +1,53 @@
+{
+  "affected": {
+    "previous": {
+      "tests": 748,
+      "suites": 32,
+      "pass": 746,
+      "fail": 2,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    "current": {
+      "tests": 752,
+      "suites": 32,
+      "pass": 749,
+      "fail": 3,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    "addedVsPreviousAffected": [
+      "launcher becomes ready on a free port and shuts down cleanly"
+    ],
+    "newVsPreviousFull": [],
+    "removedVsPreviousAffected": []
+  },
+  "full": {
+    "previous": {
+      "tests": 1906,
+      "suites": 54,
+      "pass": 1893,
+      "fail": 12,
+      "cancelled": 0,
+      "skipped": 1,
+      "todo": 0
+    },
+    "current": {
+      "tests": 1910,
+      "suites": 54,
+      "pass": 1898,
+      "fail": 11,
+      "cancelled": 0,
+      "skipped": 1,
+      "todo": 0
+    },
+    "newFailures": [],
+    "notObservedThisRun": [
+      "owner correction facade carries pending correction through SQLite reopen with direct resume"
+    ],
+    "timedOut": false,
+    "inputDrift": []
+  }
+}

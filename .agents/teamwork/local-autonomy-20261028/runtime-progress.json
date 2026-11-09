@@ -1,0 +1,35 @@
+{
+  "taskId": "5f4d2e30-5b7c-4bb7-a02f-d27b46dd2b09",
+  "state": "TASK_STATE_WORKING",
+  "pauseKind": null,
+  "decisionId": null,
+  "reason": null,
+  "originalDecisionReplied": true,
+  "originalPauseCleared": true,
+  "lastObservedLeadPolicy": {
+    "sandboxMode": "danger-full-access",
+    "approvalPolicy": "never"
+  },
+  "assignments": [
+    [
+      "5f4d2e30-5b7c-4bb7-a02f-d27b46dd2b09:r7:a0",
+      "verifier",
+      "submitted"
+    ],
+    [
+      "5f4d2e30-5b7c-4bb7-a02f-d27b46dd2b09:r6:a0",
+      "explorer",
+      "finished"
+    ],
+    [
+      "5f4d2e30-5b7c-4bb7-a02f-d27b46dd2b09:r5:a0",
+      "verifier",
+      "finished"
+    ],
+    [
+      "5f4d2e30-5b7c-4bb7-a02f-d27b46dd2b09:r4:a0",
+      "verifier",
+      "finished"
+    ]
+  ]
+}

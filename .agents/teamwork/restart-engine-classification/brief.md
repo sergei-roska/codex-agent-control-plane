@@ -1,0 +1,11 @@
+# Repair startup task engine classification
+
+Working directory: /home/sr/Projects/Workspace/codex-agent-control-plane. Extensive inherited dirty tree; preserve all work. No staging/commit/push. Owner explicitly requested project server stopped; DO NOT start launcher or original project, submit live tasks, mutate live data, or change stop/resume semantics.
+
+Evidence: src/server.js startupLeadTaskIds collects every orchestrator task before reading delivery mappings. legacyTaskIds at line ~1120 unions all startup IDs with mapped legacy IDs, incorrectly including persisted concurrent tasks. deliveryEngineFence then treats their INPUT_REQUIRED status as active legacy work. Real project3d9c2e759c has concurrent mapping cdb27a0c-e3c5-40c2-ac4a-9005e7c041ef with canceled objective, unknown planner caused provider_home_changed before provider start, and INPUT_REQUIRED A2A task after owner stop. New tasks 6f854c89 and 5603641a fail busy after restarts. Live processes absent, no launcher listening8081.
+
+Implement minimal robust classification using authoritative same-project durable mappings: mapped concurrent IDs must not be in fallback legacyTaskIds. Retain unmapped historical task compatibility, mapped legacy routing, unsafe unknown mapping refusal, real other-engine/writer/effect fences. Do not bypass concurrentRecoveryUnsafe or rewrite canceled/unknown state.
+
+Own src/server.js and test/server-delivery-engine.test.js only. Capture exact pre-edit file copies in evidence/baseline. Add regression that restarts server with persisted concurrent mapping + INPUT_REQUIRED task (ideally owner-canceled objective and unknown pre-start planner) and sends first fresh request through production HTTP/A2A admission path. Stub provider/engine permitted to avoid real work, but preserve real startup/router/fence/transport composition. Assert request reaches concurrent engine rather than busy. Retain active unmapped/mapped legacy blocking and legacy resume selection. Test both pre-fix failure and post-fix pass. Disposable SQLite only. Read existing project instructions and /home/sr/codex-home/agents/junior_worker.toml. Use Node scripts/tests already present, no new dependencies.
+
+Report changed files, exact tests/results, remaining limits. Maintain handoff.md. English ASCII throughout. Quota checked current Codex: 12% five-hour used,48% weekly used.

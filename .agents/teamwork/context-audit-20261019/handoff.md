@@ -1,0 +1,16 @@
+# Context audit handoff
+
+Status: complete. Read-only source audit; no tests or live actions. Git status/diff were clean when inspected.
+
+## Findings
+
+- Lead constructs a JSON user message from the validated assignment plus assignmentId, workspace, reportContract, and optional continuation. `src/lead-graph.js:2979-2999`. Inputs/evidence are therefore actual prompt content; they are required non-empty arrays by `src/contracts.js:586-621`, capped at 20 strings, 3000 chars each (`:279-283,590-592`). Objective, acceptanceCriteria, checks, stopConditions and writable allowedFiles are also validated (`:584-634`). Shape/bounds are enforced; truth, relevance, and adequacy of input/evidence are not established by those checks.
+- Array truncation is in Lead decision parsing: allowedFiles/inputs/evidence/acceptanceCriteria/checks/stopConditions over 20 are sliced before validation (`src/lead-graph.js:2687-2703`). Strings over 3000 are rejected, not shortened (`src/contracts.js:279-283,590-592`). The A2A JSON dispatch has no additional truncation in `submitItem` (`src/lead-graph.js:2984-2999`).
+- Recovery/senior profile instructions say to use evidence from prior attempts, but this is profile guidance (`profiles/agents/recovery-engineer.toml:8-12`, `senior-engineer.toml:8-12`). The runtime ladder only checks that engineer/recovery-engineer were attempted somewhere in this run, not that their outcomes failed or relate to this assignment (`src/contracts.js:636-641`). Lead prompt asks that established facts and paths be copied into inputs/evidence (`src/lead-graph.js:2457`).
+- Prior reports/outcomes go to the Lead prompt, not automatically into the next specialist's new A2A input. Lead full/delta prompts include prior/fresh outcomes (`src/lead-graph.js:2393-2417,2451`); `boundedOutcomes` caps the outcome projection at 60,000 chars, retaining newest full where possible, older digest/compact digest, then elision (`:39,529-555`). New specialist input is only the assignment payload (`:2979-2999`). The Lead must curate prior findings into inputs/evidence.
+- `continueFrom` is enforced as a finished assignmentId from this run, same role, at most once per decision (`src/contracts.js:509-524`). It passes continuation metadata (prior threadId/laneId/Codex home/MCP pins) into A2A (`src/lead-graph.js:3072-3093`). Service resumes the old thread only when thread exists, lane usable, Codex home and MCP pins match; otherwise it starts a fresh thread with a continuation note, retaining the assignment JSON (`src/a2a-role-service.js:1022-1052`). Usage-limit continuation instead sends a short continuation instruction on the existing thread; the assignment body is not resent on successful resume (`:156,1022-1052`).
+- A2A validates structured requests (`src/a2a-role-service.js:692-709`) and invokes `appServer.run` with input, selected tools/skills, and worker output schema (`:987-1017`). Result report text and continuation metadata return as an A2A artifact (`:1288-1305`), then Lead parses/summarizes it (`src/lead-graph.js:1916-1933`).
+
+## Limitation
+
+This audit traces source composition and validation, not a live model's effective context window or behavior. No tests run, per brief.

@@ -1,0 +1,18 @@
+{
+  "head": "65a970e0bfe9572a8d6df3d2d35d91fe33f82f83",
+  "preservedBaselineFiles": 40,
+  "expectedChanges": [
+    "docs/architecture/concurrent-harness/README.md",
+    "docs/architecture/concurrent-harness/implementation-backlog.json",
+    "docs/architecture/concurrent-harness/implementation-status.md",
+    "docs/architecture/concurrent-harness/verification-summary.json",
+    "schemas/delivery-v1.schema.json",
+    "src/delivery-contracts.js",
+    "test/delivery-contracts.test.js",
+    "test/launcher-performance-ui.test.js",
+    "launcher-ui/performance.js"
+  ],
+  "unexpectedChanges": [],
+  "newJavaScriptSyntaxFailures": [],
+  "newJavaScriptNonAsciiFiles": []
+}

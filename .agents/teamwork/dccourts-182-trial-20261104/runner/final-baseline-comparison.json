@@ -1,0 +1,19 @@
+{
+  "nativeTaskId": "987438bf-d0d0-4a27-941a-66a2fcdfa5ae",
+  "candidates": [
+    [
+      "candidate-base-15e6f62b490ba6152538c230",
+      "94b522a3f6c6614c22a6ffb863e830ad36b81f716913ccd574db2a42fa39ef53"
+    ],
+    [
+      "candidate-attempt-dacf028ff41788be8f6d35fb0f5f31a1",
+      "5ebaf9a07f43b54fa0987dd08b056bdb49c3dc1965df6c02102844799e47b9c0"
+    ]
+  ],
+  "totalPaths": 3207,
+  "unchangedPathsExcludingComposerLock": 3206,
+  "manifestEntriesIdenticalExcludingComposerLock": true,
+  "canonicalExcludedManifestSha256": "33dcf1098de872c82cb1d8bd26089814e94d1aba2b91c0849c2d5c36fd1bcab1",
+  "normalizedComposerLockSha256": "d400b617776beaa9e2e1c5925df33db865a7f7f4b0efa70365b3adb0aafbd130",
+  "canonicalization": "Python json.dumps(value,sort_keys=True,separators=(comma,colon),ensure_ascii=True), UTF-8 without trailing newline. Remove only top-level content-hash for normalized composer.lock."
+}

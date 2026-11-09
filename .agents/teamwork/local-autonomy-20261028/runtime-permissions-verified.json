@@ -1,0 +1,60 @@
+{
+  "projectId": "3d9c2e759c",
+  "appServerVersion": "codex-a2a-runtime/0.165.0 (Ubuntu 26.4.0; x86_64) gnome-terminal (codex-a2a-runtime; 0.1.0)",
+  "executionPermissions": "full-access",
+  "rolePreparation": [
+    "coordinator",
+    "explorer",
+    "engineer",
+    "verifier"
+  ],
+  "approvalPolicy": "never",
+  "command": {
+    "exitCode": 0,
+    "tmpWritable": true,
+    "uvCacheWritable": true
+  },
+  "wire": [
+    {
+      "method": "thread/start",
+      "permissions": ":danger-full-access",
+      "permissionProfile": null,
+      "sandbox": null,
+      "sandboxPolicy": null,
+      "approvalPolicy": "never"
+    },
+    {
+      "method": "thread/start",
+      "permissions": ":danger-full-access",
+      "permissionProfile": null,
+      "sandbox": null,
+      "sandboxPolicy": null,
+      "approvalPolicy": "never"
+    },
+    {
+      "method": "thread/start",
+      "permissions": ":danger-full-access",
+      "permissionProfile": null,
+      "sandbox": null,
+      "sandboxPolicy": null,
+      "approvalPolicy": "never"
+    },
+    {
+      "method": "thread/start",
+      "permissions": ":danger-full-access",
+      "permissionProfile": null,
+      "sandbox": null,
+      "sandboxPolicy": null,
+      "approvalPolicy": "never"
+    },
+    {
+      "method": "command/exec",
+      "permissions": null,
+      "permissionProfile": ":danger-full-access",
+      "sandbox": null,
+      "sandboxPolicy": null,
+      "approvalPolicy": null
+    }
+  ],
+  "modelTurnsInvoked": 0
+}

@@ -1,0 +1,107 @@
+{
+  "observedAt": "2026-11-05T14:12:56.806513+00:00",
+  "originalSnapshotBeforeEqualsAfter": true,
+  "originalCurrentEqualsBefore": true,
+  "originalCurrent": {
+    "head": "41d8ecde87bd163585327c13e1a95fc777df3c27",
+    "branch": "bugfix/DCCOURTS-182",
+    "status": "?? specs/DCCOURTS-182.requirements.yml\n",
+    "files": {
+      "composer.json": "8fb014f8be30e287956590ebf836eff79ce708bcb2c86b53d478096225dc2833",
+      "composer.lock": "9119ee491127c03ac9eb5541c08ef036f097f259a695de1a808d91b5bbb01167",
+      "patches.lock.json": "e24935d18656ccfbd29706a5a8722784cd5ad65d8e97f15d41c23c960e609358",
+      "patches/shs-3620147-preselect-stored-values.patch": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+      "specs/DCCOURTS-182.requirements.yml": "c61cd98f5700743141b404f54ca5541f6fa5aebbcab9a5124ff04fb8506f2206",
+      "AGENTS.md": "55f54d030c824f24369c6a10034ca73229b26c6a4985eb3f635a4d5949fe7634",
+      ".lando.yml": "38ee6f0f57bfdb49953fa7748d24e56c990c4d2461ea378bd52f8546136761bc"
+    }
+  },
+  "runtimeCurrentEqualsBefore": false,
+  "runtimeCurrent": {
+    ".runtime/state.sqlite": {
+      "exists": true,
+      "sha256": "a4520807e3b60ad689e95a7d488dcea5cb4c131241d71831c84e7d14d4978e12"
+    },
+    ".runtime/state.sqlite-wal": {
+      "exists": true,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    ".runtime/projects/3d9c2e759c/state.sqlite": {
+      "exists": true,
+      "sha256": "f55ae6ef9a8102304a72fb5351ac1e6b195fd5e96f669d6f61146ba6a08054f5"
+    },
+    ".runtime/projects/3d9c2e759c/state.sqlite-wal": {
+      "exists": true,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    ".runtime/projects/3d9c2e759c/project-settings.json": {
+      "exists": true,
+      "sha256": "64c83aecc0a19406f9f01c9f46bda96bb3519d597a3e8bab3daaed06adb26de0"
+    },
+    ".runtime/projects.json": {
+      "exists": true,
+      "sha256": "8cd1d1fe4282d7441a99d30b2b3da18e127568d49b9727807f386a991d142c22"
+    }
+  },
+  "runtimeDifferences": {
+    ".runtime/projects.json": {
+      "before": {
+        "exists": true,
+        "sha256": "8cfa80a7c21a151277638b1ca3b3e21984d57ff608ce09ef19e87a12bcde3420"
+      },
+      "now": {
+        "exists": true,
+        "sha256": "8cd1d1fe4282d7441a99d30b2b3da18e127568d49b9727807f386a991d142c22"
+      }
+    }
+  },
+  "ownedTrialWorktreeExists": false,
+  "currentWorktreeList": "worktree /home/sr/Projects/dccourtscode\nHEAD 41d8ecde87bd163585327c13e1a95fc777df3c27\nbranch refs/heads/bugfix/DCCOURTS-182\n\nworktree /tmp/dccourts182-native-75GQda/lanes/lane-mw24q7oq-0857f002\nHEAD 766d0473defc7cba1279f8941a77440677f3d90b\ndetached\nprunable gitdir file points to non-existent location\n\nworktree /tmp/dccourts182-native-XDlmEi/lanes/lane-mw27ul2a-6b956a52\nHEAD be62a3b32610121d8af59dba532d21d17012d33f\ndetached\nprunable gitdir file points to non-existent location\n\nworktree /tmp/dccourts182-native-k2ID27/lanes/lane-mw25fowc-e16bc27f\nHEAD 9f942e1c5497592af4f863c7e417c7fe21f513ac\ndetached\nprunable gitdir file points to non-existent location\n\nworktree /tmp/dccourts182-native-ymuUCR/lanes/lane-mw1wnfc1-f952951b\nHEAD f2e61c036735800eddeeb841eb4654139dae364c\ndetached\nprunable gitdir file points to non-existent location\n\n",
+  "ownedBranchRefs": "",
+  "successfulRunRootExists": false,
+  "backup": {
+    "sha256": "bf52b14265e08a48153b535e46fe92f4e016cf039a5f999335491ee790794428",
+    "expectedSha256": "bf52b14265e08a48153b535e46fe92f4e016cf039a5f999335491ee790794428",
+    "bytes": 3567616
+  },
+  "patch": {
+    "sha256": "ebb982adb8f5042b549bc35f79e521939088315c5e30107f1bd384a8fb3fa32f",
+    "expectedSha256": "ebb982adb8f5042b549bc35f79e521939088315c5e30107f1bd384a8fb3fa32f",
+    "bytes": 13629,
+    "files": [
+      "composer.json",
+      "composer.lock",
+      "patches.lock.json",
+      "patches/shs-3620147-preselect-stored-values.patch"
+    ],
+    "equalsGitDiffBaseToCandidate": true,
+    "base": "4b526e7e3e4f727c99f02fd44a655df595adfe0c",
+    "candidate": "7470074adf82284dc9f3614f0ee0259aef6d027b"
+  },
+  "resultClose": "completed",
+  "shutdownPhase": {
+    "attempts": [],
+    "identities": [
+      {
+        "pgid": 2899768,
+        "pid": 2899768,
+        "startTime": "3020827"
+      }
+    ],
+    "phase": "released"
+  },
+  "ownedLandoServicesFinalRetained": [],
+  "laterRegistryChange": {
+    "addedProjectIds": [
+      "28e735afb6"
+    ],
+    "addedAt": [
+      "2026-11-05T08:17:08.605Z"
+    ],
+    "currentFileMtimeUtc": "2026-11-05T08:58:44.453565+00:00",
+    "cleanupReceiptMtimeUtc": "2026-11-04T15:05:06.510128+00:00",
+    "sha256AfterRemovingOnlyLaterProjectInMemory": "8cfa80a7c21a151277638b1ca3b3e21984d57ff608ce09ef19e87a12bcde3420",
+    "equalsPretrialRegistryHash": true,
+    "attribution": "Later registry entry is directly evidenced; actor and exact write history are not established."
+  }
+}

@@ -1,0 +1,135 @@
+--- original/test/concurrent-delivery-engine.test.js
++++ test/concurrent-delivery-engine.test.js
+@@ -780,3 +780,132 @@
+     });
+   });
+ }
++
++for (const mode of ['owned', 'cooperative', 'unknown', 'publication', 'pending-inbox', 'reopen']) {
++  test(`shutdown no-publication recovery integrates ${mode} lost acknowledgement`, { timeout: 30000 }, async (t) => {
++    const objectiveId = `shutdown-${mode}-objective`;
++    const runId = `shutdown-${mode}-run`;
++    const workerEntered = deferred();
++    const releaseWorker = deferred();
++    t.after(() => releaseWorker.resolve());
++    const abort = new AbortController();
++    let calls = 0;
++    let plannerCalls = 0;
++    const roles = new Map([
++      ['engineer', { id: 'engineer', name: 'Engineer', description: 'Writes in its assigned lane.', sandbox: 'workspace-write',
++        model: 'test-model', effort: 'low', fastMode: 'off' }],
++      ['verifier', { id: 'verifier', name: 'Verifier', description: 'Reviews candidates.', sandbox: 'read-only',
++        model: 'test-model', effort: 'low', fastMode: 'off' }],
++    ]);
++    const fx = await createHarness(t, { roles, writerMode: mode === 'cooperative' ? 'cooperative' : 'worktree', appServer: {
++      async run(options) {
++        calls += 1;
++        const roleId = options.role.id;
++        const threadId = options.threadId || `${roleId}-shutdown-thread`;
++        const turnId = `${roleId}-shutdown-turn-${calls}`;
++        const processIdentity = readProcessIdentity(process.pid);
++        options.onTurnStart({ threadId, processIdentity });
++        let text;
++        if (roleId === 'lead') {
++          plannerCalls += 1;
++          const prompt = JSON.parse(options.input.slice(options.input.indexOf('\n') + 1));
++          text = JSON.stringify({ expected: prompt.pins,
++            delta: plannerCalls === 1 ? planDelta(prompt.pins, [engineerTask(objectiveId, 'held-worker', 'held.txt', 'retain private evidence')]) : null,
++            dialogue: 'Run the worker.', recovery: null, ownerDecision: null });
++        } else {
++          assert.equal(roleId, 'engineer');
++          fs.writeFileSync(path.join(options.cwd, 'held.txt'), 'retained private evidence\n');
++          workerEntered.resolve();
++          await releaseWorker.promise;
++          if (mode === 'unknown') throw new Error('provider terminal outcome unknown');
++          text = JSON.stringify({ outcome: 'completed', summary: 'Private work completed.', filesChanged: ['held.txt'],
++            filesInspected: ['source.txt'], checks: [], risks: [], scopeExpansion: [], decisionRequest: null });
++        }
++        return { threadId, turnId, status: 'completed', text, usage: {}, permissionEvents: [],
++          execution: { turnStartSent: true, turnStartRejected: false, turnTerminal: true, processIdentity, threadId, turnId } };
++      },
++    } });
++    const running = fx.engine.run({ runId, goal: 'Preserve private work through a lost acknowledgement.', contract: { requiredChecks: [] },
++      signal: abort.signal, engineMapping: { engine: 'concurrent-v1', projectId, objectiveId, sessionId: `shutdown-${mode}-session` } });
++    await workerEntered.promise;
++    const attempt = fx.engine.store.listAttempts(projectId, objectiveId).find((row) => row.taskId === 'held-worker');
++    assert.ok(attempt);
++    abort.abort();
++    assert.equal((await running).status, 'canceled');
++    assert.equal(fx.engine.executor.getAttempt(attempt.attemptId).externalTaskId, null);
++    await assert.rejects(fx.engine.shutdown(), { code: 'concurrent_shutdown_unsafe' });
++    assert.equal(fx.engine.roleService.getExecution(attempt.attemptId).state, 'running');
++    releaseWorker.resolve();
++    await waitFor(() => !fx.engine.roleService.active.size, 'role call did not drain');
++    const record = fx.engine.roleService.getExecution(attempt.attemptId);
++    const lane = fx.lanes.store.get(record.laneId);
++    assert.equal(fs.existsSync(path.join(fx.workspace, 'held.txt')), false);
++    if (mode === 'publication') {
++      fx.db.prepare(`INSERT INTO delivery_output_publications
++        (intent_id,artifact_id,request_json,state,created_at,updated_at) VALUES(?,?,'{}','unknown','now','now')`)
++        .run('unknown-shutdown-publication', record.artifactId);
++    }
++    if (mode === 'pending-inbox') {
++      fx.engine.controllers.get(runId).inbox.receive({ messageId: 'shutdown-pending-message', kind: 'steering',
++        source: 'authenticated-control', payload: { text: 'Retain this pending owner message.' } });
++    }
++    const beforeCalls = calls;
++    let engine = fx.engine;
++    let reopenedDb;
++    if (mode === 'reopen') {
++      fx.db.close();
++      reopenedDb = new Database(path.join(fx.storageRoot, 'state.sqlite'));
++      const admission = new WriterAdmission({ db: reopenedDb, workspace: fx.workspace });
++      const lanes = new LaneManager({ db: reopenedDb, workspace: fx.workspace, admission, mode: 'worktree',
++        lanesRoot: path.join(fx.storageRoot, 'lanes'), links: [] });
++      const identity = { accountId: 'fake-account', codexHome };
++      engine = new ConcurrentDeliveryEngine({ db: reopenedDb, workspace: fx.workspace, projectId, storageRoot: fx.storageRoot,
++        baseUrl: fx.baseUrl, authMiddleware: auth, authToken: 'concurrent-test-token', appServer: fx.appServer,
++        providerIdentity: identity, providerIdentityFor: () => identity, roles: fx.roles, leadRole: fx.lead, admission, lanes,
++        writerIsolation: { mode: 'worktree' }, sleepMs: 10 });
++      assert.deepEqual(await engine.recoverStoredRuns(), []);
++    }
++    try {
++      if (['owned', 'reopen'].includes(mode)) {
++        const closed = await engine.shutdown();
++        assert.equal(closed.safeToRelease, true);
++        assert.deepEqual(await engine.shutdown(), closed);
++        assert.equal(engine.store.listClaims(projectId, objectiveId)[0].state, 'released');
++        assert.equal(engine.store.listAttempts(projectId, objectiveId)[0].state, 'canceled');
++        assert.equal(engine.executor.getAttempt(attempt.attemptId).state, 'settled');
++        assert.equal(engine.roleService.getExecution(attempt.attemptId).result.failureCode, 'recovery_no_publication');
++        assert.equal(engine.lanes.store.get(record.laneId).state, 'not_integrated');
++        assert.equal(fs.readFileSync(path.join(lane.path, 'held.txt'), 'utf8'), 'retained private evidence\n');
++      } else if (mode === 'pending-inbox') {
++        await assert.rejects(engine.shutdown(), (cause) => {
++          assert.equal(cause.code, 'concurrent_shutdown_unsafe');
++          assert.equal(cause.projections[0].inboxPending, 1);
++          return true;
++        });
++        assert.equal(engine.store.listClaims(projectId, objectiveId)[0].state, 'released');
++        assert.equal(engine.controllers.get(runId).inbox.pending().length, 1);
++      } else {
++        let drainWaits = 0;
++        const originalTimeout = global.setTimeout;
++        const timer = mode === 'unknown' ? t.mock.method(global, 'setTimeout', (callback, delay, ...args) => {
++          if (delay === 20) {
++            drainWaits += 1;
++            throw new Error('Durable unknown effects cannot drain through an in-process wait.');
++          }
++          return originalTimeout(callback, delay, ...args);
++        }) : null;
++        try {
++          assert.equal(engine.roleService.active.size, 0);
++          await assert.rejects(engine.shutdown(), { code: 'concurrent_shutdown_unsafe' });
++        } finally { timer?.mock.restore(); }
++        assert.equal(drainWaits, 0);
++        assert.notEqual(engine.store.listClaims(projectId, objectiveId)[0].state, 'released');
++        assert.notEqual(engine.executor.getAttempt(attempt.attemptId).state, 'settled');
++        assert.equal(engine.roleService.getExecution(attempt.attemptId).noPublicationRecovery, undefined);
++      }
++      assert.equal(calls, beforeCalls);
++      assert.equal(fs.existsSync(path.join(fx.workspace, 'held.txt')), false);
++      assert.equal(engine.db.prepare('SELECT count(*) AS count FROM delivery_output_publications').get().count, mode === 'publication' ? 1 : 0);
++    } finally { reopenedDb?.close(); }
++  });
++}

@@ -1,0 +1,103 @@
+{
+  "scope": "Full AUT-02 Q01-Q14; no subset acceptance",
+  "cases": [
+    {
+      "id": "Q01",
+      "case": "Stable usage-limited verifier and auditor",
+      "requiredResult": "Valid same-target continuation remains allowed under existing policy; context preserved; bounded retries",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q02",
+      "case": "Usage-limited auditor, A -> B before resume",
+      "requiredResult": "Zero stale submissions from graph; fresh verifier then required auditor on B; old receipts cannot finish",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q03",
+      "case": "Usage-limited verifier, A -> B",
+      "requiredResult": "Stale verifier does not execute or satisfy gate; fresh verifier precedes auditor",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q04",
+      "case": "Explicit `continueFrom` review, same and changed targets",
+      "requiredResult": "Stable policy preserved; stale origin cannot be disguised by constructing a new assignment; fresh recovery clears continuation",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q05",
+      "case": "Endpoint race after graph preflight",
+      "requiredResult": "Actual service returns `review_origin_stale`; zero stale model calls; lead consumes rejection and reaches fresh review without another stale-origin request",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q06",
+      "case": "Missing, corrupt, ambiguous, other-run origin; unavailable staging evidence",
+      "requiredResult": "Fail closed before affected model call; no borrowed origin/receipt or fabricated acceptance; retry only after trusted state is available",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q07",
+      "case": "Mutate each review field individually",
+      "requiredResult": "Context mismatch/target rejection; no same-checkpoint narrowing or changed prerequisite links; legitimate array normalization remains compatible",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q08",
+      "case": "Full, delta and restarted lead context",
+      "requiredResult": "All six fields and current obligation survive; complete pending prerequisite set preserved; no owner edit of next decision needed",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q09",
+      "case": "Crash/restart at rejection and before fresh submission",
+      "requiredResult": "Durable failure history; recovery resumes or safely replans without duplicate effective submission, lost obligation or stale receipt reuse",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q10",
+      "case": "Wrong-target verifier, auditor-first, changed target during/after review",
+      "requiredResult": "Required gates remain closed; terminal model status alone never creates an accepted receipt",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q11",
+      "case": "Owner pause, budget denial, cancellation, unresolved writer, retry exhaustion",
+      "requiredResult": "No unauthorized submission or automatic budget/pause bypass; bounded stop with actionable reason",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q12",
+      "case": "Direct auditor, verifier and pinned-check fallback",
+      "requiredResult": "Test each claimed origin boundary and unchanged-target control; direct results do not bypass lead acceptance sequencing",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q13",
+      "case": "Routine review, valid critical review, unrelated ordinary work",
+      "requiredResult": "Existing behavior preserved; no new auditor requirement for routine work and no global feature-map requirement",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "Q14",
+      "case": "Verifier test-only write and candidate changes again during recovery",
+      "requiredResult": "Preserve existing authorized post-verifier binding; require fresh evidence when actual current target changes",
+      "status": "pending",
+      "evidence": []
+    }
+  ]
+}

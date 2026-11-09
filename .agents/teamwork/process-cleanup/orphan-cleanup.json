@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T08:52:27.187213+00:00",
+  "pid": 124021,
+  "taskId": "839aec22-f14a-4ea4-94e4-bc81aae4da5d",
+  "expectedStartTime": "602698",
+  "scope": "confirmed finished R129 pytest process only",
+  "signals": [
+    "SIGTERM"
+  ],
+  "verifiedTaskTerminal": true,
+  "goneOrZombie": true,
+  "finalState": "exited"
+}

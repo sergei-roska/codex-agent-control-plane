@@ -1,0 +1,51 @@
+{
+  "issue": "DCCOURTS-182",
+  "sourceUrl": "https://insomniacdesign.atlassian.net/browse/DCCOURTS-182",
+  "workspace": "/home/sr/Projects/dccourtscode-harness-trial-20261104",
+  "baseCommit": "4b526e7e3e4f727c99f02fd44a655df595adfe0c",
+  "goal": "Replay the code-only part of DCCOURTS-182 in this isolated trial workspace.\n\nProblem: On Drupal Forms edit forms, SHS 2.0.7 fails to preselect stored field_form_category references; saving unchanged Category can clear them. Apply the upstream fix from https://www.drupal.org/project/shs/issues/3620147 using Composer patches, keeping drupal/shs locked to 2.0.7. Public upstream merge request !59 is https://git.drupalcode.org/project/shs/-/merge_requests/59.diff . Fetch this public source if needed; do not inspect or copy any completed local bugfix branch.\n\nDeliver only the local patch at patches/shs-3620147-preselect-stored-values.patch, its registration in composer.json, and consistent patches.lock.json metadata. Do not edit contributed module files or unrelated configuration. Preserve the approved trial validation script and AGENTS.md. Do not change branches, commit, push, deploy, post Jira, read SQL dumps, or access original project/runtime data.\n\nRequired behavior: existing stored category values and hierarchical parent defaults are preselected; saving without changing Category preserves the valid references; an empty field stays empty; deleted terms are not reselected; the widget does not load all term options. The host's pinned acceptance command runs applicability, PHP lint and five independent upstream kernel regression tests against pristine SHS 2.0.7 using a separate Lando PHP 8.3 fixture. Use Lando for development commands. Host-required checks are executed separately; the host creates mandatory verifier tasks automatically. Prefer a single narrowly scoped engineering task; do not invent verifier/auditor/planner task roles.\n\nProduction followups in the Jira ticket (restore node 5415289 after deployment, audit production Forms changed after 2026-10-28, and change ticket status) are excluded from this test objective. State this limitation honestly. The original bugfix checkout must remain untouched. This code-only replay was explicitly authorized; original task-intake approval is already covered by that scope.",
+  "acceptance": {
+    "source": "agent",
+    "requiredChecks": [
+      {
+        "id": "dccourts-182-upstream-kernel",
+        "argv": [
+          "bash",
+          "scripts/harness/validate-dccourts-182.sh"
+        ],
+        "timeoutMs": 600000
+      }
+    ]
+  },
+  "roleOverrides": {
+    "coordinator": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "engineer": {
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "fastMode": "off"
+    },
+    "verifier": {
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "fastMode": "off"
+    }
+  },
+  "bounds": {
+    "objectiveTimeoutMs": 1200000,
+    "turnTimeoutMs": 300000
+  },
+  "excluded": [
+    "production content changes",
+    "production audit",
+    "deployment",
+    "Jira writes",
+    "completed branch implementation"
+  ],
+  "cleanup": "Capture patch and evidence, safely stop private services, restore owned trial to recorded dccr-master baseline. Original checkout unchanged.",
+  "trialBaselineCommit": "5ddfe8317a030f20509c32502ec66c6e79b7461c",
+  "validationScriptSha256": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6"
+}

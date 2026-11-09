@@ -1,0 +1,30 @@
+{
+  "observedAt": "2026-10-19T08:38:55Z",
+  "source": "Sanitized values transcribed from the original read-only /proc tool output; not a later re-observation",
+  "processes": [
+    {
+      "pid": 124021,
+      "ppid": 124020,
+      "state": "S",
+      "elapsed_s": 741,
+      "cwd": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvezp50w-e25ac59e",
+      "test_targets": ["tests/daemon", "tests/api/test_server.py", "tests/control/test_identity.py"]
+    },
+    {
+      "pid": 130628,
+      "ppid": 130627,
+      "state": "S",
+      "elapsed_s": 2,
+      "cwd": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf02yul-65983fd3",
+      "test_targets": ["tests/daemon/test_lifecycle.py", "tests/daemon/test_shutdown.py::test_systemd_budget_covers_all_cleanup_phases", "tests/control/test_identity.py"]
+    },
+    {
+      "pid": 130632,
+      "ppid": 130628,
+      "state": "R",
+      "elapsed_s": 2,
+      "cwd": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/lanes/lane-mvf02yul-65983fd3",
+      "test_targets": ["tests/daemon/test_lifecycle.py", "tests/daemon/test_shutdown.py::test_systemd_budget_covers_all_cleanup_phases", "tests/control/test_identity.py"]
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+    "status": "preflight_ready",
+    "inputSha256": "df7a81cd30cfca54ce89d2e7b2a958103d9b2a0752985197c7d8fc92ea2f9de5",
+    "target": {
+        "head": "5ddfe8317a030f20509c32502ec66c6e79b7461c",
+        "branch": "test/harness-DCCOURTS-182-20261104",
+        "status": "",
+        "sourceHashes": {
+            "AGENTS.md": "82fe198b8d4613441f2db16c42903be9b0739bba9fa9ca45fc12f11a3577e8b1",
+            ".lando.yml": "c784eff105e8ed23b7fdb3e5af2de39c2a1be2c14b774cf154c1e4e963f628b5",
+            "scripts/harness/validate-dccourts-182.sh": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+            "composer.json": "767f5a9bba018d081d17c46d8343b8b6a72642fedcb71eb60acaca991aa28833",
+            "composer.lock": "9119ee491127c03ac9eb5541c08ef036f097f259a695de1a808d91b5bbb01167",
+            "patches.lock.json": "b633b23a1451e40b1ddcbe5097a185e2c0cccc8afa3b21dd31dd0c300fbbee26",
+            "web/modules/contrib/shs/js/shs.js": null
+        },
+        "expectedPatchHash": null,
+        "trackedDiffHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "baselineCommit": "5ddfe8317a030f20509c32502ec66c6e79b7461c",
+    "roleOverrides": {
+        "coordinator": {
+            "model": "gpt-6-luna",
+            "effort": "low",
+            "fastMode": "off"
+        },
+        "engineer": {
+            "model": "gpt-6-luna",
+            "effort": "high",
+            "fastMode": "off"
+        },
+        "verifier": {
+            "model": "gpt-6-luna",
+            "effort": "high",
+            "fastMode": "off"
+        }
+    },
+    "acceptance": {
+        "source": "agent",
+        "requiredChecks": [
+            {
+                "id": "dccourts-182-upstream-kernel",
+                "argv": [
+                    "bash",
+                    "scripts/harness/validate-dccourts-182.sh"
+                ],
+                "timeoutMs": 600000
+            }
+        ]
+    },
+    "bounds": {
+        "objectiveTimeoutMs": 1200000,
+        "turnTimeoutMs": 300000
+    },
+    "isolatedConfigSha256": "f920682b38af880ca0b8a3681763185458fed8944c35a6fef48d1f7802c0322c",
+    "authAvailable": true,
+    "runtime": {
+        "sdk": "@a2a-js/sdk",
+        "providerPath": "real CodexAppServer",
+        "mode": "preflight_only"
+    }
+}

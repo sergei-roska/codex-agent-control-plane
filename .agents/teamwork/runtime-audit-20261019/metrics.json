@@ -1,0 +1,448 @@
+{
+  "capture_utc": "2026-10-19T08:33:51.211293Z",
+  "days": {
+    "2026-10-18": {
+      "caveat": "rows counted by started_at; dispatches/executions by created_at; token values are whole-row attribution. Snapshot-end running work appears only if already recorded.",
+      "dispatch_result_statuses": {
+        "TASK_STATE_COMPLETED": 93,
+        "TASK_STATE_FAILED": 14
+      },
+      "dispatch_states": {
+        "finished": 107
+      },
+      "dispatch_writer_lane_states": {
+        "integrated": 27,
+        "not_integrated": 41
+      },
+      "dispatches_attempts_created": 107,
+      "distinct_assignments_dispatched": 107,
+      "elapsed_intervals_crossing_snapshot": 0,
+      "elapsed_ms_sum_clipped": 19307508,
+      "elapsed_token_shares_by_role_group": {
+        "coordinator": {
+          "elapsed_ms": 3702038,
+          "elapsed_share": 0.1917408502433354,
+          "known_total_token_share": 0.16698176430594813,
+          "known_total_tokens": 15970257
+        },
+        "engineering": {
+          "elapsed_ms": 6772053,
+          "elapsed_share": 0.35074712904430755,
+          "known_total_token_share": 0.468863917541403,
+          "known_total_tokens": 44842485
+        },
+        "explorer": {
+          "elapsed_ms": 740644,
+          "elapsed_share": 0.03836041399024669,
+          "known_total_token_share": 0.036996122729098926,
+          "known_total_tokens": 3538336
+        },
+        "review": {
+          "elapsed_ms": 8092773,
+          "elapsed_share": 0.4191516067221104,
+          "known_total_token_share": 0.32715819542354996,
+          "known_total_tokens": 31289647
+        }
+      },
+      "elapsed_union_ms": 19307500,
+      "integrated_attempted_path_occurrences": 156,
+      "long_running_elapsed_ms_total": 0,
+      "long_running_rows_ge_1h": 0,
+      "overlap_ms_at_concurrency_ge_2": 8,
+      "peak_concurrent_usage_rows": 2,
+      "queue_wait": {
+        "known_rows": 0,
+        "sum_ms": 0,
+        "unknown_rows": 218
+      },
+      "repeat_assignment_attempts": 0,
+      "reported_task_outcomes": {
+        "blocked": 1,
+        "completed": 78,
+        "failed": 8,
+        "needs_decision": 15
+      },
+      "reported_task_outcomes_by_role": {
+        "auditor": {
+          "completed": 13
+        },
+        "engineer": {
+          "completed": 13
+        },
+        "explorer": {
+          "blocked": 1,
+          "completed": 17,
+          "needs_decision": 3
+        },
+        "recovery-engineer": {
+          "completed": 5,
+          "needs_decision": 3
+        },
+        "senior-engineer": {
+          "completed": 6
+        },
+        "verifier": {
+          "completed": 24,
+          "failed": 8,
+          "needs_decision": 9
+        }
+      },
+      "retry_counts": {
+        "known_rows": 107,
+        "known_sum": 0,
+        "unknown_rows": 111
+      },
+      "roles": {
+        "auditor": {
+          "elapsed_ms_sum_clipped": 3084655,
+          "rows": 16,
+          "turns_known_sum": 14,
+          "turns_unknown_rows": 0
+        },
+        "coordinator": {
+          "elapsed_ms_sum_clipped": 3702038,
+          "rows": 111,
+          "turns_known_sum": 111,
+          "turns_unknown_rows": 0
+        },
+        "engineer": {
+          "elapsed_ms_sum_clipped": 1983604,
+          "rows": 13,
+          "turns_known_sum": 13,
+          "turns_unknown_rows": 0
+        },
+        "explorer": {
+          "elapsed_ms_sum_clipped": 740644,
+          "rows": 21,
+          "turns_known_sum": 21,
+          "turns_unknown_rows": 0
+        },
+        "recovery-engineer": {
+          "elapsed_ms_sum_clipped": 2898022,
+          "rows": 8,
+          "turns_known_sum": 8,
+          "turns_unknown_rows": 0
+        },
+        "senior-engineer": {
+          "elapsed_ms_sum_clipped": 1890427,
+          "rows": 6,
+          "turns_known_sum": 6,
+          "turns_unknown_rows": 0
+        },
+        "verifier": {
+          "elapsed_ms_sum_clipped": 5008118,
+          "rows": 43,
+          "turns_known_sum": 41,
+          "turns_unknown_rows": 0
+        }
+      },
+      "startup": {
+        "cold_start_false": 103,
+        "cold_start_true": 0,
+        "known_rows": 0,
+        "unknown_rows": 218
+      },
+      "tokens": {
+        "cachedInputTokens": {
+          "known_rows": 214,
+          "sum": 87928320,
+          "unknown_rows": 4
+        },
+        "inputTokens": {
+          "known_rows": 214,
+          "sum": 94593584,
+          "unknown_rows": 4
+        },
+        "outputTokens": {
+          "known_rows": 214,
+          "sum": 1047141,
+          "unknown_rows": 4
+        },
+        "reasoningOutputTokens": {
+          "known_rows": 214,
+          "sum": 400363,
+          "unknown_rows": 4
+        },
+        "totalTokens": {
+          "known_rows": 214,
+          "sum": 95640725,
+          "unknown_rows": 4
+        },
+        "uncachedInputTokens": {
+          "known_rows": 214,
+          "sum": 6665264,
+          "unknown_rows": 4
+        }
+      },
+      "usage_rows": 218,
+      "usage_rows_by_kind": {
+        "lead_turn": 111,
+        "worker_turn": 107
+      },
+      "usage_rows_by_role": {
+        "auditor": 16,
+        "coordinator": 111,
+        "engineer": 13,
+        "explorer": 21,
+        "recovery-engineer": 8,
+        "senior-engineer": 6,
+        "verifier": 43
+      },
+      "worker_model_request_counts": {
+        "known_rows": 0,
+        "known_sum": 0,
+        "unknown_rows": 218
+      },
+      "worker_overlap_ms_at_concurrency_ge_2": 8,
+      "worker_peak_concurrency": 2,
+      "writer_delta_evidence": {
+        "head_changed_rows": 0,
+        "known_delta_rows": 41,
+        "no_changed_paths_rows": 14,
+        "reported_changed_path_occurrences": 156,
+        "unknown_delta_rows": 0
+      },
+      "writer_execution_states": {
+        "released": 41
+      },
+      "writer_executions_by_role": {
+        "auditor": 14,
+        "engineer": 13,
+        "recovery-engineer": 8,
+        "senior-engineer": 6
+      },
+      "writer_executions_created": 41
+    },
+    "2026-10-19": {
+      "caveat": "rows counted by started_at; dispatches/executions by created_at; token values are whole-row attribution. Snapshot-end running work appears only if already recorded.",
+      "dispatch_result_statuses": {
+        "TASK_STATE_COMPLETED": 24,
+        "TASK_STATE_FAILED": 3
+      },
+      "dispatch_states": {
+        "finished": 27
+      },
+      "dispatch_writer_lane_states": {
+        "integrated": 6,
+        "not_integrated": 10
+      },
+      "dispatches_attempts_created": 27,
+      "distinct_assignments_dispatched": 27,
+      "elapsed_intervals_crossing_snapshot": 0,
+      "elapsed_ms_sum_clipped": 6261773,
+      "elapsed_token_shares_by_role_group": {
+        "coordinator": {
+          "elapsed_ms": 950111,
+          "elapsed_share": 0.151731945568771,
+          "known_total_token_share": 0.14159552975934328,
+          "known_total_tokens": 4793438
+        },
+        "engineering": {
+          "elapsed_ms": 2273897,
+          "elapsed_share": 0.3631394814216357,
+          "known_total_token_share": 0.5180403043366987,
+          "known_total_tokens": 17537235
+        },
+        "explorer": {
+          "elapsed_ms": 321589,
+          "elapsed_share": 0.05135749890645988,
+          "known_total_token_share": 0.044290862927728304,
+          "known_total_tokens": 1499380
+        },
+        "review": {
+          "elapsed_ms": 2716176,
+          "elapsed_share": 0.4337710741031334,
+          "known_total_token_share": 0.29607330297622975,
+          "known_total_tokens": 10022979
+        }
+      },
+      "elapsed_union_ms": 6261773,
+      "integrated_attempted_path_occurrences": 29,
+      "long_running_elapsed_ms_total": 0,
+      "long_running_rows_ge_1h": 0,
+      "overlap_ms_at_concurrency_ge_2": 0,
+      "peak_concurrent_usage_rows": 1,
+      "queue_wait": {
+        "known_rows": 0,
+        "sum_ms": 0,
+        "unknown_rows": 55
+      },
+      "repeat_assignment_attempts": 0,
+      "reported_task_outcomes": {
+        "completed": 22,
+        "failed": 2,
+        "needs_decision": 1
+      },
+      "reported_task_outcomes_by_role": {
+        "auditor": {
+          "completed": 5
+        },
+        "engineer": {
+          "completed": 3,
+          "needs_decision": 1
+        },
+        "explorer": {
+          "completed": 5
+        },
+        "senior-engineer": {
+          "completed": 2
+        },
+        "verifier": {
+          "completed": 7,
+          "failed": 2
+        }
+      },
+      "retry_counts": {
+        "known_rows": 27,
+        "known_sum": 0,
+        "unknown_rows": 28
+      },
+      "roles": {
+        "auditor": {
+          "elapsed_ms_sum_clipped": 1369258,
+          "rows": 5,
+          "turns_known_sum": 5,
+          "turns_unknown_rows": 0
+        },
+        "coordinator": {
+          "elapsed_ms_sum_clipped": 950111,
+          "rows": 28,
+          "turns_known_sum": 28,
+          "turns_unknown_rows": 0
+        },
+        "engineer": {
+          "elapsed_ms_sum_clipped": 1612017,
+          "rows": 4,
+          "turns_known_sum": 4,
+          "turns_unknown_rows": 0
+        },
+        "explorer": {
+          "elapsed_ms_sum_clipped": 321589,
+          "rows": 5,
+          "turns_known_sum": 5,
+          "turns_unknown_rows": 0
+        },
+        "senior-engineer": {
+          "elapsed_ms_sum_clipped": 661880,
+          "rows": 2,
+          "turns_known_sum": 2,
+          "turns_unknown_rows": 0
+        },
+        "verifier": {
+          "elapsed_ms_sum_clipped": 1346918,
+          "rows": 11,
+          "turns_known_sum": 10,
+          "turns_unknown_rows": 0
+        }
+      },
+      "startup": {
+        "cold_start_false": 26,
+        "cold_start_true": 0,
+        "known_rows": 0,
+        "unknown_rows": 55
+      },
+      "tokens": {
+        "cachedInputTokens": {
+          "known_rows": 52,
+          "sum": 31669888,
+          "unknown_rows": 3
+        },
+        "inputTokens": {
+          "known_rows": 52,
+          "sum": 33563488,
+          "unknown_rows": 3
+        },
+        "outputTokens": {
+          "known_rows": 52,
+          "sum": 289544,
+          "unknown_rows": 3
+        },
+        "reasoningOutputTokens": {
+          "known_rows": 52,
+          "sum": 95590,
+          "unknown_rows": 3
+        },
+        "totalTokens": {
+          "known_rows": 52,
+          "sum": 33853032,
+          "unknown_rows": 3
+        },
+        "uncachedInputTokens": {
+          "known_rows": 52,
+          "sum": 1893600,
+          "unknown_rows": 3
+        }
+      },
+      "usage_rows": 55,
+      "usage_rows_by_kind": {
+        "lead_turn": 28,
+        "worker_turn": 27
+      },
+      "usage_rows_by_role": {
+        "auditor": 5,
+        "coordinator": 28,
+        "engineer": 4,
+        "explorer": 5,
+        "senior-engineer": 2,
+        "verifier": 11
+      },
+      "worker_model_request_counts": {
+        "known_rows": 0,
+        "known_sum": 0,
+        "unknown_rows": 55
+      },
+      "worker_overlap_ms_at_concurrency_ge_2": 0,
+      "worker_peak_concurrency": 1,
+      "writer_delta_evidence": {
+        "head_changed_rows": 1,
+        "known_delta_rows": 11,
+        "no_changed_paths_rows": 4,
+        "reported_changed_path_occurrences": 33,
+        "unknown_delta_rows": 0
+      },
+      "writer_execution_states": {
+        "released": 11
+      },
+      "writer_executions_by_role": {
+        "auditor": 5,
+        "engineer": 4,
+        "senior-engineer": 2
+      },
+      "writer_executions_created": 11
+    }
+  },
+  "snapshot_inventory": {
+    "dispatch_journal_rows_total": 134,
+    "dispatch_states_total": {
+      "finished": 134
+    },
+    "live_activity_rows_total": 130,
+    "unfinished_live_activity_rows": 1,
+    "usage_rows_total": 273,
+    "writer_execution_rows_total": 52,
+    "writer_states_total": {
+      "released": 52
+    }
+  },
+  "source": "frozen SQLite snapshot; row counts/tokens attributed by started_at; elapsed intervals from all ledger rows overlapping each calendar window, clipped to boundaries",
+  "timezone": "Europe/Chisinau (UTC+03:00)",
+  "token_semantics": {
+    "attribution": "row attributed wholly to started_at day; no prorating; missing values stay unknown",
+    "cachedInputTokens": "cached portion of inputTokens",
+    "inputTokens": "reported input total including cached input",
+    "outputTokens": "reported output tokens",
+    "reasoningOutputTokens": "reasoning subset of outputTokens; not additive",
+    "totalTokens": "reported server total; not recomputed",
+    "uncachedInputTokens": "inputTokens - cachedInputTokens where both known and consistent"
+  },
+  "windows_utc": {
+    "2026-10-18": [
+      "2026-10-17T21:00:00Z",
+      "2026-10-18T21:00:00Z"
+    ],
+    "2026-10-19": [
+      "2026-10-18T21:00:00Z",
+      "2026-10-19T08:33:51.211293Z"
+    ]
+  }
+}

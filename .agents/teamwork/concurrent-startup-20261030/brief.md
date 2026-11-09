@@ -1,0 +1,11 @@
+# Concurrent startup repair
+
+Goal: project 3d9c2e759c starts in concurrent-v1 through its existing launcher. Preserve inherited dirty changes, sessions, task history, candidates, and owner pauses. No commits, Legacy fallback, manual live DB edits, or automatic task resumption.
+
+Verified: launcher8081 GET /api/projects/3d9c2e759c/status reports startup failure concurrent_startup_recovery_unsafe: delivery_role_recovery_proof_unavailable. Server3002 is stopped. Live DB .runtime/projects/3d9c2e759c/state.sqlite is read-only evidence. Actual workspace /home/sr/Projects/Workspace/agent-harness. Persisted provider_closing phase includes two historical engineer attempts already settled, terminalShutdown proven, backlog failed; later candidate engineer succeeded and verifier remains claimed/no execution. See previous concurrent-repair-20261029/handoff.md. Current code already includes compact verifier inputs and #settleUndispatchedReviews, but no final evidence exists.
+
+Worker scope: diagnose exact rejected invariant, implement narrow safe idempotent recovery and focused positive/negative regressions. Allowed src/delivery-role-service.js, src/concurrent-delivery-engine.js, test/delivery-role-service.test.js, test/concurrent-delivery-engine.test.js, test/server-delivery-engine.test.js. Baselines in evidence/baseline. Root owns all live runtime actions and Git. Worker must not start live services, dispatch model tasks, or mutate live DB. Disposable backups/tests allowed under owned notes directory or /tmp. Report exact verified failure mechanism; do not remove identity/effects/receipt checks merely to boot. Need review before root starts server.
+
+Toolchain Node CommonJS, better-sqlite3, node --test; package.json. Active quota freshly read via launcher account/rateLimits/read at dispatch: active profile roskasergei primary used31 percent, secondary used98 percent. Five-hour threshold permits regular dispatch; Astra forbidden under current task policy/no need.
+
+Acceptance: regression reproduces current mechanism; affected tests pass; no weakened uncertainty fences; root live start reaches ready and authenticated/read-only health confirms concurrent-v1 while prior diagnostic remains paused.

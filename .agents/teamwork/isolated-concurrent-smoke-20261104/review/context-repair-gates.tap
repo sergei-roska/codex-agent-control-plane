@@ -1,0 +1,10 @@
+✔ scoped verifier full-access uses the allowed profile and never approvals while retaining frozen candidate checks (35.80987ms)
+✔ owner pause in onTurnStart prevents the scoped turn from being written (11.090266ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 423.295433

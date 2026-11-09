@@ -1,0 +1,12 @@
+{
+  "pins": 341,
+  "drift": [],
+  "full": {
+    "total": 2107,
+    "pass": 2106,
+    "fail": 0,
+    "skip": 1,
+    "durationMs": 69364.907762
+  },
+  "log": "full-schema-repair.tap"
+}

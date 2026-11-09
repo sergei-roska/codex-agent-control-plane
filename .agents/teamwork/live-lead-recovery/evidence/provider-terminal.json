@@ -1,0 +1,23 @@
+{
+  "thread": {
+    "id": "01a186b0-3a65-7f83-8f16-b26e2e6370ee",
+    "turns": [
+      {
+        "id": "01a186b0-3afa-7df1-8301-fc62b6878dfe",
+        "status": "failed",
+        "error": {
+          "message": "{\"type\":\"error\",\"error\":{\"message\":\"Invalid schema for response_format 'codex_output_schema': 'schema.properties.expected.properties' is required for object schemas.\",\"type\":\"invalid_request_error\",\"param\":\"text.format.schema\",\"code\":\"invalid_json_schema\"},\"status\":400}",
+          "codexErrorInfo": "other",
+          "additionalDetails": null,
+          "misalignment": null
+        },
+        "items": [
+          {
+            "type": "userMessage",
+            "id": "01a186b0-3f0b-7700-92ba-abc44d8b7de6"
+          }
+        ]
+      }
+    ]
+  }
+}

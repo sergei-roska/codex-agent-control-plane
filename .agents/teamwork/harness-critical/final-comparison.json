@@ -1,0 +1,52 @@
+{
+  "baseline": {
+    "log": ".agents/teamwork/harness-critical/baseline-full.log",
+    "counts": {
+      "tests": 1356,
+      "pass": 1344,
+      "fail": 10,
+      "cancelled": 0,
+      "skipped": 2
+    },
+    "failures": [
+      "direct review continuations bind thread lane and codex home to their origin attempt",
+      "direct verifier continuation requires its originating target and preserves same-target control",
+      "enumeration failure still sends apps/plugins/skills overrides and marks enforced false",
+      "selected skills are explicit turn inputs with scoped boundary and hash provenance",
+      "schemas satisfy strict structured output rules",
+      "checkSpecialistRequest accepts the shape the lead sends and returns a copy",
+      "every shipped role and the lead have an empty MCP allowlist and skills off",
+      "rejects malformed a2a_tools tables",
+      "a usage-limited lane writer reports a continuation with its thread, lane, and home",
+      "a completed lane writer publishes thread, lane, and home as continuation metadata"
+    ]
+  },
+  "final": {
+    "log": ".agents/teamwork/harness-critical/final-full.log",
+    "counts": {
+      "tests": 1385,
+      "pass": 1376,
+      "fail": 8,
+      "cancelled": 0,
+      "skipped": 1
+    },
+    "failures": [
+      "direct review continuations bind thread lane and codex home to their origin attempt",
+      "direct verifier continuation requires its originating target and preserves same-target control",
+      "enumeration failure still sends apps/plugins/skills overrides and marks enforced false",
+      "selected skills are explicit turn inputs with scoped boundary and hash provenance",
+      "every shipped role and the lead have an empty MCP allowlist and skills off",
+      "rejects malformed a2a_tools tables",
+      "a usage-limited lane writer reports a continuation with its thread, lane, and home",
+      "a completed lane writer publishes thread, lane, and home as continuation metadata"
+    ]
+  },
+  "newFailures": [],
+  "resolvedBaselineFailures": [
+    "checkSpecialistRequest accepts the shape the lead sends and returns a copy",
+    "schemas satisfy strict structured output rules"
+  ],
+  "productSourceFrozen": true,
+  "syntaxCheckedJavaScriptFiles": 25,
+  "ownedBaselineWorktreeRemoved": true
+}

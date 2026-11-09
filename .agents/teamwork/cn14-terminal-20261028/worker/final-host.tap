@@ -1,0 +1,11 @@
+✔ cooperative held lost acknowledgement retries staged close after original provider group death with immediate provider close (10341.665105ms)
+✔ cooperative held lost acknowledgement retries staged close after original provider group death with late provider close (10274.459027ms)
+✔ released shutdown phase permits fresh host intake on the same workspace and database (669.010456ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 21640.437817

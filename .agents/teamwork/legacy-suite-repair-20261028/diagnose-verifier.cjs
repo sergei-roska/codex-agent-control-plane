@@ -1,0 +1,10 @@
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const Module = require('node:module');
+const filename = path.resolve('test/a2a-role-service.test.js');
+const source = fs.readFileSync(filename, 'utf8').replace("  assert.equal(calls.length, 2, 'same-target verifier continuation reaches the injected App Server boundary');", "  console.error('DIAGNOSTIC', JSON.stringify({origin:first.artifacts[0].metadata.continuation, unchanged}));\n  assert.equal(calls.length, 2, 'same-target verifier continuation reaches the injected App Server boundary');");
+const loaded = new Module(filename, module);
+loaded.filename = filename;
+loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+loaded._compile(source, filename);

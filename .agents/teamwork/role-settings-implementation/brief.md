@@ -1,0 +1,1 @@
+Implement dedicated Roles page, role capacity defaults/overrides, discovered model capability-aware effort choices, and Fast selection request behavior within authorized source/test files. Preserve existing dirty changes and stop-required settings behavior. No service restart or live model turn.

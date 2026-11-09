@@ -1,0 +1,5 @@
+candidate=/home/sr/Projects/dccourtscode-harness-trial-20261104
+head=42266cb100b6386510e049da161d2d0b8ab940ed
+status= M composer.lock
+baseline=4b526e7e3e4f727c99f02fd44a655df595adfe0c
+prior=42266cb100b6386510e049da161d2d0b8ab940ed

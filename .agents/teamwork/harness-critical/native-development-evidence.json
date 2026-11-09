@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "modelTurns": 0,
+  "managedProjectChanges": false,
+  "policy": {
+    "mode": "inherit",
+    "writerProfile": ":danger-full-access",
+    "approvalPolicy": "never"
+  },
+  "acceptance": {
+    "disposition": "accepted",
+    "checks": [
+      {
+        "id": "loopback",
+        "result": "passed",
+        "exitCode": 0,
+        "stdout": "loopback-ok\n"
+      }
+    ]
+  },
+  "localGit": {
+    "exitCode": 0,
+    "commitCreated": true,
+    "workspaceClean": true
+  },
+  "status": "passed"
+}

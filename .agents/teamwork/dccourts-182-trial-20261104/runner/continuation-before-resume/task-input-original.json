@@ -1,0 +1,63 @@
+{
+  "issue": "DCCOURTS-182",
+  "sourceUrl": "https://insomniacdesign.atlassian.net/browse/DCCOURTS-182",
+  "workspace": "/home/sr/Projects/dccourtscode-harness-trial-20261104",
+  "baseCommit": "4b526e7e3e4f727c99f02fd44a655df595adfe0c",
+  "goal": "Complete the code-only DCCOURTS-182 candidate preserved from prior native Harness task a75b3e3b-4d73-4221-95c4-0f51cc40f7d2. The upstream SHS patch and its registration were already produced by that task. Preserve this verified work; do not regenerate the patch.\n\nThe independent upstream kernel oracle has passed 5 tests / 59 assertions. The local patch SHA-256 is 6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9. The genuine Composer Patches 2.0.0 patches-relock command ran in isolated PHP 8.3 scratch and found only one metadata difference: patches.lock.json top-level _hash is stale. Candidate value fee4166f27e9a764b2b196f42055de4c3ee8202edd8352146f29443b5a4b8378 must become tool-generated value dfc37cfe6cd7e4cdd678e03a170003d2398cea74c9e5967cae5244b0c203869d. All patch records are byte-equivalent after JSON normalization; keep them unchanged.\n\nMake that minimal metadata correction in patches.lock.json only. Then allow the host's mandatory verifier, upstream kernel check, and actual Composer relock comparison to qualify this frozen candidate. Report only checks you actually performed; host-required checks run separately. Do not alter composer.json, composer.lock, the patch, AGENTS.md, .lando.yml, validation infrastructure or unrelated project files. Keep drupal/shs locked to 2.0.7.\n\nThis is an explicitly authorized local continuation of the test trial. Do not read a completed local bugfix branch, SQL dumps, production data, or original project services. Do not change branches, commit, push, deploy or write Jira. Production category restoration and audit remain excluded. The host will retain evidence and undo all trial changes after acceptance. Use one narrow engineering task; the host automatically supplies its verifier.",
+  "acceptance": {
+    "source": "agent",
+    "requiredChecks": [
+      {
+        "id": "dccourts-182-upstream-kernel",
+        "argv": [
+          "bash",
+          "scripts/harness/validate-dccourts-182.sh"
+        ],
+        "timeoutMs": 600000
+      },
+      {
+        "id": "dccourts-182-composer-relock",
+        "argv": [
+          "bash",
+          "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/environment/evaluate-composer-patches-v2.sh",
+          "."
+        ],
+        "timeoutMs": 600000
+      }
+    ]
+  },
+  "roleOverrides": {
+    "coordinator": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "engineer": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "verifier": {
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "fastMode": "off"
+    }
+  },
+  "bounds": {
+    "objectiveTimeoutMs": 900000,
+    "turnTimeoutMs": 180000
+  },
+  "excluded": [
+    "production content changes",
+    "production audit",
+    "deployment",
+    "Jira writes",
+    "completed branch implementation"
+  ],
+  "cleanup": "Capture patch and evidence, safely stop private services, restore owned trial to recorded dccr-master baseline. Original checkout unchanged.",
+  "trialBaselineCommit": "5332f4cfae7285afbcf467cd3f1fb6a372e9c95a",
+  "validationScriptSha256": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+  "stage": "metadata-and-acceptance-continuation",
+  "priorNativeTaskId": "a75b3e3b-4d73-4221-95c4-0f51cc40f7d2",
+  "metadataEvaluatorSha256": "5a18d2e38db0b643630d9b6be66abea535463d0435973f86310c89610b3682ff"
+}

@@ -1,0 +1,713 @@
+diff --git a/src/codex-app-server.js b/src/codex-app-server.js
+index 11290f4..2b7d2b3 100644
+--- a/src/codex-app-server.js
++++ b/src/codex-app-server.js
+@@ -2,13 +2,20 @@ const { spawn } = require('node:child_process');
+ const readline = require('node:readline');
+ const fs = require('node:fs');
+ const path = require('node:path');
++const os = require('node:os');
+ const crypto = require('node:crypto');
+ const { readProcessIdentity, listGroupMembers } = require('./process-quiescence');
+ const { classifyCodexError } = require('./contracts');
+ const { DEFAULT_SKILLS_ROOT } = require('./skill-catalog');
+ const { loadMcpCatalog, resolveMcpToolSelection, mcpToolPins } = require('./mcp-catalog');
+ const { withConnectors, resolveConnectorToolSelection, resolveManagedToolSelection } = require('./connector-catalog');
+-const { READ_ONLY_PROFILE, WORKSPACE_PROFILE, resolveExecutionPermissions } = require('./execution-permissions');
++const {
++  READ_ONLY_PROFILE, WORKSPACE_PROFILE, resolveExecutionPermissions, nativeSandboxPolicy, withVerifierIpcNetworkAccess, scopedVerifierSandboxPolicy,
++} = require('./execution-permissions');
++const { canonicalRoleId } = require('./role-names');
++const { normalizeModelCapability, resolveServiceTierForTurn } = require('./model-capabilities');
++const { scopedExecutionDetails } = require('./delivery-role-capabilities');
++const { stableDigest } = require('./backlog-store');
+ 
+ const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+ const DEFAULT_TURN_TIMEOUT_MS = 3_600_000;
+@@ -795,7 +802,97 @@ class CodexAppServer {
+     }
+   }
+ 
+-  async run({ role, cwd, permissionWorkspace = cwd, input, onEvent, signal, threadId: existingThreadId, outputSchema, onTurnStart, selectedSkills = [], selectedMcpTools = [], sandboxPolicy: sandboxPolicyOverride = null, executionPermissions = 'strict' } = {}) {
++  async listModels() {
++    await this.start();
++    const result = await this._request('model/list', { includeHidden: false });
++    return Array.isArray(result?.data) ? result.data.map(normalizeModelCapability).filter((model) => typeof model.id === 'string') : [];
++  }
++
++  async startAccountUsageWindow() {
++    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-account-handshake-'));
++    try {
++      const result = await this.run({
++        role: {
++          name: 'account-handshake',
++          model: 'gpt-6.1-sol',
++          effort: 'low',
++          sandbox: 'read-only',
++          instructions: 'Reply with exactly OK. Do not use tools.',
++          tools: { mcpServers: [], skills: false },
++        },
++        cwd,
++        input: 'Reply OK.',
++        selectedSkills: [],
++        selectedMcpTools: [],
++        executionPermissions: 'strict',
++        sandboxPolicy: { type: 'readOnly', networkAccess: false },
++        ephemeral: true,
++      });
++      if (result.status !== 'completed') throw new CodexAppServerError('Handshake turn did not complete', { status: result.status });
++      return result;
++    } finally {
++      fs.rmSync(cwd, { recursive: true, force: true });
++    }
++  }
++
++  async prepareThread({ role, cwd, permissionWorkspace = cwd, selectedSkills = [], selectedMcpTools = [], executionPermissions = 'inherit', sandboxPolicy: sandboxPolicyOverride = null, ephemeral = false } = {}) {
++    if (!role || !role.name) throw new TypeError('role.name is required');
++    if (!cwd) throw new TypeError('cwd is required');
++    const validatedSkills = validateSelectedSkills(selectedSkills);
++    const validatedMcpTools = resolveManagedToolSelection(this.mcpCatalog,
++      selectedMcpTools.map((item) => item?.id),
++      { allowedServers: role.tools?.mcpServers || [], pins: mcpToolPins(selectedMcpTools) });
++    const permissionMode = await this.resolveExecutionPermissions(permissionWorkspace, executionPermissions);
++    const readOnly = role.sandbox === 'read-only';
++    const usePermissionProfile = permissionMode.mode === 'inherit' && permissionMode.profileApi === true;
++    const inheritedProfile = permissionMode.mode === 'inherit'
++      ? (readOnly ? READ_ONLY_PROFILE : permissionMode.writerProfile)
++      : null;
++    const selectedProfile = inheritedProfile || (readOnly ? READ_ONLY_PROFILE : WORKSPACE_PROFILE);
++    const applyNativeApprovals = permissionMode.mode === 'inherit';
++    const threadPermissions = usePermissionProfile
++      ? { permissions: selectedProfile }
++      : permissionMode.mode === 'inherit'
++        ? { sandbox: readOnly ? 'read-only' : permissionMode.sandboxMode }
++        : { sandbox: normalizeSandbox(role.sandbox) };
++    const approvalSettings = applyNativeApprovals
++      ? { approvalPolicy: permissionMode.approvalPolicy, approvalsReviewer: permissionMode.approvalsReviewer }
++      : { approvalPolicy: 'on-request', approvalsReviewer: APPROVALS_REVIEWER };
++    const verifierRole = canonicalRoleId(role.id || role.name) === 'verifier';
++    const nativeLegacy = applyNativeApprovals && !usePermissionProfile;
++    await this.start();
++    const { config: toolConfig, policy: toolPolicy } = await this._toolPolicy(role, cwd, validatedMcpTools);
++    const threadResult = await this._request('thread/start', {
++      model: role.model || null,
++      cwd,
++      ...(ephemeral ? { ephemeral: true } : {}),
++      developerInstructions: [role.instructions || `You are the ${role.name} agent.`, SKILL_BOUNDARY, READING_DISCIPLINE].join('\n\n'),
++      ...threadPermissions,
++      ...approvalSettings,
++      config: toolConfig,
++    });
++    const threadId = threadResult?.thread?.id;
++    if (typeof threadId !== 'string' || !threadId) throw new CodexAppServerError('Codex App Server did not return a thread ID');
++    const turnPermissions = usePermissionProfile
++      ? { permissions: selectedProfile }
++      : nativeLegacy && readOnly
++        ? { sandboxPolicy: { type: 'readOnly', networkAccess: false } }
++        : nativeLegacy
++          ? { sandboxPolicy: verifierRole && permissionMode.sandboxMode === 'workspace-write'
++            ? withVerifierIpcNetworkAccess(nativeSandboxPolicy(permissionWorkspace, permissionMode.sandboxMode, permissionMode.sandboxWorkspaceWrite))
++            : nativeSandboxPolicy(permissionWorkspace, permissionMode.sandboxMode, permissionMode.sandboxWorkspaceWrite) }
++          : { sandboxPolicy: verifierRole
++            ? withVerifierIpcNetworkAccess(sandboxPolicyOverride || sandboxPolicy(role.sandbox))
++            : sandboxPolicyOverride || sandboxPolicy(role.sandbox) };
++    this.loadedThreads.add(threadId);
++    this.threadMcpPolicies.set(threadId, JSON.stringify(mcpToolPins(validatedMcpTools)));
++    this.threadExecutionPolicies.set(threadId, JSON.stringify({ threadPermissions, turnPermissions, approvalSettings }));
++    this.threadTotals.set(threadId, ZERO_TOTAL);
++    return { threadId, model: threadResult?.model || role.model || null, effort: threadResult?.reasoningEffort || role.effort || null,
++      toolPolicy, permissionMode: permissionMode.mode };
++  }
++
++  async run({ role, cwd, permissionWorkspace = cwd, input, onEvent, signal, threadId: existingThreadId, outputSchema, onTurnStart, selectedSkills = [], selectedMcpTools = [], sandboxPolicy: sandboxPolicyOverride = null, executionPermissions = 'strict', ephemeral = false, deliveryCapability = null } = {}) {
+     if (!role || !role.name) throw new TypeError('role.name is required');
+     if (!cwd) throw new TypeError('cwd is required');
+     if (typeof input !== 'string' || !input.trim()) throw new TypeError('input must be a non-empty string');
+@@ -806,7 +903,35 @@ class CodexAppServer {
+       { allowedServers: role.tools?.mcpServers || [], pins: mcpToolPins(selectedMcpTools) });
+     const permissionMode = await this.resolveExecutionPermissions(permissionWorkspace, executionPermissions);
+     const readOnly = role.sandbox === 'read-only';
+-    const usePermissionProfile = permissionMode.mode === 'inherit' && permissionMode.profileApi === true;
++    const scoped = deliveryCapability ? scopedExecutionDetails(deliveryCapability) : null;
++    if (scoped) {
++      scoped.assertCurrent();
++      const selectedPermissionMode = (executionPermissions === 'inherit' && permissionMode.mode === 'inherit')
++        || (executionPermissions === 'strict' && permissionMode.mode === 'strict');
++      if (canonicalRoleId(role.id || role.name) !== 'verifier' || existingThreadId
++        || fs.realpathSync(cwd) !== scoped.scratchRoot || fs.realpathSync(permissionWorkspace) !== scoped.permissionWorkspace
++        || !selectedPermissionMode
++        || scoped.executionPolicyDigest !== stableDigest(scopedVerifierSandboxPolicy(scoped.scratchRoot))) {
++        throw new CodexAppServerError('Scoped verifier execution identity or selected approval policy is unavailable', { failureClass: 'request_rejected' });
++      }
++      if (!scoped.verifyCandidate()) throw new CodexAppServerError('Frozen verifier candidate changed before execution', { failureClass: 'request_rejected' });
++    }
++    let executionRole = role;
++    if (role.fastMode === 'off') {
++      executionRole = { ...role, serviceTierForTurn: 'default' };
++    } else if (role.fastMode === 'on') {
++      await this.start();
++      const models = await this.listModels();
++      const model = models.find((entry) => entry.id === role.model);
++      try {
++        const serviceTierForTurn = resolveServiceTierForTurn(role.fastMode, model);
++        executionRole = { ...role, ...(serviceTierForTurn ? { serviceTierForTurn } : {}) };
++      } catch (error) {
++        throw new CodexAppServerError(`${error.message} (${role.model || 'unknown model'})`);
++      }
++    }
++    const verifierRole = canonicalRoleId(role.id || role.name) === 'verifier';
++    const usePermissionProfile = !scoped && permissionMode.mode === 'inherit' && permissionMode.profileApi === true;
+     const inheritedProfile = permissionMode.mode === 'inherit'
+       ? (readOnly ? READ_ONLY_PROFILE : permissionMode.writerProfile)
+       : null;
+@@ -814,19 +939,29 @@ class CodexAppServer {
+     const selectedProfile = inheritedProfile || enforcedProfile;
+     const applyNativeApprovals = permissionMode.mode === 'inherit';
+     const nativeLegacy = applyNativeApprovals && !usePermissionProfile;
+-    const threadPermissions = usePermissionProfile
++    const threadPermissions = scoped
++      ? { sandbox: 'workspace-write' }
++      : usePermissionProfile
+       ? { permissions: selectedProfile }
+       : nativeLegacy
+         ? { sandbox: readOnly ? 'read-only' : permissionMode.sandboxMode }
+         : { sandbox: normalizeSandbox(role.sandbox) };
+-    const turnPermissions = usePermissionProfile
++    const turnPermissions = scoped
++      ? { sandboxPolicy: scopedVerifierSandboxPolicy(scoped.scratchRoot) }
++      : usePermissionProfile
+       ? { permissions: selectedProfile }
+       : nativeLegacy && readOnly
+         ? { sandboxPolicy: { type: 'readOnly', networkAccess: false } }
+         : nativeLegacy
+-          ? { sandboxPolicy: nativeSandboxPolicy(permissionWorkspace, permissionMode.sandboxMode, permissionMode.sandboxWorkspaceWrite) }
+-          : { sandboxPolicy: sandboxPolicyOverride || sandboxPolicy(role.sandbox) };
+-    const approvalSettings = applyNativeApprovals
++          ? { sandboxPolicy: verifierRole && permissionMode.sandboxMode === 'workspace-write'
++            ? withVerifierIpcNetworkAccess(nativeSandboxPolicy(permissionWorkspace, permissionMode.sandboxMode, permissionMode.sandboxWorkspaceWrite))
++            : nativeSandboxPolicy(permissionWorkspace, permissionMode.sandboxMode, permissionMode.sandboxWorkspaceWrite) }
++          : { sandboxPolicy: verifierRole
++            ? withVerifierIpcNetworkAccess(sandboxPolicyOverride || sandboxPolicy(role.sandbox))
++            : sandboxPolicyOverride || sandboxPolicy(role.sandbox) };
++    const approvalSettings = scoped && permissionMode.mode === 'strict'
++      ? { approvalPolicy: 'on-request', approvalsReviewer: APPROVALS_REVIEWER }
++      : applyNativeApprovals || scoped
+       ? { approvalPolicy: permissionMode.approvalPolicy, approvalsReviewer: permissionMode.approvalsReviewer }
+       : { approvalPolicy: 'on-request', approvalsReviewer: APPROVALS_REVIEWER };
+ 
+@@ -840,6 +975,8 @@ class CodexAppServer {
+       run: null,
+       model: role.model || null,
+       effort: role.effort || null,
++      fastMode: executionRole.fastMode || 'inherit',
++      serviceTierForTurn: executionRole.serviceTierForTurn || null,
+       startedAt: new Date().toISOString(),
+       startedMs: performance.now(),
+       startupMs: null,
+@@ -859,6 +996,12 @@ class CodexAppServer {
+           approvalsReviewer: APPROVALS_REVIEWER,
+         }),
+         ...(usePermissionProfile ? { profile: selectedProfile } : {}),
++        ...(verifierRole ? {
++          verifierIpcNetworkAccess: usePermissionProfile
++            ? selectedProfile === ':danger-full-access'
++            : turnPermissions.sandboxPolicy?.networkAccess === true
++              || turnPermissions.sandboxPolicy?.type === 'dangerFullAccess',
++        } : {}),
+         ...(permissionMode.mode === 'inherit' ? {
+           approvalPolicy: permissionMode.approvalPolicy ?? null,
+           approvalsReviewer: permissionMode.approvalsReviewer ?? null,
+@@ -870,7 +1013,11 @@ class CodexAppServer {
+       ctx.permissionConfig.selectedSkills = validatedSkills.map(({ id, sha256 }) => ({ id, sha256 }));
+     }
+     try {
+-      const result = await this._run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills: validatedSkills, selectedMcpTools: validatedMcpTools, permissionMode, threadPermissions, turnPermissions, approvalSettings });
++      const result = await this._run(ctx, { role: executionRole, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills: validatedSkills, selectedMcpTools: validatedMcpTools, permissionMode, threadPermissions, turnPermissions, approvalSettings, ephemeral, scoped });
++      if (scoped) {
++        if (!scoped.verifyCandidate()) throw new CodexAppServerError('Frozen verifier candidate changed during execution', { failureClass: 'request_rejected', execution: executionOf(ctx) });
++        if (result.threadId) scoped.pinObservedThread(result.threadId);
++      }
+       return { ...result, execution: executionOf(ctx), usage: this._usageOf(ctx), ...permissionOf(ctx) };
+     } catch (error) {
+       // Concurrent runs can share one error instance (child failure); give each its own copy.
+@@ -887,7 +1034,7 @@ class CodexAppServer {
+     }
+   }
+ 
+-  async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills, selectedMcpTools, permissionMode, threadPermissions, turnPermissions, approvalSettings }) {
++  async _run(ctx, { role, cwd, input, onEvent, signal, existingThreadId, outputSchema, onTurnStart, selectedSkills, selectedMcpTools, permissionMode, threadPermissions, turnPermissions, approvalSettings, ephemeral, scoped = null }) {
+     await this.start();
+     ctx.generation = this.generation;
+     this._assertTurnAdmission(ctx);
+@@ -921,9 +1068,11 @@ class CodexAppServer {
+     let threadResult = null;
+     let baseline = null;
+     if (!existingThreadId) {
++      if (scoped) { scoped.assertCurrent(); if (!scoped.verifyCandidate()) throw new CodexAppServerError('Frozen verifier candidate changed before thread start', { failureClass: 'request_rejected' }); }
+       threadResult = await this._request('thread/start', {
+         model: role.model || null,
+         cwd,
++        ...(ephemeral ? { ephemeral: true } : {}),
+         developerInstructions,
+         ...threadPermissions,
+         ...approvalSettings,
+@@ -994,6 +1143,7 @@ class CodexAppServer {
+     try {
+       if (signal?.aborted) throw abortError();
+       this._assertTurnAdmission(ctx);
++      if (scoped) { scoped.assertCurrent(); if (!scoped.verifyCandidate()) throw new CodexAppServerError('Frozen verifier candidate changed before turn start', { failureClass: 'request_rejected' }); }
+       ctx.processIdentity = this.processIdentity();
+       if (onTurnStart) onTurnStart({ processIdentity: ctx.processIdentity, threadId });
+       this._assertTurnAdmission(ctx);
+@@ -1006,11 +1156,16 @@ class CodexAppServer {
+         ],
+         ...(role.model ? { model: role.model } : {}),
+         ...(role.effort ? { effort: role.effort } : {}),
++        ...(role.serviceTierForTurn ? { serviceTierForTurn: role.serviceTierForTurn } : {}),
+         cwd,
+         ...turnPermissions,
+         ...approvalSettings,
+         ...(outputSchema ? { outputSchema } : {}),
+       }, { onSending: (generation) => {
++        if (scoped) {
++          scoped.assertCurrent();
++          if (!scoped.verifyCandidate()) throw new CodexAppServerError('Frozen verifier candidate changed before turn start', { failureClass: 'request_rejected' });
++        }
+         ctx.turnStartSent = true;
+         ctx.generation = generation;
+         ctx.childState = this.currentChildState;
+@@ -1095,6 +1250,8 @@ class CodexAppServer {
+     return {
+       model: ctx.model,
+       effort: ctx.effort,
++      fastMode: ctx.fastMode,
++      serviceTierForTurn: ctx.serviceTierForTurn,
+       startedAt: ctx.startedAt,
+       elapsedMs: Math.round(performance.now() - ctx.startedMs),
+       // A run that failed before turn/start was sent has a known count of zero turns.
+@@ -1132,9 +1289,14 @@ class CodexAppServer {
+     if (!run.terminal) return;
+     const generation = run.ctx.generation;
+     const state = run.ctx.childState;
+-    if (!Number.isSafeInteger(generation) || generation !== this.generation
+-      || !state || state !== this.currentChildState || state.generation !== generation
+-      || state.failed || state.exited || this.childExited || !this.child) {
++    const originalCurrent = () => Number.isSafeInteger(generation) && generation === this.generation
++      && state && state === this.currentChildState && state.generation === generation
++      && state.child === this.child && !state.failed && !state.exited && !this.childExited && this.child;
++    const identity = run.ctx.processIdentity;
++    const observeIdentity = () => validCleanupIdentity(identity)
++      ? this.readProcessIdentityImpl(identity.pid) : null;
++    const before = observeIdentity();
++    if (!originalCurrent() || (validCleanupIdentity(before) && !sameCleanupIdentity(identity, before))) {
+       const error = new CodexAppServerError('Background terminal cleanup could not run on the original Codex App Server generation', {
+         failureClass: 'background_terminal_cleanup_failed',
+         generation,
+@@ -1148,6 +1310,17 @@ class CodexAppServer {
+       const result = await this._request('thread/backgroundTerminals/clean', { threadId: run.threadId }, {
+         timeoutMs: this.backgroundTerminalCleanupTimeoutMs,
+       });
++      if (!originalCurrent()) {
++        throw new CodexAppServerError('Background terminal cleanup completed after the original Codex App Server generation changed', {
++          failureClass: 'background_terminal_cleanup_failed', generation, threadId: run.threadId, turnId: run.turnId,
++        });
++      }
++      const after = observeIdentity();
++      if (validCleanupIdentity(after) && !sameCleanupIdentity(identity, after)) {
++        throw new CodexAppServerError('Background terminal cleanup completed after the original process identity changed', {
++          failureClass: 'background_terminal_cleanup_failed', generation, threadId: run.threadId, turnId: run.turnId,
++        });
++      }
+       if (!result || typeof result !== 'object' || Array.isArray(result)) {
+         throw new CodexAppServerError('Codex App Server returned an invalid background terminal cleanup response', {
+           failureClass: 'background_terminal_cleanup_failed',
+@@ -1156,6 +1329,16 @@ class CodexAppServer {
+           turnId: run.turnId,
+         });
+       }
++      if (identity?.pid === state.child.pid && sameCleanupIdentity(identity, state.identity)
++        && sameCleanupIdentity(identity, before) && sameCleanupIdentity(identity, after)
++        && typeof run.threadId === 'string' && run.threadId.length > 0
++        && typeof run.turnId === 'string' && run.turnId.length > 0) {
++        run.ctx.cleanupReceipt = {
++          version: 1, method: 'thread/backgroundTerminals/clean',
++          scope: 'provider-managed-background-terminals', completion: 'confirmed',
++          generation, processIdentity: { ...identity }, threadId: run.threadId, turnId: run.turnId,
++        };
++      }
+     } catch (cause) {
+       if (cause?.failureClass === 'background_terminal_cleanup_failed' && cause.generation === generation) {
+         throw this._recordCleanupFailure(cleanupError(cause, originalError, run));
+@@ -1617,6 +1800,17 @@ function cleanupError(error, originalError, run) {
+   return error;
+ }
+ 
++function validCleanupIdentity(identity) {
++  return Number.isSafeInteger(identity?.pid) && identity.pid > 1
++    && Number.isSafeInteger(identity.pgid) && identity.pgid > 1
++    && typeof identity.startTime === 'string' && /^[0-9]+$/.test(identity.startTime);
++}
++
++function sameCleanupIdentity(a, b) {
++  return validCleanupIdentity(a) && validCleanupIdentity(b)
++    && a.pid === b.pid && a.pgid === b.pgid && a.startTime === b.startTime;
++}
++
+ function executionOf(ctx) {
+   return {
+     processIdentity: ctx.processIdentity,
+@@ -1626,6 +1820,7 @@ function executionOf(ctx) {
+     turnStartSent: ctx.turnStartSent,
+     turnStartRejected: ctx.turnStartRejected === true,
+     turnTerminal: Boolean(ctx.run?.terminal),
++    ...(ctx.cleanupReceipt ? { cleanupReceipt: ctx.cleanupReceipt } : {}),
+   };
+ }
+ 
+@@ -1751,20 +1946,6 @@ function sandboxPolicy(sandbox) {
+   return { type: 'workspaceWrite' };
+ }
+ 
+-function nativeSandboxPolicy(workspace, mode, settings = null) {
+-  if (mode === 'read-only') return { type: 'readOnly', networkAccess: false };
+-  if (mode === 'danger-full-access') return { type: 'dangerFullAccess' };
+-  const writableRoots = [workspace, ...(Array.isArray(settings?.writable_roots) ? settings.writable_roots : [])]
+-    .filter((root, index, roots) => typeof root === 'string' && path.isAbsolute(root) && roots.indexOf(root) === index);
+-  return {
+-    type: 'workspaceWrite',
+-    writableRoots,
+-    networkAccess: settings?.network_access === true,
+-    excludeTmpdirEnvVar: settings?.exclude_tmpdir_env_var === true,
+-    excludeSlashTmp: settings?.exclude_slash_tmp === true,
+-  };
+-}
+-
+ function laneSandboxPolicy({ workspacePath, networkAccess = false } = {}) {
+   if (!workspacePath) throw new TypeError('workspacePath is required');
+   return { type: 'workspaceWrite', writableRoots: [workspacePath], networkAccess: Boolean(networkAccess), excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+diff --git a/test/codex-app-server.test.js b/test/codex-app-server.test.js
+index 010fb19..2c58007 100644
+--- a/test/codex-app-server.test.js
++++ b/test/codex-app-server.test.js
+@@ -130,6 +130,72 @@ test('performs initialize handshake and completes a turn', async (t) => {
+   assert.equal(turnStart.params.approvalsReviewer, 'user');
+ });
+ 
++test('resolves Fast on from advertised metadata and sends the actual tier id', async (t) => {
++  const handler = baseHandler();
++  const fake = fakeSpawn((request, send) => {
++    if (request.method === 'model/list') return send({ id: request.id, result: { data: [{ id: role.model, supportedReasoningEfforts: [{ reasoningEffort: 'high', description: 'High' }], serviceTiers: [{ id: 'fast', name: 'Fast', description: 'Accelerated service' }] }] } });
++    return handler(request, send);
++  });
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
++  t.after(() => client.close());
++  const result = await client.run({ role: { ...role, fastMode: 'on' }, cwd: '/tmp/project', input: 'hello' });
++  assert.equal(fake.getChild().sent.find(({ method }) => method === 'turn/start').params.serviceTierForTurn, 'fast');
++  assert.equal(result.usage.serviceTierForTurn, 'fast');
++  assert.equal(result.usage.fastMode, 'on');
++});
++
++test('Fast off explicitly selects the standard turn tier', async (t) => {
++  const handler = baseHandler();
++  const fake = fakeSpawn((request, send) => {
++    if (request.method === 'model/list') return send({ id: request.id, result: { data: [{ id: role.model, supportedReasoningEfforts: [], serviceTiers: [] }] } });
++    return handler(request, send);
++  });
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
++  t.after(() => client.close());
++  const result = await client.run({ role: { ...role, fastMode: 'off' }, cwd: '/tmp/project', input: 'hello' });
++  assert.equal(fake.getChild().sent.find(({ method }) => method === 'turn/start').params.serviceTierForTurn, 'default');
++  assert.equal(fake.getChild().sent.some(({ method }) => method === 'model/list'), false);
++  assert.equal(result.usage.serviceTierForTurn, 'default');
++});
++
++test('Fast on with unknown capability metadata fails before creating a turn', async (t) => {
++  const handler = baseHandler();
++  const fake = fakeSpawn((request, send) => {
++    if (request.method === 'model/list') return send({ id: request.id, result: { data: [] } });
++    return handler(request, send);
++  });
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
++  t.after(() => client.close());
++  await assert.rejects(client.run({ role: { ...role, fastMode: 'on' }, cwd: '/tmp/project', input: 'hello' }), /Service tier capability is unknown/);
++  assert.equal(fake.getChild().sent.some(({ method }) => method === 'turn/start'), false);
++});
++
++test('account usage handshake uses one ephemeral read-only low-effort turn in a disposable cwd', async (t) => {
++  const fake = fakeSpawn(baseHandler());
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, requestTimeoutMs: 15_000, turnTimeoutMs: 90_000 });
++  t.after(() => client.close());
++
++  const result = await client.startAccountUsageWindow();
++  assert.equal(result.status, 'completed');
++  const sent = fake.getChild().sent;
++  const threadStart = sent.find(({ method }) => method === 'thread/start');
++  const turnStart = sent.find(({ method }) => method === 'turn/start');
++  assert.equal(threadStart.params.ephemeral, true);
++  assert.equal(threadStart.params.model, 'gpt-6.1-sol');
++  assert.ok(fs.statSync(path.dirname(threadStart.params.cwd)).isDirectory());
++  assert.equal(fs.existsSync(threadStart.params.cwd), false, 'scratch cwd is removed after the completed turn');
++  assert.equal(threadStart.params.config['features.apps'], false);
++  assert.equal(threadStart.params.config['features.plugins'], false);
++  assert.equal(threadStart.params.config['skills.bundled.enabled'], false);
++  assert.equal(threadStart.params.config['mcp_servers.alpha.enabled'], false);
++  assert.equal(threadStart.params.config['mcp_servers.gamma.enabled'], false);
++  assert.equal(threadStart.params.config['mcp_servers.beta.enabled'], false);
++  assert.equal(turnStart.params.model, 'gpt-6.1-sol');
++  assert.equal(turnStart.params.effort, 'low');
++  assert.deepEqual(turnStart.params.input, [{ type: 'text', text: 'Reply OK.' }]);
++  assert.deepEqual(turnStart.params.sandboxPolicy, { type: 'readOnly', networkAccess: false });
++});
++
+ test('waits for thread-scoped background terminal cleanup before resolving', async (t) => {
+   let cleanupRequest;
+   const handler = (request, send) => {
+@@ -142,8 +208,8 @@ test('waits for thread-scoped background terminal cleanup before resolving', asy
+     if (request.method === 'thread/backgroundTerminals/clean') cleanupRequest = request;
+   };
+   handler.ownsBackgroundTerminalCleanup = true;
+-  const fake = fakeSpawn(handler);
+-  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
++  const fake = fakeSpawn(handler, { pidBase: 4000 });
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: identityOf });
+   t.after(() => client.close());
+ 
+   let settled = false;
+@@ -153,7 +219,12 @@ test('waits for thread-scoped background terminal cleanup before resolving', asy
+   assert.equal(settled, false);
+   await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'overlap', threadId: 'thread-clean' }), /already active/);
+   fake.getChild().stdout.write(`${JSON.stringify({ id: cleanupRequest.id, result: {} })}\n`);
+-  assert.equal((await pending).status, 'completed');
++  const result = await pending;
++  assert.equal(result.status, 'completed');
++  assert.deepEqual(result.execution.cleanupReceipt, {
++    version: 1, method: 'thread/backgroundTerminals/clean', scope: 'provider-managed-background-terminals',
++    completion: 'confirmed', generation: 1, processIdentity: identityOf(4000), threadId: 'thread-clean', turnId: 'turn-clean',
++  });
+ });
+ 
+ test('reports cleanup RPC failure with the confirmed model outcome preserved', async (t) => {
+@@ -174,6 +245,7 @@ test('reports cleanup RPC failure with the confirmed model outcome preserved', a
+ 
+   await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'fail' }), (error) => {
+     assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
++    assert.equal(error.execution.cleanupReceipt, undefined);
+     assert.equal(error.outcomeUnknown, true);
+     assert.deepEqual(error.originalTurnOutcome, { status: 'failed', terminal: true, failureClass: 'domain_failure', message: 'model failed' });
+     assert.equal(error.originalError.message, 'model failed');
+@@ -283,6 +355,7 @@ test('rechecks quarantine after awaited setup before admitting a turn', async (t
+ 
+   await assert.rejects(client.run({ role, cwd: '/tmp/first', input: 'first' }), (error) => {
+     assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
++    assert.equal(error.execution.cleanupReceipt, undefined);
+     assert.equal(error.outcomeUnknown, true);
+     return true;
+   });
+@@ -316,8 +389,8 @@ test('cleanup ignores an abort signal but reports it after acknowledgement', asy
+     if (request.method === 'thread/backgroundTerminals/clean') cleanupRequest = request;
+   };
+   handler.ownsBackgroundTerminalCleanup = true;
+-  const fake = fakeSpawn(handler);
+-  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
++  const fake = fakeSpawn(handler, { pidBase: 4000 });
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: identityOf });
+   t.after(() => client.close());
+   const controller = new AbortController();
+   let settled = false;
+@@ -331,10 +404,26 @@ test('cleanup ignores an abort signal but reports it after acknowledgement', asy
+   controller.abort();
+   assert.equal(settled, false);
+   fake.getChild().stdout.write(`${JSON.stringify({ id: cleanupRequest.id, result: {} })}\n`);
+-  await assert.rejects(pending, { name: 'AbortError' });
++  await assert.rejects(pending, (error) => {
++    assert.equal(error.name, 'AbortError');
++    assert.equal(error.execution.cleanupReceipt?.completion, 'confirmed');
++    return true;
++  });
+   assert.equal(settled, true);
+ });
+ 
++test('failed terminal carries confirmed cleanup receipt', async (t) => {
++  const fake = fakeSpawn(baseHandler(), { pidBase: 4000 });
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: identityOf });
++  t.after(() => client.close());
++  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'fail' }), (error) => {
++    assert.equal(error.failureClass, 'domain_failure');
++    assert.equal(error.execution.cleanupReceipt?.completion, 'confirmed');
++    assert.equal(error.execution.cleanupReceipt?.turnId, error.execution.turnId);
++    return true;
++  });
++});
++
+ test('bounds cleanup RPC time and preserves the terminal outcome', async (t) => {
+   const handler = (request, send) => {
+     if (request.method === 'initialize') send({ id: request.id, result: {} });
+@@ -380,6 +469,51 @@ test('does not send cleanup after the run generation has changed', async (t) =>
+   assert.equal(fake.getChild().sent.some(({ method }) => method === 'thread/backgroundTerminals/clean'), false);
+ });
+ 
++
++test('cleanup receipt rejects malformed responses and generation or process replacement', async (t) => {
++  for (const mode of ['malformed', 'generation', 'process', 'missing']) {
++    await t.test(mode, async (t) => {
++      let request;
++      let observed = identityOf(4000);
++      const handler = (message, send) => {
++        if (message.method === 'initialize') send({ id: message.id, result: {} });
++        if (message.method === 'thread/start') send({ id: message.id, result: { thread: { id: 'receipt-thread' } } });
++        if (message.method === 'turn/start') {
++          send({ id: message.id, result: { turn: { id: 'receipt-turn' } } });
++          send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: { id: 'receipt-turn', status: 'completed' } } });
++        }
++        if (message.method === 'thread/backgroundTerminals/clean') request = message;
++      };
++      handler.ownsBackgroundTerminalCleanup = true;
++      const fake = fakeSpawn(handler, { pidBase: 4000 });
++      const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: () => observed });
++      t.after(() => client.close());
++      if (mode === 'generation') {
++        const originalRequest = client._request.bind(client);
++        client._request = async (method, ...args) => {
++          const result = await originalRequest(method, ...args);
++          if (method === 'thread/backgroundTerminals/clean') client.generation += 1;
++          return result;
++        };
++      }
++      const pending = client.run({ role, cwd: '/tmp/project', input: 'receipt' });
++      await waitForRequest(() => fake.getChild(), 'thread/backgroundTerminals/clean');
++      if (mode === 'process') observed = { ...observed, startTime: '456' };
++      if (mode === 'missing') observed = null;
++      fake.getChild().stdout.write(`${JSON.stringify({ id: request.id, result: mode === 'malformed' ? [] : {} })}\n`);
++      if (mode === 'missing') {
++        assert.equal((await pending).execution.cleanupReceipt, undefined);
++      } else {
++        await assert.rejects(pending, (error) => {
++          assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
++          assert.equal(error.execution.cleanupReceipt, undefined);
++          return true;
++        });
++      }
++    });
++  }
++});
++
+ test('routes concurrent turns to their owning run', async (t) => {
+   const fake = fakeSpawn(baseHandler());
+   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+@@ -860,6 +994,7 @@ test('onTurnStart runs before turn/start is written and receives the identity',
+   assert.deepEqual(seen, { processIdentity: identityOf(4000), threadId: 'thread-1' });
+   assert.deepEqual(result.execution, {
+     processIdentity: identityOf(4000), generation: 1, threadId: 'thread-1', turnId: 'turn-1', turnStartSent: true, turnStartRejected: false, turnTerminal: true,
++    cleanupReceipt: { version: 1, method: 'thread/backgroundTerminals/clean', scope: 'provider-managed-background-terminals', completion: 'confirmed', generation: 1, processIdentity: identityOf(4000), threadId: 'thread-1', turnId: 'turn-1' },
+   });
+   assert.equal(client.processIdentity().pid, 4000);
+ });
+@@ -1402,7 +1537,10 @@ test('inherits trusted native writer and inspector profiles on new and resumed t
+ 
+   await client.run({ role, cwd: '/tmp/project', input: 'writer', executionPermissions: 'inherit' });
+   await client.run({ role: { ...role, sandbox: 'read-only' }, cwd: '/tmp/project', input: 'inspector', executionPermissions: 'inherit' });
+-  await client.run({ role, cwd: '/tmp/project', input: 'resumed', threadId: 'old-native-thread', executionPermissions: 'inherit' });
++  const verifier = await client.run({
++    role: { ...role, id: 'verifier', name: 'verifier' }, cwd: '/tmp/project', input: 'resumed',
++    threadId: 'old-native-thread', executionPermissions: 'inherit',
++  });
+ 
+   const sent = fake.getChild().sent;
+   const writerStart = sent.find(({ method }) => method === 'thread/start');
+@@ -1419,6 +1557,96 @@ test('inherits trusted native writer and inspector profiles on new and resumed t
+   assert.deepEqual(turnStarts.map(({ params }) => params.permissions), [':danger-full-access', ':read-only', ':danger-full-access']);
+   assert.ok(turnStarts.every(({ params }) => !Object.hasOwn(params, 'sandboxPolicy')));
+   assert.ok(turnStarts.every(({ params }) => params.approvalPolicy === 'never'));
++  assert.equal(verifier.permissionConfig.verifierIpcNetworkAccess, true);
++});
++
++test('legacy workspace-write grants verifier network access while preserving native roots and other roles', async (t) => {
++  const handler = baseHandler();
++  const inherited = (request, send) => {
++    if (request.method === 'config/read') {
++      return send({ id: request.id, result: { config: {
++        projects: { '/tmp/project': { trust_level: 'trusted' } },
++        sandbox_mode: 'workspace-write',
++        sandbox_workspace_write: {
++          writable_roots: ['/tmp/extra'], network_access: false,
++          exclude_tmpdir_env_var: true, exclude_slash_tmp: true,
++        },
++        approval_policy: 'on-request', mcp_servers: {},
++      } } });
++    }
++    if (request.method === 'permissionProfile/list') {
++      return send({ id: request.id, result: { data: [{ id: ':read-only', allowed: true }] } });
++    }
++    return handler(request, send);
++  };
++  inherited.ownsConfigRead = true;
++  const fake = fakeSpawn(inherited);
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
++  t.after(() => client.close());
++
++  const verifier = await client.run({ role: { ...role, id: 'orch-verifier', name: 'verifier' }, cwd: '/tmp/project', input: 'verify', executionPermissions: 'inherit' });
++  await client.run({ role: { ...role, id: 'engineer' }, cwd: '/tmp/project', input: 'write', executionPermissions: 'inherit' });
++  await client.run({ role: { ...role, id: 'verifier', name: 'verifier', sandbox: 'read-only' }, cwd: '/tmp/project', input: 'inspect', executionPermissions: 'inherit' });
++
++  const sent = fake.getChild().sent;
++  const turns = sent.filter(({ method }) => method === 'turn/start');
++  assert.deepEqual(turns.map(({ params }) => params.sandboxPolicy), [
++    {
++      type: 'workspaceWrite', writableRoots: ['/tmp/project', '/tmp/extra'], networkAccess: true,
++      excludeTmpdirEnvVar: true, excludeSlashTmp: true,
++    },
++    {
++      type: 'workspaceWrite', writableRoots: ['/tmp/project', '/tmp/extra'], networkAccess: false,
++      excludeTmpdirEnvVar: true, excludeSlashTmp: true,
++    },
++    { type: 'readOnly', networkAccess: false },
++  ]);
++  assert.equal(verifier.permissionConfig.verifierIpcNetworkAccess, true);
++});
++
++test('legacy danger-full-access verifier policy remains full-access without a synthetic workspace policy', async (t) => {
++  const handler = baseHandler();
++  const inherited = (request, send) => {
++    if (request.method === 'config/read') return send({ id: request.id, result: { config: {
++      projects: { '/tmp/project': { trust_level: 'trusted' } }, sandbox_mode: 'danger-full-access', mcp_servers: {},
++    } } });
++    if (request.method === 'permissionProfile/list') return send({ id: request.id, result: { data: [{ id: ':read-only', allowed: true }] } });
++    return handler(request, send);
++  };
++  inherited.ownsConfigRead = true;
++  const fake = fakeSpawn(inherited);
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
++  t.after(() => client.close());
++
++  const result = await client.run({
++    role: { ...role, id: 'verifier', name: 'verifier' }, cwd: '/tmp/project', input: 'verify', executionPermissions: 'inherit',
++  });
++
++  const turnStart = fake.getChild().sent.find(({ method }) => method === 'turn/start');
++  assert.deepEqual(turnStart.params.sandboxPolicy, { type: 'dangerFullAccess' });
++  assert.equal(result.permissionConfig.verifierIpcNetworkAccess, true);
++});
++
++test('a continued strict verifier thread updates its policy to network access without widening roots', async (t) => {
++  const fake = fakeSpawn(baseHandler());
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
++  t.after(() => client.close());
++
++  const initial = await client.run({ role: { ...role, id: 'engineer' }, cwd: '/tmp/project', input: 'initial' });
++  const verifier = await client.run({
++    role: { ...role, name: 'verifier' }, cwd: '/tmp/project', input: 'verify', threadId: initial.threadId,
++    sandboxPolicy: laneSandboxPolicy({ workspacePath: '/tmp/project/lane' }), executionPermissions: 'strict',
++  });
++
++  const sent = fake.getChild().sent;
++  const update = sent.find(({ method, params }) => method === 'thread/settings/update' && params.sandboxPolicy?.networkAccess === true);
++  assert.deepEqual(update.params.sandboxPolicy, {
++    type: 'workspaceWrite', writableRoots: ['/tmp/project/lane'], networkAccess: true,
++    excludeTmpdirEnvVar: false, excludeSlashTmp: false,
++  });
++  const verifierTurn = sent.filter(({ method }) => method === 'turn/start')[1];
++  assert.deepEqual(verifierTurn.params.sandboxPolicy, update.params.sandboxPolicy);
++  assert.equal(verifier.permissionConfig.verifierIpcNetworkAccess, true);
+ });
+ 
+ test('updates a loaded strict thread before using inherited native permissions', async (t) => {

@@ -1,0 +1,15 @@
+{
+  "baselineFiles": 122,
+  "finalFiles": 122,
+  "missing": [],
+  "new": [],
+  "changed": [
+    "docs/architecture/concurrent-harness/foundation-api.md",
+    "docs/architecture/concurrent-harness/implementation-status.md",
+    "src/task-scheduler.js",
+    "test/task-scheduler.test.js"
+  ],
+  "unexpectedChanges": [],
+  "reviewedSourceDrift": [],
+  "asciiViolations": []
+}

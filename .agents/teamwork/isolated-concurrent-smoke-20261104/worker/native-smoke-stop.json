@@ -1,0 +1,9 @@
+{
+  "status": "canceled_after_verifier_failure",
+  "runId": "c3fa16c4-1295-47f5-b8f9-b5a6ee7a1dd3",
+  "projectId": "4208472325",
+  "a2aCancelResponseState": "TASK_STATE_CANCELED",
+  "objectiveDispositionAfterRestart": "canceled",
+  "shutdownPhaseAfterCloseAndRestart": "released",
+  "acceptance": "not_recorded"
+}

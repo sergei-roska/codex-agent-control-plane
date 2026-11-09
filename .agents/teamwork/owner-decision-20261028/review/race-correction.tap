@@ -1,0 +1,52 @@
+TAP version 13
+# Subtest: owner correction facade carries pending correction through SQLite reopen with recovered controller
+ok 1 - owner correction facade carries pending correction through SQLite reopen with recovered controller
+  ---
+  duration_ms: 1191.906601
+  type: 'test'
+  ...
+# Subtest: owner correction facade carries pending correction through SQLite reopen with direct resume
+ok 2 - owner correction facade carries pending correction through SQLite reopen with direct resume
+  ---
+  duration_ms: 1042.622578
+  type: 'test'
+  ...
+# Subtest: owner correction facade refuses unauthenticated unauthorized and stale messages without rewriting intake
+ok 3 - owner correction facade refuses unauthenticated unauthorized and stale messages without rewriting intake
+  ---
+  duration_ms: 160.089518
+  type: 'test'
+  ...
+# Subtest: owner correction facade rolls back checkpoint inventory history and acknowledgement on register
+ok 4 - owner correction facade rolls back checkpoint inventory history and acknowledgement on register
+  ---
+  duration_ms: 145.730392
+  type: 'test'
+  ...
+# Subtest: owner correction facade rolls back checkpoint inventory history and acknowledgement on supersede
+ok 5 - owner correction facade rolls back checkpoint inventory history and acknowledgement on supersede
+  ---
+  duration_ms: 138.961769
+  type: 'test'
+  ...
+# Subtest: owner correction facade rolls back checkpoint inventory history and acknowledgement on ack
+ok 6 - owner correction facade rolls back checkpoint inventory history and acknowledgement on ack
+  ---
+  duration_ms: 129.353275
+  type: 'test'
+  ...
+# Subtest: owner correction facade preserves admitted worker contract fences and private terminal report
+ok 7 - owner correction facade preserves admitted worker contract fences and private terminal report
+  ---
+  duration_ms: 592.284059
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3867.272898

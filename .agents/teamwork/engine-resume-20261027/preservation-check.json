@@ -1,0 +1,24 @@
+{
+  "head": "65a970e0bfe9572a8d6df3d2d35d91fe33f82f83",
+  "baselinePaths": 99,
+  "unchanged": 84,
+  "changed": [
+    "launcher-ui/backlog.css",
+    "launcher-ui/backlog.html",
+    "launcher-ui/backlog.js",
+    "launcher-ui/roles.css",
+    "launcher-ui/roles.html",
+    "launcher-ui/roles.js",
+    "src/delivery-engine-router.js",
+    "src/delivery-output-artifacts.js",
+    "src/delivery-role-capabilities.js",
+    "test/delivery-engine-router.test.js",
+    "test/delivery-output-artifacts.test.js",
+    "test/delivery-role-capabilities.test.js",
+    "test/launcher-backlog-ui.test.js",
+    "test/launcher-role-page.test.js",
+    "src/launcher-app.js"
+  ],
+  "missing": [],
+  "unexpected": []
+}

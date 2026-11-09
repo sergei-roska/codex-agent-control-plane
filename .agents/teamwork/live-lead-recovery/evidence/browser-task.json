@@ -1,0 +1,69 @@
+{
+  "goal": "Read the first heading of README.md. Delegate one bounded engineer task to create docs/RUNTIME_DIAGNOSTIC.md with a title line \"# Runtime diagnostic\", one blank line, and a line \"Project: Agent Harness\", ending with a newline. Only that file may change. Let the mandatory verifier independently check the result and finish after acceptance. Do not continue other development or run broad test suites.",
+  "check": "node /home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/live-lead-recovery/evidence/check-diagnostic.cjs",
+  "pageErrors": [],
+  "updates": [
+    {
+      "at": "2026-10-29T08:46:09.084Z",
+      "status": "Status: task in progress...",
+      "taskId": "6a338469-468a-4031-b2c1-62886c7c4a04",
+      "state": "TASK_STATE_SUBMITTED"
+    },
+    {
+      "at": "2026-10-29T08:46:14.093Z",
+      "status": "Status: task in progress...",
+      "taskId": "6a338469-468a-4031-b2c1-62886c7c4a04",
+      "state": "TASK_STATE_WORKING"
+    },
+    {
+      "at": "2026-10-29T08:48:54.357Z",
+      "status": "Status: human decision required (paused)",
+      "taskId": "6a338469-468a-4031-b2c1-62886c7c4a04",
+      "state": "TASK_STATE_INPUT_REQUIRED"
+    }
+  ],
+  "startedAt": "2026-10-29T08:46:05.490Z",
+  "url": "http://127.0.0.1:8081/?project=3d9c2e759c&session=50ab1c9f-b8b3-4f2c-b18c-a19b316d6bad",
+  "contextId": "50ab1c9f-b8b3-4f2c-b18c-a19b316d6bad",
+  "final": {
+    "taskId": "6a338469-468a-4031-b2c1-62886c7c4a04",
+    "state": "TASK_STATE_INPUT_REQUIRED",
+    "status": {
+      "state": "TASK_STATE_INPUT_REQUIRED",
+      "message": {
+        "messageId": "6a338469-468a-4031-b2c1-62886c7c4a04-pause-1793263732518",
+        "contextId": "50ab1c9f-b8b3-4f2c-b18c-a19b316d6bad",
+        "taskId": "6a338469-468a-4031-b2c1-62886c7c4a04",
+        "role": "ROLE_AGENT",
+        "parts": [
+          {
+            "text": "Paused by the owner. Running worker turns finished first; no new work is planned until you continue.\nSend a message to this task to continue.\nAnswer with: npm run ask -- --task 6a338469-468a-4031-b2c1-62886c7c4a04 \"<answer>\"",
+            "mediaType": "text/plain"
+          }
+        ]
+      },
+      "timestamp": "2026-10-29T08:48:52.518Z"
+    },
+    "artifacts": [],
+    "metadata": {
+      "acceptanceContract": {
+        "id": "acceptance-contract/v1",
+        "requiredChecks": [
+          {
+            "id": "check-1",
+            "argv": [
+              "node",
+              "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/live-lead-recovery/evidence/check-diagnostic.cjs"
+            ],
+            "timeoutMs": 600000
+          }
+        ]
+      },
+      "pause": {
+        "kind": "owner_pause",
+        "message": "Paused by the owner"
+      }
+    }
+  },
+  "finishedAt": "2026-10-29T08:48:54.524Z"
+}

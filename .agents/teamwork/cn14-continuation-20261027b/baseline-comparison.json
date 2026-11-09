@@ -1,0 +1,30 @@
+{
+  "currentSummary": {
+    "tests": 1869,
+    "suites": 54,
+    "pass": 1858,
+    "fail": 10,
+    "cancelled": 0,
+    "skipped": 1,
+    "todo": 0
+  },
+  "predecessorJsonSummary": {
+    "tests": 1792,
+    "suites": 54,
+    "pass": 1781,
+    "fail": 10,
+    "cancelled": 0,
+    "skipped": 1,
+    "todo": 0
+  },
+  "predecessorRawTapSummary": {
+    "tests": 1792,
+    "pass": 1781,
+    "fail": 10,
+    "skipped": 1
+  },
+  "sameOrderedFailureNames": true,
+  "newFailureNames": [],
+  "inputDrift": [],
+  "note": "Earlier PROJECT/docs8-failure summaries are stale; actual retained predecessor TAP has10 failures. No new failure names. Full suite is not green."
+}

@@ -1,0 +1,27 @@
+{
+  "resolved": {
+    "mode": "inherit",
+    "profileApi": false,
+    "readOnlyProfile": ":read-only",
+    "writerProfile": null,
+    "approvalPolicy": "on-request",
+    "approvalsReviewer": "auto_review",
+    "sandboxMode": "workspace-write",
+    "sandboxWorkspaceWrite": null,
+    "reason": null
+  },
+  "policy": {
+    "type": "workspaceWrite",
+    "writableRoots": [
+      "/home/sr/Projects/Workspace/claude-harness"
+    ],
+    "networkAccess": true,
+    "excludeTmpdirEnvVar": false,
+    "excludeSlashTmp": false
+  },
+  "result": {
+    "exitCode": 0,
+    "stdout": "anyio_portal=passed\nloopback_bind=passed\noutside_write=denied errno=30\n",
+    "stderr": ""
+  }
+}

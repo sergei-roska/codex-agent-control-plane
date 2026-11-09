@@ -1,0 +1,9 @@
+{
+  "composerJsonSha256": "dbd1482e5da48a83aaf70137c57186b19ea09ad4b701015c32c216ca39ab91f7",
+  "composerLockSha256": "9119ee491127c03ac9eb5541c08ef036f097f259a695de1a808d91b5bbb01167",
+  "patchesLockSha256": "83b2aaa09bffc9353546a1b8cd5e6930f8cfaaea607944f681e960753e55e614",
+  "shsPatchSha256": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+  "pluginVersion": "2.0.0",
+  "shsVersion": "2.0.7",
+  "patchRecords": 13
+}

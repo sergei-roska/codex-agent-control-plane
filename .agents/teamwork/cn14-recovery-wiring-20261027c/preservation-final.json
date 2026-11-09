@@ -1,0 +1,10 @@
+{
+  "missingInherited": [],
+  "changedSinceStart": [
+    "docs/architecture/concurrent-harness/implementation-status.md",
+    "src/concurrent-delivery-engine.js",
+    "test/concurrent-delivery-engine.test.js"
+  ],
+  "postReviewCodeDrift": [],
+  "postVerificationCodeDrift": []
+}

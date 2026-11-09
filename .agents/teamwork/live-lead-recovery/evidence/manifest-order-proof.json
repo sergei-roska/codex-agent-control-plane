@@ -1,0 +1,8 @@
+{
+  "readOnly": true,
+  "source": "delivery-output-artifacts.js:365 localeCompare differs from candidate-store.js:795 code-unit order",
+  "entries": 196,
+  "actualManifestValid": true,
+  "outputArtifactOrderingResult": "manifest_digest_invalid",
+  "firstOrderDifference": 3
+}

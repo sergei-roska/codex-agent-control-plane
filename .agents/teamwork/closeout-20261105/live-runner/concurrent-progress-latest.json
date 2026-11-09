@@ -1,0 +1,49 @@
+{
+  "at": "2026-11-05T14:59:02.451Z",
+  "runs": [
+    {
+      "run_id": "39a9d0e3-84f1-4285-b968-a5dd50d25a6a",
+      "status": "paused"
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "diagnose-product",
+      "role": "engineer",
+      "state": "claimed",
+      "revision": 1
+    },
+    {
+      "task_id": "inspect-product-failure",
+      "role": "explorer",
+      "state": "queued",
+      "revision": 1
+    },
+    {
+      "task_id": "repair-format-label",
+      "role": "engineer",
+      "state": "queued",
+      "revision": 1
+    },
+    {
+      "task_id": "repair-sum-positive",
+      "role": "engineer",
+      "state": "queued",
+      "revision": 1
+    },
+    {
+      "task_id": "repair-report",
+      "role": "engineer",
+      "state": "queued",
+      "revision": 1
+    }
+  ],
+  "planner": [
+    {
+      "status": "complete",
+      "n": 1
+    }
+  ],
+  "roles": [],
+  "messages": []
+}

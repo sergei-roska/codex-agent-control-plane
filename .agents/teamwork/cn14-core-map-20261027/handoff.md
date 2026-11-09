@@ -1,0 +1,34 @@
+# CN14 core composition readiness map
+
+Evidence is source reads only. No tests, services, or live calls were run.
+
+## Decisive gap: private lane -> candidate publication
+
+- `src/a2a-role-service.js:1124-1140,1302-1352`: on completed writable request the endpoint calls `lanes.complete({integrate:true,...})`; it then emits `writerExecution` and boundary evidence inside the terminal artifact metadata. That is an already integrated legacy shared-workspace writer path, not an immutable private output artifact. The lane path is conditional on static workspace-write role/allowedFiles (`:889-892`).
+- `src/task-executor.js:265-304`: concurrent terminal processing gives the remote task to injected `resultAdapter`, then only consumes `{result,evidence}` for BacklogStore settlement. It does not consume/persist the A2A artifact lane/delta metadata itself. A future adapter can inspect `remote`, but current send/poll/terminal contracts do not expose a typed private lane result contract.
+- `src/candidate-store.js:155-159,161-170,469-475,533-553,615-681`: candidates snapshot `workspace`; publish requires admission, controls, quiescence and `apply` dependencies, captures expected manifest/delta, journals an intent and process identity, applies to workspace, confirms quiescence, then captures/commits candidate. The existing legacy lane's integrated workspace delta cannot be passed as trustworthy private output without an additional staged private artifact/effect bridge.
+- Narrow requirement: trusted role/A2A adapter returns a durable, attempt/fence-bound private artifact identity plus manifest/delta and process/effect/quiescence evidence; CandidateStore `publish` gets an `apply` adapter that materializes that exact artifact under admission and reports spawn identity. Remote/model `trusted:true`, lane metadata, or declared changed paths are not sufficient.
+
+## Composition APIs and unsafe gaps
+
+- `src/backlog-store.js:58-75`: BacklogStore ctor takes authorization/reconciliation hooks. In particular `checkpointAccepted` defaults to `() => false`; `checkpointInventory` is optional. At `:1308-1338` saved checkpoints are merged with callback inventory and dependency acceptance consults the callback. Engine must supply current trusted inventory/qualification.
+- `src/candidate-review.js:46-63,650-705`: CandidateReviewStore similarly accepts checkpoint inventory and trusted callbacks (`authorizeCheckpoint`, `authorizeBinding`, `authorizeSettlement`, closure attestation, review execution verification); constructor defaults include permissive-shaped empty inventory but denials/null for other attestations. `isFinalStabilized` / `finalizationProjection` use inventory and closure attestation. Wire shared durable objective/checkpoint/control evidence, not model declarations.
+- `src/backlog-store.js:1435-1495,1526-1559`: finalization readiness checks unresolved lifecycle/publication effects and review projections; partial completion requires trusted remainder resolver and closure/receipt qualification. `src/delivery-acceptance.js:394-474` `finalizeCandidate` takes store, CandidateStore, reviewStore, lifecycle, contract, admission and adapters, begins durable barrier and runs frozen candidate checks. There is no top-level composition currently.
+- Core constructors: `BacklogStore(db, options)`; `TaskExecutor({backlogStore,db,transportFor,settingsFor,roleFor,requestAdapter,resultAdapter,...})`; `ProjectDeliveryController({store,executor,projectId,objectiveId,sessionId,runTurn,settingsFor,contextFor,providerThreadId,lifecycleOptions,...})`. It constructs inbox/planner/lifecycle/scheduler when omitted. It exposes `start/wake/runOnce/stop/shutdown/status`; `stop()` is not an awaited drain (`src/project-delivery-controller.js:137-145,182-203`). `DeliveryLifecycle` accepts explicit trusted adapters and shares DB/store/executor (`src/delivery-lifecycle.js:35-70`). All stores/controllers must share the server's state DB and normalized workspace identity.
+- `src/lead-planner.js:41-53`: planner needs `runTurn`, `settingsFor`, `contextFor`, `providerThreadId`, plus recovery adapters. Provider-thread prebinding remains unresolved: `CodexAppServer.run` creates/binds during run and has no public prepare-thread method (confirmed in capability handoff). Do not admit planning against an invented thread id.
+
+## Server and legacy seam
+
+- `src/server.js:806-826,879-925,975-979`: `startServer` is the actual production composition point. It acquires state/workspace locks, reads project settings once, selects writer isolation/lanes and configured roles, creates the legacy orchestrator and role endpoints. No concurrent engine objects are composed here today.
+- `src/project-settings.js` settings allowlist/normalizer (`validateSettingsDocument`, `readSettingsFile`) has no `deliveryEngine` field; unknown fields invalidate the settings document and return strict safe defaults. Add explicit validated setting, missing=>legacy; startup captures selection. Do not dynamically reroute stored/in-flight tasks.
+- `src/server.js:317` `makeLeadExecutor` expects orchestrator-like run/recovery/control behavior. Final outward task behavior reads `result.status`, `text`, `rounds`, `assignments`, optional `acceptance`, and only represents `disposition:'partial'` plus `checkpoints` in artifact metadata (`:572-605`). Concurrent engine needs a compatibility facade and persisted engine/objective identity; legacy task store/recovery remains the authority for old runs.
+- Shutdown currently cancels only lead executor, waits boundedly, closes AppServer and releases workspace lock (`src/server.js:999-1024`). Concurrent selection needs admission stop plus engine drain/reconcile proof before closing DB or releasing workspace lock; controller.stop/shutdown alone is not such proof.
+
+## Dependency order / worker interface
+
+1. Agree trusted host capability/readiness adapters and project/session/engine identity persistence against shared DB.
+2. Build engine facade from stores/review/policy, candidate publication bridge, planner/executor/lifecycle/controller; pin configured role settings and provider transport/thread.
+3. Add settings validation and new-intake-only selection at server startup, retain legacy stored-task path and makeLeadExecutor output contract.
+4. Add bounded shutdown drain and integration evidence for legacy resume, concurrent execution, candidate publication, review/final checks, reopen recovery and same-workspace exclusion.
+
+Open interface questions: exact private artifact/process receipt contract from A2A capability work; planner prepare/bind-thread API owner; concrete trusted checkpoint inventory/closure/qualification adapters; how objective/check contracts and selected role settings are durably initialized before any concurrent call. The candidate capability handoff is design-only and does not qualify confinement.

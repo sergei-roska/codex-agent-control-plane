@@ -1,0 +1,9 @@
+{
+  "capturedAt": "2026-10-30T10:45:26.223Z",
+  "interceptedRequestsOnly": true,
+  "actualTaskSubmissions": 0,
+  "submissions": 1,
+  "draftPreserved": true,
+  "errorVisible": "Send failed: Probe: continuation temporarily unavailable",
+  "errors": []
+}

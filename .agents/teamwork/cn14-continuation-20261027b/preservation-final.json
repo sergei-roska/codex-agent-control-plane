@@ -1,0 +1,24 @@
+{
+  "head": "65a970e0bfe9572a8d6df3d2d35d91fe33f82f83",
+  "baselineFiles": 121,
+  "currentFiles": 122,
+  "missing": [],
+  "changed": [
+    "docs/architecture/concurrent-harness/README.md",
+    "docs/architecture/concurrent-harness/implementation-status.md",
+    "launcher-ui/roles.css",
+    "src/concurrent-delivery-engine.js",
+    "src/delivery-acceptance.js",
+    "src/delivery-role-service.js",
+    "test/concurrent-delivery-engine.test.js",
+    "test/delivery-acceptance.test.js",
+    "test/delivery-role-service.test.js",
+    "test/launcher-role-page.test.js",
+    "test/server-delivery-engine.test.js",
+    "src/server.js"
+  ],
+  "new": [
+    "docs/architecture/concurrent-harness/activation.md"
+  ],
+  "postVerificationCodeDrift": []
+}

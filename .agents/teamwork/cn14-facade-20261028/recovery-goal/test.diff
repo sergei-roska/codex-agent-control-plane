@@ -1,0 +1,72 @@
+--- original/test/backlog-store.test.js
++++ current/test/backlog-store.test.js
+@@ -1224,3 +1224,69 @@
+   assert.throws(() => fx.store.beginFinalization(FINAL_PROJECT, FINAL_OBJECTIVE, fx.request(), fx.adapters),
+     { code: 'finalization_blocked' });
+ });
++
++test('no-effect recovery respects captured goal and authority scope', async (t) => {
++  for (const scenario of ['corrected', 'same-goal', 'legacy-first', 'legacy-corrected', 'authority-drift', 'canceled']) {
++    await t.test(scenario, () => {
++      const { db, store } = fixture(':memory:', { ownerCorrectionAuthorized: () => true });
++      try {
++        db.exec('CREATE TABLE task_executor_attempts (attempt_id TEXT, state TEXT, external_task_id TEXT, context_id TEXT, project_id TEXT, objective_id TEXT, task_id TEXT, fencing_token INTEGER)');
++        apply(store, [{ task: task('old-task', { priority: 10 }) }]);
++        const [claimed] = store.claimReady(projectId, objectiveId, 0, { controlRevision: 1 });
++        if (scenario.startsWith('legacy')) {
++          const row = db.prepare('SELECT record_json FROM backlog_attempts WHERE attempt_id=?').get(claimed.attempt.attemptId);
++          const record = JSON.parse(row.record_json);
++          delete record.capturedControls.goalRevision;
++          db.prepare('UPDATE backlog_attempts SET record_json=? WHERE attempt_id=?').run(JSON.stringify(record), claimed.attempt.attemptId);
++        }
++        const original = store.listAttempts(projectId, objectiveId)[0];
++        if (scenario === 'corrected' || scenario === 'legacy-corrected') {
++          store.applyOwnerCorrection(projectId, objectiveId, ownerCorrection('correction-recovery'));
++          const current = store.getObjective(projectId, objectiveId);
++          store.applyPlan(projectId, objectiveId, revisionedPlan(current, [{ task: task('new-task') }]));
++        }
++        if (scenario === 'authority-drift') {
++          const row = db.prepare('SELECT record_json FROM backlog_objectives WHERE project_id=? AND objective_id=?').get(projectId, objectiveId);
++          const record = JSON.parse(row.record_json);
++          record.authorityRevision += 1;
++          db.prepare('UPDATE backlog_objectives SET record_json=? WHERE project_id=? AND objective_id=?').run(JSON.stringify(record), projectId, objectiveId);
++        }
++        let current = store.getObjective(projectId, objectiveId);
++        store.requestControl(projectId, objectiveId, scenario === 'canceled' ? 'cancel' : 'pause', current.controlRevision);
++        store.markExpired(projectId, objectiveId, Number.MAX_SAFE_INTEGER);
++        const proof = { projectId, objectiveId, taskId: claimed.task.taskId, attemptId: claimed.attempt.attemptId,
++          fencingToken: claimed.claim.fencingToken, claimOwnerGeneration: 0, recoveryGeneration: 0,
++          providerContextId: claimed.attempt.providerContextId, intentState: null, noEffect: true,
++          remoteQuiescent: true, processQuiescent: true, effectsSettled: true, evidenceRefs: ['private:report'] };
++        const result = store.settleRecoveredNoEffect(projectId, objectiveId, claimed.attempt.attemptId, claimed.claim.fencingToken, proof, scenario === 'corrected' ? 1 : 2);
++        const blocked = ['corrected', 'legacy-corrected', 'authority-drift'].includes(scenario);
++        assert.equal(result.state, scenario === 'canceled' ? 'canceled' : blocked ? 'task_blocked' : 'no_effect_requeued');
++        assert.equal(result.task.state, scenario === 'canceled' ? 'canceled' : blocked ? 'blocked' : 'queued');
++        if (blocked) {
++          assert.equal(result.task.blockedReason, 'owner_correction_replan_required');
++          assert.equal(store.getObjective(projectId, objectiveId).disposition, 'paused_owner');
++          const event = store.events.replay(projectId).find((item) => item.eventType === 'attempt.recovery_task_blocked');
++          assert.equal(event.payload.retry, false);
++          assert.equal(event.payload.taskBlocked, true);
++          assert.equal(event.payload.objectiveBlocked, false);
++        }
++        assert.equal(result.claim.state, 'released');
++        assert.equal(result.attempt.state, 'canceled');
++        assert.deepEqual(result.attempt.evidenceRefs, ['private:report']);
++        const saved = store.listAttempts(projectId, objectiveId)[0];
++        assert.deepEqual(saved.contractSnapshot, original.contractSnapshot);
++        assert.deepEqual(saved.capturedControls, original.capturedControls);
++        if (!scenario.startsWith('legacy')) assert.equal(saved.capturedControls.goalRevision, 1);
++        if (scenario !== 'canceled') {
++          current = store.getObjective(projectId, objectiveId);
++          store.requestControl(projectId, objectiveId, 'resume', current.controlRevision);
++          current = store.getObjective(projectId, objectiveId);
++          const [next] = store.claimReady(projectId, objectiveId, 0, { controlRevision: current.controlRevision });
++          if (scenario === 'corrected' || scenario === 'legacy-corrected') assert.equal(next.task.taskId, 'new-task');
++          else if (blocked) assert.equal(next, undefined);
++          else assert.equal(next.task.taskId, 'old-task');
++        }
++      } finally { db.close(); }
++    });
++  }
++});

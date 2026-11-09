@@ -1,0 +1,142 @@
+--- original/test/codex-app-server.test.js
++++ current/test/codex-app-server.test.js
+@@ -208,8 +208,8 @@
+     if (request.method === 'thread/backgroundTerminals/clean') cleanupRequest = request;
+   };
+   handler.ownsBackgroundTerminalCleanup = true;
+-  const fake = fakeSpawn(handler);
+-  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
++  const fake = fakeSpawn(handler, { pidBase: 4000 });
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: identityOf });
+   t.after(() => client.close());
+ 
+   let settled = false;
+@@ -219,7 +219,12 @@
+   assert.equal(settled, false);
+   await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'overlap', threadId: 'thread-clean' }), /already active/);
+   fake.getChild().stdout.write(`${JSON.stringify({ id: cleanupRequest.id, result: {} })}\n`);
+-  assert.equal((await pending).status, 'completed');
++  const result = await pending;
++  assert.equal(result.status, 'completed');
++  assert.deepEqual(result.execution.cleanupReceipt, {
++    version: 1, method: 'thread/backgroundTerminals/clean', scope: 'provider-managed-background-terminals',
++    completion: 'confirmed', generation: 1, processIdentity: identityOf(4000), threadId: 'thread-clean', turnId: 'turn-clean',
++  });
+ });
+ 
+ test('reports cleanup RPC failure with the confirmed model outcome preserved', async (t) => {
+@@ -240,6 +245,7 @@
+ 
+   await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'fail' }), (error) => {
+     assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
++    assert.equal(error.execution.cleanupReceipt, undefined);
+     assert.equal(error.outcomeUnknown, true);
+     assert.deepEqual(error.originalTurnOutcome, { status: 'failed', terminal: true, failureClass: 'domain_failure', message: 'model failed' });
+     assert.equal(error.originalError.message, 'model failed');
+@@ -349,6 +355,7 @@
+ 
+   await assert.rejects(client.run({ role, cwd: '/tmp/first', input: 'first' }), (error) => {
+     assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
++    assert.equal(error.execution.cleanupReceipt, undefined);
+     assert.equal(error.outcomeUnknown, true);
+     return true;
+   });
+@@ -382,8 +389,8 @@
+     if (request.method === 'thread/backgroundTerminals/clean') cleanupRequest = request;
+   };
+   handler.ownsBackgroundTerminalCleanup = true;
+-  const fake = fakeSpawn(handler);
+-  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
++  const fake = fakeSpawn(handler, { pidBase: 4000 });
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: identityOf });
+   t.after(() => client.close());
+   const controller = new AbortController();
+   let settled = false;
+@@ -397,10 +404,26 @@
+   controller.abort();
+   assert.equal(settled, false);
+   fake.getChild().stdout.write(`${JSON.stringify({ id: cleanupRequest.id, result: {} })}\n`);
+-  await assert.rejects(pending, { name: 'AbortError' });
++  await assert.rejects(pending, (error) => {
++    assert.equal(error.name, 'AbortError');
++    assert.equal(error.execution.cleanupReceipt?.completion, 'confirmed');
++    return true;
++  });
+   assert.equal(settled, true);
+ });
+ 
++test('failed terminal carries confirmed cleanup receipt', async (t) => {
++  const fake = fakeSpawn(baseHandler(), { pidBase: 4000 });
++  const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: identityOf });
++  t.after(() => client.close());
++  await assert.rejects(client.run({ role, cwd: '/tmp/project', input: 'fail' }), (error) => {
++    assert.equal(error.failureClass, 'domain_failure');
++    assert.equal(error.execution.cleanupReceipt?.completion, 'confirmed');
++    assert.equal(error.execution.cleanupReceipt?.turnId, error.execution.turnId);
++    return true;
++  });
++});
++
+ test('bounds cleanup RPC time and preserves the terminal outcome', async (t) => {
+   const handler = (request, send) => {
+     if (request.method === 'initialize') send({ id: request.id, result: {} });
+@@ -446,6 +469,51 @@
+   assert.equal(fake.getChild().sent.some(({ method }) => method === 'thread/backgroundTerminals/clean'), false);
+ });
+ 
++
++test('cleanup receipt rejects malformed responses and generation or process replacement', async (t) => {
++  for (const mode of ['malformed', 'generation', 'process', 'missing']) {
++    await t.test(mode, async (t) => {
++      let request;
++      let observed = identityOf(4000);
++      const handler = (message, send) => {
++        if (message.method === 'initialize') send({ id: message.id, result: {} });
++        if (message.method === 'thread/start') send({ id: message.id, result: { thread: { id: 'receipt-thread' } } });
++        if (message.method === 'turn/start') {
++          send({ id: message.id, result: { turn: { id: 'receipt-turn' } } });
++          send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: { id: 'receipt-turn', status: 'completed' } } });
++        }
++        if (message.method === 'thread/backgroundTerminals/clean') request = message;
++      };
++      handler.ownsBackgroundTerminalCleanup = true;
++      const fake = fakeSpawn(handler, { pidBase: 4000 });
++      const client = new CodexAppServer({ spawnImpl: fake.spawnImpl, readProcessIdentityImpl: () => observed });
++      t.after(() => client.close());
++      if (mode === 'generation') {
++        const originalRequest = client._request.bind(client);
++        client._request = async (method, ...args) => {
++          const result = await originalRequest(method, ...args);
++          if (method === 'thread/backgroundTerminals/clean') client.generation += 1;
++          return result;
++        };
++      }
++      const pending = client.run({ role, cwd: '/tmp/project', input: 'receipt' });
++      await waitForRequest(() => fake.getChild(), 'thread/backgroundTerminals/clean');
++      if (mode === 'process') observed = { ...observed, startTime: '456' };
++      if (mode === 'missing') observed = null;
++      fake.getChild().stdout.write(`${JSON.stringify({ id: request.id, result: mode === 'malformed' ? [] : {} })}\n`);
++      if (mode === 'missing') {
++        assert.equal((await pending).execution.cleanupReceipt, undefined);
++      } else {
++        await assert.rejects(pending, (error) => {
++          assert.equal(error.failureClass, 'background_terminal_cleanup_failed');
++          assert.equal(error.execution.cleanupReceipt, undefined);
++          return true;
++        });
++      }
++    });
++  }
++});
++
+ test('routes concurrent turns to their owning run', async (t) => {
+   const fake = fakeSpawn(baseHandler());
+   const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+@@ -926,6 +994,7 @@
+   assert.deepEqual(seen, { processIdentity: identityOf(4000), threadId: 'thread-1' });
+   assert.deepEqual(result.execution, {
+     processIdentity: identityOf(4000), generation: 1, threadId: 'thread-1', turnId: 'turn-1', turnStartSent: true, turnStartRejected: false, turnTerminal: true,
++    cleanupReceipt: { version: 1, method: 'thread/backgroundTerminals/clean', scope: 'provider-managed-background-terminals', completion: 'confirmed', generation: 1, processIdentity: identityOf(4000), threadId: 'thread-1', turnId: 'turn-1' },
+   });
+   assert.equal(client.processIdentity().pid, 4000);
+ });

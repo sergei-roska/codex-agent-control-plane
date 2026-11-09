@@ -1,0 +1,197 @@
+TAP version 13
+# Subtest: captures full source and keeps content-addressed review copy frozen
+ok 1 - captures full source and keeps content-addressed review copy frozen
+  ---
+  duration_ms: 48.417917
+  type: 'test'
+  ...
+# Subtest: rejects escapes, symlinks, special submodule modes and tampered content
+ok 2 - rejects escapes, symlinks, special submodule modes and tampered content
+  ---
+  duration_ms: 67.957274
+  type: 'test'
+  ...
+# Subtest: retains parent lineage and references through garbage collection
+ok 3 - retains parent lineage and references through garbage collection
+  ---
+  duration_ms: 77.398317
+  type: 'test'
+  ...
+# Subtest: candidate row and synchronous event hook commit atomically
+ok 4 - candidate row and synchronous event hook commit atomically
+  ---
+  duration_ms: 32.326432
+  type: 'test'
+  ...
+# Subtest: rejects invalid environment digests and candidate identity conflicts before apply
+ok 5 - rejects invalid environment digests and candidate identity conflicts before apply
+  ---
+  duration_ms: 63.080263
+  type: 'test'
+  ...
+# Subtest: rejects malformed control revision and fencing pins before admission
+ok 6 - rejects malformed control revision and fencing pins before admission
+  ---
+  duration_ms: 46.198513
+  type: 'test'
+  ...
+# Subtest: refuses stale base and control changes without attributing owner edits
+ok 7 - refuses stale base and control changes without attributing owner edits
+  ---
+  duration_ms: 53.042866
+  type: 'test'
+  ...
+# Subtest: journals before apply, reconciles after restart, and applies once
+ok 8 - journals before apply, reconciles after restart, and applies once
+  ---
+  duration_ms: 192.641083
+  type: 'test'
+  ...
+# Subtest: owner edit during release window is not attributed to the frozen candidate
+ok 9 - owner edit during release window is not attributed to the frozen candidate
+  ---
+  duration_ms: 79.534972
+  type: 'test'
+  ...
+# Subtest: crash before effect reconciles exact before manifest as not applied
+ok 10 - crash before effect reconciles exact before manifest as not applied
+  ---
+  duration_ms: 57.094627
+  type: 'test'
+  ...
+# Subtest: partial apply stays unknown and keeps the admission fence
+ok 11 - partial apply stays unknown and keeps the admission fence
+  ---
+  duration_ms: 53.735047
+  type: 'test'
+  ...
+# Subtest: garbage collection retains snapshots named by unresolved intents
+ok 12 - garbage collection retains snapshots named by unresolved intents
+  ---
+  duration_ms: 74.323618
+  type: 'test'
+  ...
+# Subtest: cross-connection reuse survives GC unlink and restart repairs a missing manifest cache
+ok 13 - cross-connection reuse survives GC unlink and restart repairs a missing manifest cache
+  ---
+  duration_ms: 47.33004
+  type: 'test'
+  ...
+# Subtest: blob file and directory sync precede snapshot metadata publication
+ok 14 - blob file and directory sync precede snapshot metadata publication
+  ---
+  duration_ms: 30.209047
+  type: 'test'
+  ...
+# Subtest: blob sync failures fail closed before snapshot, known candidate, or publication intent
+    # Subtest: file sync
+    ok 1 - file sync
+      ---
+      duration_ms: 67.167947
+      type: 'test'
+      ...
+    # Subtest: directory sync
+    ok 2 - directory sync
+      ---
+      duration_ms: 72.633556
+      type: 'test'
+      ...
+    1..2
+ok 15 - blob sync failures fail closed before snapshot, known candidate, or publication intent
+  ---
+  duration_ms: 140.235448
+  type: 'test'
+  ...
+# Subtest: records writer admission acquisition timing for publication
+ok 16 - records writer admission acquisition timing for publication
+  ---
+  duration_ms: 52.98624
+  type: 'test'
+  ...
+# Subtest: projects scoped pages, dependency explanations, capacity and planner/inbox facts read-only
+ok 17 - projects scoped pages, dependency explanations, capacity and planner/inbox facts read-only
+  ---
+  duration_ms: 16.047889
+  type: 'test'
+  ...
+# Subtest: old databases without optional delivery tables report unknown planner and inbox facts
+ok 18 - old databases without optional delivery tables report unknown planner and inbox facts
+  ---
+  duration_ms: 0.820663
+  type: 'test'
+  ...
+# Subtest: rejects malformed scope and unbounded requests, and does not construct schema on empty database
+ok 19 - rejects malformed scope and unbounded requests, and does not construct schema on empty database
+  ---
+  duration_ms: 0.57782
+  type: 'test'
+  ...
+# Subtest: retains real attempt identity and leaves unpinned provider context and token usage unknown
+ok 20 - retains real attempt identity and leaves unpinned provider context and token usage unknown
+  ---
+  duration_ms: 4.106421
+  type: 'test'
+  ...
+# Subtest: checkpoint dependency acceptance stays unknown and a trusted output edge is ready only with exact persisted proof
+ok 21 - checkpoint dependency acceptance stays unknown and a trusted output edge is ready only with exact persisted proof
+  ---
+  duration_ms: 12.306112
+  type: 'test'
+  ...
+# Subtest: project-wide claims consume shared capacity and planner activity is explicitly session-scoped
+ok 22 - project-wide claims consume shared capacity and planner activity is explicitly session-scoped
+  ---
+  duration_ms: 3.480451
+  type: 'test'
+  ...
+# Subtest: opaque cursors cannot be reused across objectives, projects or sessions
+ok 23 - opaque cursors cannot be reused across objectives, projects or sessions
+  ---
+  duration_ms: 2.266657
+  type: 'test'
+  ...
+# Subtest: a succeeded predecessor without trusted output evidence is unknown and never counted ready
+ok 24 - a succeeded predecessor without trusted output evidence is unknown and never counted ready
+  ---
+  duration_ms: 5.30377
+  type: 'test'
+  ...
+# Subtest: uses a bounded readable objective summary while retaining the stable task ID
+ok 25 - uses a bounded readable objective summary while retaining the stable task ID
+  ---
+  duration_ms: 2.560837
+  type: 'test'
+  ...
+# Subtest: attributes distinct persisted timing intervals and preserves unknowns
+ok 26 - attributes distinct persisted timing intervals and preserves unknowns
+  ---
+  duration_ms: 6.390914
+  type: 'test'
+  ...
+# Subtest: objective discovery, live polling, detail rendering and stale selection guards work together
+ok 27 - objective discovery, live polling, detail rendering and stale selection guards work together
+  ---
+  duration_ms: 9.801708
+  type: 'test'
+  ...
+# Subtest: project and session changes clear selection and discard old objective and backlog responses
+ok 28 - project and session changes clear selection and discard old objective and backlog responses
+  ---
+  duration_ms: 2.749988
+  type: 'test'
+  ...
+# Subtest: poll refreshes every currently loaded page with a nonempty cursor and renders unknown readiness
+ok 29 - poll refreshes every currently loaded page with a nonempty cursor and renders unknown readiness
+  ---
+  duration_ms: 1.950016
+  type: 'test'
+  ...
+1..29
+# tests 31
+# suites 0
+# pass 31
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1184.169853

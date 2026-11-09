@@ -1,0 +1,64 @@
+{
+  "issue": "DCCOURTS-182",
+  "sourceUrl": "https://insomniacdesign.atlassian.net/browse/DCCOURTS-182",
+  "workspace": "/home/sr/Projects/dccourtscode-harness-trial-20261104",
+  "baseCommit": "4b526e7e3e4f727c99f02fd44a655df595adfe0c",
+  "goal": "Verify the existing code-only DCCOURTS-182 candidate in this isolated trial workspace. The upstream SHS fix and consistent Composer patch metadata have already been produced and preserved. This objective is verification only: do not modify any file and do not create implementation or investigation tasks. Return an empty/no-change plan and allow the host to create its mandatory verifier and execute the pinned acceptance contract. Do not claim acceptance yourself.\n\nKnown inputs: drupal/shs remains locked at 2.0.7; patches/shs-3620147-preselect-stored-values.patch is the public upstream MR59 fix, SHA-256 6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9. It is registered in composer.json and patches.lock.json. Independent Lando PHP 8.3 validation passed five upstream kernel tests / 59 assertions. Genuine Composer Patches 2.0.0 patches-relock confirmed all 13 records and top-level _hash dfc37cfe6cd7e4cdd678e03a170003d2398cea74c9e5967cae5244b0c203869d. The host will rerun both checks against the frozen candidate.\n\nInspect this candidate honestly under the normal mandatory verifier rules. Scope is composer.json, composer.lock, patches.lock.json, the SHS patch and existing validation infrastructure as needed. Preserve all bytes. Do not run production actions, restore content categories, audit production data, write Jira, deploy, commit, switch branches, read SQL dumps, or contact others. Original bugfix checkout and services remain excluded. This is a fresh verification-only objective for preserved prior work, not a replay or restoration of a canceled task.",
+  "acceptance": {
+    "source": "agent",
+    "requiredChecks": [
+      {
+        "id": "dccourts-182-upstream-kernel",
+        "argv": [
+          "bash",
+          "scripts/harness/validate-dccourts-182.sh"
+        ],
+        "timeoutMs": 600000
+      },
+      {
+        "id": "dccourts-182-composer-relock",
+        "argv": [
+          "bash",
+          "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/environment/evaluate-composer-patches-v2.sh",
+          "."
+        ],
+        "timeoutMs": 600000
+      }
+    ]
+  },
+  "roleOverrides": {
+    "coordinator": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "engineer": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "verifier": {
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "fastMode": "off"
+    }
+  },
+  "bounds": {
+    "objectiveTimeoutMs": 900000,
+    "turnTimeoutMs": 180000
+  },
+  "excluded": [
+    "production content changes",
+    "production audit",
+    "deployment",
+    "Jira writes",
+    "completed branch implementation"
+  ],
+  "cleanup": "Capture patch and evidence, safely stop private services, restore owned trial to recorded dccr-master baseline. Original checkout unchanged.",
+  "trialBaselineCommit": "42266cb100b6386510e049da161d2d0b8ab940ed",
+  "validationScriptSha256": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+  "stage": "fresh-verification-only",
+  "priorNativeTaskId": "a75b3e3b-4d73-4221-95c4-0f51cc40f7d2",
+  "metadataEvaluatorSha256": "5a18d2e38db0b643630d9b6be66abea535463d0435973f86310c89610b3682ff",
+  "priorContinuationTaskId": "3d20463a-1c91-4805-aaff-489d9f4ff5b6"
+}

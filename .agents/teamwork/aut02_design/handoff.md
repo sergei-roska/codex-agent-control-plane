@@ -1,0 +1,23 @@
+# AUT-02 R2 design handoff
+
+Status: review complete, R2 decision conditional on frozen probe results.
+Report: `.agents/teamwork/aut02_design/review.md`.
+Read: R2 proposal/runbook, current graph/direct/contracts/review policy/orchestrator, Git status/diff stat. No source edit, tests, live calls, or Git state changes.
+Main findings: persist bounded recovery intent/template before batch clears; trigger only trusted stale signals; plan fresh verifier then gated auditor through normal round/ID/journal path; preserve pause/budget/round/writer gates; add direct verifier unique same-run origin guard; version/default/legacy rollback behavior must be explicit.
+Next: lead reconciles frozen R1 probes with this design, assigns graph repair, then requests final code review on resulting diff and focused checks.
+
+Direct-scope re-review: `.agents/teamwork/aut02_design/direct-review.md` records one fail-closed origin lookup gap. Ten named tests passed; mixed malformed/saturated history still needs a repair and probe. No source edits were made by this reviewer.
+
+Direct final re-review: `.agents/teamwork/aut02_design/direct-review-final.md` APPROVE at source hash `481dd650ad801b25fa968e157e8f408086b7592ab90ca65e41cac31d412d1f85` and test hash `daf8bb2ac5d865b77f441016699e0cc3e357cec80686eff751fa87583deedd7b`. Prior blocking gap closed. Seven named tests pass; archived direct baseline manifest counts and all nine listed file hashes checked independently. Graph final review remains pending.
+
+Superseding challenger finding: `.agents/teamwork/aut02_design/thread-binding-design.md` rejects the current direct tuple trust and gives the minimal versioned staging binding/rollback contract. Direct worker and lead received requirements. Final source review must recheck this new repair; the earlier direct APPROVE is invalidated by the repro.
+
+Frozen tuple repair final review: `.agents/teamwork/aut02_design/direct-tuple-review.md` APPROVE at service hash `e3ca7ce3a37e43f6950fe47b1915c2a52a2bfe5ea9b8f343b2ebf044160104cf` and test hash `bbfbc584054d938599840e6683e21e34d9dddeca4b3fc343f2c4ea1a2b607bfd`. Three named probes pass; challenger trace now shows two App Server calls and failed forged continuation. Graph preliminary safety finding sent to lead/worker: authorized verifier test-only write can be misclassified as stale recovery after a valid post-write receipt; graph tests and final review remain open.
+
+Graph source review at hash `3fc0699bc550c5ddd673f1c865fcdd81870e929db9622dcb40e6fb0520f6308b`: `.agents/teamwork/aut02_design/graph-source-review.md` REJECT with two concrete findings: routine accepted test-write incorrectly enters auditor path, and corrupt persisted allowedFiles path is not validated before deterministic dispatch. Four named graph recovery tests pass. Findings sent to graph worker and lead; re-review only delta after repair.
+
+Q06 origin-code contract finding: `.agents/teamwork/aut02_design/origin-code-review.md` REJECT supersedes the narrow direct tuple APPROVE for missing/corrupt binding classification. Direct helper conflates unknown binding with trustworthy digest mismatch under `review_origin_stale`, and graph auto-recovers that code. Sent tri-state requirement to lead/direct worker. Re-review delta and Q06 graph-plus-service negative probe.
+
+Legacy/rollback graph-reader probe: `.agents/teamwork/aut02_design/legacy-reader-report.md` PASS for two disposable SQLite checkpoint directions at current graph hash `c83082c22bc7feedd0bf9b6e72e026c3b0e0176f9926be2208fbc4cb3db3551d`; scratch probe SHA `60f52df25b6bc60a6d239722e8c421a9f5b10143ed5339fa1bba9525189dfd98`. Both directions rejected a stale historical finish with `review_receipt_missing`, retained two receipts, and made zero worker sends. No active pending-assignment downgrade or direct-service rollback was tested.
+
+Superseding reusable legacy-reader evidence: `docs/evidence/aut-02/legacy-reader/probe.cjs`, `result.json`, and `report.md`. Probe SHA `acd2025574cd213f5b21e9e6e4ea6c1bededecc1df477df94ff556a93c5dab1d`; current graph SHA `6b93da685d44afeadbc573cd84fae2169e0dfc2e949f86c5187bd1a31fb1dd9b`. Exact command: `node docs/evidence/aut-02/legacy-reader/probe.cjs > docs/evidence/aut-02/legacy-reader/result.json` (exit 0). It repeats the two prior directions and additionally captures an actual generation-1 `verifier_pending` checkpoint after a usage-limited A verifier and stale A->B continuation. Archived graph sends pending `_reviewRecovery` marker to archived `checkSpecialistRequest`; contract rejects `request_invalid` before model (zero old worker model calls). Archived finish then rejects `review_receipt_missing`; no accepted receipt or unresolved writer. No live service or direct-service rollback tested. Lead notified.

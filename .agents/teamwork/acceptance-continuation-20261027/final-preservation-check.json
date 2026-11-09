@@ -1,0 +1,23 @@
+{
+  "inherited": 83,
+  "unchanged": 73,
+  "authorizedChanges": [
+    "docs/architecture/concurrent-harness/README.md",
+    "docs/architecture/concurrent-harness/foundation-api.md",
+    "docs/architecture/concurrent-harness/implementation-backlog.json",
+    "docs/architecture/concurrent-harness/implementation-status.md",
+    "docs/architecture/concurrent-harness/knowledge-graph.json",
+    "docs/architecture/concurrent-harness/verification-summary.json",
+    "src/codex-app-server.js",
+    "src/delivery-acceptance.js",
+    "src/execution-permissions.js",
+    "src/task-executor.js"
+  ],
+  "unexpectedChanges": [],
+  "missing": [],
+  "graphNodes": 288,
+  "graphEdges": 791,
+  "graphInvalidEdges": 0,
+  "graphInvalidSourceHashes": [],
+  "head": "65a970e"
+}

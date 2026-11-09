@@ -1,0 +1,66 @@
+{
+  "status": "accepted",
+  "runId": "b2028dce-d355-4f0a-ab7b-40758791ea46",
+  "taskState": "TASK_STATE_COMPLETED",
+  "projectId": "f1446ca967",
+  "objectiveId": "delivery-ebf6c4732bba5b6e5c32e84e201141c5",
+  "engine": "concurrent-v1",
+  "objectiveDisposition": "accepted",
+  "finalizationState": "accepted",
+  "finalizationDisposition": "accepted",
+  "finalizationCheckRows": [],
+  "check": {
+    "command": "node verify-output.js",
+    "exitCode": 0,
+    "stdout": "PASS exact synthetic output",
+    "fileSha256": "5af9330850129a61b69ce46bab68efc6c46a267f8865fb4a907191911ba6bf25",
+    "bytes": 20,
+    "scriptSha256": "0b4bf0a53efff460f4d9ce9a252a1bc44b45e5b2ac2854677887f65b0552d113"
+  },
+  "restart": {
+    "engine": "concurrent-v1",
+    "agentCardStatus": 200,
+    "disposition": "accepted",
+    "candidateId": "candidate-attempt-6f292193152114d2d6715d7d1a29ec5c"
+  },
+  "shutdown": {
+    "first": "released",
+    "second": "released"
+  },
+  "legacyCandidate": {
+    "schemaPreserved": true,
+    "rowPreserved": true
+  },
+  "configuredRoleOverrides": {
+    "coordinator": {
+      "model": "gpt-6-luna",
+      "effort": "low"
+    },
+    "engineer": {
+      "model": "gpt-6-luna",
+      "effort": "low"
+    },
+    "verifier": {
+      "model": "gpt-6-luna",
+      "effort": "high"
+    }
+  },
+  "usageLedgerRows": 0,
+  "providerUsage": "unavailable_after_private_runtime_cleanup",
+  "sourceHead": "c67bf681e4b20809fe37f9bdbb6a83ef7c2a0990",
+  "sourceHashes": {
+    "src/codex-app-server.js": "8afe15a782c615a94cd155810fbd6a86113b3a58a8f81e370a3c06741138cdbe",
+    "src/delivery-role-capabilities.js": "809e3da3273bcd5380a7cfb0cfdb8ffd150cf0084d209883e2ae6067a08dea90",
+    "test/delivery-verifier-integration.test.js": "a5d4781c40b6990df8421b0f7fbd84dfc97bfe260ac27a7072d3fa2660845e39",
+    "src/concurrent-delivery-engine.js": "0bfbf9eac041187fcfff67a28608776d5acb4cfea826ff01d6e233609b17bc65",
+    "test/server-delivery-engine.test.js": "b338bc72d4e1252897eaa77461472e56e3b33286fa86878341931d7fa6a927e6"
+  },
+  "manifestMatches": {
+    "src/codex-app-server.js": true,
+    "src/delivery-role-capabilities.js": true,
+    "test/delivery-verifier-integration.test.js": true,
+    "src/concurrent-delivery-engine.js": true,
+    "test/server-delivery-engine.test.js": true
+  },
+  "localRunnerHash": "fea4fca0dd3c9bebe8dadea644791188ef1a0963630b4370182386a70601724a"
+}

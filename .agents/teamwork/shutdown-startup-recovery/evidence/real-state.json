@@ -1,0 +1,120 @@
+{
+  "readOnly": true,
+  "phase": {
+    "attempts": [],
+    "identities": [
+      {
+        "pgid": 886263,
+        "pid": 886263,
+        "startTime": "1477852"
+      },
+      {
+        "pgid": 1785127,
+        "pid": 1785127,
+        "startTime": "3238246"
+      },
+      {
+        "pgid": 2050789,
+        "pid": 2050789,
+        "startTime": "3818436"
+      },
+      {
+        "pgid": 2064083,
+        "pid": 2064083,
+        "startTime": "3841917"
+      }
+    ],
+    "phase": "provider_closing"
+  },
+  "quiescence": [
+    {
+      "identity": {
+        "pgid": 886263,
+        "pid": 886263,
+        "startTime": "1477852"
+      },
+      "gone": true
+    },
+    {
+      "identity": {
+        "pgid": 1785127,
+        "pid": 1785127,
+        "startTime": "3238246"
+      },
+      "gone": true
+    },
+    {
+      "identity": {
+        "pgid": 2050789,
+        "pid": 2050789,
+        "startTime": "3818436"
+      },
+      "gone": true
+    },
+    {
+      "identity": {
+        "pgid": 2064083,
+        "pid": 2064083,
+        "startTime": "3841917"
+      },
+      "gone": true
+    }
+  ],
+  "objective": [
+    {
+      "record_json": {
+        "schemaVersion": "delivery/v1",
+        "projectId": "3d9c2e759c",
+        "objectiveId": "delivery-1b0c9912fcf4af350c24c3226567ec62",
+        "sessionId": "session-8402e9884c4d2eb90e275d69731e5e7f",
+        "legacyRunId": "cdb27a0c-e3c5-40c2-ac4a-9005e7c041ef",
+        "engineVersion": "delivery/v1",
+        "goalRevision": 1,
+        "requirementDigest": "sha256:ac5b86a7e192ef9f5fd85f7b0334d4fe9b8f66df0d0807c5a1a5bc0938107db4",
+        "checksDigest": "sha256:2a6d28b05ea9013868247e068a4aa342231b67d258c6dc681c0bd7295c4d998a",
+        "authorityRevision": 1,
+        "controlRevision": 2,
+        "disposition": "canceled",
+        "createdAt": 1793231087067,
+        "updatedAt": 1793246812551
+      },
+      "plan_revision": 0
+    }
+  ],
+  "facts": [
+    {
+      "project_id": "3d9c2e759c",
+      "session_id": "session-8402e9884c4d2eb90e275d69731e5e7f",
+      "turn_id": "lead-05337a9e38ddc7ff52df41a104cc286e",
+      "identity_json": "{\"ownerGeneration\":0,\"projectId\":\"3d9c2e759c\",\"providerScope\":\"lead:3d9c2e759c:session-8402e9884c4d2eb90e275d69731e5e7f:3d9d8f55ec055a52a3bfcd25e363b1416ac45d6e49a85a82db24248977890987:/home/sr/.codex\",\"providerThreadId\":\"01a184e6-e740-7692-b4be-a5ea4436c13a\",\"sessionId\":\"session-8402e9884c4d2eb90e275d69731e5e7f\",\"turnId\":\"lead-05337a9e38ddc7ff52df41a104cc286e\"}",
+      "start_json": null,
+      "terminal_json": null
+    }
+  ],
+  "turns": [
+    {
+      "project_id": "3d9c2e759c",
+      "session_id": "session-8402e9884c4d2eb90e275d69731e5e7f",
+      "provider_scope": "lead:3d9c2e759c:session-8402e9884c4d2eb90e275d69731e5e7f:3d9d8f55ec055a52a3bfcd25e363b1416ac45d6e49a85a82db24248977890987:/home/sr/.codex",
+      "provider_thread_id": "01a184e6-e740-7692-b4be-a5ea4436c13a",
+      "turn_id": "lead-05337a9e38ddc7ff52df41a104cc286e",
+      "status": "unknown",
+      "result_json": "{\"errorCode\":\"provider_home_changed\"}"
+    }
+  ],
+  "counts": {
+    "backlog_attempts": 0,
+    "backlog_claims": 0,
+    "delivery_role_executions": 0,
+    "delivery_output_publications": 0,
+    "candidate_intents": 0,
+    "delivery_inbox_messages": 0,
+    "concurrent_controller_fences": 0
+  },
+  "writerStates": [
+    {
+      "state": "released",
+      "count": 2
+    }
+  ]
+}

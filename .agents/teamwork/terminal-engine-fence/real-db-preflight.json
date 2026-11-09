@@ -1,0 +1,33 @@
+{
+  "readOnly": true,
+  "taskStates": [
+    {
+      "id": "5f4d2e30-5b7c-4bb7-a02f-d27b46dd2b09",
+      "status_state": "TASK_STATE_COMPLETED"
+    },
+    {
+      "id": "19e9b977-f860-4a37-98f6-ba4df59d919e",
+      "status_state": "TASK_STATE_FAILED"
+    },
+    {
+      "id": "0743c966-05b6-42f3-a6f2-537e251b8491",
+      "status_state": "TASK_STATE_FAILED"
+    },
+    {
+      "id": "baf8611f-4678-441e-b9d8-cbd18cd7fdbb",
+      "status_state": "TASK_STATE_FAILED"
+    }
+  ],
+  "results": [
+    {
+      "sourceRoot": "/home/sr/Projects/Workspace/codex-agent-control-plane",
+      "sourceSha256": "931777ea1ee27fc1286cc2db1798f80328dca4c42096d0e97aba25cc59ad3062",
+      "result": "busy"
+    },
+    {
+      "sourceRoot": "/home/sr/Projects/Workspace/codex-agent-control-plane-recovery",
+      "sourceSha256": "0982a0856578b089d74b08063661f857f76e61c158b4bc21baeaf41b9839b367",
+      "result": true
+    }
+  ]
+}

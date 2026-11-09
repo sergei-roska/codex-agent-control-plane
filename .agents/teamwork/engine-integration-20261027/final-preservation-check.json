@@ -1,0 +1,25 @@
+{
+  "inherited": 93,
+  "unchanged": 81,
+  "authorizedChanges": [
+    "docs/architecture/concurrent-harness/foundation-api.md",
+    "docs/architecture/concurrent-harness/implementation-status.md",
+    "docs/architecture/concurrent-harness/knowledge-graph.json",
+    "docs/architecture/concurrent-harness/verification-summary.json",
+    "src/app-server-switch.js",
+    "src/candidate-review.js",
+    "src/codex-app-server.js",
+    "src/delivery-acceptance.js",
+    "test/app-server-switch.test.js",
+    "test/candidate-review.test.js",
+    "test/delivery-acceptance-join.test.js",
+    "test/delivery-verifier-integration.test.js"
+  ],
+  "unexpectedChanges": [],
+  "missing": [],
+  "graphNodes": 292,
+  "graphEdges": 812,
+  "invalidEdges": 0,
+  "invalidSourceHashes": [],
+  "head": "65a970e"
+}

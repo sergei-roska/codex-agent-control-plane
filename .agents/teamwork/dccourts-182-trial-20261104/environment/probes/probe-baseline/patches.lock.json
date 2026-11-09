@@ -1,0 +1,13 @@
+{
+  "patches": {
+    "drupal/shs": [
+      {
+        "package": "drupal/shs",
+        "description": "Upstream regression tests baseline control",
+        "url": "patches/upstream-tests-only.patch",
+        "sha256": "99c9de2cd8539a0c10b0ddbb71153652f5d9f25f80e16134c9136acaba74e360",
+        "depth": 1
+      }
+    ]
+  }
+}

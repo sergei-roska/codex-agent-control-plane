@@ -1,0 +1,93 @@
+{
+  "attemptId": "attempt-dffd0f1f5e3d6e7efa2c0115ddf686be",
+  "candidateId": "candidate-attempt-7f4f2659488983d5a4ef2ef763167b03",
+  "checkPins": [
+    "repaired-product"
+  ],
+  "evidenceDigest": "sha256:77bdafc951a7c44c81267786102a09678b7f930c0c94700d8f5dc5468934f94e",
+  "evidenceRefs": [
+    "verifier-check-proof:attempt-dffd0f1f5e3d6e7efa2c0115ddf686be",
+    {
+      "attemptId": "attempt-dffd0f1f5e3d6e7efa2c0115ddf686be:acceptance:1",
+      "checkId": "repaired-product",
+      "contract": "evidence-ref/v1",
+      "createdAt": 1793178884900,
+      "error": null,
+      "expiresAt": 1795770884900,
+      "id": "ev_a73b0628f7f57a209fea89f4cc044cbd",
+      "kind": "check_stdout",
+      "mediaType": "text/plain; charset=utf-8",
+      "omitted": null,
+      "originalBytes": 25,
+      "originalSha256": "324a7c31aa356f62849015dcab7a0ec8b31d21f0b60aef6c98c3e9a9d64bada9",
+      "runId": "attempt-dffd0f1f5e3d6e7efa2c0115ddf686be",
+      "sha256": "324a7c31aa356f62849015dcab7a0ec8b31d21f0b60aef6c98c3e9a9d64bada9",
+      "source": {
+        "argv": [
+          "/home/sr/.nvm/versions/node/v24.22.1/bin/node",
+          "verify-product.js"
+        ],
+        "canceled": false,
+        "exitCode": 0,
+        "producer": "acceptance",
+        "signal": null,
+        "stream": "stdout",
+        "timedOut": false
+      },
+      "stored": true,
+      "storedBytes": 25,
+      "summary": "/home/sr/.nvm/versions/node/v24.22.1/bin/node verify-product.js stdout (exit 0): 25 bytes, complete. Tail: ",
+      "taskId": null,
+      "truncated": false
+    },
+    {
+      "attemptId": "attempt-dffd0f1f5e3d6e7efa2c0115ddf686be:acceptance:1",
+      "checkId": "repaired-product",
+      "contract": "evidence-ref/v1",
+      "createdAt": 1793178884901,
+      "error": null,
+      "expiresAt": 1795770884901,
+      "id": "ev_a33f621d6f183e3e484494df1ded8dca",
+      "kind": "check_stderr",
+      "mediaType": "text/plain; charset=utf-8",
+      "omitted": null,
+      "originalBytes": 0,
+      "originalSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "runId": "attempt-dffd0f1f5e3d6e7efa2c0115ddf686be",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": {
+        "argv": [
+          "/home/sr/.nvm/versions/node/v24.22.1/bin/node",
+          "verify-product.js"
+        ],
+        "canceled": false,
+        "exitCode": 0,
+        "producer": "acceptance",
+        "signal": null,
+        "stream": "stderr",
+        "timedOut": false
+      },
+      "stored": true,
+      "storedBytes": 0,
+      "summary": "/home/sr/.nvm/versions/node/v24.22.1/bin/node verify-product.js stderr (exit 0): 0 bytes, complete. Tail: ",
+      "taskId": null,
+      "truncated": false
+    }
+  ],
+  "fencingToken": 4,
+  "inputManifestDigest": "9e8cde5edf8fc3edda604b6d91957ca98a4d56d7d6afcc5e1becb4f9436fba3b",
+  "objectiveId": "delivery-14107cd7ae5e767bd30ce6d87e55c5c5",
+  "projectId": "ac504429fd",
+  "providerContextId": "09bd6546-e0cd-5fff-8d4d-447c5ee3f807",
+  "providerThreadId": "verifier-thread-9",
+  "requestDigest": "sha256:74c6af88ca149f1b212f4abcea00cbad86f7c8867fa0548d074c15f4b6d10a60",
+  "results": [
+    {
+      "checkId": "repaired-product",
+      "evidenceRef": "verifier-check:attempt-dffd0f1f5e3d6e7efa2c0115ddf686be:repaired-product",
+      "state": "passed"
+    }
+  ],
+  "selectedSettingsDigest": "sha256:714dea70088a2df8795ca322511bbe22ad81ecded71ebf34a5a9d10e62d29a54",
+  "taskId": "review-22b130c92da22f5d63ec2e3c"
+}

@@ -1,0 +1,160 @@
+{
+    "_hash": "dfc37cfe6cd7e4cdd678e03a170003d2398cea74c9e5967cae5244b0c203869d",
+    "patches": {
+        "drupal/core": [
+            {
+                "package": "drupal/core",
+                "description": "Breaking View (even if not used) when making changes in the Header/Footer section",
+                "url": "https://www.drupal.org/files/issues/2901327-DisplayPluginBase_info_array_0.patch",
+                "sha256": "3b55a12ab6320b31945703ee2742560ed74873da3996cdca9a714f52db72fbb3",
+                "depth": 2,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ],
+        "drupal/conditional_fields": [
+            {
+                "package": "drupal/conditional_fields",
+                "description": "Warning: Trying to access array offset on value of type null in Drupal\\conditional_fields\\DependencyHelper",
+                "url": "https://www.drupal.org/files/issues/2021-01-14/fix-notice-3192044-14.patch",
+                "sha256": "7e555094f5ff294c895d05a0e1f0a7a85760a575c0469ef559ac45c94bc1625e",
+                "depth": 1,
+                "extra": {
+                    "freeform": {
+                        "executable": "patch",
+                        "args": "--verbose -p%s -d %s < %s",
+                        "dry_run_args": "--verbose --dry-run -p%s -d %s < %s"
+                    },
+                    "provenance": "root"
+                }
+            },
+            {
+                "package": "drupal/conditional_fields",
+                "description": "Undefined property: DependencyHelper::$entity_type",
+                "url": "https://www.drupal.org/files/issues/2025-01-09/conditional_fields-resolveDependenciesHelper-3496295-3.patch",
+                "sha256": "d9dd63ecf508883eda5e2d88ec4289a69375c6e6daedad794b37746705ffb9c4",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ],
+        "drupal/custom_search": [
+            {
+                "package": "drupal/custom_search",
+                "description": "Drupal 11 compatibility",
+                "url": "https://www.drupal.org/files/issues/2024-03-17/custom_search.8.x-1.0-beta9.rector.patch",
+                "sha256": "ce38eff2e23118511a87f0983d8edf6acf6d299dff92edb3aa4298fa9bef766c",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ],
+        "drupal/views_ajax_history": [
+            {
+                "package": "drupal/views_ajax_history",
+                "description": "Maximum call stack size exceeded",
+                "url": "https://www.drupal.org/files/issues/2022-02-03/maximum_call_stack_size_exceeded-3221897-11.patch",
+                "sha256": "3399dd9612b4bde0c7e597119098718dfe43969d72e1259ad27560a83ade9641",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            },
+            {
+                "package": "drupal/views_ajax_history",
+                "description": "Views filters reset removes pagination ?page= query",
+                "url": "https://www.drupal.org/files/issues/2025-07-28/view-ajax-history-keep-page-after-reset_2.patch",
+                "sha256": "c100278f332de381b6975ff2ecb8b6648b0f124968248835f12b6016c3adea07",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ],
+        "drupal/select2_multicheck": [
+            {
+                "package": "drupal/select2_multicheck",
+                "description": "https://www.drupal.org/project/select2_multicheck/issues/3474838",
+                "url": "https://www.drupal.org/files/issues/2024-09-17/select2_multicheck-3474838-MR4-4.patch",
+                "sha256": "c41ff9463500f811ec7d653e1da5033c61b3535d9afdfe1b9361b39b743076cd",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ],
+        "drupal/select2": [
+            {
+                "package": "drupal/select2",
+                "description": "https://www.drupal.org/project/select2/issues/3484551",
+                "url": "https://www.drupal.org/files/issues/2024-10-30/bef-pager-3484551-0_0.patch",
+                "sha256": "4baf7538459be7125c56ff3b0806264e42c34a6fc5e411dcff3a6f38b2cf6178",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ],
+        "drupal/shs": [
+            {
+                "package": "drupal/shs",
+                "description": "Preselect stored values and preserve valid references",
+                "url": "patches/shs-3620147-preselect-stored-values.patch",
+                "sha256": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ],
+        "drupal/better_exposed_filters": [
+            {
+                "package": "drupal/better_exposed_filters",
+                "description": "https://www.drupal.org/project/i/3291146",
+                "url": "https://www.drupal.org/files/issues/2024-07-24/better_exposed_filters-undefined_array_key-3291146-20.patch",
+                "sha256": "8cd77a582b6eae184854cef7a61022b96745d2611d3ba0ca0569b75e4bd00a2d",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ],
+        "drupal/clientside_validation": [
+            {
+                "package": "drupal/clientside_validation",
+                "description": "https://www.drupal.org/project/clientside_validation/issues/3200530",
+                "url": "https://www.drupal.org/files/issues/2021-10-28/3200530-9_17.patch",
+                "sha256": "55e30c127f21db8f0fecd6a81409e1eccdc87852c5d9184e7b0449caefeb54d7",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            },
+            {
+                "package": "drupal/clientside_validation",
+                "description": "Allow more prefixes on link fields",
+                "url": "patches/clientside_validation-allow_more_prefixes_on_link.patch",
+                "sha256": "ce8d6e5c634b2114456aa724edfb46df3ce67189ce9db279453ede6bb13cd8a1",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ],
+        "drupal/webform": [
+            {
+                "package": "drupal/webform",
+                "description": "Remove Webform jQueryUI Datepicker (Deprecated) condition",
+                "url": "patches/webform-remove-webform_jqueryui_datepicker-condition.patch",
+                "sha256": "6e8c4dea8c214e0aa4ca9c76c31bc3e07896f1fbf0c48ee65e9e64671614cf20",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ]
+    }
+}

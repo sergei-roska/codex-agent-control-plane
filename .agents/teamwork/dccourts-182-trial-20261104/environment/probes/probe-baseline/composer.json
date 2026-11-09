@@ -1,0 +1,12 @@
+{
+  "require": {
+    "cweagans/composer-patches": "^2.0"
+  },
+  "extra": {
+    "patches": {
+      "drupal/shs": {
+        "Upstream regression tests baseline control": "patches/upstream-tests-only.patch"
+      }
+    }
+  }
+}

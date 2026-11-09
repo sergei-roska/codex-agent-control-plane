@@ -1,0 +1,63 @@
+{
+  "runId": "a125b4c6-f640-45ae-a106-22f97837f8e9",
+  "contextId": "8d7f6bd4-2d43-48cd-933a-53736fba2e88",
+  "projectId": "c8740b5b4f",
+  "source": ".runtime/projects/c8740b5b4f/state.sqlite, latest checkpoint for the sole lead task in this context",
+  "purpose": "Admission context only; this export is not verification evidence.",
+  "reviewObjects": [
+    {
+      "kind": "risk_change",
+      "checkpointId": "m4-r20-integrated-authority-persistence",
+      "reason": "Repair ownership authority and immutable Rule evidence persistence affect authoritative transitions and integrity. A passing independent verifier is required before a bounded auditor and dependent writes.",
+      "paths": [
+        "src/teamwork/contracts/schemas.py",
+        "src/teamwork/state/execution_control.py",
+        "src/teamwork/state/repository.py",
+        "src/teamwork/knowledge/rules.py",
+        "tests/state/test_execution_control.py",
+        "tests/state/test_repository.py",
+        "tests/knowledge/test_rules.py",
+        "artifacts/m4/T3.1.2d.1",
+        "artifacts/m4/T3.4.2b.2",
+        "artifacts/m4/T3.4.2c.1"
+      ],
+      "evidenceIds": [
+        "ev_94e9c8c534add98efbf55f7fa5f04c60",
+        "a125b4c6-f640-45ae-a106-22f97837f8e9:r19:a0",
+        "a125b4c6-f640-45ae-a106-22f97837f8e9:r19:a2"
+      ]
+    },
+    {
+      "kind": "risk_change",
+      "checkpointId": "m4-t312d2-lifecycle-authority",
+      "reason": "Durable abandonment and suspension determine authoritative task ownership and execution fencing; require passing independent verification followed by a bounded audit before dependent wiring.",
+      "paths": [
+        "src/teamwork/contracts/schemas.py",
+        "src/teamwork/state/execution_control.py",
+        "tests/state/test_execution_control.py",
+        "artifacts/m4/T3.1.2d.2"
+      ],
+      "evidenceIds": [
+        "ev_d811a156afb038fb878d0784e7fa1585",
+        "ev_1f685632899f320c09aaf14bed3e8661"
+      ]
+    },
+    {
+      "kind": "risk_change",
+      "checkpointId": "m4-t312e1-dispatch-stop-evidence",
+      "reason": "Dispatcher stop-evidence handoff crosses the runtime-result authority boundary and feeds ownership lifecycle decisions; require independent verification followed by audit before dependent lifecycle wiring.",
+      "paths": [
+        "src/teamwork/control/dispatcher.py",
+        "tests/control/test_dispatcher.py",
+        "artifacts/m4/T3.1.2e.1",
+        "docs/adr/m4-full-project-lifecycle-boundary.md",
+        "artifacts/m4/production-transfer-index.md"
+      ],
+      "evidenceIds": [
+        "ev_1a3e7b91c81029ff584a3262d37de992",
+        "a125b4c6-f640-45ae-a106-22f97837f8e9:r61:a0",
+        "a125b4c6-f640-45ae-a106-22f97837f8e9:r62:a0"
+      ]
+    }
+  ]
+}

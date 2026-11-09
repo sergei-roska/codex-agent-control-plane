@@ -1,0 +1,309 @@
+'use strict';
+
+const { createHash } = require('node:crypto');
+const { VERSION, validatePlanDelta } = require('./delivery-contracts');
+
+const MAX_CONTEXT_BYTES = 192 * 1024;
+const MAX_TURN_BYTES = 32768;
+const PLANNER_BLOCKED_DISPOSITIONS = new Set(['draining', 'paused_owner', 'waiting_budget', 'waiting_owner', 'blocked_technical', 'validating', 'accepted', 'partial', 'canceled']);
+const json = (value) => JSON.stringify(value);
+const parse = (value) => JSON.parse(value);
+const clone = (value) => JSON.parse(JSON.stringify(value));
+const error = (code) => Object.assign(new Error(code), { code });
+const digest = (value) => `sha256:${createHash('sha256').update(json(value)).digest('hex')}`;
+
+function assertBoundedJson(value) {
+  const stack = [{ value, depth: 0 }];
+  let nodes = 0;
+  while (stack.length) {
+    const current = stack.pop();
+    nodes += 1;
+    if (nodes > 512 || current.depth > 8) throw error('planner_metadata_invalid');
+    const item = current.value;
+    if (item === null || typeof item === 'boolean' || (typeof item === 'number' && Number.isFinite(item))) continue;
+    if (typeof item === 'string') {
+      if (item.length > 4000) throw error('planner_metadata_invalid');
+      continue;
+    }
+    if (Array.isArray(item)) {
+      if (item.length > 64) throw error('planner_metadata_invalid');
+      for (const child of item) stack.push({ value: child, depth: current.depth + 1 });
+      continue;
+    }
+    if (!item || typeof item !== 'object' || Object.getPrototypeOf(item) !== Object.prototype || Object.keys(item).length > 64) throw error('planner_metadata_invalid');
+    for (const [key, child] of Object.entries(item)) {
+      if (!key || key.length > 128) throw error('planner_metadata_invalid');
+      stack.push({ value: child, depth: current.depth + 1 });
+    }
+  }
+}
+
+class LeadPlanner {
+  constructor({ store, inbox, runTurn, settingsFor = () => ({}), contextFor = () => ({}), reconcilePriorTurn, authorizeRecovery, providerThreadId, ownerGeneration, now = () => Date.now(), maxEvidence = 64 } = {}) {
+    if (!store || !store.db || !inbox || inbox.db !== store.db) throw new TypeError('LeadPlanner requires a store and inbox sharing one database');
+    if (typeof runTurn !== 'function') throw new TypeError('runTurn is required');
+    for (const [name, fn] of Object.entries({ settingsFor, contextFor, reconcilePriorTurn, authorizeRecovery, now })) if (fn !== undefined && typeof fn !== 'function') throw new TypeError(`${name} must be a function`);
+    if (!Number.isSafeInteger(maxEvidence) || maxEvidence < 1 || maxEvidence > 256) throw new TypeError('maxEvidence must be between 1 and 256');
+    this.store = store;
+    this.db = store.db;
+    this.inbox = inbox;
+    this.runTurnAdapter = runTurn;
+    const objective = store.getObjective(inbox.projectId, inbox.objectiveId);
+    this.ownerGeneration = ownerGeneration ?? objective?.ownerGeneration;
+    if (!Number.isSafeInteger(this.ownerGeneration) || this.ownerGeneration < 0) throw new TypeError('ownerGeneration must be a non-negative integer');
+    this.settingsFor = settingsFor;
+    this.contextFor = contextFor;
+    this.reconcilePriorTurn = reconcilePriorTurn;
+    this.authorizeRecovery = authorizeRecovery || (() => false);
+    if (providerThreadId !== undefined && (typeof providerThreadId !== 'string' || !providerThreadId.trim() || providerThreadId.length > 256)) throw new TypeError('providerThreadId must be a nonempty actual provider thread identity');
+    this.providerThreadId = providerThreadId || null;
+    this.lastProviderIdentity = null;
+    this.now = now;
+    this.maxEvidence = maxEvidence;
+    this.inFlight = null;
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS delivery_planner_turns (
+        project_id TEXT NOT NULL, session_id TEXT NOT NULL, provider_scope TEXT NOT NULL DEFAULT 'default', provider_thread_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL, status TEXT NOT NULL, pins_json TEXT NOT NULL,
+        result_json TEXT, started_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        PRIMARY KEY(project_id,session_id,provider_thread_id,turn_id)
+      );
+      CREATE TABLE IF NOT EXISTS delivery_planner_evidence (
+        project_id TEXT NOT NULL, session_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+        evidence_json TEXT NOT NULL, PRIMARY KEY(project_id,session_id,sequence)
+      );
+    `);
+    if (!this.db.pragma('table_info(delivery_planner_turns)').some((column) => column.name === 'provider_scope')) {
+      this.db.exec("ALTER TABLE delivery_planner_turns ADD COLUMN provider_scope TEXT NOT NULL DEFAULT 'default'");
+    }
+    const liveIndexColumns = this.db.pragma('index_info(delivery_planner_live_thread_idx)').map((column) => column.name);
+    if (liveIndexColumns.length && JSON.stringify(liveIndexColumns) !== JSON.stringify(['provider_scope', 'provider_thread_id'])) {
+      this.db.exec('DROP INDEX delivery_planner_live_thread_idx');
+    }
+    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS delivery_planner_live_thread_idx
+      ON delivery_planner_turns(provider_scope,provider_thread_id) WHERE status IN ('active','unknown');`);
+  }
+
+  projection() {
+    const identity = this.lastProviderIdentity;
+    const lastTurn = identity
+      ? this.db.prepare(`SELECT turn_id,status,started_at,updated_at FROM delivery_planner_turns
+          WHERE project_id=? AND session_id=? AND provider_scope=? AND provider_thread_id=? ORDER BY started_at DESC LIMIT 1`)
+        .get(this.inbox.projectId, this.inbox.sessionId, identity.scope, identity.threadId)
+      : this.db.prepare(`SELECT turn_id,status,started_at,updated_at FROM delivery_planner_turns
+          WHERE project_id=? AND session_id=? ORDER BY started_at DESC LIMIT 1`)
+        .get(this.inbox.projectId, this.inbox.sessionId);
+    return { providerThreadId: identity?.threadId || this.providerThreadId, providerScope: identity?.scope || null, inFlight: Boolean(this.inFlight),
+      lastTurn: lastTurn || null,
+      evidence: this.listEvidence() };
+  }
+
+  listEvidence() {
+    return this.db.prepare(`SELECT evidence_json FROM delivery_planner_evidence WHERE project_id=? AND session_id=? ORDER BY sequence DESC LIMIT ?`)
+      .all(this.inbox.projectId, this.inbox.sessionId, this.maxEvidence).map((row) => parse(row.evidence_json)).reverse();
+  }
+
+  run(trigger = 'durable_trigger') {
+    if (this.inFlight) return this.inFlight;
+    this.inFlight = this.#run(trigger).finally(() => { this.inFlight = null; });
+    return this.inFlight;
+  }
+
+  async #run(trigger) {
+    const snapshot = this.#snapshot();
+    if (!snapshot || !this.inbox.projection().wakeup) return { state: 'idle', reason: 'no_trigger' };
+    if (snapshot.currentOwnerGeneration !== this.ownerGeneration) return { state: 'stale', reason: 'owner_generation_changed' };
+    if (PLANNER_BLOCKED_DISPOSITIONS.has(snapshot.projection.objective.disposition) || this.store.pendingOwnerDecision(this.inbox.projectId, this.inbox.objectiveId)) {
+      return { state: 'blocked', reason: 'objective_control', disposition: snapshot.projection.objective.disposition };
+    }
+    const settings = clone(this.settingsFor({ projectId: this.inbox.projectId, sessionId: this.inbox.sessionId }));
+    const providerContext = clone(this.contextFor({ projectId: this.inbox.projectId, sessionId: this.inbox.sessionId, snapshot }));
+    const providerIdentity = this.#providerIdentity(providerContext);
+    this.lastProviderIdentity = providerIdentity;
+    const oldTurn = this.db.prepare(`SELECT project_id,session_id,turn_id,status,pins_json,result_json FROM delivery_planner_turns
+      WHERE provider_scope=? AND provider_thread_id=? AND status IN ('active','unknown') ORDER BY started_at LIMIT 1`)
+      .get(providerIdentity.scope, providerIdentity.threadId);
+    if (oldTurn) {
+      if (oldTurn.status === 'active') return { state: 'busy', reason: 'provider_thread_busy', turnId: oldTurn.turn_id };
+      if (!this.reconcilePriorTurn) return { state: 'blocked', reason: 'prior_turn_reconciliation_required', turnId: oldTurn.turn_id };
+      const priorIdentity = { projectId: oldTurn.project_id, sessionId: oldTurn.session_id, turnId: oldTurn.turn_id,
+        pins: parse(oldTurn.pins_json), providerThreadId: providerIdentity.threadId, providerScope: providerIdentity.scope,
+        recoveryEligibility: oldTurn.result_json ? parse(oldTurn.result_json) : null };
+      priorIdentity.ownerGeneration = priorIdentity.pins.ownerGeneration;
+      const reconciled = await this.reconcilePriorTurn(priorIdentity);
+      if (!this.#validNoEffectProof(reconciled, priorIdentity)) return { state: 'blocked', reason: 'prior_turn_effect_unknown', turnId: oldTurn.turn_id };
+      const retire = this.db.transaction(() => this.db.prepare(`UPDATE delivery_planner_turns SET status='reconciled_no_effect',result_json=?,updated_at=?
+        WHERE project_id=? AND session_id=? AND provider_scope=? AND provider_thread_id=? AND turn_id=? AND status='unknown'`)
+        .run(json(reconciled), this.now(), oldTurn.project_id, oldTurn.session_id, providerIdentity.scope, providerIdentity.threadId, oldTurn.turn_id).changes);
+      if (retire.immediate() !== 1) return { state: 'blocked', reason: 'prior_turn_state_changed', turnId: oldTurn.turn_id };
+    }
+    const pins = { ...snapshot.pins, settings, settingsDigest: digest(settings), providerContext, providerContextDigest: digest(providerContext), providerIdentity, trigger };
+    const turnId = `lead-${digest([this.inbox.projectId, this.inbox.sessionId, providerIdentity, pins, this.now()]).slice(7, 39)}`;
+    const acquired = this.#acquire(turnId, pins, providerIdentity);
+    if (acquired === 'stale') return { state: 'stale', reason: 'snapshot_changed', turnId };
+    if (!acquired) return { state: 'busy', reason: 'provider_thread_busy' };
+    let output;
+    try {
+      output = await this.runTurnAdapter({ turnId, providerThreadId: providerIdentity.threadId, providerScope: providerIdentity.scope, settings: clone(settings), providerContext: clone(providerContext), prompt: snapshot.prompt, projection: snapshot.projection, trigger });
+      const normalized = this.#validateOutput(output, snapshot.pins);
+      return this.#apply(turnId, snapshot, normalized, providerIdentity);
+    } catch (cause) {
+      this.#finishTurn(turnId, 'unknown', { errorCode: cause.code || 'turn_error' }, providerIdentity);
+      throw cause;
+    }
+  }
+
+  #providerIdentity(context) {
+    if (!context || typeof context !== 'object' || Array.isArray(context) || Object.getPrototypeOf(context) !== Object.prototype) {
+      throw error('provider_context_identity_required');
+    }
+    if (Object.hasOwn(context, 'providerThreadId') || Object.hasOwn(context, 'transportId')) throw error('provider_context_identity_alias_invalid');
+    const hasThread = Object.hasOwn(context, 'threadId');
+    const contextThreadId = hasThread ? context.threadId : null;
+    if (hasThread && (typeof contextThreadId !== 'string' || !contextThreadId.trim() || contextThreadId.length > 256)) throw error('provider_thread_identity_invalid');
+    if (this.providerThreadId && hasThread && contextThreadId !== this.providerThreadId) throw error('provider_thread_identity_mismatch');
+    const threadId = this.providerThreadId || contextThreadId;
+    if (!threadId) throw error('provider_thread_identity_required');
+    const scope = context.transportKey === undefined ? 'default' : context.transportKey;
+    if (typeof scope !== 'string' || !scope.trim() || scope.length > 256) throw error('provider_transport_scope_invalid');
+    return { scope, threadId };
+  }
+
+  #validNoEffectProof(proof, expected) {
+    const fields = ['state', 'projectId', 'sessionId', 'turnId', 'providerThreadId', 'providerScope', 'ownerGeneration', 'remoteQuiescent', 'processQuiescent'];
+    return proof && typeof proof === 'object' && !Array.isArray(proof) && Object.getPrototypeOf(proof) === Object.prototype
+      && Object.keys(proof).length === fields.length && fields.every((field) => Object.hasOwn(proof, field))
+      && proof.state === 'no_effect' && proof.projectId === expected.projectId
+      && proof.sessionId === expected.sessionId && proof.turnId === expected.turnId
+      && proof.providerThreadId === expected.providerThreadId && proof.providerScope === expected.providerScope
+      && proof.ownerGeneration === expected.ownerGeneration
+      && proof.remoteQuiescent === true && proof.processQuiescent === true;
+  }
+
+  // Only a trusted lifecycle adapter may call this after proving both remote and process quiescence.
+  markPriorTurnRecoveryEligible(proof) {
+    const fields = ['projectId', 'sessionId', 'turnId', 'providerThreadId', 'providerScope', 'ownerGeneration', 'remoteQuiescent', 'processQuiescent'];
+    if (!proof || typeof proof !== 'object' || Array.isArray(proof) || Object.getPrototypeOf(proof) !== Object.prototype
+      || Object.keys(proof).length !== fields.length || fields.some((field) => !Object.hasOwn(proof, field))) {
+      throw error('planner_recovery_proof_invalid');
+    }
+    if (fields.slice(0, 5).some((field) => typeof proof[field] !== 'string' || !proof[field].trim() || proof[field].length > 256)
+      || !Number.isSafeInteger(proof.ownerGeneration) || proof.ownerGeneration < 0
+      || proof.remoteQuiescent !== true || proof.processQuiescent !== true) throw error('planner_recovery_quiescence_required');
+    const authorization = this.authorizeRecovery(Object.freeze({ ...proof }));
+    if (authorization && typeof authorization.then === 'function') throw error('planner_recovery_authorization_async');
+    if (authorization !== true) throw error('planner_recovery_unauthorized');
+    const tx = this.db.transaction(() => {
+      const result = this.db.prepare(`UPDATE delivery_planner_turns SET status='unknown',result_json=?,updated_at=?
+        WHERE project_id=? AND session_id=? AND provider_scope=? AND provider_thread_id=? AND turn_id=? AND status='active'`)
+        .run(json(proof), this.now(), proof.projectId, proof.sessionId, proof.providerScope, proof.providerThreadId, proof.turnId);
+      if (result.changes !== 1) throw error('planner_recovery_turn_not_active');
+      const row = this.db.prepare(`SELECT pins_json FROM delivery_planner_turns WHERE project_id=? AND session_id=? AND provider_scope=? AND provider_thread_id=? AND turn_id=?`)
+        .get(proof.projectId, proof.sessionId, proof.providerScope, proof.providerThreadId, proof.turnId);
+      if (parse(row.pins_json).ownerGeneration !== proof.ownerGeneration) throw error('planner_recovery_generation_mismatch');
+      return { ...proof, state: 'recovery_eligible' };
+    });
+    return tx.immediate();
+  }
+
+  #snapshot() {
+    const projectId = this.inbox.projectId;
+    const objectiveId = this.inbox.objectiveId;
+    const read = this.db.transaction(() => {
+      const objective = this.store.getObjective(projectId, objectiveId);
+      if (!objective) return null;
+      const inbox = this.inbox.projection();
+      const events = this.store.events?.replay(projectId, { after: Math.max(0, (this.store.events?.cursor(projectId, 'lead-planner') || 0) - 40), limit: 40 }) || [];
+      const attempts = this.store.listAttempts(projectId, objectiveId).map((item) => ({ ...item, contractSnapshot: undefined }));
+      const claims = this.store.listClaims(projectId, objectiveId);
+      const projection = { projectId, objectiveId, objective, queue: objective.tasks, blockers: objective.tasks.filter((task) => ['blocked', 'failed'].includes(task.state)).map((task) => ({ taskId: task.taskId, state: task.state, blockedReason: task.blockedReason || null })), activeAttempts: attempts.filter((attempt) => !['succeeded', 'failed', 'canceled'].includes(attempt.state)), claims: claims.filter((claim) => claim.state === 'active'), events, plannerEvidence: this.listEvidence().slice(-4), investigationEvidence: this.store.listAttempts(projectId, objectiveId).filter((entry) => entry.state === 'succeeded' && entry.contractSnapshot?.kind === 'investigation').slice(-16).map((entry) => ({ attemptId: entry.attemptId, taskId: entry.taskId, summary: entry.outcome?.summary, evidenceRefs: entry.evidenceRefs, originalControls: entry.capturedControls, ownerGeneration: entry.executionGeneration })), ownerDecisions: this.store.listOwnerDecisions(projectId, objectiveId), inbox: { version: inbox.version, cursor: inbox.cursor, pending: this.inbox.pending() } };
+      const pins = { planRevision: objective.planRevision, goalRevision: objective.goalRevision, authorityRevision: objective.authorityRevision, controlRevision: objective.controlRevision, ownerGeneration: this.ownerGeneration, inboxVersion: inbox.version, checksDigest: objective.checksDigest, disposition: objective.disposition };
+      const prompt = { schema: 'lead-planner/v1', pins, projection };
+      if (Buffer.byteLength(json(prompt), 'utf8') > MAX_CONTEXT_BYTES) throw error('planner_context_too_large');
+      return { pins, projection, prompt, currentOwnerGeneration: objective.ownerGeneration };
+    });
+    return read.deferred();
+  }
+
+  #validateOutput(output, pins) {
+    if (!output || typeof output !== 'object' || Array.isArray(output)) throw error('planner_output_invalid');
+    const allowed = ['expected', 'delta', 'dialogue', 'recovery', 'ownerDecision'];
+    if (Object.keys(output).some((key) => !allowed.includes(key))) throw error('planner_output_field_invalid');
+    if (!output.expected || typeof output.expected !== 'object' || Array.isArray(output.expected)) throw error('planner_expected_revisions_required');
+    for (const key of ['planRevision', 'goalRevision', 'authorityRevision', 'controlRevision', 'inboxVersion']) if (output.expected[key] !== pins[key]) throw error('planner_expected_revision_mismatch');
+    if (output.delta !== undefined && output.delta !== null && typeof output.delta !== 'object') throw error('planner_delta_invalid');
+    const metadata = { dialogue: output.dialogue ?? null, recovery: output.recovery ?? null, ownerDecision: output.ownerDecision ?? null };
+    assertBoundedJson(metadata);
+    if (Buffer.byteLength(json(metadata), 'utf8') > MAX_TURN_BYTES) throw error('planner_metadata_too_large');
+    return { delta: output.delta || null, metadata };
+  }
+
+  #apply(turnId, snapshot, output, providerIdentity) {
+    const tx = this.db.transaction(() => {
+      const objective = this.store.getObjective(this.inbox.projectId, this.inbox.objectiveId);
+      const currentInbox = this.inbox.projection();
+      if (!objective || objective.ownerGeneration !== snapshot.pins.ownerGeneration || objective.ownerGeneration !== this.ownerGeneration || objective.planRevision !== snapshot.pins.planRevision || objective.goalRevision !== snapshot.pins.goalRevision || objective.authorityRevision !== snapshot.pins.authorityRevision || objective.controlRevision !== snapshot.pins.controlRevision || objective.disposition !== snapshot.pins.disposition || currentInbox.version !== snapshot.pins.inboxVersion) {
+        this.#storeEvidence(turnId, 'stale', output.metadata, snapshot.pins, providerIdentity);
+        this.#finishTurn(turnId, 'stale', output.metadata, providerIdentity);
+        return { state: 'stale', reason: objective?.ownerGeneration !== this.ownerGeneration ? 'owner_generation_changed' : (currentInbox.version !== snapshot.pins.inboxVersion ? 'inbox_changed' : 'revision_changed'), turnId, messageIds: snapshot.projection.inbox.pending.map((message) => message.messageId) };
+      }
+      let applied = null;
+      if (output.delta) {
+        validatePlanDelta(objective, output.delta);
+        applied = this.store.applyPlan(this.inbox.projectId, this.inbox.objectiveId, output.delta);
+      }
+      const decision = output.metadata.ownerDecision === null ? null : this.store.registerOwnerDecision(
+        this.inbox.projectId, this.inbox.objectiveId, output.metadata.ownerDecision, { sourceTurnId: turnId,
+          expected: this.store.ownerDecisionPins(this.inbox.projectId, this.inbox.objectiveId) });
+      this.inbox.completeTurn(snapshot.pins.inboxVersion, snapshot.projection.inbox.pending
+        .filter((message) => message.kind === 'steering').map((message) => message.messageId));
+      this.#storeEvidence(turnId, 'applied', output.metadata, snapshot.pins, providerIdentity);
+      this.#finishTurn(turnId, 'complete', { changed: Boolean(applied) }, providerIdentity);
+      return { state: 'complete', turnId, decision, controlRevision: this.store.getObjective(this.inbox.projectId, this.inbox.objectiveId).controlRevision, planRevision: applied?.planRevision ?? objective.planRevision, changed: Boolean(applied), messageIds: snapshot.projection.inbox.pending.map((message) => message.messageId) };
+    });
+    return tx.immediate();
+  }
+
+  #acquire(turnId, pins, providerIdentity) {
+    const tx = this.db.transaction(() => {
+      const scopedThreadActive = this.db.prepare(`SELECT turn_id FROM delivery_planner_turns
+        WHERE provider_scope=? AND provider_thread_id=? AND status IN ('active','unknown')`)
+        .get(providerIdentity.scope, providerIdentity.threadId);
+      if (scopedThreadActive) return false;
+      const objective = this.store.getObjective(this.inbox.projectId, this.inbox.objectiveId);
+      const inbox = this.inbox.projection();
+      if (!objective || objective.disposition !== pins.disposition
+        || objective.ownerGeneration !== pins.ownerGeneration || pins.ownerGeneration !== this.ownerGeneration
+        || objective.planRevision !== pins.planRevision || objective.goalRevision !== pins.goalRevision
+        || objective.authorityRevision !== pins.authorityRevision || objective.controlRevision !== pins.controlRevision
+        || inbox.version !== pins.inboxVersion || PLANNER_BLOCKED_DISPOSITIONS.has(objective.disposition)
+        || this.store.pendingOwnerDecision(this.inbox.projectId, this.inbox.objectiveId)) return 'stale';
+      const capacity = this.store.projectCapacity(this.inbox.projectId, this.inbox.objectiveId);
+      const activeCount = this.db.prepare(`SELECT COUNT(*) AS n FROM delivery_planner_turns
+        WHERE project_id=? AND status IN ('active','unknown')`).get(this.inbox.projectId).n;
+      if (activeCount >= capacity.plannerReservedSlots) return false;
+      const now = this.now();
+      this.db.prepare(`INSERT INTO delivery_planner_turns(project_id,session_id,provider_scope,provider_thread_id,turn_id,status,pins_json,started_at,updated_at)
+        VALUES(?,?,?,?,?,'active',?,?,?)`).run(this.inbox.projectId, this.inbox.sessionId, providerIdentity.scope, providerIdentity.threadId, turnId, json(pins), now, now);
+      return true;
+    });
+    return tx.immediate();
+  }
+
+  #finishTurn(turnId, status, result, providerIdentity) {
+    const encoded = result === undefined ? null : json(result);
+    this.db.prepare(`UPDATE delivery_planner_turns SET status=?,result_json=?,updated_at=?
+      WHERE project_id=? AND session_id=? AND provider_scope=? AND provider_thread_id=? AND turn_id=? AND status='active'`)
+      .run(status, encoded, this.now(), this.inbox.projectId, this.inbox.sessionId, providerIdentity.scope, providerIdentity.threadId, turnId);
+  }
+
+  #storeEvidence(turnId, state, metadata, pins, providerIdentity) {
+    const sequence = this.db.prepare(`SELECT COALESCE(MAX(sequence),0)+1 AS n FROM delivery_planner_evidence WHERE project_id=? AND session_id=?`)
+      .get(this.inbox.projectId, this.inbox.sessionId).n;
+    const evidence = { turnId, state, metadata, pins, providerIdentity, recordedAt: this.now() };
+    this.db.prepare(`INSERT INTO delivery_planner_evidence(project_id,session_id,sequence,evidence_json) VALUES(?,?,?,?)`)
+      .run(this.inbox.projectId, this.inbox.sessionId, sequence, json(evidence));
+  }
+}
+
+module.exports = { LeadPlanner, MAX_CONTEXT_BYTES, MAX_TURN_BYTES };

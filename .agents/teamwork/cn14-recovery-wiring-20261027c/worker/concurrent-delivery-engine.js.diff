@@ -1,0 +1,79 @@
+--- original/src/concurrent-delivery-engine.js
++++ src/concurrent-delivery-engine.js
+@@ -232,7 +232,7 @@
+       requestAdapter: (input) => this.#requestFor(input),
+       resultAdapter: (input) => this.roleService.resultAdapter(input),
+       receiptAdapter: (input) => this.roleService.receiptAdapter(input),
+-      recoveryProofAdapter: () => null,
++      recoveryProofAdapter: (input) => this.roleService.recoveryProofFor(input),
+       resolveVerifierCapability: capability.resolveVerifierCapability,
+     });
+   }
+@@ -363,20 +363,24 @@
+ 
+   async shutdown() {
+     const projections = [];
+-    for (const [runId, controller] of this.controllers) {
+-      const fenced = controller.shutdown({ pause: false });
++    const controllers = [...this.controllers.entries()];
++    for (const [, controller] of controllers) controller.shutdown({ pause: false });
++    for (const [, controller] of controllers) {
+       if (controller.cycle) await controller.cycle;
+       if (controller.scheduler.runPromise) await controller.scheduler.runPromise;
+-      await this.#drainRoleCalls();
+-      const refreshed = controller.lifecycle.shutdownProjection();
+-      projections.push({ runId, ...refreshed });
+-      if (refreshed.safeToRelease !== true) throw Object.assign(error('concurrent_shutdown_unsafe'), { projections });
+-      void fenced;
+-    }
++    }
++    await this.#drainRoleCalls();
+     const stored = this.db.prepare('SELECT run_id FROM concurrent_delivery_runs WHERE project_id=? ORDER BY run_id').all(this.projectId);
+     for (const { run_id: runId } of stored) {
+-      if (this.controllers.has(runId)) continue;
+       const run = this.#run(runId);
++      await this.#recoverDrainedRoleAttempts(run);
++      const controller = this.controllers.get(runId);
++      if (controller) {
++        const projection = controller.lifecycle.shutdownProjection();
++        projections.push({ runId, ...projection });
++        if (projection.safeToRelease !== true) throw Object.assign(error('concurrent_shutdown_unsafe'), { projections });
++        continue;
++      }
+       const objective = this.store.getObjective(this.projectId, run.objectiveId);
+       if (!objective) throw error('concurrent_objective_missing');
+       const inbox = new DeliveryInbox(this.db, { projectId: this.projectId, objectiveId: run.objectiveId, sessionId: run.sessionId });
+@@ -391,6 +395,23 @@
+       if (projection.safeToRelease !== true) throw Object.assign(error('concurrent_shutdown_unsafe'), { projections });
+     }
+     return { engine: 'concurrent-v1', projectId: this.projectId, safeToRelease: true, projections };
++  }
++
++  async #recoverDrainedRoleAttempts(run) {
++    const objective = this.store.getObjective(this.projectId, run.objectiveId);
++    if (!objective) throw error('concurrent_objective_missing');
++    const prepared = [];
++    for (const attempt of this.store.listAttempts(this.projectId, run.objectiveId)) {
++      if (['succeeded', 'failed', 'canceled'].includes(attempt.state)) continue;
++      const identity = { projectId: this.projectId, objectiveId: run.objectiveId, taskId: attempt.taskId,
++        attemptId: attempt.attemptId, fencingToken: attempt.fencingToken, recoveryGeneration: objective.ownerGeneration };
++      try { await this.roleService.prepareNoPublicationRecovery(identity); }
++      catch (_) { continue; }
++      prepared.push(identity);
++    }
++    if (!prepared.length) return;
++    this.store.requestLifecycleRecovery(this.projectId, run.objectiveId, objective.ownerGeneration);
++    for (const identity of prepared) this.executor.recover(identity);
+   }
+ 
+   async #runFacade(input, isResume) {
+@@ -1240,8 +1261,7 @@
+   async #drainRoleCalls() {
+     const until = Date.now() + 5000;
+     while (Date.now() < until) {
+-      const active = this.roleService.projection().some((row) => ['accepted', 'running', 'unknown'].includes(row.state));
+-      if (!active) return;
++      if (!this.roleService.active.size) return;
+       await new Promise((resolve) => setTimeout(resolve, 20));
+     }
+   }

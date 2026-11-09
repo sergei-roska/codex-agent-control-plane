@@ -1,0 +1,17 @@
+Frozen new-engine affected suite (152 passed, 0 failed):
+env -u NODE_TEST_CONTEXT node --test test/delivery-contracts.test.js test/backlog-store.test.js test/delivery-events.test.js test/candidate-store.test.js test/task-executor.test.js test/task-resource-policy.test.js test/task-scheduler.test.js test/delivery-inbox.test.js test/lead-planner.test.js test/project-delivery-controller.test.js test/candidate-review.test.js test/delivery-review-policy.test.js
+Log: /tmp/concurrent-continuation-final-affected-20261026.tap
+
+Full suite (1633 total, 1623 pass, 9 fail, 1 skip):
+env -u NODE_TEST_CONTEXT npm test
+Log: /tmp/concurrent-continuation-full-20261026.tap
+
+Additional startup failure isolated rerun (2 pass, 0 fail):
+env -u NODE_TEST_CONTEXT node --test test/launcher-startup.test.js
+Log: /tmp/concurrent-continuation-launcher-rerun-20261026.tap
+
+Exact targeted probes (passing):
+node .agents/teamwork/cn09-challenge/owner-takeover.cjs
+node .agents/teamwork/cn10-challenge/probe.js
+
+All /tmp evidence and ignored probes may disappear. Permanent tests preserve the regressions.

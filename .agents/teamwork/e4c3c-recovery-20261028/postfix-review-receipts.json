@@ -1,0 +1,82 @@
+[
+  {
+    "assignmentId": "8341e45b-e3fa-4a69-89a0-649d9635c93b:r1:a0",
+    "attemptId": "8341e45b-e3fa-4a69-89a0-649d9635c93b:r1:a0:t1",
+    "type": "review_result",
+    "role": "verifier",
+    "status": "inconclusive",
+    "target": "review-target/v1:0f3b9bcd612ae02ce31b73bb22e5d95791699f26f009761575e2c0a2e95c25f4",
+    "details": {
+      "checkpointId": "e4c3c-installed-owner-dispatch",
+      "currentTargetMatches": true,
+      "policyId": "auditor-routing/v1",
+      "reason": "verification_execution_failed",
+      "reportOutcome": null,
+      "serviceReviewAccepted": false,
+      "serviceReviewStatus": "inconclusive",
+      "targetKnown": true,
+      "verdict": null,
+      "verifierTestWrite": false
+    }
+  },
+  {
+    "assignmentId": "8341e45b-e3fa-4a69-89a0-649d9635c93b:r1:a0:c1",
+    "attemptId": "8341e45b-e3fa-4a69-89a0-649d9635c93b:r1:a0:c1:t1",
+    "type": "review_result",
+    "role": "verifier",
+    "status": "inconclusive",
+    "target": "review-target/v1:0f3b9bcd612ae02ce31b73bb22e5d95791699f26f009761575e2c0a2e95c25f4",
+    "details": {
+      "checkpointId": "e4c3c-installed-owner-dispatch",
+      "currentTargetMatches": true,
+      "policyId": "auditor-routing/v1",
+      "reason": "review_origin_stale",
+      "reportOutcome": null,
+      "serviceReviewAccepted": false,
+      "serviceReviewStatus": "rejected",
+      "targetKnown": true,
+      "verdict": null,
+      "verifierTestWrite": false
+    }
+  },
+  {
+    "assignmentId": "8341e45b-e3fa-4a69-89a0-649d9635c93b:r2:a0",
+    "attemptId": "8341e45b-e3fa-4a69-89a0-649d9635c93b:r2:a0:t1",
+    "type": "review_result",
+    "role": "verifier",
+    "status": "accepted",
+    "target": "review-target/v1:0f3b9bcd612ae02ce31b73bb22e5d95791699f26f009761575e2c0a2e95c25f4",
+    "details": {
+      "checkpointId": "e4c3c-installed-owner-dispatch",
+      "currentTargetMatches": true,
+      "policyId": "auditor-routing/v1",
+      "reason": null,
+      "reportOutcome": "completed",
+      "serviceReviewAccepted": true,
+      "serviceReviewStatus": "accepted",
+      "targetKnown": true,
+      "verdict": null,
+      "verifierTestWrite": false
+    }
+  },
+  {
+    "assignmentId": "8341e45b-e3fa-4a69-89a0-649d9635c93b:r3:a0",
+    "attemptId": "8341e45b-e3fa-4a69-89a0-649d9635c93b:r3:a0:t1",
+    "type": "review_result",
+    "role": "auditor",
+    "status": "accepted",
+    "target": "review-target/v1:0f3b9bcd612ae02ce31b73bb22e5d95791699f26f009761575e2c0a2e95c25f4",
+    "details": {
+      "checkpointId": "e4c3c-installed-owner-dispatch",
+      "currentTargetMatches": true,
+      "policyId": "auditor-routing/v1",
+      "reason": null,
+      "reportOutcome": "completed",
+      "serviceReviewAccepted": true,
+      "serviceReviewStatus": "accepted",
+      "targetKnown": true,
+      "verdict": "pass",
+      "verifierTestWrite": false
+    }
+  }
+]

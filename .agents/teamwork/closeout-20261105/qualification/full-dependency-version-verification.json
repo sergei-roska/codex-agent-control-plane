@@ -1,0 +1,12 @@
+{
+  "pins": 341,
+  "drift": [],
+  "full": {
+    "total": 2107,
+    "pass": 2106,
+    "fail": 0,
+    "skip": 1,
+    "durationMs": 65950.639882
+  },
+  "log": "full-dependency-version.tap"
+}

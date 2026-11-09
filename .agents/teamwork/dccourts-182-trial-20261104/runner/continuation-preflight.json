@@ -1,0 +1,71 @@
+{
+    "status": "preflight_ready",
+    "inputSha256": "21d5be0d13b39e7f7d7c1913e72ae1b23429d6132a503a452bbb17d7d2098aa7",
+    "target": {
+        "head": "5332f4cfae7285afbcf467cd3f1fb6a372e9c95a",
+        "branch": "test/harness-DCCOURTS-182-20261104",
+        "status": "",
+        "sourceHashes": {
+            "AGENTS.md": "82fe198b8d4613441f2db16c42903be9b0739bba9fa9ca45fc12f11a3577e8b1",
+            ".lando.yml": "c784eff105e8ed23b7fdb3e5af2de39c2a1be2c14b774cf154c1e4e963f628b5",
+            "scripts/harness/validate-dccourts-182.sh": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+            "composer.json": "dbd1482e5da48a83aaf70137c57186b19ea09ad4b701015c32c216ca39ab91f7",
+            "composer.lock": "9119ee491127c03ac9eb5541c08ef036f097f259a695de1a808d91b5bbb01167",
+            "patches.lock.json": "83b2aaa09bffc9353546a1b8cd5e6930f8cfaaea607944f681e960753e55e614",
+            "web/modules/contrib/shs/js/shs.js": null
+        },
+        "expectedPatchHash": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+        "trackedDiffHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "baselineCommit": "5332f4cfae7285afbcf467cd3f1fb6a372e9c95a",
+    "roleOverrides": {
+        "coordinator": {
+            "model": "gpt-6-luna",
+            "effort": "low",
+            "fastMode": "off"
+        },
+        "engineer": {
+            "model": "gpt-6-luna",
+            "effort": "low",
+            "fastMode": "off"
+        },
+        "verifier": {
+            "model": "gpt-6-luna",
+            "effort": "high",
+            "fastMode": "off"
+        }
+    },
+    "acceptance": {
+        "source": "agent",
+        "requiredChecks": [
+            {
+                "id": "dccourts-182-upstream-kernel",
+                "argv": [
+                    "bash",
+                    "scripts/harness/validate-dccourts-182.sh"
+                ],
+                "timeoutMs": 600000
+            },
+            {
+                "id": "dccourts-182-composer-relock",
+                "argv": [
+                    "bash",
+                    "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/environment/evaluate-composer-patches-v2.sh",
+                    "."
+                ],
+                "timeoutMs": 600000
+            }
+        ]
+    },
+    "bounds": {
+        "objectiveTimeoutMs": 900000,
+        "turnTimeoutMs": 180000
+    },
+    "isolatedConfigSha256": "f920682b38af880ca0b8a3681763185458fed8944c35a6fef48d1f7802c0322c",
+    "authAvailable": true,
+    "runtime": {
+        "sdk": "@a2a-js/sdk",
+        "providerPath": "real CodexAppServer",
+        "mode": "preflight_only"
+    }
+}

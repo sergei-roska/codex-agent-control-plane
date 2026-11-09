@@ -1,0 +1,22 @@
+✔ router awaits asynchronous legacy resumability and preserves its boolean result (7.718337ms)
+✔ replaying a mapped run with a partial intake cannot erase persisted contract or context (3.085708ms)
+✔ a mapped run rejects provider context drift (1.749596ms)
+✔ immutable intake preserves omitted newRequest and routes stored values (1.546131ms)
+✔ explicit null and changed immutable values reject before mutation or engine calls (2.115041ms)
+✔ a normal first run pins omission for every immutable intake field (2.394523ms)
+✔ omitted contract and context preserve the complete pinned intake across SQLite reopen (2.652836ms)
+✔ resume placeholder backfills once and retains the legacy engine after default changes (2.598859ms)
+✔ runLegacy pins an old task to legacy but never overrides an existing mapping (2.340091ms)
+✔ new concurrent intake is refused while the host publication fence is closed (0.767866ms)
+✔ engine fence rejects a legacy downgrade before pinning and preserves an existing run mapping (1.215779ms)
+✔ failed additive mapping migration preserves claims and evidence across reopen and retry (20.340061ms)
+✔ composed engines fence mixed intake and workspace aliases while an independent project runs (195.31993ms)
+✔ held concurrent writer prevents legacy publication through the composed router (270.028639ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 926.508804

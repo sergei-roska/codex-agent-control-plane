@@ -1,0 +1,243 @@
+{
+  "status": "incomplete",
+  "budgets": {
+    "turnTimeoutMs": 180000,
+    "objectiveTimeoutMs": 420000
+  },
+  "candidateSchemaSeed": {
+    "legacyRowSeeded": true,
+    "source": "matching existing server-delivery-engine fixture"
+  },
+  "nativeConfig": {
+    "authCopiedPrivately": true,
+    "configCopiedPrivately": false,
+    "isolatedWorkspaceTrusted": true,
+    "roleOverrides": {
+      "coordinator": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "engineer": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      "verifier": {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      }
+    },
+    "projectPermissions": "full-access"
+  },
+  "nativePermissionResolution": {
+    "mode": "full-access",
+    "sandboxMode": null,
+    "profileApi": true,
+    "writerProfile": ":danger-full-access",
+    "approvalPolicy": "never",
+    "reason": null
+  },
+  "startup": {
+    "port": 39655,
+    "loopback": true,
+    "engine": "concurrent-v1",
+    "writerIsolation": {
+      "mode": "cooperative",
+      "reason": "owner_full_access_cooperative",
+      "lanesRoot": "/tmp/isolated-concurrent-native-DgXxTc/lanes",
+      "links": [
+        ".venv",
+        "venv",
+        "node_modules"
+      ],
+      "networkAccess": true,
+      "confinement": "none",
+      "inherited": false,
+      "ownerFullAccess": true,
+      "profile": ":danger-full-access",
+      "probe": null,
+      "recovery": {
+        "orphaned": [],
+        "integrated": [],
+        "notIntegrated": [],
+        "removed": [],
+        "failed": []
+      }
+    },
+    "roleProfiles": [
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "xhigh"
+      },
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "medium"
+      },
+      {
+        "model": "gpt-6.1-terra",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "medium"
+      },
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      }
+    ],
+    "agentCardStatus": 200
+  },
+  "task": {
+    "id": "c3fa16c4-1295-47f5-b8f9-b5a6ee7a1dd3",
+    "state": 5,
+    "stateName": "TASK_STATE_CANCELED",
+    "pollDeadlineReached": false,
+    "finalMessage": null,
+    "artifactCount": 0,
+    "artifacts": []
+  },
+  "file": {
+    "exists": true,
+    "sha256": "5af9330850129a61b69ce46bab68efc6c46a267f8865fb4a907191911ba6bf25",
+    "bytes": 20,
+    "verifierExitCode": 0,
+    "verifierStdout": "PASS exact synthetic output"
+  },
+  "durableBeforeRestart": {
+    "projectId": "4208472325",
+    "runId": "c3fa16c4-1295-47f5-b8f9-b5a6ee7a1dd3",
+    "mappingEngine": "concurrent-v1",
+    "objectiveId": "delivery-cb8e4cb16ec94cd4e1737a4f4f680040",
+    "disposition": "canceled",
+    "digestDisposition": "canceled",
+    "taskStates": [
+      {
+        "taskId": "review-610a3b4db08d0dbb705f17ef",
+        "state": "failed"
+      },
+      {
+        "taskId": "write-output",
+        "state": "succeeded"
+      }
+    ]
+  },
+  "afterFirstClose": {
+    "run": {
+      "status": "running",
+      "disposition": null,
+      "candidateId": null,
+      "assignmentCount": 0,
+      "acceptanceDisposition": null
+    },
+    "objective": {
+      "objectiveId": "delivery-cb8e4cb16ec94cd4e1737a4f4f680040",
+      "disposition": "canceled"
+    },
+    "tasks": [
+      {
+        "task_id": "review-610a3b4db08d0dbb705f17ef",
+        "state": "failed"
+      },
+      {
+        "task_id": "write-output",
+        "state": "succeeded"
+      }
+    ],
+    "finalization": null,
+    "shutdownPhase": "released",
+    "usage": [],
+    "candidateTables": {
+      "legacyExists": true,
+      "legacyColumns": [
+        "candidate_id",
+        "run_id",
+        "plan_revision_id",
+        "base_commit",
+        "head",
+        "branch",
+        "head_moved",
+        "manifest_json",
+        "diff_artifact_id",
+        "truncated",
+        "acceptance_json",
+        "integrity_hash",
+        "created_at"
+      ],
+      "legacyRowCount": 1,
+      "legacyRowPreserved": true,
+      "concurrentExists": true,
+      "concurrentRowCount": 2
+    }
+  },
+  "restart": {
+    "port": 43151,
+    "loopback": true,
+    "engine": "concurrent-v1",
+    "agentCardStatus": 200
+  },
+  "reopenDurability": {
+    "mappingEngine": "concurrent-v1",
+    "disposition": "canceled",
+    "candidateId": "candidate-attempt-cb2e5df666ba594a253a6b4aa388af43"
+  },
+  "afterSecondClose": {
+    "run": {
+      "status": "running",
+      "disposition": null,
+      "candidateId": null,
+      "assignmentCount": 0,
+      "acceptanceDisposition": null
+    },
+    "objective": {
+      "objectiveId": "delivery-cb8e4cb16ec94cd4e1737a4f4f680040",
+      "disposition": "canceled"
+    },
+    "tasks": [
+      {
+        "task_id": "review-610a3b4db08d0dbb705f17ef",
+        "state": "failed"
+      },
+      {
+        "task_id": "write-output",
+        "state": "succeeded"
+      }
+    ],
+    "finalization": null,
+    "shutdownPhase": "released",
+    "usage": [],
+    "candidateTables": {
+      "legacyExists": true,
+      "legacyColumns": [
+        "candidate_id",
+        "run_id",
+        "plan_revision_id",
+        "base_commit",
+        "head",
+        "branch",
+        "head_moved",
+        "manifest_json",
+        "diff_artifact_id",
+        "truncated",
+        "acceptance_json",
+        "integrity_hash",
+        "created_at"
+      ],
+      "legacyRowCount": 1,
+      "legacyRowPreserved": true,
+      "concurrentExists": true,
+      "concurrentRowCount": 2
+    }
+  }
+}

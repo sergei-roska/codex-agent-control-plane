@@ -1,0 +1,17 @@
+{
+    "_hash": "069ef7c721c369ea8f3bbcb4fe3429a684b10fd7941072529c876a7eefc92f63",
+    "patches": {
+        "drupal/shs": [
+            {
+                "package": "drupal/shs",
+                "description": "Upstream MR 59 validation probe",
+                "url": "patches/dccourts-182-mr59.diff",
+                "sha256": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+                "depth": 1,
+                "extra": {
+                    "provenance": "root"
+                }
+            }
+        ]
+    }
+}

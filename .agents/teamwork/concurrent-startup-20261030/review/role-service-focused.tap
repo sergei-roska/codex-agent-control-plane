@@ -1,0 +1,51 @@
+replay-state-debug {"roleState":"settled","effectsSettled":true,"terminalPhase":"proven","backlogState":"failed","claimState":"released","executorState":"settled","proofEvidence":true,"providerHomeMatches":true,"settingsDigestMatches":false}
+✖ settled terminal shutdown proof replays under changed provider and role settings without rewriting history (188.362787ms)
+✖ terminal shutdown recovery still rejects provider drift before settlement (120.466759ms)
+✔ settled terminal shutdown replay refuses a tampered cleanup receipt (124.982977ms)
+✔ settled terminal shutdown replay refuses a tampered terminal proof digest (137.095359ms)
+✔ terminal failure requires independent original group death, preserves drift and replays executor closure (133.604732ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 3
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 982.021792
+
+✖ failing tests:
+
+test at test/delivery-role-service.test.js:657:1
+✖ settled terminal shutdown proof replays under changed provider and role settings without rewriting history (188.362787ms)
+  Error: delivery_role_recovery_proof_unavailable
+      at error (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:34:55)
+      at fail (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:274:32)
+      at #noPublicationRecoverySnapshot (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:313:79)
+      at #shutdownSnapshot (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:397:57)
+      at DeliveryRoleService.prepareTerminalFailure (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:435:42)
+      at TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/delivery-role-service.test.js:676:35)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    code: 'delivery_role_recovery_proof_unavailable'
+  }
+
+test at test/delivery-role-service.test.js:686:1
+✖ terminal shutdown recovery still rejects provider drift before settlement (120.466759ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'running'
+  - 'submitted'
+  
+      at TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/delivery-role-service.test.js:694:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'running',
+    expected: 'submitted',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

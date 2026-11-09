@@ -1,0 +1,3 @@
+kernel_status=0
+composer_patches_relock_status=0
+composer_project_validate_status=0

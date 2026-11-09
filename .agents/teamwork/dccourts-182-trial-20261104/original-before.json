@@ -1,0 +1,14 @@
+{
+  "head": "41d8ecde87bd163585327c13e1a95fc777df3c27",
+  "branch": "bugfix/DCCOURTS-182",
+  "status": "?? specs/DCCOURTS-182.requirements.yml\n",
+  "files": {
+    "composer.json": "8fb014f8be30e287956590ebf836eff79ce708bcb2c86b53d478096225dc2833",
+    "composer.lock": "9119ee491127c03ac9eb5541c08ef036f097f259a695de1a808d91b5bbb01167",
+    "patches.lock.json": "e24935d18656ccfbd29706a5a8722784cd5ad65d8e97f15d41c23c960e609358",
+    "patches/shs-3620147-preselect-stored-values.patch": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+    "specs/DCCOURTS-182.requirements.yml": "c61cd98f5700743141b404f54ca5541f6fa5aebbcab9a5124ff04fb8506f2206",
+    "AGENTS.md": "55f54d030c824f24369c6a10034ca73229b26c6a4985eb3f635a4d5949fe7634",
+    ".lando.yml": "38ee6f0f57bfdb49953fa7748d24e56c990c4d2461ea378bd52f8546136761bc"
+  }
+}

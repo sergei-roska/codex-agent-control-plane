@@ -1,0 +1,11 @@
+diff --git a/patches.lock.json b/patches.lock.json
+index 39ec320f0..e599fdc88 100644
+--- a/patches.lock.json
++++ b/patches.lock.json
+@@ -1,5 +1,5 @@
+ {
+-    "_hash": "fee4166f27e9a764b2b196f42055de4c3ee8202edd8352146f29443b5a4b8378",
++    "_hash": "dfc37cfe6cd7e4cdd678e03a170003d2398cea74c9e5967cae5244b0c203869d",
+     "patches": {
+         "drupal/core": [
+             {

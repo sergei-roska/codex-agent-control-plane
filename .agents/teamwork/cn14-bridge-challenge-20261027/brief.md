@@ -1,0 +1,1 @@
+Bounded challenge: verifier control revocation at onTurnStart; artifact authorization revocation and duplicate command while blocked on real WriterAdmission. Product source and existing tests read-only.

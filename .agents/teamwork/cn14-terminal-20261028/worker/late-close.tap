@@ -1,0 +1,10 @@
+✔ cooperative held lost acknowledgement retries staged close after original provider group death with immediate provider close (10286.597156ms)
+✔ cooperative held lost acknowledgement retries staged close after original provider group death with late provider close (10225.18996ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 20841.021668

@@ -1,0 +1,23 @@
+✔ shutdown no-publication recovery integrates owned lost acknowledgement (5257.618283ms)
+✔ shutdown no-publication recovery integrates cooperative lost acknowledgement (5159.413992ms)
+✔ shutdown no-publication recovery integrates unknown lost acknowledgement (5146.148984ms)
+✔ shutdown no-publication recovery integrates publication lost acknowledgement (5135.893465ms)
+✔ shutdown no-publication recovery integrates pending-inbox lost acknowledgement (5155.218079ms)
+✔ shutdown no-publication recovery integrates reopen lost acknowledgement (5153.447271ms)
+✔ owner pause facade resumes reused controller without overlapping planner calls (94.096135ms)
+✔ owner pause facade resumes reopened SQLite without overlapping planner calls (116.638237ms)
+✔ owner pause facade retains admitted worker completion (350.650454ms)
+✔ owner pause facade retains admitted worker unknown effects (150.333962ms)
+✔ owner pause facade resume preserves owner-stop-unknown boundary (192.069949ms)
+✔ owner pause facade resume preserves technical boundary (182.768849ms)
+✔ owner pause facade resume preserves budget boundary (189.250128ms)
+✔ staged shutdown retains older and newly started provider groups across preparation reopen (39.845509ms)
+✔ staged shutdown drains executor callback promises after scheduler scan has returned (47.173203ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 32667.013307

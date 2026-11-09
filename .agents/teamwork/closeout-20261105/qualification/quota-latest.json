@@ -1,0 +1,27 @@
+{
+  "at": "2026-11-05T15:28:03.578Z",
+  "rateLimits": {
+    "limitId": "codex",
+    "limitName": null,
+    "normalModelSlug": null,
+    "primary": {
+      "usedPercent": 94,
+      "windowDurationMins": 300,
+      "resetsAt": 1793905751
+    },
+    "secondary": {
+      "usedPercent": 31,
+      "windowDurationMins": 10080,
+      "resetsAt": 1794383888
+    },
+    "credits": {
+      "hasCredits": false,
+      "unlimited": false,
+      "balance": "0"
+    },
+    "individualLimit": null,
+    "spendControlReached": false,
+    "planType": "plus",
+    "rateLimitReachedType": null
+  }
+}

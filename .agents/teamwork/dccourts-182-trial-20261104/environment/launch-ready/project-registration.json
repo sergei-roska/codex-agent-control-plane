@@ -1,0 +1,18 @@
+{
+  "registeredAt": "2026-11-04T14:54:12.015Z",
+  "id": "88ae4d8dfe",
+  "name": "harness-ready-20261104",
+  "path": "/home/sr/Projects/Workspace/harness-ready-20261104",
+  "port": 3002,
+  "status": "stopped",
+  "taskReady": false,
+  "stateDb": "/home/sr/codex-work/harness-ui-runtime-20261104/projects/88ae4d8dfe/state.sqlite",
+  "stateDbExists": false,
+  "deliveryEngine": "concurrent-v1",
+  "registryPath": "/home/sr/codex-work/harness-ui-runtime-20261104/projects.json",
+  "projectSettingsPath": "/home/sr/codex-work/harness-ui-runtime-20261104/projects/88ae4d8dfe/project-settings.json",
+  "temporaryPortReservation": {
+    "port": 3001,
+    "purpose": "route allocator to free requested port 3002"
+  }
+}

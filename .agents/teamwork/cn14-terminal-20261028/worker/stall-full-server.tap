@@ -1,0 +1,344 @@
+TAP version 13
+# Subtest: direct server starts derive the normalized launcher project identity
+ok 1 - direct server starts derive the normalized launcher project identity
+  ---
+  duration_ms: 44.29512
+  type: 'test'
+  ...
+# Subtest: legacy default composes the persisted router and completes a new A2A task on legacy
+ok 2 - legacy default composes the persisted router and completes a new A2A task on legacy
+  ---
+  duration_ms: 19.98245
+  type: 'test'
+  ...
+# Subtest: configured project identity must match the exact real workspace hash
+ok 3 - configured project identity must match the exact real workspace hash
+  ---
+  duration_ms: 0.84846
+  type: 'test'
+  ...
+# Subtest: state database mappings from another normalized project fail closed
+ok 4 - state database mappings from another normalized project fail closed
+  ---
+  duration_ms: 9.556232
+  type: 'test'
+  ...
+# Subtest: concurrent setting fails closed when startup selects unsupported shared isolation
+ok 5 - concurrent setting fails closed when startup selects unsupported shared isolation
+  ---
+  duration_ms: 10.085736
+  type: 'test'
+  ...
+# Subtest: default server composition routes an authenticated steer into a held real concurrent lead turn
+ok 6 - default server composition routes an authenticated steer into a held real concurrent lead turn
+  ---
+  duration_ms: 5287.587619
+  type: 'test'
+  ...
+# Subtest: restart with legacy default fences persisted concurrent objectives, mixed claims, and publications
+    # Subtest: active objective
+    ok 1 - active objective
+      ---
+      duration_ms: 195.160864
+      type: 'test'
+      ...
+    # Subtest: unknown claim
+    ok 2 - unknown claim
+      ---
+      duration_ms: 179.433747
+      type: 'test'
+      ...
+    # Subtest: active claim
+    ok 3 - active claim
+      ---
+      duration_ms: 167.063338
+      type: 'test'
+      ...
+    # Subtest: unknown publication
+    ok 4 - unknown publication
+      ---
+      duration_ms: 176.761437
+      type: 'test'
+      ...
+    # Subtest: pending publication
+    ok 5 - pending publication
+      ---
+      duration_ms: 184.941506
+      type: 'test'
+      ...
+    # Subtest: settled effects
+    ok 6 - settled effects
+      ---
+      duration_ms: 196.108316
+      type: 'test'
+      ...
+    1..6
+ok 7 - restart with legacy default fences persisted concurrent objectives, mixed claims, and publications
+  ---
+  duration_ms: 1100.57875
+  type: 'test'
+  ...
+# Subtest: durable legacy mappings block concurrent intake while independent projects remain usable
+ok 8 - durable legacy mappings block concurrent intake while independent projects remain usable
+  ---
+  duration_ms: 87.945872
+  type: 'test'
+  ...
+# Subtest: restart refuses unknown stored engine selections without rewriting the durable mapping
+ok 9 - restart refuses unknown stored engine selections without rewriting the durable mapping
+  ---
+  duration_ms: 152.824043
+  type: 'test'
+  ...
+# Subtest: default real server accepts a base candidate with empty owner checks
+ok 10 - default real server accepts a base candidate with empty owner checks
+  ---
+  duration_ms: 656.386797
+  type: 'test'
+  ...
+# Subtest: legacy downgrade checks the exact durable planner session even without a controller fence
+    # Subtest: unknown planner turn
+    ok 1 - unknown planner turn
+      ---
+      duration_ms: 197.025676
+      type: 'test'
+      ...
+    # Subtest: active planner turn
+    ok 2 - active planner turn
+      ---
+      duration_ms: 177.947883
+      type: 'test'
+      ...
+    # Subtest: unrecognized planner state
+    ok 3 - unrecognized planner state
+      ---
+      duration_ms: 191.336558
+      type: 'test'
+      ...
+    # Subtest: complete planner turn
+    ok 4 - complete planner turn
+      ---
+      duration_ms: 197.202933
+      type: 'test'
+      ...
+    # Subtest: stale planner turn
+    ok 5 - stale planner turn
+      ---
+      duration_ms: 192.821523
+      type: 'test'
+      ...
+    # Subtest: reconciled planner turn
+    ok 6 - reconciled planner turn
+      ---
+      duration_ms: 184.218222
+      type: 'test'
+      ...
+    # Subtest: unrelated session
+    ok 7 - unrelated session
+      ---
+      duration_ms: 182.657571
+      type: 'test'
+      ...
+    # Subtest: foreign project same session
+    ok 8 - foreign project same session
+      ---
+      duration_ms: 207.686461
+      type: 'test'
+      ...
+    # Subtest: missing mapping session
+    ok 9 - missing mapping session
+      ---
+      duration_ms: 191.025055
+      type: 'test'
+      ...
+    # Subtest: empty mapping session
+    ok 10 - empty mapping session
+      ---
+      duration_ms: 198.057687
+      type: 'test'
+      ...
+    # Subtest: missing mapping objective
+    ok 11 - missing mapping objective
+      ---
+      duration_ms: 200.164989
+      type: 'test'
+      ...
+    # Subtest: corrupt run session
+    ok 12 - corrupt run session
+      ---
+      duration_ms: 196.929617
+      type: 'test'
+      ...
+    # Subtest: corrupt mapping session
+    ok 13 - corrupt mapping session
+      ---
+      duration_ms: 190.926721
+      type: 'test'
+      ...
+    # Subtest: corrupt objective session
+    ok 14 - corrupt objective session
+      ---
+      duration_ms: 186.418166
+      type: 'test'
+      ...
+    1..14
+ok 11 - legacy downgrade checks the exact durable planner session even without a controller fence
+  ---
+  duration_ms: 2696.57054
+  type: 'test'
+  ...
+# Subtest: legacy downgrade fences authoritative effect records independently of settled publication caches
+    # Subtest: unknown candidate intent
+    ok 1 - unknown candidate intent
+      ---
+      duration_ms: 174.710027
+      type: 'test'
+      ...
+    # Subtest: prepared candidate intent
+    ok 2 - prepared candidate intent
+      ---
+      duration_ms: 197.689939
+      type: 'test'
+      ...
+    # Subtest: applying candidate intent
+    ok 3 - applying candidate intent
+      ---
+      duration_ms: 173.554013
+      type: 'test'
+      ...
+    # Subtest: settling candidate intent
+    ok 4 - settling candidate intent
+      ---
+      duration_ms: 177.328031
+      type: 'test'
+      ...
+    # Subtest: refused candidate intent
+    ok 5 - refused candidate intent
+      ---
+      duration_ms: 175.148223
+      type: 'test'
+      ...
+    # Subtest: not-applied candidate intent
+    ok 6 - not-applied candidate intent
+      ---
+      duration_ms: 187.27422
+      type: 'test'
+      ...
+    # Subtest: unknown role execution
+    ok 7 - unknown role execution
+      ---
+      duration_ms: 207.942278
+      type: 'test'
+      ...
+    # Subtest: terminal role effects unknown
+    ok 8 - terminal role effects unknown
+      ---
+      duration_ms: 195.626759
+      type: 'test'
+      ...
+    # Subtest: terminal role effects missing
+    ok 9 - terminal role effects missing
+      ---
+      duration_ms: 205.569301
+      type: 'test'
+      ...
+    # Subtest: settled role effects
+    ok 10 - settled role effects
+      ---
+      duration_ms: 188.501552
+      type: 'test'
+      ...
+    # Subtest: terminal role effects
+    ok 11 - terminal role effects
+      ---
+      duration_ms: 191.277879
+      type: 'test'
+      ...
+    1..11
+ok 12 - legacy downgrade fences authoritative effect records independently of settled publication caches
+  ---
+  duration_ms: 2076.647838
+  type: 'test'
+  ...
+# Subtest: settled publication observations require matching authoritative intent identity
+    # Subtest: applied cache missing intent
+    ok 1 - applied cache missing intent
+      ---
+      duration_ms: 193.618182
+      type: 'test'
+      ...
+    # Subtest: not-applied cache missing intent
+    ok 2 - not-applied cache missing intent
+      ---
+      duration_ms: 186.735621
+      type: 'test'
+      ...
+    # Subtest: applied intent wrong project
+    ok 3 - applied intent wrong project
+      ---
+      duration_ms: 182.51753
+      type: 'test'
+      ...
+    # Subtest: applied intent wrong objective
+    ok 4 - applied intent wrong objective
+      ---
+      duration_ms: 204.795224
+      type: 'test'
+      ...
+    # Subtest: applied intent wrong ID
+    ok 5 - applied intent wrong ID
+      ---
+      duration_ms: 208.458225
+      type: 'test'
+      ...
+    # Subtest: matching applied intent
+    ok 6 - matching applied intent
+      ---
+      duration_ms: 206.474511
+      type: 'test'
+      ...
+    # Subtest: matching not-applied intent
+    ok 7 - matching not-applied intent
+      ---
+      duration_ms: 199.147006
+      type: 'test'
+      ...
+    # Subtest: refused cache without intent
+    ok 8 - refused cache without intent
+      ---
+      duration_ms: 186.458084
+      type: 'test'
+      ...
+    1..8
+ok 13 - settled publication observations require matching authoritative intent identity
+  ---
+  duration_ms: 1569.712586
+  type: 'test'
+  ...
+# Subtest: cooperative held lost acknowledgement retries staged close after original provider group death with immediate provider close
+ok 14 - cooperative held lost acknowledgement retries staged close after original provider group death with immediate provider close
+  ---
+  duration_ms: 10273.842131
+  type: 'test'
+  ...
+# Subtest: cooperative held lost acknowledgement retries staged close after original provider group death with late provider close
+ok 15 - cooperative held lost acknowledgement retries staged close after original provider group death with late provider close
+  ---
+  duration_ms: 10273.537254
+  type: 'test'
+  ...
+# Subtest: released shutdown phase permits fresh host intake on the same workspace and database
+ok 16 - released shutdown phase permits fresh host intake on the same workspace and database
+  ---
+  duration_ms: 658.956151
+  type: 'test'
+  ...
+1..16
+# tests 55
+# suites 0
+# pass 55
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 35287.807933

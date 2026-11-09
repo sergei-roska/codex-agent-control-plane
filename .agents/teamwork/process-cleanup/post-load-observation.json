@@ -1,0 +1,26 @@
+{
+  "at": "2026-10-19T12:20:53.719383+00:00",
+  "situation": {
+    "state": "TASK_STATE_WORKING",
+    "node": "dispatch",
+    "phase": "working",
+    "pauseKind": null,
+    "round": 158,
+    "batch": [
+      {
+        "assignmentId": "9e2c8b53-458b-4ccf-924b-ee13639510df:r158:a0",
+        "role": "auditor",
+        "state": "running"
+      }
+    ]
+  },
+  "completedUsageSinceLoad": [
+    {
+      "kind": "lead_turn",
+      "role": "coordinator",
+      "started_at": "2026-10-19T12:19:42.426Z",
+      "elapsed_ms": 35481,
+      "outcome": "completed"
+    }
+  ]
+}

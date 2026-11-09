@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: cooperative held lost acknowledgement retries staged close after original provider group death with immediate provider close
+ok 1 - cooperative held lost acknowledgement retries staged close after original provider group death with immediate provider close
+  ---
+  duration_ms: 10359.037663
+  type: 'test'
+  ...
+# Subtest: cooperative held lost acknowledgement retries staged close after original provider group death with late provider close
+ok 2 - cooperative held lost acknowledgement retries staged close after original provider group death with late provider close
+  ---
+  duration_ms: 10300.738432
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 20985.688681

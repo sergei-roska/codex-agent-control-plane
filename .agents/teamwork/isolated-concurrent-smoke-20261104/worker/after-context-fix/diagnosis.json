@@ -1,0 +1,69 @@
+{
+  "status": "incomplete",
+  "sourceHead": "c67bf681e4b20809fe37f9bdbb6a83ef7c2a0990",
+  "sourceHashesAtRun": {
+    "src/codex-app-server.js": "8f9e9b3a5eb1a1260ddbd7a6a0808d8adbc9d6fecefc50e26d3e0cc1b37b6f51",
+    "src/delivery-role-capabilities.js": "809e3da3273bcd5380a7cfb0cfdb8ffd150cf0084d209883e2ae6067a08dea90",
+    "test/delivery-verifier-integration.test.js": "71893450dba69e04ef888c6c9cfbdddf948ff1ee697eb60d65fae48bdbca8ed7"
+  },
+  "roleOverrides": {
+    "coordinator": {
+      "model": "gpt-6-luna",
+      "effort": "low"
+    },
+    "engineer": {
+      "model": "gpt-6-luna",
+      "effort": "low"
+    },
+    "verifier": {
+      "model": "gpt-6-luna",
+      "effort": "low"
+    }
+  },
+  "verifier": {
+    "state": "failed",
+    "failureKind": "role_report_or_turn_failed",
+    "summary": "Unable to review the candidate: the prepared workspace contains neither of the trusted-scope files, output.txt or verify-output.js.",
+    "filesInspected": [],
+    "checks": [],
+    "actualCandidateFilesExist": [
+      "output.txt",
+      "verify-output.js"
+    ],
+    "candidatePath": "/tmp/isolated-concurrent-native-DgXxTc/delivery-storage/verifier-scratch/4208472325/delivery-cb8e4cb16ec94cd4e1737a4f4f680040/attempt-41ad43a6c7a9bf90f5e24437c2f244f6.candidate",
+    "scratchRoot": "/tmp/isolated-concurrent-native-DgXxTc/delivery-storage/verifier-scratch/4208472325/delivery-cb8e4cb16ec94cd4e1737a4f4f680040/attempt-41ad43a6c7a9bf90f5e24437c2f244f6",
+    "reportedCommands": [
+      {
+        "command": "cat output.txt && sed ... verify-output.js",
+        "cwd": "scratchRoot",
+        "inspectedCandidatePath": false
+      },
+      {
+        "command": "pwd; ls -la",
+        "cwd": "scratchRoot",
+        "inspectedCandidatePath": false
+      }
+    ],
+    "requiredHostCheck": {
+      "id": "verify-output",
+      "verifierReported": "omitted",
+      "hostCheckExecuted": false,
+      "note": "No finalization was reached; the runner independently executed verify-output.js after the task failed."
+    }
+  },
+  "syntheticFile": {
+    "sha256": "5af9330850129a61b69ce46bab68efc6c46a267f8865fb4a907191911ba6bf25",
+    "independentCheckExitCode": 0,
+    "stdout": "PASS exact synthetic output"
+  },
+  "durability": {
+    "a2aState": "TASK_STATE_CANCELED",
+    "objectiveBeforeClose": "canceled",
+    "objectiveAfterReopen": "canceled",
+    "shutdownPhaseAfterClose": "released",
+    "shutdownPhaseAfterSecondClose": "released",
+    "legacyCandidatePreserved": true
+  },
+  "providerUsage": null,
+  "providerUsageReason": "usage_ledger was empty; temporary delivery_role_executions state was deleted after safe close. Do not infer token use."
+}

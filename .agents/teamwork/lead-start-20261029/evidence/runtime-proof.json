@@ -1,0 +1,9 @@
+{
+  "port": 3002,
+  "pid": 1785118,
+  "sourceHash": "301609bd1cfb67d46b05f5ab8f3b434497d6d0913199c34c4ae4e56a7b0aed18",
+  "loadedSourceHash": "301609bd1cfb67d46b05f5ab8f3b434497d6d0913199c34c4ae4e56a7b0aed18",
+  "loadedReviewedFix": true,
+  "oldTaskUnchanged": true,
+  "plannerTurns": 1
+}

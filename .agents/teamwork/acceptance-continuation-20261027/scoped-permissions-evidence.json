@@ -1,0 +1,36 @@
+{
+  "at": "2026-10-27T09:27:20.086Z",
+  "scope": "standalone command/exec only; no model turn",
+  "policy": {
+    "type": "workspaceWrite",
+    "writableRoots": [
+      "/tmp/harness-scoped-permissions-lCghHn/scratch"
+    ],
+    "networkAccess": true,
+    "excludeTmpdirEnvVar": true,
+    "excludeSlashTmp": true
+  },
+  "version": "codex-a2a-runtime/0.164.0 (Ubuntu 26.4.0; x86_64) gnome-terminal (codex-a2a-runtime; 0.1.0)",
+  "exitCode": 0,
+  "stdout": "{\"candidateReadable\":true,\"scratch\":{\"written\":true},\"candidate\":{\"written\":false,\"code\":\"EROFS\"},\"outside\":{\"written\":false,\"code\":\"EROFS\"},\"tmpEnv\":{\"written\":false,\"code\":\"EROFS\"}}\n",
+  "stderr": "",
+  "observed": {
+    "candidateReadable": true,
+    "scratch": {
+      "written": true
+    },
+    "candidate": {
+      "written": false,
+      "code": "EROFS"
+    },
+    "outside": {
+      "written": false,
+      "code": "EROFS"
+    },
+    "tmpEnv": {
+      "written": false,
+      "code": "EROFS"
+    }
+  },
+  "result": "PASS"
+}

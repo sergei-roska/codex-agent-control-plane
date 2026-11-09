@@ -1,0 +1,8 @@
+{
+  "at": "2026-10-28T20:40:47.179274+00:00",
+  "source": "launcher fresh account/rateLimits/read force=1",
+  "primaryRemainingPercent": 3,
+  "secondaryRemainingPercent": 55,
+  "policy": "No new development tasks or agent assignments; finish active worker and preserve checkpoint.",
+  "taskId": "8341e45b-e3fa-4a69-89a0-649d9635c93b"
+}

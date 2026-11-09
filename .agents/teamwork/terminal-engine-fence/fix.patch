@@ -1,0 +1,153 @@
+--- a/src/server.js
++++ b/src/server.js
+@@ -48,6 +48,7 @@
+ // close() waits up to SHUTDOWN_TIMEOUT_MS for the runs to settle, then up to the same for the app server and HTTP close.
+ const SHUTDOWN_TOTAL_MS = 2 * SHUTDOWN_TIMEOUT_MS;
+ const AUTO_RESUME_TEXT = 'Automatic resume: Codex usage budget is available again.';
++const TERMINAL_STORED_TASK_STATES = new Set(['TASK_STATE_COMPLETED', 'TASK_STATE_FAILED', 'TASK_STATE_CANCELED']);
+ 
+ function projectIdForWorkspace(workspace) {
+   const realWorkspace = fs.realpathSync(workspace);
+@@ -157,14 +158,14 @@
+       }
+       const tasks = db.prepare('SELECT status_state FROM tasks WHERE owner=? AND id=?').all('orchestrator', mapping.run_id);
+       if (!tasks.length) return 'unsafe';
+-      if (tasks.some((task) => ![TaskState.TASK_STATE_COMPLETED, TaskState.TASK_STATE_FAILED, TaskState.TASK_STATE_CANCELED].includes(task.status_state))) return 'busy';
++      if (tasks.some((task) => !TERMINAL_STORED_TASK_STATES.has(task.status_state))) return 'busy';
+     }
+   }
+   if (engine === 'concurrent-v1') {
+     for (const taskId of legacyTaskIds || []) {
+       if (taskId === runId) continue;
+       const tasks = db.prepare('SELECT status_state FROM tasks WHERE owner=? AND id=?').all('orchestrator', taskId);
+-      if (tasks.some((task) => ![TaskState.TASK_STATE_COMPLETED, TaskState.TASK_STATE_FAILED, TaskState.TASK_STATE_CANCELED].includes(task.status_state))) return 'busy';
++      if (tasks.some((task) => !TERMINAL_STORED_TASK_STATES.has(task.status_state))) return 'busy';
+     }
+   }
+   if (hasTable(db, 'writer_executions')) {
+--- a/test/server-delivery-engine.test.js
++++ b/test/server-delivery-engine.test.js
+@@ -325,7 +325,7 @@
+   }
+ });
+ 
+-async function idleConcurrentServer(t, name = 'project', provider = {}, { executionPermissions = 'inherit' } = {}) {
++async function idleConcurrentServer(t, name = 'project', provider = {}, { executionPermissions = 'inherit', legacyRows = [], concurrentEngineFactory } = {}) {
+   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'server-delivery-engine-'));
+   const workspace = path.join(root, name);
+   const settingsFile = path.join(root, 'settings.json');
+@@ -357,12 +357,31 @@
+       ...provider,
+     }),
+     providerIdentityPinFactory: () => ({ providerIdentity: identity, providerIdentityFor: () => identity }),
++    ...(concurrentEngineFactory ? { concurrentEngineFactory } : {}),
+     orchestratorFactory: () => ({
+       async run(input) { calls.push(input.runId); return { status: 'completed', text: 'legacy result' }; },
+       async resume() { return { status: 'completed' }; },
+     }),
+   };
+   fs.writeFileSync(settingsFile, JSON.stringify({ version: 1, executionPermissions, deliveryEngine: 'concurrent-v1' }));
++  if (legacyRows.length) {
++    const seeded = await openStateDatabase({ filePath: options.stateFile });
++    const insertTask = seeded.db.prepare(`INSERT INTO tasks(tenant,owner,id,context_id,status_last_updated,status_state,status,artifacts,history,metadata,protocol_version)
++      VALUES('','orchestrator',?,?,?,?,'{}','[]','[]','{}','1.0')`);
++    for (const row of legacyRows) {
++      insertTask.run(row.id, `context-${row.id}`, Date.now(), row.state);
++      if (row.mapped) {
++        seeded.db.exec(`CREATE TABLE IF NOT EXISTS delivery_run_engines (
++          project_id TEXT NOT NULL, run_id TEXT NOT NULL, engine TEXT NOT NULL,
++          objective_id TEXT, session_id TEXT, request_json TEXT NOT NULL,
++          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(project_id,run_id))`);
++        seeded.db.prepare(`INSERT INTO delivery_run_engines(project_id,run_id,engine,objective_id,session_id,request_json,created_at,updated_at)
++          VALUES(?,?,'legacy',?,?, '{}',1,1)`)
++          .run(projectIdForWorkspace(workspace), row.id, `objective-${row.id}`, `session-${row.id}`);
++      }
++    }
++    await seeded.close();
++  }
+   const runtime = await startServer(options);
+   t.after(async () => {
+     try { await runtime.close(); }
+@@ -376,6 +395,45 @@
+   });
+   return { runtime, root, options, calls, permissionCalls, settingsFile };
+ }
++
++test('concurrent engine admission recognizes persisted terminal legacy task states', { timeout: 60000 }, async (t) => {
++  const terminalStates = ['TASK_STATE_COMPLETED', 'TASK_STATE_FAILED', 'TASK_STATE_CANCELED'];
++  const cases = [
++    ...terminalStates.map((state) => ({ state, mapped: false })),
++    ...terminalStates.map((state) => ({ state, mapped: true })),
++    ...['TASK_STATE_WORKING', 'TASK_STATE_INPUT_REQUIRED', 'TASK_STATE_UNKNOWN'].map((state) => ({ state, mapped: false, blocked: true })),
++  ];
++  for (const [index, fixture] of cases.entries()) {
++    await t.test(`${fixture.state} ${fixture.mapped ? 'mapped' : 'startup task'}${fixture.blocked ? ' remains blocked' : ' admits concurrent engine'}`, async (subtest) => {
++      let engineCalls = 0;
++      let modelCalls = 0;
++      const concurrentEngineFactory = () => ({
++        register() {},
++        async recoverStoredRuns() { return []; },
++        async run() { engineCalls += 1; return { status: 'completed' }; },
++        async resume() { engineCalls += 1; return { status: 'completed' }; },
++        fenceShutdown() {},
++        async prepareShutdown() {},
++        beginProviderShutdown() {},
++        async finishShutdown() { return { safeToRelease: true }; },
++        async shutdown() { return { safeToRelease: true }; },
++      });
++      const fx = await idleConcurrentServer(subtest, `terminal-fence-${index}`, {
++        async run() { modelCalls += 1; throw new Error('Model calls are not part of this admission test'); },
++      }, { legacyRows: [{ id: `legacy-${index}`, state: fixture.state, mapped: fixture.mapped }], concurrentEngineFactory });
++      const run = { runId: `new-${index}`, goal: 'Admit only when prior legacy work is terminal.' };
++      if (fixture.blocked) {
++        await assert.rejects(fx.runtime.orchestrator.run(run), { code: 'delivery_engine_busy' });
++        assert.equal(engineCalls, 0);
++      } else {
++        assert.deepEqual(await fx.runtime.orchestrator.run(run), { status: 'completed' });
++        assert.equal(engineCalls, 1);
++        assert.equal(fx.runtime.orchestrator.mapping(run.runId).engine, 'concurrent-v1');
++      }
++      assert.equal(modelCalls, 0);
++    });
++  }
++});
+ 
+ 
+ function seedConcurrentFence(runtime, { disposition = 'canceled', claimStates = [], publicationStates = [] } = {}) {
+--- a/README.md
++++ b/README.md
+@@ -95,6 +95,8 @@
+ ## Writer admission
+ 
+ Every writable Codex turn passes through the role executor, which admits at most one writer per workspace (canonical path) using the state database.
++
++Cross-engine admission treats persisted `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, and `TASK_STATE_CANCELED` legacy tasks as terminal; active and unknown states remain fenced. See [P-42](docs/production-transfer.md#p-42-terminal-legacy-task-states-fenced-engine-switching).
+ 
+ - Waits: a second writer stays `SUBMITTED` (FIFO) while the holder is `active`; canceling while waiting ends `CANCELED` with no effects. Read-only roles never take admission and run alongside a writer.
+ - Blocks: while the holder is `unresolved` (its outcome is unknown), one reconciliation is attempted; if the process group cannot be proven gone, the new writer fails with `failureKind: "admission_blocked"` and no effects.
+--- a/docs/production-transfer.md
++++ b/docs/production-transfer.md
+@@ -677,3 +677,23 @@
+   remain required; historical receipts alone do not satisfy the gate.
+ - Evidence: focused lead-graph regressions cover successful explicit recovery
+   and denial when no validated auditor assignment is available.
++
++### P-42 Terminal legacy task states fenced engine switching
++
++- Found: 2026-10-29. A completed legacy run remained in the task store after
++  selecting concurrent delivery, so the router rejected new concurrent runs as
++  busy despite no active runs or writers.
++- Cause: the SDK exposes task-state enum values as numbers, while SQLite stores
++  their canonical names as strings. Both cross-engine legacy checks compared
++  those incompatible representations, making all stored states appear active.
++- Correction: recognize only the persisted completed, failed, and canceled
++  strings as terminal. Working, input-required, missing, and unknown states
++  remain fenced; writer, concurrent-run recovery, and unknown-effect gates are
++  unchanged.
++- Evidence: `test/server-delivery-engine.test.js` seeds durable task rows before
++  server startup and checks both mapped and startup-discovered legacy runs with
++  no model calls. The focused regression was red before the correction and
++  passed afterward.
++- Production: after independent review, apply the narrow correction to the
++  original server and verify restart/intake through its supported API without
++  changing stored task state.

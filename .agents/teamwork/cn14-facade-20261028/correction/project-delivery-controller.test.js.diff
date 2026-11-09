@@ -1,0 +1,58 @@
+--- .agents/teamwork/cn14-facade-20261028/correction/project-delivery-controller.test.js	2026-10-28 10:08:24.160690277 +0200
++++ test/project-delivery-controller.test.js	2026-10-28 10:13:23.473432182 +0200
+@@ -43,7 +43,7 @@
+ 
+ function fixture({ tasks = [], runTurn = async ({ prompt }) => plannerOutput(prompt), sendMessage, cancelTask, authenticateOwner,
+   ownerCorrectionAuthorized = () => false, inbox, file = ':memory:', plannerReservedSlots = 1, getTask,
+-  resultAdapter, lifecycleOptions = {}, reconcilePriorTurn, authorizeRecovery, now = () => Date.now(),
++  resultAdapter, lifecycleOptions = {}, reconcilePriorTurn, authorizeRecovery, onOwnerCorrection, now = () => Date.now(),
+   pollIntervalMs = 100000, providerThreadId = `test-thread:${projectId}:${sessionId}`,
+   contextFor = () => ({}), projectId: configuredProjectId = projectId, objectiveId: configuredObjectiveId = objectiveId,
+   sessionId: configuredSessionId = sessionId } = {}) {
+@@ -73,7 +73,7 @@
+   const plannerOptions = providerThreadId === null ? {} : { providerThreadId };
+   const controller = new ProjectDeliveryController({ store, executor, projectId: configuredProjectId, objectiveId: configuredObjectiveId,
+     sessionId: configuredSessionId, inbox: durableInbox, runTurn, contextFor, reconcilePriorTurn, authorizeRecovery, ...plannerOptions,
+-    authenticateOwner, lifecycleOptions, now, schedulerOptions: { roles: ['engineer'], writerMode: 'isolated', pollIntervalMs } });
++    authenticateOwner, onOwnerCorrection, lifecycleOptions, now, schedulerOptions: { roles: ['engineer'], writerMode: 'isolated', pollIntervalMs } });
+   return { db, store, inbox: durableInbox, executor, controller };
+ }
+ 
+@@ -735,3 +735,37 @@
+   release.resolve();
+   assert.deepEqual((await Promise.all(runs)).map((result) => result.state), ['complete', 'complete']);
+ });
++
++for (const failure of ['throw', 'async', 'ack']) test(`owner correction trusted hook rolls back atomically on ${failure}`, async (t) => {
++  const fx = fixture({ authenticateOwner: () => true, ownerCorrectionAuthorized: () => true,
++    onOwnerCorrection: ({ current }) => {
++      assert.equal(fx.db.inTransaction, true);
++      assert.equal(current.goalRevision, 2);
++      fx.db.prepare('INSERT INTO correction_hook_probe(value) VALUES(?)').run(current.goalRevision);
++      if (failure === 'throw') throw Object.assign(new Error('hook failure'), { code: 'hook_failure' });
++      if (failure === 'async') return Promise.resolve();
++    } });
++  t.after(() => { fx.controller.stop(); fx.db.close(); });
++  fx.db.exec('CREATE TABLE correction_hook_probe(value INTEGER)');
++  if (failure === 'ack') fx.inbox.markApplied = () => { throw Object.assign(new Error('ack failure'), { code: 'ack_failure' }); };
++  fx.controller.receive({ messageId: 'hook-rollback', kind: 'owner_correction', source: 'trusted-adapter', payload: {
++    correction: { expectedGoalRevision: 1, expectedAuthorityRevision: 1, expectedControlRevision: 1, requirementDigest: digest('c') } } });
++  fx.controller.applyPendingOwnerCorrections();
++  assert.equal(fx.store.getObjective(projectId, objectiveId).goalRevision, 1);
++  assert.equal(fx.db.prepare('SELECT COUNT(*) AS n FROM correction_hook_probe').get().n, 0);
++  assert.equal(fx.db.prepare('SELECT COUNT(*) AS n FROM backlog_owner_corrections').get().n, 0);
++  assert.equal(fx.inbox.get('hook-rollback').state, 'blocked');
++  assert.equal(fx.inbox.get('hook-rollback').result.code, failure === 'async' ? 'owner_correction_hook_async' : failure === 'throw' ? 'hook_failure' : 'ack_failure');
++});
++
++test('correction-only drain refuses stale controller owner without consuming pending correction', (t) => {
++  const { db, store, inbox, controller } = fixture({ authenticateOwner: () => true, ownerCorrectionAuthorized: () => true });
++  t.after(() => { controller.stop(); db.close(); });
++  controller.receive({ messageId: 'takeover-correction', kind: 'owner_correction', source: 'trusted-adapter', payload: {
++    correction: { expectedGoalRevision: 1, expectedAuthorityRevision: 1, expectedControlRevision: 1, requirementDigest: digest('c') } } });
++  store.advanceOwnerGeneration(projectId, objectiveId, 0);
++  assert.throws(() => controller.applyPendingOwnerCorrections(), { code: 'owner_generation_stale' });
++  assert.equal(inbox.get('takeover-correction').state, 'received');
++  assert.equal(store.getObjective(projectId, objectiveId).goalRevision, 1);
++  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM backlog_owner_corrections').get().n, 0);
++});

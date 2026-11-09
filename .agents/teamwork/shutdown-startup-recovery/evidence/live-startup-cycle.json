@@ -1,0 +1,133 @@
+{
+  "liveTaskSubmitted": false,
+  "autoResume": "0",
+  "before": {
+    "taskDigest": "c34bea9b193ecaf10f50b62334ffca1b9cb25f639f44825f336dc6b2bf193bcf",
+    "plannerTurns": [
+      {
+        "turn_id": "lead-05337a9e38ddc7ff52df41a104cc286e",
+        "status": "unknown",
+        "result_json": "{\"errorCode\":\"provider_home_changed\"}"
+      }
+    ],
+    "phase": {
+      "attempts": [],
+      "identities": [
+        {
+          "pgid": 886263,
+          "pid": 886263,
+          "startTime": "1477852"
+        },
+        {
+          "pgid": 1785127,
+          "pid": 1785127,
+          "startTime": "3238246"
+        },
+        {
+          "pgid": 2050789,
+          "pid": 2050789,
+          "startTime": "3818436"
+        },
+        {
+          "pgid": 2064083,
+          "pid": 2064083,
+          "startTime": "3841917"
+        },
+        {
+          "pgid": 2101176,
+          "pid": 2101176,
+          "startTime": "3906027"
+        }
+      ],
+      "phase": "provider_closing"
+    }
+  },
+  "sourceHashes": {
+    "src/server.js": {
+      "expected": "3b29cf0f3279e0a31b917dc708f1ed7b87628b31e0be07f78b137ba7083d2cec",
+      "loaded": "3b29cf0f3279e0a31b917dc708f1ed7b87628b31e0be07f78b137ba7083d2cec"
+    },
+    "src/concurrent-delivery-engine.js": {
+      "expected": "bd22f45da39a801c924fdf19921e87c4f7650b9265c20c95427545b3203c44b7",
+      "loaded": "bd22f45da39a801c924fdf19921e87c4f7650b9265c20c95427545b3203c44b7"
+    },
+    "src/lead-planner.js": {
+      "expected": "b2b0a0e7da70ccec2944de9d7dbcb3feaeae725d2d2aadcc53a74ba5c32af03f",
+      "loaded": "b2b0a0e7da70ccec2944de9d7dbcb3feaeae725d2d2aadcc53a74ba5c32af03f"
+    },
+    "src/project-delivery-controller.js": {
+      "expected": "5e23660dd07c25cc6ca28ca7345a977e3b270039df0e245d8714288ae95c7b89",
+      "loaded": "5e23660dd07c25cc6ca28ca7345a977e3b270039df0e245d8714288ae95c7b89"
+    },
+    "src/app-server-switch.js": {
+      "expected": "0e47f504cdfdc6533e0774f9525699257db69c5f8d58b44cb2ab4308ace2afde",
+      "loaded": "0e47f504cdfdc6533e0774f9525699257db69c5f8d58b44cb2ab4308ace2afde"
+    }
+  },
+  "pid": 62908,
+  "running": {
+    "taskDigest": "c34bea9b193ecaf10f50b62334ffca1b9cb25f639f44825f336dc6b2bf193bcf",
+    "plannerTurns": [
+      {
+        "turn_id": "lead-05337a9e38ddc7ff52df41a104cc286e",
+        "status": "reconciled_no_effect",
+        "result_json": "{\"oldProviderGroupsGone\":true,\"originalResult\":{\"errorCode\":\"provider_home_changed\"},\"ownerGeneration\":0,\"projectId\":\"3d9c2e759c\",\"providerDispatchStarted\":false,\"providerScope\":\"lead:3d9c2e759c:session-8402e9884c4d2eb90e275d69731e5e7f:3d9d8f55ec055a52a3bfcd25e363b1416ac45d6e49a85a82db24248977890987:/home/sr/.codex\",\"providerThreadId\":\"01a184e6-e740-7692-b4be-a5ea4436c13a\",\"sessionId\":\"session-8402e9884c4d2eb90e275d69731e5e7f\",\"source\":\"switching_app_server.expected_home_preflight\",\"state\":\"reconciled_no_effect\",\"turnId\":\"lead-05337a9e38ddc7ff52df41a104cc286e\"}"
+      }
+    ],
+    "phase": {
+      "attempts": [],
+      "identities": [
+        {
+          "pgid": 886263,
+          "pid": 886263,
+          "startTime": "1477852"
+        },
+        {
+          "pgid": 1785127,
+          "pid": 1785127,
+          "startTime": "3238246"
+        },
+        {
+          "pgid": 2050789,
+          "pid": 2050789,
+          "startTime": "3818436"
+        },
+        {
+          "pgid": 2064083,
+          "pid": 2064083,
+          "startTime": "3841917"
+        },
+        {
+          "pgid": 2101176,
+          "pid": 2101176,
+          "startTime": "3906027"
+        }
+      ],
+      "phase": "released"
+    }
+  },
+  "startupRecovered": true,
+  "afterStop": {
+    "taskDigest": "c34bea9b193ecaf10f50b62334ffca1b9cb25f639f44825f336dc6b2bf193bcf",
+    "plannerTurns": [
+      {
+        "turn_id": "lead-05337a9e38ddc7ff52df41a104cc286e",
+        "status": "reconciled_no_effect",
+        "result_json": "{\"oldProviderGroupsGone\":true,\"originalResult\":{\"errorCode\":\"provider_home_changed\"},\"ownerGeneration\":0,\"projectId\":\"3d9c2e759c\",\"providerDispatchStarted\":false,\"providerScope\":\"lead:3d9c2e759c:session-8402e9884c4d2eb90e275d69731e5e7f:3d9d8f55ec055a52a3bfcd25e363b1416ac45d6e49a85a82db24248977890987:/home/sr/.codex\",\"providerThreadId\":\"01a184e6-e740-7692-b4be-a5ea4436c13a\",\"sessionId\":\"session-8402e9884c4d2eb90e275d69731e5e7f\",\"source\":\"switching_app_server.expected_home_preflight\",\"state\":\"reconciled_no_effect\",\"turnId\":\"lead-05337a9e38ddc7ff52df41a104cc286e\"}"
+      }
+    ],
+    "phase": {
+      "attempts": [],
+      "identities": [
+        {
+          "pgid": 62917,
+          "pid": 62917,
+          "startTime": "88869"
+        }
+      ],
+      "phase": "released"
+    }
+  },
+  "statusAfterStop": "stopped",
+  "cleanStop": true
+}

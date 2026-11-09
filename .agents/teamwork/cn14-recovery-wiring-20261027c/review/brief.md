@@ -1,0 +1,1 @@
+Review the frozen two-file recovery wiring delta independently. No source edits, Git mutations, live providers or service/settings changes. Inspect existing trusted interfaces and run decisive focused tests with the mandatory Git-filter skip.

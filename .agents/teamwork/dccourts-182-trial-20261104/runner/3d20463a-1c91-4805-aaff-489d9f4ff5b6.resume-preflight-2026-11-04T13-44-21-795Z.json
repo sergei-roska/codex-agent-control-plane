@@ -1,0 +1,280 @@
+{
+  "target": {
+    "head": "5332f4cfae7285afbcf467cd3f1fb6a372e9c95a",
+    "branch": "test/harness-DCCOURTS-182-20261104",
+    "status": "M patches.lock.json",
+    "sourceHashes": {
+      "AGENTS.md": "82fe198b8d4613441f2db16c42903be9b0739bba9fa9ca45fc12f11a3577e8b1",
+      ".lando.yml": "c784eff105e8ed23b7fdb3e5af2de39c2a1be2c14b774cf154c1e4e963f628b5",
+      "scripts/harness/validate-dccourts-182.sh": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+      "composer.json": "dbd1482e5da48a83aaf70137c57186b19ea09ad4b701015c32c216ca39ab91f7",
+      "composer.lock": "9119ee491127c03ac9eb5541c08ef036f097f259a695de1a808d91b5bbb01167",
+      "patches.lock.json": "e68acceec7ef04ff16e8e00121e4677d8a408a33671aecdce7959b35bf8322c1",
+      "web/modules/contrib/shs/js/shs.js": null
+    },
+    "expectedPatchHash": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+    "trackedDiffHash": "91a239492eab1cb7e9270873a5f4feab643fe051996566341d8e1ca7baa36eab"
+  },
+  "stateSha256": "05ab9293d6ba5c4055fa08b84fdc9b3edd5a8a5fce6861f92913e360400b8d08",
+  "snapshot": {
+    "mapping": {
+      "run_id": "3d20463a-1c91-4805-aaff-489d9f4ff5b6",
+      "engine": "concurrent-v1",
+      "objective_id": "delivery-dfb3aaa99f860830e95767896d239161",
+      "session_id": "session-75e5839d75a7d499a97550b7e1ce9f4b"
+    },
+    "run": {
+      "status": "paused",
+      "objectiveId": "delivery-dfb3aaa99f860830e95767896d239161"
+    },
+    "objective": {
+      "objectiveId": "delivery-dfb3aaa99f860830e95767896d239161",
+      "disposition": "blocked_technical"
+    },
+    "task": {
+      "contextId": "f5990cf8-dc8b-42e9-b6c1-eb803b2830f2",
+      "statusName": "TASK_STATE_INPUT_REQUIRED"
+    },
+    "phase": "released",
+    "activePlannerTurns": [],
+    "unreconciledRecoveries": [],
+    "queuedReview": {
+      "taskId": "review-e012790536d88c5f3213442e",
+      "candidateId": "candidate-attempt-dcb5b208238640e1f707ad7fcb998dc3",
+      "candidateStatus": "known"
+    },
+    "priorUndispatchedReview": {
+      "attemptId": "attempt-f955fc8f54c5f587af4bea40c3b9c0a3",
+      "state": "canceled",
+      "failureKind": "reconciled_no_effect",
+      "externalTaskId": null,
+      "claimState": "released",
+      "evidenceRefs": [
+        "concurrent-shutdown:undispatched-review:attempt-f955fc8f54c5f587af4bea40c3b9c0a3:sha256:c5347a7491f039859078ff8822913f3f4f707289ce8ccb3cba2e1d7be8177e7c"
+      ]
+    },
+    "deliverySnapshot": {
+      "run": {
+        "status": "paused",
+        "result": null
+      },
+      "objective": {
+        "objectiveId": "delivery-dfb3aaa99f860830e95767896d239161",
+        "disposition": "blocked_technical"
+      },
+      "tasks": [
+        {
+          "task_id": "review-e012790536d88c5f3213442e",
+          "state": "queued"
+        },
+        {
+          "task_id": "update-patches-lock-hash",
+          "state": "succeeded"
+        }
+      ],
+      "finalization": null,
+      "roleExecutions": [
+        {
+          "role": "engineer",
+          "taskId": "update-patches-lock-hash",
+          "state": "settled",
+          "externalStateName": "TASK_STATE_COMPLETED",
+          "failureCode": null,
+          "model": "gpt-6-luna",
+          "effort": "low",
+          "turns": 1,
+          "tokens": {
+            "cachedInputTokens": 34176,
+            "inputTokens": 51979,
+            "outputTokens": 427,
+            "reasoningOutputTokens": 0,
+            "totalTokens": 52406
+          },
+          "outcome": "completed",
+          "effectsSettled": true
+        }
+      ],
+      "proofs": [],
+      "usage": [],
+      "shutdownPhase": {
+        "attempts": [],
+        "identities": [
+          {
+            "pgid": 2205001,
+            "pid": 2205001,
+            "startTime": "2444969"
+          }
+        ],
+        "phase": "released"
+      },
+      "plannerFacts": [
+        {
+          "start": {
+            "processIdentity": {
+              "pgid": 2205001,
+              "pid": 2205001,
+              "startTime": "2444969"
+            },
+            "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33"
+          },
+          "terminal": {
+            "execution": {
+              "cleanupReceipt": {
+                "completion": "confirmed",
+                "generation": 1,
+                "method": "thread/backgroundTerminals/clean",
+                "processIdentity": {
+                  "pgid": 2205001,
+                  "pid": 2205001,
+                  "startTime": "2444969"
+                },
+                "scope": "provider-managed-background-terminals",
+                "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33",
+                "turnId": "01a1a6bb-f7c4-7e61-852a-8b6f0a11f9e8",
+                "version": 1
+              },
+              "generation": 1,
+              "processIdentity": {
+                "pgid": 2205001,
+                "pid": 2205001,
+                "startTime": "2444969"
+              },
+              "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33",
+              "turnId": "01a1a6bb-f7c4-7e61-852a-8b6f0a11f9e8",
+              "turnStartRejected": false,
+              "turnStartSent": true,
+              "turnTerminal": true
+            },
+            "status": "completed",
+            "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33",
+            "turnId": "01a1a6bb-f7c4-7e61-852a-8b6f0a11f9e8"
+          }
+        },
+        {
+          "start": {
+            "processIdentity": {
+              "pgid": 2205001,
+              "pid": 2205001,
+              "startTime": "2444969"
+            },
+            "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33"
+          },
+          "terminal": {
+            "execution": {
+              "cleanupReceipt": {
+                "completion": "confirmed",
+                "generation": 1,
+                "method": "thread/backgroundTerminals/clean",
+                "processIdentity": {
+                  "pgid": 2205001,
+                  "pid": 2205001,
+                  "startTime": "2444969"
+                },
+                "scope": "provider-managed-background-terminals",
+                "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33",
+                "turnId": "01a1a6bc-894c-7180-8e42-8d20adc15d98",
+                "version": 1
+              },
+              "generation": 1,
+              "processIdentity": {
+                "pgid": 2205001,
+                "pid": 2205001,
+                "startTime": "2444969"
+              },
+              "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33",
+              "turnId": "01a1a6bc-894c-7180-8e42-8d20adc15d98",
+              "turnStartRejected": false,
+              "turnStartSent": true,
+              "turnTerminal": true
+            },
+            "status": "completed",
+            "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33",
+            "turnId": "01a1a6bc-894c-7180-8e42-8d20adc15d98"
+          }
+        },
+        {
+          "start": {
+            "processIdentity": {
+              "pgid": 2205001,
+              "pid": 2205001,
+              "startTime": "2444969"
+            },
+            "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33"
+          },
+          "terminal": {
+            "execution": {
+              "cleanupReceipt": {
+                "completion": "confirmed",
+                "generation": 1,
+                "method": "thread/backgroundTerminals/clean",
+                "processIdentity": {
+                  "pgid": 2205001,
+                  "pid": 2205001,
+                  "startTime": "2444969"
+                },
+                "scope": "provider-managed-background-terminals",
+                "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33",
+                "turnId": "01a1a6bc-9597-7a02-a8cb-3afaa34cceec",
+                "version": 1
+              },
+              "generation": 1,
+              "processIdentity": {
+                "pgid": 2205001,
+                "pid": 2205001,
+                "startTime": "2444969"
+              },
+              "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33",
+              "turnId": "01a1a6bc-9597-7a02-a8cb-3afaa34cceec",
+              "turnStartRejected": false,
+              "turnStartSent": true,
+              "turnTerminal": true
+            },
+            "status": "completed",
+            "threadId": "01a1a6bb-f7a2-7eb3-a7e8-126a3a166d33",
+            "turnId": "01a1a6bc-9597-7a02-a8cb-3afaa34cceec"
+          }
+        }
+      ]
+    }
+  },
+  "privatePaths": {
+    "codexHome": "/tmp/dccourts182-native-k2ID27/codex-home",
+    "accountsDir": "/tmp/dccourts182-native-k2ID27/accounts",
+    "settingsFile": "/tmp/dccourts182-native-k2ID27/project-settings.json",
+    "roleOverridesFile": "/tmp/dccourts182-native-k2ID27/role-overrides.json",
+    "storage": "/tmp/dccourts182-native-k2ID27/delivery-storage",
+    "locks": "/tmp/dccourts182-native-k2ID27/workspace-locks",
+    "stateFile": "/tmp/dccourts182-native-k2ID27/state.sqlite",
+    "resumeToken": "/tmp/dccourts182-native-k2ID27/resume-token",
+    "authAvailable": true
+  },
+  "privateHashes": {
+    "settingsSha256": "c97e801b6933d025b89a03b3fde5945a7228118da4a722f63e51b2342f91821d",
+    "roleOverridesSha256": "0220b975a9c276941d82b0f78726e8f885ccd139f88e63fd8bd846b960807a47",
+    "codexTrustConfigSha256": "883b41ab2312ac1f3c84fdd8cebc9905e5f317b4cbce218334904e03569d57b9",
+    "materializationProofSha256": "4a123a225055502141d48647cffa81a545cca96411ee9338318c4170e3bb794d"
+  },
+  "retainedTrustMap": {
+    "sha256": "883b41ab2312ac1f3c84fdd8cebc9905e5f317b4cbce218334904e03569d57b9",
+    "projects": [
+      "/home/sr/Projects/dccourtscode",
+      "/home/sr/Projects/dccourtscode-harness-trial-20261104"
+    ],
+    "commonGitDir": "/home/sr/Projects/dccourtscode/.git"
+  },
+  "reviewMaterialization": {
+    "verified": true,
+    "files": 3207,
+    "candidateId": "candidate-attempt-dcb5b208238640e1f707ad7fcb998dc3",
+    "manifestDigest": "cfde05568c3a0864e02269eb23e767eac706f39ddf8cf42eec54e2cc94691c28"
+  },
+  "preActionStateBackup": {
+    "path": "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/runner/3d20463a-1c91-4805-aaff-489d9f4ff5b6.resume-preflight-2026-11-04T13-44-21-795Z.state.sqlite",
+    "sha256": "9c110809c03b62dcd8a0bf9254d9a27f6159cc3b05e5d8b28484f7509c46f45f",
+    "bytes": 4861952
+  },
+  "mode": "preflight_only",
+  "resumeMessage": "Resume the existing DCCOURTS-182 objective at its current state. Keep its original goal and acceptance contract unchanged. Continue the pending verifier review for the already-created candidate; do not replace the objective or acceptance requirements.",
+  "createdAt": "2026-11-04T13:44:21.818Z",
+  "reportPath": "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/runner/3d20463a-1c91-4805-aaff-489d9f4ff5b6.resume-preflight-2026-11-04T13-44-21-795Z.json"
+}

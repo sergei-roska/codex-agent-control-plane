@@ -1,0 +1,22 @@
+{
+  "modelTurns": 0,
+  "steps": [
+    {
+      "step": "clear_legacy",
+      "keys": []
+    },
+    {
+      "step": "inherit_owner",
+      "keys": []
+    },
+    {
+      "step": "clear_profile",
+      "keys": []
+    },
+    {
+      "step": "restore_strict",
+      "keys": []
+    }
+  ],
+  "status": "passed"
+}

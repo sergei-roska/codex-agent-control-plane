@@ -1,0 +1,24 @@
+✔ direct review continuations bind thread lane and codex home to their origin attempt (254.436578ms)
+✔ direct verifier continuation requires its originating target and preserves same-target control (22.066223ms)
+▶ cleanup receipt rejects malformed responses and generation or process replacement
+  ✔ malformed (75.79351ms)
+  ✔ generation (14.805557ms)
+  ✔ process (16.981467ms)
+  ✔ missing (4.94259ms)
+✔ cleanup receipt rejects malformed responses and generation or process replacement (118.140609ms)
+✔ enumeration failure refuses the turn when MCP limits cannot be enforced (6.191173ms)
+✔ selected skills are explicit turn inputs with scoped boundary and hash provenance (32.86807ms)
+✔ launcher exits promptly with a port hint and no ready log when binding fails (960.652956ms)
+✔ launcher becomes ready on a free port and shuts down cleanly (719.84715ms)
+✔ shipped roles have their curated MCP allowlists and skills off (10.197125ms)
+✔ rejects malformed a2a_tools tables (47.297597ms)
+✔ a usage-limited lane writer reports a continuation with its thread, lane, and home (220.254256ms)
+✔ a completed lane writer publishes thread, lane, and home as continuation metadata (209.275288ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1818.725491

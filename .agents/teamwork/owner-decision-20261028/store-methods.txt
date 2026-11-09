@@ -1,0 +1,162 @@
+  listOwnerDecisions(projectId, objectiveId) {
+    return this.db.prepare('SELECT record_json FROM backlog_owner_decisions WHERE project_id=? AND objective_id=? ORDER BY version')
+      .all(projectId, objectiveId).map((row) => decode(row.record_json));
+  }
+
+  pendingOwnerDecision(projectId, objectiveId) {
+    return this.listOwnerDecisions(projectId, objectiveId).find((item) => item.state === 'pending') || null;
+  }
+
+  ownerDecisionPins(projectId, objectiveId) {
+    const objective = this.getObjective(projectId, objectiveId);
+    if (!objective) throw recordError('objective_missing');
+    return Object.fromEntries(['PlanRevision', 'GoalRevision', 'AuthorityRevision', 'ControlRevision', 'OwnerGeneration']
+      .map((field) => [`expected${field}`, objective[field[0].toLowerCase() + field.slice(1)]]));
+  }
+
+  validateOwnerDecision(projectId, objectiveId, input) {
+    const request = exactRecord(input, ['decisionId', 'reason', 'question', 'options', 'recommendation', 'evidenceRefs', 'obligations'], 'owner_decision_fields_invalid');
+    const text = (value) => typeof value === 'string' && value.trim() && value.length <= 2000;
+    boundedIdentity(request.decisionId, 'owner_decision_id_invalid');
+    if (!HUMAN_REASONS.includes(request.reason) || !text(request.question)) throw recordError('owner_decision_reason_invalid');
+    if (!Array.isArray(request.options) || request.options.length < 2 || request.options.length > 10) throw recordError('owner_decision_options_invalid');
+    request.options = request.options.map((option) => {
+      const value = exactRecord(option, ['id', 'description'], 'owner_decision_options_invalid');
+      boundedIdentity(value.id, 'owner_decision_options_invalid');
+      if (!text(value.description)) throw recordError('owner_decision_options_invalid');
+      return value;
+    });
+    if (new Set(request.options.map((option) => option.id)).size !== request.options.length
+      || !request.options.some((option) => option.id === request.recommendation)) throw recordError('owner_decision_options_invalid');
+    const objective = this.getObjective(projectId, objectiveId);
+    if (!objective) throw recordError('objective_missing');
+    if (!Array.isArray(request.obligations) || !request.obligations.length || request.obligations.length > 64) throw recordError('owner_decision_obligations_invalid');
+    request.obligations = request.obligations.map((entry) => {
+      const obligation = exactRecord(entry, ['kind', 'id'], 'owner_decision_obligations_invalid');
+      if (!(obligation.kind === 'objective_acceptance' && obligation.id === objectiveId)
+        && !(obligation.kind === 'task' && objective.tasks.some((task) => task.taskId === obligation.id && !['canceled', 'superseded'].includes(task.state)))) {
+        throw recordError('owner_decision_obligations_invalid');
+      }
+      return obligation;
+    });
+    if (new Set(request.obligations.map((item) => encode(item))).size !== request.obligations.length) throw recordError('owner_decision_obligations_invalid');
+    if (!Array.isArray(request.evidenceRefs) || !request.evidenceRefs.length || request.evidenceRefs.length > 16
+      || new Set(request.evidenceRefs).size !== request.evidenceRefs.length) throw recordError('owner_decision_investigation_required');
+    const attempts = this.listAttempts(projectId, objectiveId);
+    for (const ref of request.evidenceRefs) {
+      const attempt = typeof ref === 'string' && ref.startsWith('attempt:') && attempts.find((entry) => entry.attemptId === ref.slice(8));
+      const contract = attempt?.contractSnapshot;
+      if (!attempt || attempt.state !== 'succeeded' || attempt.outcome?.trusted !== true || contract?.kind !== 'investigation'
+        || !['explorer', 'scout'].includes(contract.role) || contract.productWritePaths.length || contract.scratchWriteRoots.length
+        || attempt.executionGeneration !== objective.ownerGeneration || attempt.capturedControls?.goalRevision !== objective.goalRevision
+        || attempt.capturedControls?.authorityRevision !== objective.authorityRevision
+        || !attempt.effect?.remoteQuiescent || !attempt.effect?.processQuiescent || !attempt.effect?.effectsSettled
+        || !attempt.evidenceRefs?.length) throw recordError('owner_decision_investigation_required');
+    }
+    return clone(request);
+  }
+
+  registerOwnerDecision(projectId, objectiveId, input, { sourceTurnId, expected } = {}) {
+    const tx = this.db.transaction(() => {
+      const request = this.validateOwnerDecision(projectId, objectiveId, input);
+      const objective = this.getObjective(projectId, objectiveId);
+      this.#assertOwnerDecisionPins(projectId, objectiveId, expected);
+      if (!['planning', 'executing'].includes(objective.disposition) || this.pendingOwnerDecision(projectId, objectiveId)) throw recordError('owner_decision_not_active');
+      boundedIdentity(sourceTurnId, 'owner_decision_source_invalid');
+      if (this.listOwnerDecisions(projectId, objectiveId).some((item) => item.request.decisionId === request.decisionId)) throw recordError('owner_decision_id_conflict');
+      const record = this.#writeOwnerDecisionRequest(projectId, objectiveId, request, sourceTurnId, null);
+      return record;
+    });
+    return tx.immediate();
+  }
+
+  controlOwnerDecision(projectId, objectiveId, input, { replace = false } = {}) {
+    const fields = ['runId', 'projectId', 'sessionId', 'objectiveId', 'messageId', 'decisionId',
+      ...(replace ? ['oldRequestDigest', 'replacement'] : ['requestDigest', 'optionId']),
+      'expectedPlanRevision', 'expectedGoalRevision', 'expectedAuthorityRevision', 'expectedControlRevision', 'expectedOwnerGeneration'];
+    const request = exactRecord(input, fields, 'owner_decision_control_fields_invalid');
+    const canonicalRequest = encode(fields.map((field) => [field, request[field]]));
+    const tx = this.db.transaction(() => {
+      const authorized = this.ownerDecisionAuthorized(deepFreeze({ projectId, objectiveId, action: replace ? 'replace' : 'respond', input: clone(request) }));
+      if (authorized?.then || authorized !== true) throw recordError('owner_decision_unauthorized');
+      const objective = this.getObjective(projectId, objectiveId);
+      if (!objective || input.projectId !== projectId || input.objectiveId !== objectiveId || input.sessionId !== objective.sessionId
+        || (objective.legacyRunId && input.runId !== objective.legacyRunId)) throw recordError('owner_decision_scope_mismatch');
+      boundedIdentity(request.messageId, 'owner_decision_message_invalid');
+      const prior = this.db.prepare('SELECT request_json,result_json FROM backlog_owner_decision_messages WHERE project_id=? AND objective_id=? AND message_id=?')
+        .get(projectId, objectiveId, request.messageId);
+      if (prior) {
+        if (prior.request_json !== canonicalRequest) throw recordError('message_id_conflict');
+        return { ...decode(prior.result_json), duplicate: true };
+      }
+      this.#assertOwnerDecisionPins(projectId, objectiveId, request);
+      const pending = this.pendingOwnerDecision(projectId, objectiveId);
+      if (!pending || pending.request.decisionId !== request.decisionId
+        || pending.digest !== (replace ? request.oldRequestDigest : request.requestDigest)) throw recordError('owner_decision_request_stale');
+      const control = this.getLifecycleControl(projectId, objectiveId);
+      const paused = objective.disposition === 'paused_owner' && ['owner_pause', 'owner_stop'].includes(control.cause);
+      if (!paused && !(objective.disposition === 'waiting_owner' && control.cause === 'owner_decision')) throw recordError('owner_decision_controlled');
+      let decision;
+      if (replace) {
+        const replacement = this.validateOwnerDecision(projectId, objectiveId, request.replacement);
+        if (replacement.decisionId !== request.decisionId) throw recordError('owner_decision_id_conflict');
+        pending.state = 'superseded'; this.#saveOwnerDecision(pending);
+        decision = this.#writeOwnerDecisionRequest(projectId, objectiveId, replacement, `replacement:${request.messageId}`, pending);
+      } else {
+        for (const key of ['expectedPlanRevision', 'expectedGoalRevision', 'expectedAuthorityRevision', 'expectedOwnerGeneration']) {
+          if (pending.pins[key] !== request[key]) throw recordError('owner_decision_request_stale');
+        }
+        if (!pending.request.options.some((option) => option.id === request.optionId)) throw recordError('owner_decision_option_invalid');
+        pending.state = 'resolved'; pending.response = { messageId: request.messageId, optionId: request.optionId,
+          requestDigest: pending.digest, pins: this.ownerDecisionPins(projectId, objectiveId), recordedAt: this.now() };
+        this.#saveOwnerDecision(pending); decision = pending;
+        this.#setOwnerDecisionControl(projectId, objectiveId, paused ? objective.disposition : pending.resumeDisposition,
+          paused ? control.cause : 'active');
+      }
+      const result = { acknowledged: true, messageId: request.messageId, decisionId: request.decisionId,
+        state: replace ? 'replaced' : 'resolved', decision, pins: this.ownerDecisionPins(projectId, objectiveId),
+        resume: !replace && !paused, duplicate: false };
+      this.db.prepare('INSERT INTO backlog_owner_decision_messages(project_id,objective_id,message_id,request_json,result_json) VALUES(?,?,?,?,?)')
+        .run(projectId, objectiveId, request.messageId, canonicalRequest, encode(result));
+      return result;
+    });
+    return tx.immediate();
+  }
+
+  #assertOwnerDecisionPins(projectId, objectiveId, expected) {
+    const pins = this.ownerDecisionPins(projectId, objectiveId);
+    if (!expected || Object.entries(pins).some(([key, value]) => !Number.isSafeInteger(expected[key]) || expected[key] !== value)) throw recordError('owner_decision_revision_stale');
+  }
+
+  #setOwnerDecisionControl(projectId, objectiveId, disposition, cause) {
+    const objective = this.getObjective(projectId, objectiveId);
+    const next = validateObjective({ ...objective, tasks: undefined, dependencies: undefined, checkpoints: undefined,
+      ownerGeneration: undefined, maxActiveTurns: undefined, plannerReservedSlots: undefined, roleCapacities: undefined,
+      planRevision: undefined, disposition, controlRevision: objective.controlRevision + 1, updatedAt: this.now() });
+    // Keep the objective record separate from its relational task/capacity projection.
+    const row = this.#objectiveRow(projectId, objectiveId);
+    const stored = { ...decode(row.record_json), disposition: next.disposition, controlRevision: next.controlRevision, updatedAt: next.updatedAt };
+    this.db.prepare('UPDATE backlog_objectives SET record_json=? WHERE project_id=? AND objective_id=?').run(encode(stored), projectId, objectiveId);
+    this.#saveLifecycleControl(projectId, objectiveId, objective.ownerGeneration, next.controlRevision, cause);
+  }
+
+  #writeOwnerDecisionRequest(projectId, objectiveId, request, sourceTurnId, prior) {
+    const objective = this.getObjective(projectId, objectiveId);
+    const paused = objective.disposition === 'paused_owner';
+    this.#setOwnerDecisionControl(projectId, objectiveId, paused ? 'paused_owner' : 'waiting_owner',
+      paused ? this.getLifecycleControl(projectId, objectiveId).cause : 'owner_decision');
+    const version = this.listOwnerDecisions(projectId, objectiveId).length + 1;
+    const facts = { projectId, objectiveId, sessionId: objective.sessionId, version, request,
+      sourceTurnId, pins: this.ownerDecisionPins(projectId, objectiveId), priorDigest: prior?.digest || null };
+    const record = { ...facts, digest: stableDigest(facts), state: 'pending', createdAt: this.now(),
+      resumeDisposition: prior?.resumeDisposition || objective.disposition };
+    this.db.prepare('INSERT INTO backlog_owner_decisions(project_id,objective_id,version,state,record_json) VALUES(?,?,?,?,?)')
+      .run(projectId, objectiveId, version, record.state, encode(record));
+    return record;
+  }
+
+  #saveOwnerDecision(record) {
+    this.db.prepare('UPDATE backlog_owner_decisions SET state=?,record_json=? WHERE project_id=? AND objective_id=? AND version=?')
+      .run(record.state, encode(record), record.projectId, record.objectiveId, record.version);
+  }
+

@@ -1,0 +1,4 @@
+500 nested leaves: PASS (500 returned scope entries)
+501 nested leaves: PASS (1 returned scope entries)
+500 top-level leaves: PASS unchanged
+501 top-level leaves: PASS refused

@@ -1,0 +1,27 @@
+{
+  "baseline": {
+    "command": "node --test --test-name-pattern='planner sends a strict usable schema' test/server-delivery-engine.test.js",
+    "passed": 0,
+    "failed": 1,
+    "failure": "task branches must separate writable and read-only role groups"
+  },
+  "verification": [
+    {"command": "node --check src/concurrent-delivery-engine.js", "passed": true},
+    {"command": "node --check test/server-delivery-engine.test.js", "passed": true},
+    {"command": "node --test --test-name-pattern='planner sends a strict usable schema|planner schema represents a distinct repair superseding a failed task' test/server-delivery-engine.test.js", "passed": 2, "failed": 0},
+    {"command": "node --test test/server-delivery-engine.test.js", "passed": 82, "failed": 0},
+    {"command": "node --test test/delivery-contracts.test.js", "passed": 16, "failed": 0},
+    {"command": "node --test test/concurrent-recovery-acceptance.test.js", "passed": 1, "failed": 0},
+    {"command": "node --test test/lead-planner.test.js", "passed": 11, "failed": 0},
+    {"command": "git diff --check -- src/concurrent-delivery-engine.js test/server-delivery-engine.test.js", "passed": true}
+  ],
+  "frozenFiles": {
+    "src/concurrent-delivery-engine.js": "2c5d35f0d7c5653a263657f01cfb2349cf2f334470b41823ecab0fd02afffa8a",
+    "test/server-delivery-engine.test.js": "14f731ca1bf323f2935ad1f7212e1066056d4a32d72b6fdbe4793f567e308930"
+  },
+  "providerTurns": 0,
+  "liveCalls": 0,
+  "runtimeRestarts": 0,
+  "gitMutations": 0,
+  "criticReview": "pending"
+}

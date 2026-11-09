@@ -1,0 +1,7 @@
+{
+  "taskId": "5f4d2e30-5b7c-4bb7-a02f-d27b46dd2b09",
+  "state": "TASK_STATE_INPUT_REQUIRED",
+  "decisionId": "5f4d2e30-5b7c-4bb7-a02f-d27b46dd2b09:h1",
+  "choice": "restore_supported_route",
+  "ownerFullLocalAuthorization": true
+}

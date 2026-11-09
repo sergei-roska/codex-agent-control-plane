@@ -1,0 +1,14 @@
+{
+  "README.md": "b649f8dac7cd8400241190b71d4fa2d85a197260263bdc9a7ce75e2f2af6f0c8",
+  "docs/codex-handoff.md": "4fd42dc401982f5331343a1f0a16ff11a3484375aee43d05ec5e8fd7bcbfc4e7",
+  "docs/orchestrator-improvement-backlog.md": "2318088921369988c53e7748716269c9d6801267951984d65a5041c8de1a995c",
+  "docs/dashboard-ideas-backlog.md": "b58b702cda05233028e9cb261382dbdea72643be2331c4b76a90bc515079ce0e",
+  "docs/architecture/concurrent-harness/README.md": "92ec220bc18923b91cf9d3c1ed8a556fcb6fa0b766cb128eabdb9b4b58269729",
+  "docs/architecture/concurrent-harness/implementation-plan.md": "3819f5df6ca6a6428bc91ff5f4b41fb5418dcc5a224c5ba0480ea00c7bf04914",
+  "docs/architecture/concurrent-harness/implementation-status.md": "50ae44e970ccd1118b3bfca433d80644c1396be98fa67fd8ce56b22599f29964",
+  "docs/architecture/concurrent-harness/implementation-backlog.json": "aebc3af99d647db3ff0ef0412b4c518689e1bdd787bce65d6a384ac50dd0658b",
+  "docs/architecture/concurrent-harness/knowledge-graph.json": "b075861500414b8bb8c6503d07fc83c2ea506843fad76520150e6d9243704d86",
+  "docs/autonomous-delivery-backlog.md": "b476fafb560da4459c4ce78dba15d57b005b2d1da91634eb499d5da763ed1965",
+  "docs/autonomous-delivery-migration.md": "1f3cc2b47bd4350af68cc33acd94b9e5240c0e75c3e63d5967a640b4ad0a86c4",
+  "docs/autonomous-delivery-constraints.md": "5efbd1701e0ca6e9fa5e14ceca9a41df5bfab7d588819d216fdda4a98ba58597"
+}

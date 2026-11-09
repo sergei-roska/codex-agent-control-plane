@@ -1,0 +1,97 @@
+[
+  {
+    "type": "review_result",
+    "attempt": "e2c71938-b92f-4b70-a231-dc0088343016:r1:a0:t1",
+    "status": "failed",
+    "payload": {
+      "checkpointId": "a3-standard-verifier-smoke",
+      "currentTargetMatches": true,
+      "policyId": "auditor-routing/v1",
+      "reason": "review_report_invalid_or_incomplete",
+      "reportOutcome": "blocked",
+      "serviceReviewAccepted": false,
+      "serviceReviewStatus": "inconclusive",
+      "targetKnown": true,
+      "verdict": null,
+      "verifierTestWrite": false
+    },
+    "createdAt": "2026-10-22T07:10:32.143Z"
+  },
+  {
+    "type": "review_result",
+    "attempt": "e2c71938-b92f-4b70-a231-dc0088343016:r2:a0:t1",
+    "status": "inconclusive",
+    "payload": {
+      "checkpointId": "a3-standard-verifier-smoke",
+      "currentTargetMatches": true,
+      "policyId": "auditor-routing/v1",
+      "reason": "review_origin_stale",
+      "reportOutcome": null,
+      "serviceReviewAccepted": false,
+      "serviceReviewStatus": "rejected",
+      "targetKnown": true,
+      "verdict": null,
+      "verifierTestWrite": false
+    },
+    "createdAt": "2026-10-22T07:11:08.677Z"
+  },
+  {
+    "type": "review_recovery",
+    "attempt": "e2c71938-b92f-4b70-a231-dc0088343016:r2:a0:t1",
+    "status": "verifier_queued",
+    "payload": {
+      "checkpointId": "a3-standard-verifier-smoke",
+      "generation": 1,
+      "policyId": "auditor-routing/v1",
+      "trigger": "review_origin_stale"
+    },
+    "createdAt": "2026-10-22T07:11:08.681Z"
+  },
+  {
+    "type": "verifier_result",
+    "attempt": "e2c71938-b92f-4b70-a231-dc0088343016:r3:a0:t1",
+    "status": "completed",
+    "payload": {
+      "attemptedRemedies": [],
+      "checkpointId": "a3-standard-verifier-smoke",
+      "failedChecks": [],
+      "findings": [
+        "This pass applies only to checkpoint a3-standard-verifier-smoke; it is not integrated A3 acceptance.",
+        "Full CI was not run, as directed."
+      ],
+      "kind": "routine",
+      "outcome": "completed",
+      "policyId": "auditor-routing/v1",
+      "reason": null,
+      "reportValid": true,
+      "reviewCoverage": {
+        "reason": null,
+        "stable": true,
+        "targetIdentity": "review-target/v1:9e56b51e6b6b447ceece668ae80d183c4451b29e84cd52201483b44ffd91b95b",
+        "targetKnown": true
+      },
+      "summary": "VERDICT: pass\nRoutine smoke checkpoint passed: AnyIO blocking portal succeeded and both specified Host-guard tests passed. HEAD and dirty paths matched before and after; no files were changed.",
+      "unrunChecks": [],
+      "valid": true
+    },
+    "createdAt": "2026-10-22T07:11:28.118Z"
+  },
+  {
+    "type": "review_result",
+    "attempt": "e2c71938-b92f-4b70-a231-dc0088343016:r3:a0:t1",
+    "status": "accepted",
+    "payload": {
+      "checkpointId": "a3-standard-verifier-smoke",
+      "currentTargetMatches": true,
+      "policyId": "auditor-routing/v1",
+      "reason": null,
+      "reportOutcome": "completed",
+      "serviceReviewAccepted": true,
+      "serviceReviewStatus": "accepted",
+      "targetKnown": true,
+      "verdict": null,
+      "verifierTestWrite": false
+    },
+    "createdAt": "2026-10-22T07:11:28.411Z"
+  }
+]

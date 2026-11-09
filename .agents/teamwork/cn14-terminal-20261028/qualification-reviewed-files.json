@@ -1,0 +1,11 @@
+{
+  "test/concurrent-engine-comparison.test.js": "2206b648b63feb2fddefc366f7543ec9ec3b6f754b70ab9a11451e16227d6e61",
+  "test/delivery-migration-qualification.test.js": "494858a4ed636c1b9c2f567e280d2d7f8eeb9fdb3d4256eb7718fdeee6d8b4ef",
+  "launcher.js": "8f3dc670daa4446a894ea64b5b255b7f44bef525bef83552bb0c0a90ff3458dc",
+  "test/launcher-startup.test.js": "f11e74d1f8fd61e2f739916efbf7380270539313e86cc88c5d1485df3c5877b9",
+  "test/a2a-role-service.test.js": "2d797a526b6aa3d50c417e34ce5ca2f4ade3abf9d33d1be155f1ea3f0389fb81",
+  "test/codex-app-server.test.js": "12ed03150b6d6e14d50ddb91e28f16643ce0d0310c7f7436a6ee3f025c32020b",
+  "test/role-catalog.test.js": "b4d5fec67a5bfb01a9fe71327e9c1f2cf7803fe6b827d99e2087f755d6dfa94b",
+  "test/writer-lanes.test.js": "da99eabaca57209d2b504f5f05f33d46dbb67289219a233d9917708c5b2a7804",
+  "test/e2e.test.js": "c87b2f5c046ee945dd67b2afafdf34a78040091e10b1abb78a6ac0caeb2f2556"
+}

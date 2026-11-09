@@ -1,0 +1,20 @@
+TAP version 13
+# Subtest: owner decision real engine answer retains mandatory acceptance and authenticated controls
+not ok 1 - owner decision real engine answer retains mandatory acceptance and authenticated controls
+  ---
+  duration_ms: 15010.800899
+  type: 'test'
+  location: '/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:1443:70'
+  failureType: 'testTimeoutFailure'
+  error: 'test timed out after 15000ms'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 0
+# cancelled 1
+# skipped 0
+# todo 0
+# duration_ms 15343.181426

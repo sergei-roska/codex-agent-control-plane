@@ -1,0 +1,18 @@
+{
+  "status": "failed",
+  "dataRoot": "temporary",
+  "nativeModelTurns": 0,
+  "nativePermissionResolution": {
+    "mode": "denied",
+    "sandboxMode": null,
+    "profileApi": true,
+    "writerProfile": null,
+    "approvalPolicy": null,
+    "reason": "full_access_permission_context_unavailable"
+  },
+  "error": {
+    "name": "Error",
+    "code": "full_access_unavailable",
+    "message": "Owner full-access execution is unavailable (full_access_permission_context_unavailable)"
+  }
+}

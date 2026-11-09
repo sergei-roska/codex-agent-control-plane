@@ -1,0 +1,19 @@
+{
+  "missingPredecessorFiles": [],
+  "changedFromStart": [
+    "docs/architecture/concurrent-harness/foundation-api.md",
+    "docs/architecture/concurrent-harness/implementation-status.md",
+    "src/backlog-store.js",
+    "src/codex-app-server.js",
+    "src/concurrent-delivery-engine.js",
+    "src/project-delivery-controller.js",
+    "test/backlog-store.test.js",
+    "test/codex-app-server.test.js",
+    "test/concurrent-delivery-engine.test.js",
+    "test/project-delivery-controller.test.js"
+  ],
+  "unexpectedChanges": [],
+  "schedulerSourceUnchanged": true,
+  "schedulerTestsUnchanged": true,
+  "ascii": true
+}

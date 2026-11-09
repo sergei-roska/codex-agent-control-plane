@@ -1,0 +1,66 @@
+--- .agents/teamwork/cn14-facade-20261028/correction/concurrent-delivery-engine.js	2026-10-28 10:02:47.462671395 +0200
++++ src/concurrent-delivery-engine.js	2026-10-28 10:11:05.722573928 +0200
+@@ -425,17 +425,14 @@
+     if (['accepted', 'partial'].includes(objective.disposition)) return copy(run.result) || this.#terminalResult(run);
+     if (objective.disposition === 'canceled') return { runId, status: 'canceled', text: 'Canceled by the owner.', rounds: 0, assignments: [] };
+     if (isResume) {
+-      const currentController = this.controllers.get(runId);
++      let controller = this.controllers.get(runId);
++      if (!controller || controller.shutdownRequested) controller = await this.#controller(run, { prepareThread: false });
++      controller.applyPendingOwnerCorrections();
++      objective = this.store.getObjective(this.projectId, run.objectiveId);
+       if (objective.disposition === 'paused_owner') {
+         const control = this.store.getLifecycleControl(this.projectId, run.objectiveId);
+-        if (control?.cause === 'owner_pause' || control?.cause === 'owner_stop') {
+-          objective = currentController && !currentController.shutdownRequested
+-            ? currentController.resumeObjective()
+-            : this.store.transitionLifecycleControl(this.projectId, run.objectiveId, { action: 'resume',
+-              expectedControlRevision: objective.controlRevision, expectedOwnerGeneration: objective.ownerGeneration });
+-        }
++        if (control?.cause === 'owner_pause' || control?.cause === 'owner_stop') controller.resumeObjective();
+       }
+-      const controller = await this.#controller(run, { prepareThread: false });
+       if (input.input?.answer || typeof input.input === 'string') {
+         const text = typeof input.input === 'string' ? input.input : input.input.answer;
+         if (text) controller.receive({ messageId: `resume-${sha256(`${runId}:${this.now()}`).slice(0, 32)}`,
+@@ -528,6 +525,7 @@
+       projectId: this.projectId, objectiveId: run.objectiveId, sessionId: run.sessionId,
+       providerThreadId: lead.threadId,
+       authenticateOwner: (source) => this.authenticateOwner({ ...source, runId: run.runId }),
++      onOwnerCorrection: (context) => this.#replaceOwnerCheckpoints(run, context),
+       settingsFor: () => ({ ...lead.settings }),
+       contextFor: () => ({ threadId: lead.threadId, transportKey: lead.transportKey,
+         accountId: lead.accountId, codexHome: lead.codexHome, settingsDigest: lead.settingsDigest }),
+@@ -1009,6 +1007,32 @@
+       readManifest: readOnlyTreeManifest(manifest), checkpointAncestors: checkpoint.dependsOn || [] };
+   }
+ 
++  #replaceOwnerCheckpoints(run, { prior, current, message }) {
++    const scope = { projectId: this.projectId, objectiveId: run.objectiveId };
++    const active = this.reviewStore.checkpointInventory(scope);
++    const history = new Map(this.reviewStore.checkpointHistory(scope).map((entry) => [entry.checkpoint.checkpointId, entry.checkpoint]));
++    const replacements = active.map(({ checkpointId }) => ({ checkpointId,
++      replacementCheckpointId: `owner-${sha256(`${run.runId}:${message.messageId}:${checkpointId}`).slice(0, 24)}` }));
++    const ids = new Map(replacements.map((entry) => [entry.checkpointId, entry.replacementCheckpointId]));
++    const saveInventory = (checkpointIds) => this.db.prepare(`UPDATE concurrent_delivery_runs SET checkpoint_ids_json=?
++      WHERE project_id=? AND run_id=?`).run(json(checkpointIds), this.projectId, run.runId);
++    saveInventory([...active.map((entry) => entry.checkpointId), ...ids.values()]);
++    for (const entry of replacements) {
++      const checkpoint = history.get(entry.checkpointId);
++      this.reviewStore.registerCheckpoint({ ...scope, checkpointId: entry.replacementCheckpointId,
++        kind: checkpoint.kind, reason: checkpoint.reason, critical: checkpoint.critical,
++        checkIdentity: checkpoint.checkIdentity, checkPins: checkpoint.checkPins, toolPins: checkpoint.toolPins,
++        profilePins: checkpoint.profilePins, environmentDigest: checkpoint.environmentDigest,
++        dependsOn: checkpoint.dependsOn.map((checkpointId) => ids.get(checkpointId) || checkpointId) },
++      { source: 'owner-correction', sourceMessageId: message.messageId });
++    }
++    this.reviewStore.supersedeCheckpoints({ ...scope, sourceMessageId: message.messageId,
++      expectedOwnerGeneration: current.ownerGeneration, expectedControlRevision: current.controlRevision,
++      priorGoalRevision: prior.goalRevision, currentGoalRevision: current.goalRevision, replacements },
++    { source: 'owner-correction', sourceMessageId: message.messageId });
++    saveInventory(replacements.map((entry) => entry.replacementCheckpointId));
++  }
++
+   #ownerCheckpointInventory({ projectId, objectiveId }) {
+     const row = this.db.prepare('SELECT checkpoint_ids_json FROM concurrent_delivery_runs WHERE project_id=? AND objective_id=?')
+       .get(projectId, objectiveId);

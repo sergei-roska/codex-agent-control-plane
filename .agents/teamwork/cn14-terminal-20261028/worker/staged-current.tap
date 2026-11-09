@@ -1,0 +1,10 @@
+✔ staged shutdown retains older and newly started provider groups across preparation reopen (51.13192ms)
+✔ staged shutdown drains executor callback promises after scheduler scan has returned (44.458409ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 430.393278

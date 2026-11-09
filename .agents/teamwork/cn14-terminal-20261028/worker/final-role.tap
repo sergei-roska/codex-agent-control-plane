@@ -1,0 +1,22 @@
+✔ terminal failure requires independent original group death, preserves drift and replays executor closure (173.363391ms)
+✔ shutdown terminal failure denies receipt (110.939692ms)
+✔ shutdown terminal failure denies receipt-generation (100.800919ms)
+✔ shutdown terminal failure denies receipt-turn (101.790154ms)
+✔ shutdown terminal failure denies escaped (100.836514ms)
+✔ shutdown terminal failure denies owner (103.598694ms)
+✔ shutdown terminal failure denies request (101.782724ms)
+✔ shutdown terminal failure denies settings (108.815867ms)
+✔ shutdown terminal failure denies publication (115.974186ms)
+✔ shutdown preparation excludes succeeded read-only execution with an actual qualified receipt (65.509244ms)
+✔ shutdown reconciliation revalidates request after lane completion await (100.055476ms)
+✔ shutdown reconciliation revalidates settings after lane completion await (104.882699ms)
+✔ shutdown reconciliation revalidates receipt after lane completion await (104.70214ms)
+✔ shutdown writable reconciliation refuses unavailable shared workspace observation (113.685713ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1809.22678

@@ -1,0 +1,21 @@
+{
+  "baseline": {
+    "command": "node --test --test-name-pattern='planner schema represents a distinct repair superseding a failed task' test/server-delivery-engine.test.js",
+    "result": "failed",
+    "passed": 0,
+    "failed": 1,
+    "failure": "schema must expose the failed task exact supersession target"
+  },
+  "verification": [
+    {"command": "node --test --test-name-pattern='planner sends a strict usable schema|planner schema represents a distinct repair superseding a failed task' test/server-delivery-engine.test.js", "passed": 2, "failed": 0},
+    {"command": "node --test test/server-delivery-engine.test.js", "passed": 82, "failed": 0},
+    {"command": "node --test test/delivery-contracts.test.js", "passed": 16, "failed": 0},
+    {"command": "node --test test/concurrent-recovery-acceptance.test.js", "passed": 1, "failed": 0},
+    {"command": "node --test test/lead-planner.test.js", "passed": 11, "failed": 0}
+  ],
+  "scope": ["src/concurrent-delivery-engine.js", "test/server-delivery-engine.test.js"],
+  "modelTurns": 0,
+  "runtimeRestarts": 0,
+  "gitMutations": 0,
+  "criticReview": "pending"
+}

@@ -1,0 +1,63 @@
+▶ add
+  ✔ dedupes by realpath including symlinks (4.273806ms)
+  ✔ rejects missing paths and files (1.145963ms)
+  ✔ gives concurrent adds different ports and skips busy ones (3.203545ms)
+  ✔ adopts the legacy state db only for the first project and only if it exists (1.389163ms)
+✔ add (11.015571ms)
+▶ registry
+  ✔ round-trips across instances with restricted modes (1.153293ms)
+  ✔ recovers from a corrupt file (0.6983ms)
+  ✔ unknown ids give not_found (0.482801ms)
+✔ registry (2.519965ms)
+▶ start
+  ✔ spawns with expected args and env, token first (2.645445ms)
+  ✔ is idempotent including concurrent calls (1.068274ms)
+  ✔ applies the owner launcher default only where project execution permissions are omitted (2.585792ms)
+  ✔ fails before spawn for malformed or unsupported launcher defaults (1.451044ms)
+  ✔ becomes running on stdout marker (0.991037ms)
+  ✔ does not treat generic product text or stderr as a successful listen marker (1.006885ms)
+  ✔ reallocates a busy port and persists it (1.087198ms)
+  ✔ returns to stopped when ensureToken or spawn throws (1.316887ms)
+  ✔ persists early token failures for status after manager reinitialization (0.754217ms)
+  ✔ redacts credential values with quoted JSON keys and values (0.755861ms)
+  ✔ persists sanitized startup stderr without stdout and restores it after manager reinitialization (1.463495ms)
+  ✔ omits overlong startup stderr lines from logs and persistence (1.817805ms)
+  ✔ replaces a failed startup diagnostic after a later successful start (1.50546ms)
+  ✔ caps logs at logLimit and status returns the tail (0.929751ms)
+✔ start (19.994144ms)
+▶ exit handling
+  ✔ marks stopped on close and appends the exit line (1.13015ms)
+  ✔ a late close from an old child does not clobber a newer child (1.271423ms)
+  ✔ ignores a late old-child close while a newer startup is still pending (1.265695ms)
+  ✔ handles the spawn error event (0.850016ms)
+✔ exit handling (4.725429ms)
+▶ stop
+  ✔ sends SIGTERM and returns once the child closes (1.390681ms)
+  ✔ waits for an in-flight start before stopping (1.045266ms)
+  ✔ escalates to SIGKILL when SIGTERM is ignored (31.141174ms)
+  ✔ kills an adopted pid only when it listens on the port (1.558093ms)
+  ✔ refuses a running project it did not start (0.673937ms)
+✔ stop (36.113376ms)
+▶ init and refresh
+  ✔ clears stale pids on init (1.331341ms)
+  ✔ refresh transitions (1.125277ms)
+✔ init and refresh (2.591474ms)
+▶ remove
+  ✔ removes only stopped projects and keeps files (1.406087ms)
+✔ remove (1.506141ms)
+▶ stop grace (STOP-01)
+  ✔ waits the whole server shutdown plus a margin before SIGKILL (2.503144ms)
+  ✔ does not SIGKILL a server that finishes its drain inside the grace (61.477147ms)
+  ✔ stopAll waits at least the same grace before escalating (2.368377ms)
+✔ stop grace (STOP-01) (66.560237ms)
+▶ stopAll
+  ✔ terminates all managed children and escalates stragglers (532.40928ms)
+✔ stopAll (532.612568ms)
+ℹ tests 37
+ℹ suites 9
+ℹ pass 37
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 979.3891

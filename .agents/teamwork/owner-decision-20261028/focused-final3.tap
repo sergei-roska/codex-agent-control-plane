@@ -1,0 +1,982 @@
+TAP version 13
+# Subtest: two SQLite connections atomically claim one task and enforce role and project reservations
+ok 1 - two SQLite connections atomically claim one task and enforce role and project reservations
+  ---
+  duration_ms: 42.830037
+  type: 'test'
+  ...
+# Subtest: claim eligibility sees project resources added after an outside projection
+ok 2 - claim eligibility sees project resources added after an outside projection
+  ---
+  duration_ms: 15.452254
+  type: 'test'
+  ...
+# Subtest: claim eligibility rejects asynchronous and non-boolean results atomically
+ok 3 - claim eligibility rejects asynchronous and non-boolean results atomically
+  ---
+  duration_ms: 8.369791
+  type: 'test'
+  ...
+# Subtest: two simultaneous SQLite claimers cannot reserve the same ready task
+ok 4 - two simultaneous SQLite claimers cannot reserve the same ready task
+  ---
+  duration_ms: 99.689912
+  type: 'test'
+  ...
+# Subtest: plan CAS and dependency-cycle failures roll back tasks, revision, and events
+ok 5 - plan CAS and dependency-cycle failures roll back tasks, revision, and events
+  ---
+  duration_ms: 7.679277
+  type: 'test'
+  ...
+# Subtest: dependency readiness requires trusted settled output and explicit checkpoint evidence
+ok 6 - dependency readiness requires trusted settled output and explicit checkpoint evidence
+  ---
+  duration_ms: 13.297739
+  type: 'test'
+  ...
+# Subtest: claimed contracts remain pinned, retries get distinct deterministic identities, and stale fences fail
+ok 7 - claimed contracts remain pinned, retries get distinct deterministic identities, and stale fences fail
+  ---
+  duration_ms: 10.207274
+  type: 'test'
+  ...
+# Subtest: plan projection materializes supersession state and merged dependency edges
+ok 8 - plan projection materializes supersession state and merged dependency edges
+  ---
+  duration_ms: 6.672187
+  type: 'test'
+  ...
+# Subtest: expired live or unknown attempts retain capacity until explicit quiescence
+ok 9 - expired live or unknown attempts retain capacity until explicit quiescence
+  ---
+  duration_ms: 9.354517
+  type: 'test'
+  ...
+# Subtest: submission requires a bounded nonempty external identity before mutating the attempt
+ok 10 - submission requires a bounded nonempty external identity before mutating the attempt
+  ---
+  duration_ms: 6.970382
+  type: 'test'
+  ...
+# Subtest: control CAS pauses future claims and rejects stale planner control revisions
+ok 11 - control CAS pauses future claims and rejects stale planner control revisions
+  ---
+  duration_ms: 5.84176
+  type: 'test'
+  ...
+# Subtest: planning objectives may run ready tasks while owner control states remain barriers
+ok 12 - planning objectives may run ready tasks while owner control states remain barriers
+  ---
+  duration_ms: 3.246364
+  type: 'test'
+  ...
+# Subtest: failed claim event append rolls back task, attempt, claim, and capacity writes
+ok 13 - failed claim event append rolls back task, attempt, claim, and capacity writes
+  ---
+  duration_ms: 3.878178
+  type: 'test'
+  ...
+# Subtest: failed settlement event append rolls back terminal state and capacity release
+ok 14 - failed settlement event append rolls back terminal state and capacity release
+  ---
+  duration_ms: 5.052037
+  type: 'test'
+  ...
+# Subtest: readiness and settlement reject truthy non-boolean controller facts
+ok 15 - readiness and settlement reject truthy non-boolean controller facts
+  ---
+  duration_ms: 3.466419
+  type: 'test'
+  ...
+# Subtest: project backlog keyset cursor remains stable across objective identity collisions
+ok 16 - project backlog keyset cursor remains stable across objective identity collisions
+  ---
+  duration_ms: 3.570715
+  type: 'test'
+  ...
+# Subtest: objective backlog nextCursor round-trips through afterCursor and afterTaskId remains supported
+ok 17 - objective backlog nextCursor round-trips through afterCursor and afterTaskId remains supported
+  ---
+  duration_ms: 3.176
+  type: 'test'
+  ...
+# Subtest: project-wide worker capacity spans objectives but independent projects remain separate
+ok 18 - project-wide worker capacity spans objectives but independent projects remain separate
+  ---
+  duration_ms: 7.116037
+  type: 'test'
+  ...
+# Subtest: owner generation fences old scheduler writes while recovery can settle with current generation evidence
+ok 19 - owner generation fences old scheduler writes while recovery can settle with current generation evidence
+  ---
+  duration_ms: 6.542679
+  type: 'test'
+  ...
+# Subtest: derived attempt IDs are unambiguous when opaque identifiers contain colons
+ok 20 - derived attempt IDs are unambiguous when opaque identifiers contain colons
+  ---
+  duration_ms: 4.577666
+  type: 'test'
+  ...
+# Subtest: claim captures a digest from synchronous selected settings evidence
+ok 21 - claim captures a digest from synchronous selected settings evidence
+  ---
+  duration_ms: 2.803407
+  type: 'test'
+  ...
+# Subtest: owner correction is authorized, CAS-bound, atomic, and blocks only unstarted work
+ok 22 - owner correction is authorized, CAS-bound, atomic, and blocks only unstarted work
+  ---
+  duration_ms: 11.968981
+  type: 'test'
+  ...
+# Subtest: owner correction replay requires current authorization but skips stale CAS and duplicate writes
+ok 23 - owner correction replay requires current authorization but skips stale CAS and duplicate writes
+  ---
+  duration_ms: 5.451167
+  type: 'test'
+  ...
+# Subtest: owner corrections default-deny, require CAS and exact fields, and roll back with event failure
+ok 24 - owner corrections default-deny, require CAS and exact fields, and roll back with event failure
+  ---
+  duration_ms: 5.957498
+  type: 'test'
+  ...
+# Subtest: owner correction preserves pause, budget and technical intent and moves validating to planning
+ok 25 - owner correction preserves pause, budget and technical intent and moves validating to planning
+  ---
+  duration_ms: 7.775008
+  type: 'test'
+  ...
+# Subtest: terminal objectives cannot accept owner corrections
+ok 26 - terminal objectives cannot accept owner corrections
+  ---
+  duration_ms: 3.188022
+  type: 'test'
+  ...
+# Subtest: checkpoint inventory extends plan validation without granting checkpoint acceptance
+ok 27 - checkpoint inventory extends plan validation without granting checkpoint acceptance
+  ---
+  duration_ms: 2.750562
+  type: 'test'
+  ...
+# Subtest: checkpoint inventory deduplicates consistent refs and rejects malformed, async, conflicting, and oversized data
+ok 28 - checkpoint inventory deduplicates consistent refs and rejects malformed, async, conflicting, and oversized data
+  ---
+  duration_ms: 9.36486
+  type: 'test'
+  ...
+# Subtest: typed lifecycle controls distinguish owner stop and require exact generation and control CAS
+ok 29 - typed lifecycle controls distinguish owner stop and require exact generation and control CAS
+  ---
+  duration_ms: 3.352814
+  type: 'test'
+  ...
+# Subtest: budget waits preserve provider/model identity and stale control or generation cannot wake them
+ok 30 - budget waits preserve provider/model identity and stale control or generation cannot wake them
+  ---
+  duration_ms: 3.015852
+  type: 'test'
+  ...
+# Subtest: typed retry records require current pins and block after bounded strategy exhaustion
+ok 31 - typed retry records require current pins and block after bounded strategy exhaustion
+  ---
+  duration_ms: 5.804701
+  type: 'test'
+  ...
+# Subtest: independent task retry budgets preserve ready siblings and block only after no work remains
+ok 32 - independent task retry budgets preserve ready siblings and block only after no work remains
+  ---
+  duration_ms: 8.429383
+  type: 'test'
+  ...
+# Subtest: retry scope kind and task/checkpoint references are validated
+ok 33 - retry scope kind and task/checkpoint references are validated
+  ---
+  duration_ms: 3.070179
+  type: 'test'
+  ...
+# Subtest: objective cancellation terminalizes unstarted work and rejects late successful settlement
+ok 34 - objective cancellation terminalizes unstarted work and rejects late successful settlement
+  ---
+  duration_ms: 5.490772
+  type: 'test'
+  ...
+# Subtest: finalization barrier fences real publication, runs real acceptance, and retains historical evidence
+ok 35 - finalization barrier fences real publication, runs real acceptance, and retains historical evidence
+  ---
+  duration_ms: 187.732915
+  type: 'test'
+  ...
+# Subtest: unknown finalization checks survive SQLite reopen and require trusted no-effect reconciliation
+ok 36 - unknown finalization checks survive SQLite reopen and require trusted no-effect reconciliation
+  ---
+  duration_ms: 62.697698
+  type: 'test'
+  ...
+# Subtest: terminal partial requires trusted provenance for every remainder and emits only trusted evidence
+ok 37 - terminal partial requires trusted provenance for every remainder and emits only trusted evidence
+  ---
+  duration_ms: 140.352991
+  type: 'test'
+  ...
+# Subtest: owner control changes invalidate a ready finalization without restoring over the newer state
+ok 38 - owner control changes invalidate a ready finalization without restoring over the newer state
+  ---
+  duration_ms: 119.370857
+  type: 'test'
+  ...
+# Subtest: a candidate published after checks invalidates the pins before terminal commit
+ok 39 - a candidate published after checks invalidates the pins before terminal commit
+  ---
+  duration_ms: 151.868443
+  type: 'test'
+  ...
+# Subtest: terminal acceptance event failure rolls back final record and permanent reference together
+ok 40 - terminal acceptance event failure rolls back final record and permanent reference together
+  ---
+  duration_ms: 124.040154
+  type: 'test'
+  ...
+# Subtest: typed finalization command replays reauthorize without rewriting evidence after pin drift
+ok 41 - typed finalization command replays reauthorize without rewriting evidence after pin drift
+  ---
+  duration_ms: 478.07405
+  type: 'test'
+  ...
+# Subtest: owner correction replan blocks finalization until task disposition is resolved
+ok 42 - owner correction replan blocks finalization until task disposition is resolved
+  ---
+  duration_ms: 48.614192
+  type: 'test'
+  ...
+# Subtest: no-effect recovery respects captured goal and authority scope
+    # Subtest: corrected
+    ok 1 - corrected
+      ---
+      duration_ms: 7.864528
+      type: 'test'
+      ...
+    # Subtest: same-goal
+    ok 2 - same-goal
+      ---
+      duration_ms: 3.985026
+      type: 'test'
+      ...
+    # Subtest: legacy-first
+    ok 3 - legacy-first
+      ---
+      duration_ms: 3.859574
+      type: 'test'
+      ...
+    # Subtest: legacy-corrected
+    ok 4 - legacy-corrected
+      ---
+      duration_ms: 4.834801
+      type: 'test'
+      ...
+    # Subtest: authority-drift
+    ok 5 - authority-drift
+      ---
+      duration_ms: 4.355666
+      type: 'test'
+      ...
+    # Subtest: canceled
+    ok 6 - canceled
+      ---
+      duration_ms: 3.414986
+      type: 'test'
+      ...
+    1..6
+ok 43 - no-effect recovery respects captured goal and authority scope
+  ---
+  duration_ms: 29.068854
+  type: 'test'
+  ...
+# Subtest: cooperative writer mode keeps private lanes and its unconfined inherited provenance
+ok 44 - cooperative writer mode keeps private lanes and its unconfined inherited provenance
+  ---
+  duration_ms: 52.455142
+  type: 'test'
+  ...
+# Subtest: concurrent engine accepts its pinned base candidate with required owner checks
+ok 45 - concurrent engine accepts its pinned base candidate with required owner checks
+  ---
+  duration_ms: 903.944107
+  type: 'test'
+  ...
+# Subtest: concurrent engine accepts its pinned base candidate with empty owner checks
+ok 46 - concurrent engine accepts its pinned base candidate with empty owner checks
+  ---
+  duration_ms: 665.090994
+  type: 'test'
+  ...
+# Subtest: concurrent engine accepts its pinned base candidate with planner-recovery owner checks
+ok 47 - concurrent engine accepts its pinned base candidate with planner-recovery owner checks
+  ---
+  duration_ms: 789.264447
+  type: 'test'
+  ...
+# Subtest: lead preparation settings mutation is rejected before any provider turn
+ok 48 - lead preparation settings mutation is rejected before any provider turn
+  ---
+  duration_ms: 65.653529
+  type: 'test'
+  ...
+# Subtest: same-home provider account replacement is rejected before the lead provider turn
+ok 49 - same-home provider account replacement is rejected before the lead provider turn
+  ---
+  duration_ms: 64.192591
+  type: 'test'
+  ...
+# Subtest: steering replays its durable acknowledgement after revisions advance and conflicts on changed body
+ok 50 - steering replays its durable acknowledgement after revisions advance and conflicts on changed body
+  ---
+  duration_ms: 745.193036
+  type: 'test'
+  ...
+# Subtest: steering revision changes during controller setup roll back the appended message
+ok 51 - steering revision changes during controller setup roll back the appended message
+  ---
+  duration_ms: 87.628799
+  type: 'test'
+  ...
+# Subtest: overlapping private engineer lanes unlock dependent work and review the changed candidate
+ok 52 - overlapping private engineer lanes unlock dependent work and review the changed candidate
+  ---
+  duration_ms: 2251.925348
+  type: 'test'
+  ...
+# engineering harness ready
+# engine run promise returned
+# both private lane turns started
+# second lead turn inspected live sibling state
+# dependent provider turn started
+# Subtest: planner recovery holds uncertain host facts: live-process
+ok 53 - planner recovery holds uncertain host facts: live-process
+  ---
+  duration_ms: 95.536454
+  type: 'test'
+  ...
+# Subtest: planner recovery holds uncertain host facts: missing-terminal
+ok 54 - planner recovery holds uncertain host facts: missing-terminal
+  ---
+  duration_ms: 95.582176
+  type: 'test'
+  ...
+# Subtest: planner recovery holds uncertain host facts: wrong-thread
+ok 55 - planner recovery holds uncertain host facts: wrong-thread
+  ---
+  duration_ms: 97.051503
+  type: 'test'
+  ...
+# Subtest: planner recovery holds uncertain host facts: provider-error
+ok 56 - planner recovery holds uncertain host facts: provider-error
+  ---
+  duration_ms: 95.563712
+  type: 'test'
+  ...
+# Subtest: database reopen cannot release a canceled run with an unknown durable planner turn
+ok 57 - database reopen cannot release a canceled run with an unknown durable planner turn
+  ---
+  duration_ms: 92.811859
+  type: 'test'
+  ...
+# Subtest: shutdown refuses a persisted terminal role record with missing settlement attestation
+ok 58 - shutdown refuses a persisted terminal role record with missing settlement attestation
+  ---
+  duration_ms: 78.617197
+  type: 'test'
+  ...
+# Subtest: shutdown refuses a persisted terminal role record with false settlement attestation
+ok 59 - shutdown refuses a persisted terminal role record with false settlement attestation
+  ---
+  duration_ms: 81.952316
+  type: 'test'
+  ...
+# Subtest: shutdown no-publication recovery integrates owned lost acknowledgement
+ok 60 - shutdown no-publication recovery integrates owned lost acknowledgement
+  ---
+  duration_ms: 5220.175476
+  type: 'test'
+  ...
+# Subtest: shutdown no-publication recovery integrates cooperative lost acknowledgement
+ok 61 - shutdown no-publication recovery integrates cooperative lost acknowledgement
+  ---
+  duration_ms: 5181.651005
+  type: 'test'
+  ...
+# Subtest: shutdown no-publication recovery integrates unknown lost acknowledgement
+ok 62 - shutdown no-publication recovery integrates unknown lost acknowledgement
+  ---
+  duration_ms: 5188.778509
+  type: 'test'
+  ...
+# Subtest: shutdown no-publication recovery integrates publication lost acknowledgement
+ok 63 - shutdown no-publication recovery integrates publication lost acknowledgement
+  ---
+  duration_ms: 5207.943642
+  type: 'test'
+  ...
+# Subtest: shutdown no-publication recovery integrates pending-inbox lost acknowledgement
+ok 64 - shutdown no-publication recovery integrates pending-inbox lost acknowledgement
+  ---
+  duration_ms: 5173.874273
+  type: 'test'
+  ...
+# Subtest: shutdown no-publication recovery integrates reopen lost acknowledgement
+ok 65 - shutdown no-publication recovery integrates reopen lost acknowledgement
+  ---
+  duration_ms: 5183.4358
+  type: 'test'
+  ...
+# Subtest: owner pause facade resumes reused controller without overlapping planner calls
+ok 66 - owner pause facade resumes reused controller without overlapping planner calls
+  ---
+  duration_ms: 125.432892
+  type: 'test'
+  ...
+# Subtest: owner pause facade resumes reopened SQLite without overlapping planner calls
+ok 67 - owner pause facade resumes reopened SQLite without overlapping planner calls
+  ---
+  duration_ms: 132.896711
+  type: 'test'
+  ...
+# Subtest: owner pause facade retains admitted worker completion
+ok 68 - owner pause facade retains admitted worker completion
+  ---
+  duration_ms: 397.787009
+  type: 'test'
+  ...
+# Subtest: owner pause facade retains admitted worker unknown effects
+ok 69 - owner pause facade retains admitted worker unknown effects
+  ---
+  duration_ms: 192.249339
+  type: 'test'
+  ...
+# Subtest: owner pause facade resume preserves owner-stop-unknown boundary
+ok 70 - owner pause facade resume preserves owner-stop-unknown boundary
+  ---
+  duration_ms: 208.608553
+  type: 'test'
+  ...
+# Subtest: owner pause facade resume preserves technical boundary
+ok 71 - owner pause facade resume preserves technical boundary
+  ---
+  duration_ms: 194.388624
+  type: 'test'
+  ...
+# Subtest: owner pause facade resume preserves budget boundary
+ok 72 - owner pause facade resume preserves budget boundary
+  ---
+  duration_ms: 197.754801
+  type: 'test'
+  ...
+# Subtest: owner correction facade carries pending correction through SQLite reopen with recovered controller
+ok 73 - owner correction facade carries pending correction through SQLite reopen with recovered controller
+  ---
+  duration_ms: 859.643215
+  type: 'test'
+  ...
+# Subtest: owner correction facade carries pending correction through SQLite reopen with direct resume
+ok 74 - owner correction facade carries pending correction through SQLite reopen with direct resume
+  ---
+  duration_ms: 810.280569
+  type: 'test'
+  ...
+# Subtest: owner correction facade refuses unauthenticated unauthorized and stale messages without rewriting intake
+ok 75 - owner correction facade refuses unauthenticated unauthorized and stale messages without rewriting intake
+  ---
+  duration_ms: 109.109713
+  type: 'test'
+  ...
+# Subtest: owner correction facade rolls back checkpoint inventory history and acknowledgement on register
+ok 76 - owner correction facade rolls back checkpoint inventory history and acknowledgement on register
+  ---
+  duration_ms: 100.456982
+  type: 'test'
+  ...
+# Subtest: owner correction facade rolls back checkpoint inventory history and acknowledgement on supersede
+ok 77 - owner correction facade rolls back checkpoint inventory history and acknowledgement on supersede
+  ---
+  duration_ms: 103.648877
+  type: 'test'
+  ...
+# Subtest: owner correction facade rolls back checkpoint inventory history and acknowledgement on ack
+ok 78 - owner correction facade rolls back checkpoint inventory history and acknowledgement on ack
+  ---
+  duration_ms: 106.393664
+  type: 'test'
+  ...
+# Subtest: owner correction facade preserves admitted worker contract fences and private terminal report
+ok 79 - owner correction facade preserves admitted worker contract fences and private terminal report
+  ---
+  duration_ms: 483.512944
+  type: 'test'
+  ...
+# Subtest: staged shutdown retains older and newly started provider groups across preparation reopen
+ok 80 - staged shutdown retains older and newly started provider groups across preparation reopen
+  ---
+  duration_ms: 47.472144
+  type: 'test'
+  ...
+# Subtest: staged shutdown drains executor callback promises after scheduler scan has returned
+ok 81 - staged shutdown drains executor callback promises after scheduler scan has returned
+  ---
+  duration_ms: 50.64256
+  type: 'test'
+  ...
+# Subtest: owner decision real engine answer preserves scoped control and authenticated response
+ok 82 - owner decision real engine answer preserves scoped control and authenticated response
+  ---
+  duration_ms: 1207.630684
+  type: 'test'
+  ...
+# Subtest: owner decision real engine replace preserves scoped control and authenticated response
+ok 83 - owner decision real engine replace preserves scoped control and authenticated response
+  ---
+  duration_ms: 451.479098
+  type: 'test'
+  ...
+# Subtest: owner decision real engine replace-drift preserves scoped control and authenticated response
+ok 84 - owner decision real engine replace-drift preserves scoped control and authenticated response
+  ---
+  duration_ms: 324.30622
+  type: 'test'
+  ...
+# Subtest: owner decision real engine reopen preserves scoped control and authenticated response
+ok 85 - owner decision real engine reopen preserves scoped control and authenticated response
+  ---
+  duration_ms: 465.164037
+  type: 'test'
+  ...
+# Subtest: authenticated controls use persisted router scope and return durable immediate acknowledgements
+ok 86 - authenticated controls use persisted router scope and return durable immediate acknowledgements
+  ---
+  duration_ms: 114.655953
+  type: 'test'
+  ...
+# Subtest: control routes authenticate before revealing mapped state
+ok 87 - control routes authenticate before revealing mapped state
+  ---
+  duration_ms: 15.196013
+  type: 'test'
+  ...
+# Subtest: controls fail closed for unknown, legacy, and mismatched scopes
+ok 88 - controls fail closed for unknown, legacy, and mismatched scopes
+  ---
+  duration_ms: 20.378673
+  type: 'test'
+  ...
+# Subtest: budget wake requires due time, literal true eligibility, and unchanged control pins
+ok 89 - budget wake requires due time, literal true eligibility, and unchanged control pins
+  ---
+  duration_ms: 18.848103
+  type: 'test'
+  ...
+# Subtest: a later owner pause pins out an earlier budget wake and leaves the wait durable
+ok 90 - a later owner pause pins out an earlier budget wake and leaves the wait durable
+  ---
+  duration_ms: 5.745643
+  type: 'test'
+  ...
+# Subtest: retry and budget writes reject stale lifecycle owner or control pins
+ok 91 - retry and budget writes reject stale lifecycle owner or control pins
+  ---
+  duration_ms: 8.466292
+  type: 'test'
+  ...
+# Subtest: non-planner retry wakeups stay out of lead-model admission
+ok 92 - non-planner retry wakeups stay out of lead-model admission
+  ---
+  duration_ms: 5.037384
+  type: 'test'
+  ...
+# Subtest: shutdown projection defaults unknown admission and publication effects to unsafe
+ok 93 - shutdown projection defaults unknown admission and publication effects to unsafe
+  ---
+  duration_ms: 2.528011
+  type: 'test'
+  ...
+# Subtest: planner validation retry requires exact prior-turn proof while thrown turn errors stay held
+ok 94 - planner validation retry requires exact prior-turn proof while thrown turn errors stay held
+  ---
+  duration_ms: 6.49224
+  type: 'test'
+  ...
+# Subtest: two failed corrections of one strategy block technical recovery durably
+ok 95 - two failed corrections of one strategy block technical recovery durably
+  ---
+  duration_ms: 5.239865
+  type: 'test'
+  ...
+# Subtest: restart during retry backoff restores the persisted wake time
+ok 96 - restart during retry backoff restores the persisted wake time
+  ---
+  duration_ms: 6.688595
+  type: 'test'
+  ...
+# Subtest: versioned delta adds a successor without waiting for worker records
+ok 97 - versioned delta adds a successor without waiting for worker records
+  ---
+  duration_ms: 26.393432
+  type: 'test'
+  ...
+# Subtest: new inbox receipt invalidates a running plan before it can mutate backlog
+ok 98 - new inbox receipt invalidates a running plan before it can mutate backlog
+  ---
+  duration_ms: 8.321206
+  type: 'test'
+  ...
+# Subtest: one provider thread cannot run overlapping planner turns and empty wake is idle
+ok 99 - one provider thread cannot run overlapping planner turns and empty wake is idle
+  ---
+  duration_ms: 9.965105
+  type: 'test'
+  ...
+# Subtest: a planner cannot authorize itself by returning a newer captured revision
+ok 100 - a planner cannot authorize itself by returning a newer captured revision
+  ---
+  duration_ms: 5.655158
+  type: 'test'
+  ...
+# Subtest: recovery metadata is structurally bounded and never triggers a fallback turn
+ok 101 - recovery metadata is structurally bounded and never triggers a fallback turn
+  ---
+  duration_ms: 4.655981
+  type: 'test'
+  ...
+# Subtest: active same-thread turns stay busy and never invoke opportunistic reconciliation
+ok 102 - active same-thread turns stay busy and never invoke opportunistic reconciliation
+  ---
+  duration_ms: 9.945977
+  type: 'test'
+  ...
+# Subtest: unknown turns require exact no-effect and remote/process quiescence proof before fence release
+ok 103 - unknown turns require exact no-effect and remote/process quiescence proof before fence release
+  ---
+  duration_ms: 10.275174
+  type: 'test'
+  ...
+# Subtest: reopened active turns require authorized lifecycle quiescence before reconciliation
+ok 104 - reopened active turns require authorized lifecycle quiescence before reconciliation
+  ---
+  duration_ms: 17.075749
+  type: 'test'
+  ...
+# Subtest: owner takeover stales held and subsequent old-planner turns while the new owner can proceed
+ok 105 - owner takeover stales held and subsequent old-planner turns while the new owner can proceed
+  ---
+  duration_ms: 15.274991
+  type: 'test'
+  ...
+# Subtest: owner generation is scoped to its objective on the same project
+ok 106 - owner generation is scoped to its objective on the same project
+  ---
+  duration_ms: 10.440204
+  type: 'test'
+  ...
+# Subtest: owner decision survives real host and SQLite reopen and resumes mandatory acceptance
+ok 107 - owner decision survives real host and SQLite reopen and resumes mandatory acceptance
+  ---
+  duration_ms: 1860.720167
+  type: 'test'
+  ...
+# Subtest: owner decision rejects routine without creating a wait
+ok 108 - owner decision rejects routine without creating a wait
+  ---
+  duration_ms: 19.965393
+  type: 'test'
+  ...
+# Subtest: owner decision rejects no-investigation without creating a wait
+ok 109 - owner decision rejects no-investigation without creating a wait
+  ---
+  duration_ms: 6.693706
+  type: 'test'
+  ...
+# Subtest: owner decision rejects unknown-evidence without creating a wait
+ok 110 - owner decision rejects unknown-evidence without creating a wait
+  ---
+  duration_ms: 5.592864
+  type: 'test'
+  ...
+# Subtest: owner decision rejects untrusted without creating a wait
+ok 111 - owner decision rejects untrusted without creating a wait
+  ---
+  duration_ms: 9.61221
+  type: 'test'
+  ...
+# Subtest: owner decision rejects writable without creating a wait
+ok 112 - owner decision rejects writable without creating a wait
+  ---
+  duration_ms: 5.638699
+  type: 'test'
+  ...
+# Subtest: owner decision rejects stale-investigation without creating a wait
+ok 113 - owner decision rejects stale-investigation without creating a wait
+  ---
+  duration_ms: 6.115408
+  type: 'test'
+  ...
+# Subtest: owner decision rejects obligation without creating a wait
+ok 114 - owner decision rejects obligation without creating a wait
+  ---
+  duration_ms: 4.692779
+  type: 'test'
+  ...
+# Subtest: owner decision rejects option without creating a wait
+ok 115 - owner decision rejects option without creating a wait
+  ---
+  duration_ms: 3.88129
+  type: 'test'
+  ...
+# Subtest: owner decision rejects extra without creating a wait
+ok 116 - owner decision rejects extra without creating a wait
+  ---
+  duration_ms: 4.976841
+  type: 'test'
+  ...
+# Subtest: owner request fences direct claims and finalization even if disposition is corrupted
+ok 117 - owner request fences direct claims and finalization even if disposition is corrupted
+  ---
+  duration_ms: 10.901461
+  type: 'test'
+  ...
+# Subtest: owner replies require exact authorization, scope, option, request and current pins
+ok 118 - owner replies require exact authorization, scope, option, request and current pins
+  ---
+  duration_ms: 16.782917
+  type: 'test'
+  ...
+# Subtest: legacy requestControl cannot resume through a pending owner decision
+ok 119 - legacy requestControl cannot resume through a pending owner decision
+  ---
+  duration_ms: 7.120293
+  type: 'test'
+  ...
+# Subtest: owner reply preserves later pause
+ok 120 - owner reply preserves later pause
+  ---
+  duration_ms: 9.467689
+  type: 'test'
+  ...
+# Subtest: owner reply preserves later stop
+ok 121 - owner reply preserves later stop
+  ---
+  duration_ms: 10.483531
+  type: 'test'
+  ...
+# Subtest: owner reply preserves later cancel
+ok 122 - owner reply preserves later cancel
+  ---
+  duration_ms: 8.830574
+  type: 'test'
+  ...
+# Subtest: changed goal requires authenticated replacement with revalidated investigation and retained history
+ok 123 - changed goal requires authenticated replacement with revalidated investigation and retained history
+  ---
+  duration_ms: 18.637534
+  type: 'test'
+  ...
+# Subtest: planner request registration is atomic, consumes trigger and makes no owner wait model loop
+ok 124 - planner request registration is atomic, consumes trigger and makes no owner wait model loop
+  ---
+  duration_ms: 21.472438
+  type: 'test'
+  ...
+# Subtest: planner answer cannot register a decision after owner control changes during its await
+ok 125 - planner answer cannot register a decision after owner control changes during its await
+  ---
+  duration_ms: 12.793391
+  type: 'test'
+  ...
+# Subtest: owner wait survives SQLite reopen with immutable digest and exact reply pins
+ok 126 - owner wait survives SQLite reopen with immutable digest and exact reply pins
+  ---
+  duration_ms: 14.965908
+  type: 'test'
+  ...
+# Subtest: acknowledges steering during a slow actual execution and atomically applies it before another claim
+ok 127 - acknowledges steering during a slow actual execution and atomically applies it before another claim
+  ---
+  duration_ms: 53.751354
+  type: 'test'
+  ...
+# Subtest: authenticated correction applies and acknowledges atomically before queued work can be claimed
+ok 128 - authenticated correction applies and acknowledges atomically before queued work can be claimed
+  ---
+  duration_ms: 24.803167
+  type: 'test'
+  ...
+# Subtest: an authorized correction replans and claims replacement work at its new control revision
+ok 129 - an authorized correction replans and claims replacement work at its new control revision
+  ---
+  duration_ms: 21.990605
+  type: 'test'
+  ...
+# Subtest: owner correction acknowledgement failure rolls back the correction and blocks the inbox message
+ok 130 - owner correction acknowledgement failure rolls back the correction and blocks the inbox message
+  ---
+  duration_ms: 11.261002
+  type: 'test'
+  ...
+# Subtest: restart consumes durable inbox wakeup and idle runs do not call the model
+ok 131 - restart consumes durable inbox wakeup and idle runs do not call the model
+  ---
+  duration_ms: 21.10077
+  type: 'test'
+  ...
+# Subtest: shutdown fences a controller cycle suspended before planner admission
+ok 132 - shutdown fences a controller cycle suspended before planner admission
+  ---
+  duration_ms: 6.718839
+  type: 'test'
+  ...
+# Subtest: shutdown invalidates a held planner output and keeps its reservation until it settles
+ok 133 - shutdown invalidates a held planner output and keeps its reservation until it settles
+  ---
+  duration_ms: 16.286495
+  type: 'test'
+  ...
+# Subtest: shutdown blocks queued and direct planner and scheduler admissions
+ok 134 - shutdown blocks queued and direct planner and scheduler admissions
+  ---
+  duration_ms: 6.216383
+  type: 'test'
+  ...
+# Subtest: pause before controller start preserves steering without starting a lead turn
+ok 135 - pause before controller start preserves steering without starting a lead turn
+  ---
+  duration_ms: 29.061827
+  type: 'test'
+  ...
+# Subtest: pause during a held lead turn makes output stale and suppresses a follow-up turn
+ok 136 - pause during a held lead turn makes output stale and suppresses a follow-up turn
+  ---
+  duration_ms: 35.039056
+  type: 'test'
+  ...
+# Subtest: owner pause drains a held worker send without requesting cancellation
+ok 137 - owner pause drains a held worker send without requesting cancellation
+  ---
+  duration_ms: 25.432195
+  type: 'test'
+  ...
+# Subtest: emergency owner stop records a distinct cause, requests abort, and retains uncertain capacity
+ok 138 - emergency owner stop records a distinct cause, requests abort, and retains uncertain capacity
+  ---
+  duration_ms: 27.525632
+  type: 'test'
+  ...
+# Subtest: restart polls a submitted intent under the new generation without resending
+ok 139 - restart polls a submitted intent under the new generation without resending
+  ---
+  duration_ms: 43.951631
+  type: 'test'
+  ...
+# Subtest: restart keeps an uncertain live process fenced when no trusted recovery proof exists
+ok 140 - restart keeps an uncertain live process fenced when no trusted recovery proof exists
+  ---
+  duration_ms: 49.492018
+  type: 'test'
+  ...
+# Subtest: an existing controller never adopts a newer owner generation after takeover
+ok 141 - an existing controller never adopts a newer owner generation after takeover
+  ---
+  duration_ms: 8.783944
+  type: 'test'
+  ...
+# Subtest: a receipt during a lead turn invalidates it and the coalesced wakeup gets a fresh turn
+ok 142 - a receipt during a lead turn invalidates it and the coalesced wakeup gets a fresh turn
+  ---
+  duration_ms: 23.169807
+  type: 'test'
+  ...
+# Subtest: failed work prompts one bounded internal investigation turn without owner reply or model fallback
+ok 143 - failed work prompts one bounded internal investigation turn without owner reply or model fallback
+  ---
+  duration_ms: 46.146303
+  type: 'test'
+  ...
+# Subtest: failed planner corrections drain workers and stop model calls after bounded recovery exhaustion
+ok 144 - failed planner corrections drain workers and stop model calls after bounded recovery exhaustion
+  ---
+  duration_ms: 43.282499
+  type: 'test'
+  ...
+# Subtest: a thrown planner call cannot receive validation recovery proof or a retry
+ok 145 - a thrown planner call cannot receive validation recovery proof or a retry
+  ---
+  duration_ms: 31.391184
+  type: 'test'
+  ...
+# Subtest: planner reservations are project-wide across objectives and sessions
+ok 146 - planner reservations are project-wide across objectives and sessions
+  ---
+  duration_ms: 13.748696
+  type: 'test'
+  ...
+# Subtest: a busy controller retries its durable message after project capacity is released
+ok 147 - a busy controller retries its durable message after project capacity is released
+  ---
+  duration_ms: 127.009507
+  type: 'test'
+  ...
+# Subtest: a stopped busy controller clears retry timers and recovers its wakeup after reopen
+ok 148 - a stopped busy controller clears retry timers and recovers its wakeup after reopen
+  ---
+  duration_ms: 161.838246
+  type: 'test'
+  ...
+# Subtest: an actual context thread stays fenced across sessions even when another planner slot is free
+ok 149 - an actual context thread stays fenced across sessions even when another planner slot is free
+  ---
+  duration_ms: 13.024425
+  type: 'test'
+  ...
+# Subtest: planner fails closed on missing or mismatched actual provider thread identity
+ok 150 - planner fails closed on missing or mismatched actual provider thread identity
+  ---
+  duration_ms: 12.447581
+  type: 'test'
+  ...
+# Subtest: equal thread IDs on distinct transports do not share a planner fence
+ok 151 - equal thread IDs on distinct transports do not share a planner fence
+  ---
+  duration_ms: 11.52418
+  type: 'test'
+  ...
+# Subtest: owner correction trusted hook rolls back atomically on throw
+ok 152 - owner correction trusted hook rolls back atomically on throw
+  ---
+  duration_ms: 5.589526
+  type: 'test'
+  ...
+# Subtest: owner correction trusted hook rolls back atomically on async
+ok 153 - owner correction trusted hook rolls back atomically on async
+  ---
+  duration_ms: 4.846177
+  type: 'test'
+  ...
+# Subtest: owner correction trusted hook rolls back atomically on ack
+ok 154 - owner correction trusted hook rolls back atomically on ack
+  ---
+  duration_ms: 4.486412
+  type: 'test'
+  ...
+# Subtest: correction-only drain refuses stale controller owner without consuming pending correction
+ok 155 - correction-only drain refuses stale controller owner without consuming pending correction
+  ---
+  duration_ms: 4.633718
+  type: 'test'
+  ...
+1..155
+# tests 161
+# suites 0
+# pass 161
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 44460.929939

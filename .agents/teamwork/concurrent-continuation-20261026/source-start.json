@@ -1,0 +1,361 @@
+{
+  "capturedAt": "2026-10-26T18:51:18.017307+00:00",
+  "head": "65a970e0bfe9572a8d6df3d2d35d91fe33f82f83",
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "c5935846556abb6b4347bf5b239df4240619c025fee73efc08b21c64a731b22f",
+      "status": " M"
+    },
+    {
+      "path": "docs/execution-boundary-contract.md",
+      "sha256": "29a06a6e15a3ff91d195f547e704be8ae68be638314ea6bebaff9d547c47f8bf",
+      "status": " M"
+    },
+    {
+      "path": "docs/execution-permissions.md",
+      "sha256": "e1149a17511c0aaa214ba4db04bb5b0d39b81423067da52956010891d57a433f",
+      "status": " M"
+    },
+    {
+      "path": "launcher-ui/app.js",
+      "sha256": "2076673ed9702e20a26f57211aa94c9eb7dbfeb98a2f5901d5425f16a7a334b0",
+      "status": " M"
+    },
+    {
+      "path": "launcher-ui/index.html",
+      "sha256": "dbbcf1f5d2df9420047b1009fd3111808a51338282305d4c2bc5a255cb75e770",
+      "status": " M"
+    },
+    {
+      "path": "launcher-ui/performance.js",
+      "sha256": "e3209f5f6b435a7dc17af33afd056b339f4ba459211383aa64547089dc392814",
+      "status": " M"
+    },
+    {
+      "path": "launcher-ui/styles.css",
+      "sha256": "7c193b4ccf1905e3256326ab2c0228e1364713026d7317811ce4e418810b69d5",
+      "status": " M"
+    },
+    {
+      "path": "launcher.js",
+      "sha256": "538b78bdc8d8b11947eefcf2737c07550f357a7b94906f8cf45f426270c58811",
+      "status": " M"
+    },
+    {
+      "path": "src/acceptance.js",
+      "sha256": "7ba0d185fef831988f6e09ef610c4bae33d7afe7cfa4c5210db95d101e4fa039",
+      "status": " M"
+    },
+    {
+      "path": "src/codex-app-server.js",
+      "sha256": "379a3b2893f023ab96777136e7d4b89e08d43103888e4ad663453a012585b569",
+      "status": " M"
+    },
+    {
+      "path": "src/execution-permissions.js",
+      "sha256": "d296a208cf6a096a72ac9b52b114a602732747d35ed37212e0a5f304dc1feb72",
+      "status": " M"
+    },
+    {
+      "path": "src/launcher-app.js",
+      "sha256": "15ff1a39c219c84b223516e5bdddbc39f32e14af5f62bd673287ec6e49fa19c7",
+      "status": " M"
+    },
+    {
+      "path": "src/lead-graph.js",
+      "sha256": "8897d64d68f772707814198e14b904afa6a1577e325c8e74588e9e2ca69bef29",
+      "status": " M"
+    },
+    {
+      "path": "src/loop-guard.js",
+      "sha256": "a0ce0eeca32e5373a7e010022bc4940faff749486d08f629976c7efee189e519",
+      "status": " M"
+    },
+    {
+      "path": "src/role-overrides.js",
+      "sha256": "3f3a4878291e05d6ba3e809060b52168703a6c8d2be4495b1545775cd8a3d089",
+      "status": " M"
+    },
+    {
+      "path": "src/verification-preflight.js",
+      "sha256": "2db7d06709f28e4d68d1656c8d1a76253f67aa85dbd4310c364c604c5b4a0c6b",
+      "status": " M"
+    },
+    {
+      "path": "test/acceptance-scratch.test.js",
+      "sha256": "afd7edb10c16782d45547f5b84d26667b390e81809bd5823f43ae92a9ab9a6e6",
+      "status": " M"
+    },
+    {
+      "path": "test/acceptance.test.js",
+      "sha256": "5222a768859f7198fe2fef0360cd328f1969b57795b89078e3fefccf6d84f4ca",
+      "status": " M"
+    },
+    {
+      "path": "test/codex-app-server.test.js",
+      "sha256": "8a458b73f93b5af99817f85b32e71c614672f388fd8ff880bf7aa5ed20c0e180",
+      "status": " M"
+    },
+    {
+      "path": "test/launcher-accounts.test.js",
+      "sha256": "96d8f12267acc996bd63c1011770665d9934c32f0bbac96b8def94f41bfce864",
+      "status": " M"
+    },
+    {
+      "path": "test/launcher-app.test.js",
+      "sha256": "4ae200bba2310a7a14b41d4ec06a6160694ba23c46abd74978eb9539a4ff946c",
+      "status": " M"
+    },
+    {
+      "path": "test/lead-graph.test.js",
+      "sha256": "0d70293b5026718cbf046274f2731689789b4d487725d74294262d82510c3117",
+      "status": " M"
+    },
+    {
+      "path": "test/loop-guard.test.js",
+      "sha256": "104829304b5bb699ad5096731f29fe25a470ea8f9e34170bef17957aa5298eae",
+      "status": " M"
+    },
+    {
+      "path": "test/role-overrides.test.js",
+      "sha256": "a0747e373f58d218eec571d5eb20bb560b3861901853bf001796cc7f1eda2ed3",
+      "status": " M"
+    },
+    {
+      "path": "test/verification-preflight.test.js",
+      "sha256": "0f370872a918728dd08d843fabd4ee759470139871f74df055ceb82eff22dc42",
+      "status": " M"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/README.md",
+      "sha256": "5f59a077f6a263fcfbeaa4d28daeb0bad3a56e237c8a85b732b2899adb35cf3f",
+      "status": "??"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/current-architecture.md",
+      "sha256": "f7d5c5eb5cd8f04207358c262c81b6bfb48014ddb053e8ac2e49204c9989d082",
+      "status": "??"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/foundation-api.md",
+      "sha256": "15ba3ad956f4a5222694c22212a7c6880cb1f35f3b4e413b8c87a7d1ff7e4231",
+      "status": "??"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/implementation-backlog.json",
+      "sha256": "f007fa237adf8380cba1984faf0dbf0adda6bbad727608f171a5855a854d6840",
+      "status": "??"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/implementation-plan.md",
+      "sha256": "423f969ec16ed0287a7f6cd34b7102649dd71851dc23e253ff05c2451b1b3874",
+      "status": "??"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/implementation-status.md",
+      "sha256": "8ad264f15a308f2fe7804f8c0fdcd77100edf1714a89159a61b88d58e306b8c6",
+      "status": "??"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/knowledge-graph.json",
+      "sha256": "d0dfb20d47bd6cfebf54751593911130a49c379cc6379fb3e8b3a590f3c24208",
+      "status": "??"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/role-policy.md",
+      "sha256": "9685b11a4f08724a1e752f4a5cee518720b4fc008f077b1a8b98e449243d874b",
+      "status": "??"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/source-baseline.json",
+      "sha256": "4879079d6cfba9bffd522546e1b55a99fda80ff63a2358937ff795128c77c466",
+      "status": "??"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/target-design.md",
+      "sha256": "4c5f44eea1104f345cf858296ebcc6e939eb2f030b1dee0c2b2fd51b8c854783",
+      "status": "??"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/validation.md",
+      "sha256": "e7774b5f522bc65abab62ea8f72e68467f67858036b98f22e7ebadbeabd6bb6c",
+      "status": "??"
+    },
+    {
+      "path": "docs/architecture/concurrent-harness/verification-summary.json",
+      "sha256": "e1c54bf50363ea8926a1f57e1e5f1eb55f8ea61dd4e2a193d97dfbbd362dcbab",
+      "status": "??"
+    },
+    {
+      "path": "launcher-ui/roles.css",
+      "sha256": "521c559b5295fd797358a6a7d1d4c372d3a593a143680605e99cd43e644d3074",
+      "status": "??"
+    },
+    {
+      "path": "launcher-ui/roles.html",
+      "sha256": "cf9551c19471497c96b0fc37c84110099fb610102e0e7133c8a09a1497ef90c5",
+      "status": "??"
+    },
+    {
+      "path": "launcher-ui/roles.js",
+      "sha256": "8bd93eeb3015ebd2c0195f2a57d54bad2897eb70f0390658432591f14954ad3e",
+      "status": "??"
+    },
+    {
+      "path": "schemas/delivery-v1.schema.json",
+      "sha256": "43899694ae52871f25e5e773beae6ec61fd54961a951a53757671209f2922f43",
+      "status": "??"
+    },
+    {
+      "path": "src/backlog-store.js",
+      "sha256": "c513b581b62885a4762aa964fad01c3f9668220270156dcbc105cca050a6d061",
+      "status": "??"
+    },
+    {
+      "path": "src/candidate-review.js",
+      "sha256": "a7647684782ff100cacd8980d36c004dc8ac6431e3ba2f35734f0f3cbfec608c",
+      "status": "??"
+    },
+    {
+      "path": "src/candidate-store.js",
+      "sha256": "55fa94c7de70233df1630175df1b17a6340509205e3083a3b1f0c9026170a506",
+      "status": "??"
+    },
+    {
+      "path": "src/delivery-contracts.js",
+      "sha256": "20987a6b745d3a7c96205260cdeb2bd666b4b2c8e4027cfeb8e7dc9a456ad2be",
+      "status": "??"
+    },
+    {
+      "path": "src/delivery-events.js",
+      "sha256": "6a02d5b42e35694592473700982726a3576ee621fe02efcd65b09d1e2dc4a878",
+      "status": "??"
+    },
+    {
+      "path": "src/delivery-inbox.js",
+      "sha256": "9a6aca2b26f6fe00d3e5099875369eb15cdca1560671effaa0f5e934d36935d7",
+      "status": "??"
+    },
+    {
+      "path": "src/delivery-review-policy.js",
+      "sha256": "9fc1a5f4e2df37e3c088ca43126232521aa397a7298a78ee86a20e556f658463",
+      "status": "??"
+    },
+    {
+      "path": "src/lead-planner.js",
+      "sha256": "85546d6613e4b4df60a870ace3794abd70333431155006ebb311d119cea1a451",
+      "status": "??"
+    },
+    {
+      "path": "src/model-capabilities.js",
+      "sha256": "2cb12a41ccd45c0f1787a3274906f6557be28c083357ba4a2ed58fbc4ca80b22",
+      "status": "??"
+    },
+    {
+      "path": "src/project-delivery-controller.js",
+      "sha256": "05e9dbcd252c865cd1fc2a9fdde91055592857406d0937dd46a2ebff2f94da03",
+      "status": "??"
+    },
+    {
+      "path": "src/task-executor.js",
+      "sha256": "0c87e034c33fa50a9b526ae660b7b8fe928e76dade8097a933da48cde78b02b5",
+      "status": "??"
+    },
+    {
+      "path": "src/task-resource-policy.js",
+      "sha256": "05bcb30561c25ad8b31c8e294ed025c1b2a006cf32e06de762921213215b4ca7",
+      "status": "??"
+    },
+    {
+      "path": "src/task-scheduler.js",
+      "sha256": "d540edbf4fe13a3c7a3aa8b7a3eca6b5588704c4bc48d3ea56c32b1e005d02a4",
+      "status": "??"
+    },
+    {
+      "path": "test/backlog-store.test.js",
+      "sha256": "8a2360afc89f13f73d97d4e993e3ef4b94b04e5d6ef8f29c0562d82ccde93b0f",
+      "status": "??"
+    },
+    {
+      "path": "test/candidate-review.test.js",
+      "sha256": "a215edeba3a5fc48f23464ed841f5d7dd9228236bd115733f4656e1cff54b1f1",
+      "status": "??"
+    },
+    {
+      "path": "test/candidate-store.test.js",
+      "sha256": "6d05e9090cc52c5be089f25567521cb489f94219c6d1cebfe22da68c7db1ff74",
+      "status": "??"
+    },
+    {
+      "path": "test/delivery-contracts.test.js",
+      "sha256": "c945fccc1518f07e5ac4ad5747be1e58e8888965fbb87a5382edab03fb61faa1",
+      "status": "??"
+    },
+    {
+      "path": "test/delivery-events.test.js",
+      "sha256": "a71a75f6643f546a521c5cd6d4191b7ba100665ea6f99c9b24363b478fbf3ea8",
+      "status": "??"
+    },
+    {
+      "path": "test/delivery-inbox.test.js",
+      "sha256": "4155a05f7d78bac6928d66a7b2699d804ff197aa60b7fef423fcc9a940a2ad21",
+      "status": "??"
+    },
+    {
+      "path": "test/delivery-review-policy.test.js",
+      "sha256": "56bddb0d2300c30c7f6136cf47f7ba1a7cb5deb5f67d65e2f432372818296753",
+      "status": "??"
+    },
+    {
+      "path": "test/launcher-accounts-refresh-ui.test.js",
+      "sha256": "9895b23319b0f4e31d87e6c4ec56ef0020a82e58a402535df60265bc21472585",
+      "status": "??"
+    },
+    {
+      "path": "test/launcher-handshake-ui.test.js",
+      "sha256": "777b72cc0ccef851d47c5a6c27f097d9d2f72b054797ff5cf931663f5760ea6d",
+      "status": "??"
+    },
+    {
+      "path": "test/launcher-performance-ui.test.js",
+      "sha256": "cb0e87c283efc211341f3fee5811d1ceb66a56e5405d0f6a00d6121d4f6e27b4",
+      "status": "??"
+    },
+    {
+      "path": "test/launcher-role-page.test.js",
+      "sha256": "2dbc9ce0473002e75bc189a64915280340810dec42079a24e5b95785ce894f79",
+      "status": "??"
+    },
+    {
+      "path": "test/launcher-startup.test.js",
+      "sha256": "9e8b68d02ba2c59126cadd553eb8b33bd92d18c42a098763e3ebf337cade2019",
+      "status": "??"
+    },
+    {
+      "path": "test/lead-planner.test.js",
+      "sha256": "a03f24ce2293fe2eeafdfbefdc44c23a827188c261ce659025cc7a821bdc57a8",
+      "status": "??"
+    },
+    {
+      "path": "test/role-model-capabilities.test.js",
+      "sha256": "0a05bc32d9ccb70b55926c34048827b248621745e6815e1b57aeb1e54a9172c7",
+      "status": "??"
+    },
+    {
+      "path": "test/task-executor.test.js",
+      "sha256": "a7f9bebd0cf445253b7eeb33e4c23083dacb5a08852246c8db7f7838d0170534",
+      "status": "??"
+    },
+    {
+      "path": "test/task-resource-policy.test.js",
+      "sha256": "736e415f1c37d99a976fa325b51b0df553ae34f1e8182ef8cccda34604308a65",
+      "status": "??"
+    },
+    {
+      "path": "test/task-scheduler.test.js",
+      "sha256": "d0d0ccab2db59727da29255f1d8bdc979c92e333705693763bb84666632fe722",
+      "status": "??"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+Final affected checkpoint command (236 passed, 1 known CN-10 failure):
+env -u NODE_TEST_CONTEXT node --test --test-reporter=tap test/role-overrides.test.js test/role-model-capabilities.test.js test/launcher-role-page.test.js test/launcher-accounts-refresh-ui.test.js test/launcher-app.test.js test/launcher-accounts.test.js test/launcher-handshake-ui.test.js test/launcher-performance-ui.test.js test/launcher-performance.test.js test/performance-store.test.js test/usage-report.test.js test/usage-ledger.test.js test/delivery-contracts.test.js test/backlog-store.test.js test/delivery-events.test.js test/candidate-store.test.js test/task-executor.test.js test/task-resource-policy.test.js test/task-scheduler.test.js test/delivery-inbox.test.js test/lead-planner.test.js test/candidate-review.test.js test/delivery-review-policy.test.js
+
+No full suite was run.

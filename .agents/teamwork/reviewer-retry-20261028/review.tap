@@ -1,0 +1,130 @@
+TAP version 13
+# Subtest: candidate review freezes source bytes, proves exact scheduler binding, settles trusted receipts and retains snapshots
+ok 1 - candidate review freezes source bytes, proves exact scheduler binding, settles trusted receipts and retains snapshots
+  ---
+  duration_ms: 96.849854
+  type: 'test'
+  ...
+# Subtest: failed scoped reviewer retry preserves a qualified sibling and cannot qualify a newer candidate
+ok 2 - failed scoped reviewer retry preserves a qualified sibling and cannot qualify a newer candidate
+  ---
+  duration_ms: 95.637214
+  type: 'test'
+  ...
+# Subtest: claim binding rejects truthy and asynchronous authorization results
+ok 3 - claim binding rejects truthy and asynchronous authorization results
+  ---
+  duration_ms: 88.542055
+  type: 'test'
+  ...
+# Subtest: TaskScheduler admits only the registered frozen review task through its live review callback
+ok 4 - TaskScheduler admits only the registered frozen review task through its live review callback
+  ---
+  duration_ms: 48.060565
+  type: 'test'
+  ...
+# Subtest: TaskScheduler keeps same-checkpoint verifier evidence ahead of its dependent auditor
+ok 5 - TaskScheduler keeps same-checkpoint verifier evidence ahead of its dependent auditor
+  ---
+  duration_ms: 45.303704
+  type: 'test'
+  ...
+# Subtest: settlement rejects stale owner/check identity and rolls back receipt plus event writes
+ok 6 - settlement rejects stale owner/check identity and rolls back receipt plus event writes
+  ---
+  duration_ms: 148.000291
+  type: 'test'
+  ...
+# Subtest: promotion uses the exact immutable source context stored with its receipt
+ok 7 - promotion uses the exact immutable source context stored with its receipt
+  ---
+  duration_ms: 69.758454
+  type: 'test'
+  ...
+# Subtest: receipt replay preserves the first record across clock advance and reopen without extra writes
+ok 8 - receipt replay preserves the first record across clock advance and reopen without extra writes
+  ---
+  duration_ms: 54.766164
+  type: 'test'
+  ...
+# Subtest: promotion replay preserves the first record across clock advance and reopen without extra writes
+ok 9 - promotion replay preserves the first record across clock advance and reopen without extra writes
+  ---
+  duration_ms: 77.082193
+  type: 'test'
+  ...
+# Subtest: conflicting settlement after stale preflight preserves the committed winner through GC and reopen
+ok 10 - conflicting settlement after stale preflight preserves the committed winner through GC and reopen
+  ---
+  duration_ms: 49.630023
+  type: 'test'
+  ...
+# Subtest: conflicting promotion after stale preflight preserves the committed winner through GC and reopen
+ok 11 - conflicting promotion after stale preflight preserves the committed winner through GC and reopen
+  ---
+  duration_ms: 70.329662
+  type: 'test'
+  ...
+# Subtest: review context proposal reference and rows roll back together on event failure
+ok 12 - review context proposal reference and rows roll back together on event failure
+  ---
+  duration_ms: 41.428693
+  type: 'test'
+  ...
+# Subtest: failed proposal after a committed duplicate context preserves the winner reference
+ok 13 - failed proposal after a committed duplicate context preserves the winner reference
+  ---
+  duration_ms: 46.242612
+  type: 'test'
+  ...
+# Subtest: proposal validates registered checkpoint ancestry and preserves acceptance dependencies
+ok 14 - proposal validates registered checkpoint ancestry and preserves acceptance dependencies
+  ---
+  duration_ms: 42.131261
+  type: 'test'
+  ...
+# Subtest: verifier ordering is evidence-bound; distinct checkpoints remain independent; only unchanged attested closures promote
+ok 15 - verifier ordering is evidence-bound; distinct checkpoints remain independent; only unchanged attested closures promote
+  ---
+  duration_ms: 117.402927
+  type: 'test'
+  ...
+# Subtest: finalization projection exposes exact qualified receipts and refuses undrained review tasks
+ok 16 - finalization projection exposes exact qualified receipts and refuses undrained review tasks
+  ---
+  duration_ms: 77.964465
+  type: 'test'
+  ...
+# Subtest: owner checkpoint supersession keeps stale obligations active until authorized replacement and preserves history
+ok 17 - owner checkpoint supersession keeps stale obligations active until authorized replacement and preserves history
+  ---
+  duration_ms: 56.419797
+  type: 'test'
+  ...
+# Subtest: finalization ignores a retired queued review but blocks the current replacement review until its receipt settles
+ok 18 - finalization ignores a retired queued review but blocks the current replacement review until its receipt settles
+  ---
+  duration_ms: 56.595266
+  type: 'test'
+  ...
+# Subtest: owner checkpoint supersession defaults to deny, requires exact coverage and rejects stale or downgraded mappings atomically
+ok 19 - owner checkpoint supersession defaults to deny, requires exact coverage and rejects stale or downgraded mappings atomically
+  ---
+  duration_ms: 304.111034
+  type: 'test'
+  ...
+# Subtest: owner checkpoint supersession rolls back relation and event together, requires fresh replay auth, and supports sequential corrections
+ok 20 - owner checkpoint supersession rolls back relation and event together, requires fresh replay auth, and supports sequential corrections
+  ---
+  duration_ms: 50.183071
+  type: 'test'
+  ...
+1..20
+# tests 20
+# suites 0
+# pass 20
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1720.796457

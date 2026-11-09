@@ -1,0 +1,17 @@
+{
+  "at": "2026-10-19T12:19:28.116Z",
+  "response": {
+    "success": true,
+    "project": {
+      "id": "c65886082e",
+      "path": "/home/sr/Projects/Workspace/claude-harness",
+      "name": "claude-harness",
+      "port": 3004,
+      "stateDb": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/c65886082e/state.sqlite",
+      "addedAt": "2026-10-18T13:26:12.361Z",
+      "lastUsedAt": "2026-10-19T12:17:23.107Z",
+      "pid": 261953,
+      "status": "starting"
+    }
+  }
+}

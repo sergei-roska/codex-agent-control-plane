@@ -1,0 +1,35 @@
+▶ blocked technical resume requires an exact released no-effect review receipt
+  ✖ accepts the exact frozen verifier attempt and advances the control revision once (17.818773ms)
+  ✔ refuses tampered-receipt without changing objective or event history (7.030118ms)
+  ✔ refuses failed-task without changing objective or event history (4.066878ms)
+  ✔ refuses retry-pending without changing objective or event history (3.767691ms)
+  ✔ refuses unknown-attempt without changing objective or event history (4.931963ms)
+  ✔ refuses stale-control without changing objective or event history (3.983361ms)
+✖ blocked technical resume requires an exact released no-effect review receipt (42.713592ms)
+✔ provider drift stays dormant until explicit resume prepares and durably binds a fresh planner thread (134.155367ms)
+✔ provider rebind refuses control drift during delayed thread preparation without writing history (82.891743ms)
+✔ provider rebind refuses binding drift during delayed thread preparation without writing history (77.718446ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 8
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 611.01612
+
+✖ failing tests:
+
+test at test/backlog-store.test.js:1350:11
+✖ accepts the exact frozen verifier attempt and advances the control revision once (17.818773ms)
+  ReferenceError [Error]: objectiveRecord is not defined
+      at sqliteTransaction.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/src/backlog-store.js:858:43)
+      at sqliteTransaction (/home/sr/Projects/Workspace/codex-agent-control-plane/node_modules/better-sqlite3/lib/methods/transaction.js:65:24)
+      at BacklogStore.resumeBlockedTechnical (/home/sr/Projects/Workspace/codex-agent-control-plane/src/backlog-store.js:868:15)
+      at TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/backlog-store.test.js:1357:32)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at TestContext.test (node:internal/test_runner/test:400:20)
+      at TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/backlog-store.test.js:1350:11)
+      at Test.runInAsyncScope (node:async_hooks:227:14)

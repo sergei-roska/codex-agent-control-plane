@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "modelTurns": 0,
+  "managedProjectChanges": false,
+  "agentCard": {
+    "status": 200,
+    "name": "Team Coordinator"
+  },
+  "writerIsolation": {
+    "mode": "cooperative",
+    "reason": "trusted_native_full_access_cooperative",
+    "lanesRoot": "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/harness-critical/native-startup-tUgqVd/lanes",
+    "links": [
+      ".venv",
+      "venv",
+      "node_modules"
+    ],
+    "networkAccess": true,
+    "confinement": "none",
+    "inherited": true,
+    "probe": null,
+    "recovery": {
+      "orphaned": [],
+      "integrated": [],
+      "notIntegrated": [],
+      "removed": [],
+      "failed": []
+    }
+  },
+  "status": "passed"
+}

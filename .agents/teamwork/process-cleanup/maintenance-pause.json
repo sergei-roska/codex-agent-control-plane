@@ -1,0 +1,33 @@
+{
+  "at": "2026-10-19T12:15:35.190Z",
+  "projectId": "c65886082e",
+  "contextId": "cb7ddc85-ce74-4fb8-864b-0f71de97eb28",
+  "runId": "9e2c8b53-458b-4ccf-924b-ee13639510df",
+  "requestedByThisMaintenance": true,
+  "before": {
+    "state": "TASK_STATE_WORKING",
+    "node": "dispatch",
+    "round": 156,
+    "batch": [
+      {
+        "assignmentId": "9e2c8b53-458b-4ccf-924b-ee13639510df:r156:a0",
+        "role": "engineer",
+        "state": "running"
+      }
+    ]
+  },
+  "response": {
+    "runs": [
+      {
+        "taskId": "9e2c8b53-458b-4ccf-924b-ee13639510df",
+        "pauseRequested": true
+      }
+    ]
+  },
+  "reRequestedAt": "2026-10-19T12:18:11.500Z",
+  "resumeObserved": {
+    "reason": "new owner message in UI",
+    "messageId": "web-1792412243115"
+  },
+  "currentRound": 157
+}

@@ -1,0 +1,12 @@
+{
+  "require": {
+    "cweagans/composer-patches": "^2.0"
+  },
+  "extra": {
+    "patches": {
+      "drupal/shs": {
+        "Upstream MR 59 validation probe": "patches/dccourts-182-mr59.diff"
+      }
+    }
+  }
+}

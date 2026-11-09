@@ -1,0 +1,25 @@
+✔ owner decision rejects routine without creating a wait (13.386783ms)
+✔ owner decision rejects no-investigation without creating a wait (3.730273ms)
+✔ owner decision rejects unknown-evidence without creating a wait (4.230795ms)
+✔ owner decision rejects untrusted without creating a wait (3.836237ms)
+✔ owner decision rejects writable without creating a wait (3.626775ms)
+✔ owner decision rejects stale-investigation without creating a wait (3.846852ms)
+✔ owner decision rejects obligation without creating a wait (2.700827ms)
+✔ owner decision rejects option without creating a wait (2.65138ms)
+✔ owner decision rejects extra without creating a wait (2.910193ms)
+✔ owner request fences direct claims and finalization even if disposition is corrupted (5.58793ms)
+✔ owner replies require exact authorization, scope, option, request and current pins (9.079948ms)
+✔ owner reply preserves later pause (4.930715ms)
+✔ owner reply preserves later stop (5.293731ms)
+✔ owner reply preserves later cancel (3.627202ms)
+✔ changed goal requires authenticated replacement with revalidated investigation and retained history (8.187229ms)
+✔ planner request registration is atomic, consumes trigger and makes no owner wait model loop (11.79878ms)
+✔ owner wait survives SQLite reopen with immutable digest and exact reply pins (8.148328ms)
+ℹ tests 17
+ℹ suites 0
+ℹ pass 17
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 175.225147

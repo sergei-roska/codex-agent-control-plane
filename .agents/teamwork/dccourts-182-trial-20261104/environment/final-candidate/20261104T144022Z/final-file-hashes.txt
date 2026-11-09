@@ -1,0 +1,7 @@
+82fe198b8d4613441f2db16c42903be9b0739bba9fa9ca45fc12f11a3577e8b1  /home/sr/Projects/dccourtscode-harness-trial-20261104/AGENTS.md
+c784eff105e8ed23b7fdb3e5af2de39c2a1be2c14b774cf154c1e4e963f628b5  /home/sr/Projects/dccourtscode-harness-trial-20261104/.lando.yml
+dbd1482e5da48a83aaf70137c57186b19ea09ad4b701015c32c216ca39ab91f7  /home/sr/Projects/dccourtscode-harness-trial-20261104/composer.json
+4e040403c2ed8ef0d60642a451a6f8e571e4cd9ae26c90130573dff3e294034a  /home/sr/Projects/dccourtscode-harness-trial-20261104/composer.lock
+e68acceec7ef04ff16e8e00121e4677d8a408a33671aecdce7959b35bf8322c1  /home/sr/Projects/dccourtscode-harness-trial-20261104/patches.lock.json
+6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9  /home/sr/Projects/dccourtscode-harness-trial-20261104/patches/shs-3620147-preselect-stored-values.patch
+939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6  /home/sr/Projects/dccourtscode-harness-trial-20261104/scripts/harness/validate-dccourts-182.sh

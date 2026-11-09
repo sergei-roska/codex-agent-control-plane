@@ -1,0 +1,117 @@
+ M README.md
+ M docs/execution-boundary-contract.md
+ M docs/execution-permissions.md
+ M launcher-ui/app.js
+ M launcher-ui/index.html
+ M launcher-ui/performance.js
+ M launcher-ui/styles.css
+ M launcher.js
+ M profiles/agents/architect.toml
+ M profiles/agents/auditor.toml
+ M profiles/agents/engineer.toml
+ M profiles/agents/explorer.toml
+ M profiles/agents/recovery-engineer.toml
+ M profiles/agents/scout.toml
+ M profiles/agents/senior-engineer.toml
+ M profiles/agents/verifier.toml
+ M src/a2a-role-service.js
+ M src/acceptance.js
+ M src/app-server-switch.js
+ M src/codex-app-server.js
+ M src/contracts.js
+ M src/execution-permissions.js
+ M src/launcher-app.js
+ M src/launcher-projects.js
+ M src/lead-graph.js
+ M src/loop-guard.js
+ M src/project-settings.js
+ M src/role-catalog.js
+ M src/role-overrides.js
+ M src/server.js
+ M src/verification-preflight.js
+ M src/workspace-snapshot.js
+ M test/a2a-role-service.test.js
+ M test/acceptance-scratch.test.js
+ M test/acceptance.test.js
+ M test/app-server-switch.test.js
+ M test/codex-app-server.test.js
+ M test/e2e.test.js
+ M test/launcher-accounts.test.js
+ M test/launcher-app.test.js
+ M test/lead-graph.test.js
+ M test/loop-guard.test.js
+ M test/project-settings.test.js
+ M test/role-catalog.test.js
+ M test/role-overrides.test.js
+ M test/verification-preflight.test.js
+ M test/writer-lanes.test.js
+?? docs/architecture/
+?? launcher-ui/backlog.css
+?? launcher-ui/backlog.html
+?? launcher-ui/backlog.js
+?? launcher-ui/roles.css
+?? launcher-ui/roles.html
+?? launcher-ui/roles.js
+?? schemas/delivery-v1.schema.json
+?? src/backlog-store.js
+?? src/candidate-review.js
+?? src/candidate-store.js
+?? src/concurrent-delivery-engine.js
+?? src/delivery-acceptance.js
+?? src/delivery-contracts.js
+?? src/delivery-engine-router.js
+?? src/delivery-events.js
+?? src/delivery-host-controls.js
+?? src/delivery-inbox.js
+?? src/delivery-lifecycle.js
+?? src/delivery-output-artifacts.js
+?? src/delivery-provider-identity.js
+?? src/delivery-review-policy.js
+?? src/delivery-role-capabilities.js
+?? src/delivery-role-service.js
+?? src/delivery-visibility.js
+?? src/launcher-project-settings.js
+?? src/lead-planner.js
+?? src/model-capabilities.js
+?? src/project-delivery-controller.js
+?? src/task-executor.js
+?? src/task-resource-policy.js
+?? src/task-scheduler.js
+?? test/backlog-store.test.js
+?? test/candidate-review.test.js
+?? test/candidate-store.test.js
+?? test/concurrent-delivery-engine.test.js
+?? test/concurrent-engine-comparison.test.js
+?? test/concurrent-recovery-acceptance.test.js
+?? test/delivery-acceptance-join.test.js
+?? test/delivery-acceptance.test.js
+?? test/delivery-contracts.test.js
+?? test/delivery-engine-router.test.js
+?? test/delivery-events.test.js
+?? test/delivery-host-controls.test.js
+?? test/delivery-inbox.test.js
+?? test/delivery-lifecycle.test.js
+?? test/delivery-migration-qualification.test.js
+?? test/delivery-output-artifacts.test.js
+?? test/delivery-provider-identity.test.js
+?? test/delivery-review-policy.test.js
+?? test/delivery-role-capabilities.test.js
+?? test/delivery-role-service.test.js
+?? test/delivery-verifier-integration.test.js
+?? test/delivery-visibility.test.js
+?? test/launcher-accounts-refresh-ui.test.js
+?? test/launcher-backlog-ui.test.js
+?? test/launcher-handshake-ui.test.js
+?? test/launcher-owner-delivery.test.js
+?? test/launcher-owner-ui.test.js
+?? test/launcher-performance-ui.test.js
+?? test/launcher-role-page.test.js
+?? test/launcher-startup.test.js
+?? test/lead-planner.test.js
+?? test/owner-decision.test.js
+?? test/project-delivery-controller.test.js
+?? test/role-model-capabilities.test.js
+?? test/server-delivery-engine.test.js
+?? test/task-executor.test.js
+?? test/task-resource-policy.test.js
+?? test/task-scheduler.test.js

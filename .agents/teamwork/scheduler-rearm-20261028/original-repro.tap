@@ -1,0 +1,29 @@
+✖ early poll callback must rearm a future pending poll (20.900102ms)
+ℹ {"now":1199,"timers":1,"timerPresent":false,"nextPollAt":[["attempt-40486c81acf3ba3f512f534e2cdeb952",1200]],"polls":0,"projection":{"projectId":"scheduler-project","objectiveId":"scheduler-objective","running":true,"inFlight":[],"parked":[],"capacity":{"active":1,"workerLimit":5,"maxActiveTurns":6,"plannerReservedSlots":1,"byRole":{"engineer":{"active":1,"limit":4},"auditor":{"active":0,"limit":2},"explorer":{"active":0,"limit":2}}},"idle":{"cause":"no_ready_work","detail":"no_eligible_task"},"disposition":"executing","admissionReasons":{}}}
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 94.578172
+
+✖ failing tests:
+
+test at .agents/teamwork/cn14-facade-20261028/correction/early-poll-repro.cjs:17:1
+✖ early poll callback must rearm a future pending poll (20.900102ms)
+  AssertionError [ERR_ASSERTION]: early timer left a submitted intent without any future poll
+  
+  false !== true
+  
+      at TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/cn14-facade-20261028/correction/early-poll-repro.cjs:48:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

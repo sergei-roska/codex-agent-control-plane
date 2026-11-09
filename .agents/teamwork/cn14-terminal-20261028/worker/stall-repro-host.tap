@@ -1,0 +1,36 @@
+✔ cooperative held lost acknowledgement retries staged close after original provider group death with immediate provider close (10343.995815ms)
+✖ cooperative held lost acknowledgement retries staged close after original provider group death with late provider close (5169.600624ms)
+(node:116914) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 251)
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:116914) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 252)
+
+Interrupted while running:
+
+⚠ test/server-delivery-engine.test.js (test/server-delivery-engine.test.js:1:1)
+✖ test/server-delivery-engine.test.js (59974.135803ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 59978.868139
+
+✖ failing tests:
+
+test at test/server-delivery-engine.test.js:697:43
+✖ cooperative held lost acknowledgement retries staged close after original provider group death with late provider close (5169.600624ms)
+  Error: concurrent_shutdown_unsafe
+      at error (/home/sr/Projects/Workspace/codex-agent-control-plane/src/concurrent-delivery-engine.js:29:55)
+      at #drainRoleCalls (/home/sr/Projects/Workspace/codex-agent-control-plane/src/concurrent-delivery-engine.js:1391:11)
+      at async #prepareShutdown (/home/sr/Projects/Workspace/codex-agent-control-plane/src/concurrent-delivery-engine.js:396:5)
+      at async ConcurrentDeliveryEngine.prepareShutdown (/home/sr/Projects/Workspace/codex-agent-control-plane/src/concurrent-delivery-engine.js:386:18)
+      at async DeliveryEngineRouter.prepareShutdown (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-engine-router.js:199:24)
+      at async /home/sr/Projects/Workspace/codex-agent-control-plane/src/server.js:1225:17 {
+    code: 'concurrent_shutdown_unsafe'
+  }
+
+test at test/server-delivery-engine.test.js:1:1
+✖ test/server-delivery-engine.test.js (59974.135803ms)
+  'Promise resolution is still pending but the event loop has already resolved'

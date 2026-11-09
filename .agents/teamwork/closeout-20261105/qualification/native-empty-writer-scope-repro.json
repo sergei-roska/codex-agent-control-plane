@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-05T15:03:53.632Z",
+  "taskId": "diagnose-product",
+  "role": "engineer",
+  "allowedFiles": [],
+  "intentCount": 0,
+  "roleExecutionCount": 0,
+  "rejection": {
+    "name": "BoundaryViolation",
+    "message": "Writable role engineer requires explicit allowedFiles"
+  }
+}

@@ -1,0 +1,19 @@
+# DCCOURTS-182 cleanup acceptance
+
+Verdict: APPROVE the bounded cleanup/preservation endpoint. The earlier independently accepted native verification remains accepted; no native checks or provider turns were repeated.
+
+## Acceptance criteria
+
+1. PASS - Retain the final candidate and durable result before discarding owned trial state. Ran SHA-256 over runner/final-four-file-candidate.patch: ebb982adb8f5042b549bc35f79e521939088315c5e30107f1bd384a8fb3fa32f, matching final-acceptance-summary.json. Ran actual Git diff between recorded base 4b526e7e3e4f727c99f02fd44a655df595adfe0c and final candidate 7470074adf82284dc9f3614f0ee0259aef6d027b for all four retained patch paths; bytes equal the retained patch exactly. Backup is 3567616 bytes and SHA-256 bf52b14265e08a48153b535e46fe92f4e016cf039a5f999335491ee790794428, matching both summary and prior acceptance.
+2. PASS - Safe successful-run close. Read native-run-result.json: close completed, shutdown released, final owned Lando list empty. Prior independent close/native evidence reused. Ran filesystem inspection: successful /tmp/dccourts182-native-WyL9IJ absent. No runtime or database opened or changed.
+3. PASS - Owned rollback endpoint. Ran read-only Git worktree/ref checks: trial directory, registered trial worktree, and test/harness-DCCOURTS-182-20261104 branch absent. The intermediate reset-before-removal ordering is reported by cleanup-verification.json, not independently reconstructible after deletion. Final removal independently establishes that the owned candidate is no longer applied there.
+4. PASS - Original target preservation. Parsed original-before.json and original-after.json: exact equality. Ran current HEAD/branch/status and seven file hashes: exact equality with both snapshots. Original remains bugfix/DCCOURTS-182 at 41d8ecde87bd163585327c13e1a95fc777df3c27 with only the same untracked requirements file; current tracked diff is empty.
+5. PASS with explicit current-state qualification - Original Harness runtime preservation. Recomputed all six runtime-before.json paths. Five match exactly, including both databases and WALs. Current projects.json differs. Its sole structural addition is cdb project28e735afb6, addedAt 2026-11-05T08:17:08.605Z; current file mtime/ctime is after the 2026-11-04 cleanup receipt. Removing only this entry in memory reproduces the exact pretrial registry hash 8cfa80a7c21a151277638b1ca3b3e21984d57ff608ce09ef19e87a12bcde3420. This supports later registry change, with original registry content preserved. No standalone runtime-after snapshot exists; cleanup-time equality is retained root testimony, not a new independent historical measurement. Do not claim the entire current runtime snapshot is unchanged or attribute the later write to an actor.
+6. PASS - Limitations retained. Native/code-only scope, staged history, excluded production/browser checks and unqualified L6/economy claims remain as in prior acceptance. Four stale detached registrations belong to older failed runs and are explicitly outside this cleanup; none is the owned trial or final successful run.
+
+## Evidence and boundaries
+
+Machine-readable independent observations: cleanup-independent-evidence.json in this directory, observed 2026-11-05T14:12:56Z. Commands: Python hashlib/json snapshot comparison; git --no-optional-locks -C /home/sr/Projects/dccourtscode status --porcelain, rev-parse HEAD, branch --show-current, branch --list, worktree list --porcelain, diff BASE CANDIDATE -- FOUR_PATHS; filesystem existence/stat checks. Read current Harness git diff stat/names and status; the inherited 11 tracked dirty files and untracked :memory:.lockdb remain outside this cleanup review. No reviewed source, fixtures, Git state, services, databases or providers were mutated. Evidence lives in ignored local teamwork and may disappear if that directory is removed.
+
+Status: complete
+Scope expansion: none

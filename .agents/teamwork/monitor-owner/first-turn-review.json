@@ -1,0 +1,17 @@
+{
+  "kind": "risk_change",
+  "checkpointId": "m4-t312e1c2b1-first-turn-authority",
+  "reason": "Durable first-turn creation and single-use dispatch binding establish execution authority and fencing. Independently verify the existing state leaf, then audit it before dependent lifecycle and quota transitions.",
+  "paths": [
+    "src/teamwork/state/execution_control.py",
+    "tests/state/test_execution_control.py"
+  ],
+  "evidenceIds": [
+    "a125b4c6-f640-45ae-a106-22f97837f8e9:r134:a0",
+    "a125b4c6-f640-45ae-a106-22f97837f8e9:r130:a0",
+    "a125b4c6-f640-45ae-a106-22f97837f8e9:r133:a0:c1"
+  ],
+  "prerequisiteFor": [
+    "m4-t312e1-dispatch-stop-evidence"
+  ]
+}

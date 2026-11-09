@@ -1,0 +1,18 @@
+▶ large known closures compact to manifest-exact prefixes while preserving the full closure
+  ✔ 1000 selected manifest files (377.969094ms)
+  ✔ 1001 selected manifest files (327.591315ms)
+✔ large known closures compact to manifest-exact prefixes while preserving the full closure (706.336083ms)
+✔ large sparse read scopes retain leaves and do not expand across siblings or similar prefixes (210.762288ms)
+▶ known closures must match the frozen manifest and unrepresentable root scopes fail before insertion
+  ✔ absent path (34.900528ms)
+  ✔ mismatched digest (32.709477ms)
+  ✔ too many independent top-level files (148.360653ms)
+✔ known closures must match the frozen manifest and unrepresentable root scopes fail before insertion (216.701209ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1204.679143

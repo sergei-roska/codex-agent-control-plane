@@ -1,0 +1,21 @@
+'use strict';
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const net = require('node:net');
+const { spawnSync } = require('node:child_process');
+(async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'launcher-original-probe-'));
+  const preload = path.join(root, 'preload.cjs');
+  const original = path.resolve('.agents/teamwork/legacy-suite-repair-20261028/originals/launcher.js');
+  const target = path.resolve('launcher.js');
+  fs.writeFileSync(preload, `const fs = require('node:fs');\nconst Module = require('node:module');\nconst original = Module._extensions['.js'];\nModule._extensions['.js'] = (module, filename) => filename === ${JSON.stringify(target)} ? module._compile(fs.readFileSync(${JSON.stringify(original)}, 'utf8'), filename) : original(module, filename);\nconst log = console.log;\nconsole.log = (...args) => { if (String(args[0]).startsWith('Launcher listening at:') && (!process.listenerCount('SIGINT') || !process.listenerCount('SIGTERM'))) process.exit(42); log(...args); };\n`);
+  const probe = net.createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const port = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  const child = spawnSync(process.execPath, [target], { env: { ...process.env, NODE_OPTIONS: `--require=${preload}`, LAUNCHER_PORT: String(port), LAUNCHER_RUNTIME_DIR: root }, encoding: 'utf8', timeout: 5000 });
+  console.log(JSON.stringify({ status: child.status, signal: child.signal, stderr: child.stderr }));
+  fs.rmSync(root, { recursive: true, force: true });
+  if (child.status !== 42) process.exitCode = 1;
+})().catch((error) => { console.error(error); process.exitCode = 1; });

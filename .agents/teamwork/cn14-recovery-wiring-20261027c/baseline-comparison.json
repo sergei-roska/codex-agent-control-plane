@@ -1,0 +1,27 @@
+{
+  "sameOrderedFailures": true,
+  "previous": {
+    "tests": 711,
+    "suites": 32,
+    "pass": 709,
+    "fail": 2,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "current": {
+    "tests": 717,
+    "suites": 32,
+    "pass": 715,
+    "fail": 2,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "failures": [
+    "enumeration failure still sends apps/plugins/skills overrides and marks enforced false",
+    "selected skills are explicit turn inputs with scoped boundary and hash provenance"
+  ],
+  "inputDrift": [],
+  "timedOut": false
+}

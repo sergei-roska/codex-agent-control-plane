@@ -1,0 +1,52 @@
+--- original/src/backlog-store.js
++++ current/src/backlog-store.js
+@@ -1021,7 +1021,7 @@
+         const selectedSettings = this.selectedSettingsResolver ? this.selectedSettingsResolver({ projectId, objectiveId, task: clone(task), ownerGeneration: schedulerGeneration }) : null;
+         if (selectedSettings && typeof selectedSettings.then === 'function') throw recordError('settings_resolver_must_be_synchronous');
+         const settingsKnown = selectedSettings !== null && selectedSettings !== undefined;
+-        const capturedControls = { authorityRevision: objective.authorityRevision, controlRevision: objective.controlRevision, schedulerGeneration, selectedSettingsKnown: settingsKnown };
++        const capturedControls = { goalRevision: objective.goalRevision, authorityRevision: objective.authorityRevision, controlRevision: objective.controlRevision, schedulerGeneration, selectedSettingsKnown: settingsKnown };
+         const selectedSettingsDigest = stableDigest(settingsKnown ? selectedSettings : { state: 'unknown' });
+         const attempt = validateAttempt({ schemaVersion: VERSION, projectId, objectiveId, attemptId, taskId: task.taskId, taskRevision: task.revision, attemptNo, executionGeneration: schedulerGeneration, fencingToken: fence, contractDigest: stableDigest(task), selectedSettingsDigest, state: 'claimed', providerContextId: this.contextFactory(attemptId), externalTaskId: null, capturedControls, startedAt: this.now() });
+         const claim = validateClaim({ schemaVersion: VERSION, projectId, objectiveId, claimId, taskId: task.taskId, attemptId, ownerGeneration: schedulerGeneration, fencingToken: fence, role: task.role, capacityClass: task.role, leaseUntil: this.now() + leaseMs, heartbeatAt: this.now(), state: 'active', startedAt: this.now(), releasedAt: null });
+@@ -1182,13 +1182,19 @@
+       }
+       const terminalResult = { state: 'canceled', failureKind: 'reconciled_no_effect' };
+       const currentTaskContract = decode(row.contract_json);
+-      const recoveryExhausted = attempt.attemptNo >= retryLimit && objective.disposition !== 'canceled';
++      const capturedGoal = attempt.capturedControls?.goalRevision;
++      const sameGoal = capturedGoal === undefined ? objective.goalRevision === 1
++        : Number.isSafeInteger(capturedGoal) && capturedGoal === objective.goalRevision;
++      const replanRequired = objective.disposition !== 'canceled' && (!sameGoal
++        || attempt.capturedControls?.authorityRevision !== objective.authorityRevision);
++      const recoveryExhausted = !replanRequired && attempt.attemptNo >= retryLimit && objective.disposition !== 'canceled';
+       attempt = { ...attempt, state: 'canceled', outcome: terminalResult,
+         effect: { remoteQuiescent: true, processQuiescent: true, effectsSettled: true },
+         evidenceRefs: proof.evidenceRefs, settledAt: this.now() };
+       claim = { ...claim, state: 'released', releasedAt: this.now() };
+       let nextTask;
+       if (objective.disposition === 'canceled') nextTask = { ...task, state: 'canceled' };
++      else if (replanRequired) nextTask = { ...task, state: 'blocked', blockedReason: 'owner_correction_replan_required' };
+       else if (recoveryExhausted) nextTask = { ...task, state: 'blocked', blockedReason: 'recovery_retry_exhausted' };
+       else nextTask = { ...currentTaskContract, state: currentTaskContract.state === 'ready' ? 'ready' : 'queued' };
+       this.#saveAttempt(attempt, digest, proof); this.#saveClaim(claim); this.#putTask(nextTask);
+@@ -1201,15 +1207,15 @@
+         this.#saveLifecycleControl(projectId, objectiveId, objectiveRow.owner_generation, objective.controlRevision, 'blocked_technical');
+       }
+       const eventType = shouldBlockObjective ? 'objective.blocked_technical'
+-        : recoveryExhausted ? 'attempt.recovery_task_blocked' : 'attempt.reconciled_no_effect';
++        : recoveryExhausted || replanRequired ? 'attempt.recovery_task_blocked' : 'attempt.reconciled_no_effect';
+       this.events.appendInTransaction(projectId, { eventType,
+         objectRevision: nextTask.revision, taskId: task.taskId, attemptId,
+-        payload: { objectiveId, taskId: task.taskId, fencingToken, retry: !recoveryExhausted && objective.disposition !== 'canceled',
+-          taskBlocked: recoveryExhausted, objectiveBlocked, attemptNo: attempt.attemptNo, retryLimit, evidenceRefs: proof.evidenceRefs },
++        payload: { objectiveId, taskId: task.taskId, fencingToken, retry: !recoveryExhausted && !replanRequired && objective.disposition !== 'canceled',
++          taskBlocked: recoveryExhausted || replanRequired, objectiveBlocked, attemptNo: attempt.attemptNo, retryLimit, evidenceRefs: proof.evidenceRefs },
+         dedupeKey: `attempt:${attemptId}:reconciled-no-effect` });
+       return { attempt, claim, task: nextTask, duplicate: false,
+         state: objective.disposition === 'canceled' ? 'canceled' : objectiveBlocked ? 'blocked_technical'
+-          : recoveryExhausted ? 'task_blocked' : 'no_effect_requeued' };
++          : recoveryExhausted || replanRequired ? 'task_blocked' : 'no_effect_requeued' };
+     });
+     return tx.immediate();
+   }

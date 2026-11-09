@@ -1,0 +1,29 @@
+{
+  "validatedReplacementTask": "repair-product",
+  "branches": [
+    {
+      "expectedRevision": null,
+      "taskId": {
+        "type": "string"
+      },
+      "supersedesTaskId": null
+    },
+    {
+      "expectedRevision": {
+        "type": "integer",
+        "enum": [
+          1
+        ],
+        "description": "Exact current revision for this task ID from the supplied snapshot."
+      },
+      "taskId": {
+        "type": "string",
+        "enum": [
+          "failed-probe"
+        ]
+      },
+      "supersedesTaskId": null
+    }
+  ],
+  "representableSupersession": false
+}

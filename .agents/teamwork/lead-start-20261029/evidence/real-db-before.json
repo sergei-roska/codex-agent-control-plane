@@ -1,0 +1,29 @@
+{
+  "readOnly": true,
+  "projectId": "3d9c2e759c",
+  "taskId": "cdb27a0c-e3c5-40c2-ac4a-9005e7c041ef",
+  "taskState": "TASK_STATE_INPUT_REQUIRED",
+  "taskDigest": "94441e698102ff32cd8700ddcc41f542550be0a98a0bad459120f74b90cc8131",
+  "run": {
+    "run_id": "cdb27a0c-e3c5-40c2-ac4a-9005e7c041ef",
+    "objective_id": "delivery-1b0c9912fcf4af350c24c3226567ec62",
+    "lead_codex_home": "/home/sr/.codex",
+    "status": "running"
+  },
+  "objectiveDisposition": "canceled",
+  "planRevision": 0,
+  "planner": [
+    {
+      "turn_id": "lead-05337a9e38ddc7ff52df41a104cc286e",
+      "status": "unknown",
+      "result_json": "{\"errorCode\":\"provider_home_changed\"}"
+    }
+  ],
+  "execution": [
+    {
+      "start_json": null,
+      "terminal_json": null
+    }
+  ],
+  "conclusion": "Initial planner guard rejected before provider turn; owner later canceled objective. No live task resumed by this investigation."
+}

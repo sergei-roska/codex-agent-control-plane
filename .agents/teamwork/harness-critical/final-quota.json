@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-10-20T07:56:39.528Z",
+  "modelTurns": 0,
+  "limits": [
+    {
+      "id": "codex",
+      "primary": {
+        "usedPercent": 95,
+        "windowDurationMins": 300,
+        "resetsAt": 1792498108
+      },
+      "secondary": {
+        "usedPercent": 15,
+        "windowDurationMins": 10080,
+        "resetsAt": 1793084908
+      }
+    }
+  ]
+}

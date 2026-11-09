@@ -1,0 +1,78 @@
+--- a/src/lead-graph.js
++++ b/src/lead-graph.js
+@@ -1264,7 +1264,7 @@
+       const obligation = review && findObligation(review.checkpointId);
+       if (!review || item.reviewRecovery || canonicalRoleId(item.role) !== 'verifier'
+         || entry?.phase !== 'replan_required'
+-        || !['fresh_verifier_not_accepted', 'fresh_auditor_not_accepted'].includes(entry.blockedReason)
++        || !['fresh_verifier_not_accepted', 'fresh_auditor_not_accepted', 'validated_auditor_template_unavailable'].includes(entry.blockedReason)
+         || !obligation || !obligationMatches(obligation, review)
+         || entry.contextHash !== reviewContextHash(review) || item.reviewSkipped || item.reviewReused) continue;
+       const target = targetForReview({ ...state, reviewObligations: obligations }, obligation.review);
+@@ -1568,7 +1568,7 @@
+     const recoveryContextMismatch = Boolean(recoveryCheckpoint && recoveryCheckpoint.contextHash !== contextHash);
+     const recovery = recoveryCheckpoint && !recoveryContextMismatch ? recoveryCheckpoint : null;
+     const recoveryReplanAllowed = recovery?.phase === 'replan_required'
+-      && ['fresh_verifier_not_accepted', 'fresh_auditor_not_accepted'].includes(recovery.blockedReason);
++      && ['fresh_verifier_not_accepted', 'fresh_auditor_not_accepted', 'validated_auditor_template_unavailable'].includes(recovery.blockedReason);
+     const ordinaryHandoffAllowed = recoveryValid && !recoveryContextMismatch
+       && (!recovery || !['verifier_pending', 'auditor_pending', 'replan_required'].includes(recovery.phase));
+     if (!target?.known || !recoveryValid || recoveryContextMismatch
+--- a/test/lead-graph.test.js
++++ b/test/lead-graph.test.js
+@@ -4753,7 +4753,10 @@
+   }, { workspace, roles: rolesMap, orchestrator: { stagingLog } });
+ });
+ 
+-test('same-batch later auditor uses only the fresh earlier-group verifier receipt during replan', async () => {
++for (const recoveryCase of [
++  { name: 'same-batch later auditor uses only the fresh earlier-group verifier receipt during replan', reason: 'fresh_auditor_not_accepted', staleAuditorTemplate: false },
++  { name: 'same-batch later auditor recovers when the stored auditor template is unavailable', reason: 'validated_auditor_template_unavailable', staleAuditorTemplate: true },
++]) test(recoveryCase.name, async () => {
+   const workspace = gitRepo();
+   fs.mkdirSync(path.join(workspace, 'src'));
+   fs.mkdirSync(path.join(workspace, 'test'));
+@@ -4797,7 +4800,12 @@
+       reviewRecovery: {
+         ...snapshot.values.reviewRecovery,
+         checkpoints: snapshot.values.reviewRecovery.checkpoints.map((entry) => ({
+-          ...entry, phase: 'replan_required', blockedReason: 'fresh_auditor_not_accepted',
++          ...entry,
++          phase: 'replan_required',
++          blockedReason: recoveryCase.reason,
++          ...(recoveryCase.staleAuditorTemplate
++            ? { templates: { ...entry.templates, auditor: { ...entry.templates.auditor, roleProfileSha256: '0'.repeat(64) } } }
++            : {}),
+         })),
+       },
+     });
+--- a/README.md
++++ b/README.md
+@@ -249,6 +249,9 @@
+ review. A round ending alone does not trigger either review. Declared review
+ checkpoints bind their evidence to scoped content, including uncommitted files;
+ model risk classification remains a lead responsibility.
++During an explicit review replan, a matching auditor may use a fresh accepted
++verifier from an earlier wave even when the stored auditor template is
++unavailable; historical receipts alone remain gated.
+ 
+ Acceptance audit reports use an exact standalone first summary line, such as
+ `VERDICT: pass`. `checks` records required executions or explicit validation
+--- a/docs/production-transfer.md
++++ b/docs/production-transfer.md
+@@ -665,3 +665,15 @@
+   and source/test regressions. Temporary ignored reports:
+   `.agents/teamwork/local-autonomy-20261028/{review.md,verification-full.json,runtime-applied.json,runtime-permissions-verified.json,runtime-progress.json}`.
+   No credentials or raw private conversations are copied into this record.
++
++### P-41 Explicit review replan can recover an unavailable auditor template
++
++- Found: 2026-10-28. A validated explicit verifier/auditor wave was blocked
++  after a fresh verifier receipt when recovery was marked
++  `validated_auditor_template_unavailable`.
++- Correction: permit that reason through the existing explicit-replan and
++  same-batch verifier gates. The matching review context, current target,
++  accepted same-batch verifier receipt, and normal auditor assignment checks
++  remain required; historical receipts alone do not satisfy the gate.
++- Evidence: focused lead-graph regressions cover successful explicit recovery
++  and denial when no validated auditor assignment is available.

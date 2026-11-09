@@ -1,0 +1,27 @@
+{
+  "at": "2026-11-05T15:24:26.051Z",
+  "phase": {
+    "attempts": [],
+    "identities": [
+      {
+        "pgid": 1632784,
+        "pid": 1632784,
+        "startTime": "2718535"
+      }
+    ],
+    "phase": "provider_closing"
+  },
+  "allOwnedProviderGroupsGone": true,
+  "runner": {
+    "pid": 1632722,
+    "pgid": 1632721,
+    "startTime": "2718491"
+  },
+  "runnerSigtermSent": true,
+  "engineSafeClose": false,
+  "ownershipRetained": true,
+  "runtimeRoot": "/tmp/harness-cn15-20261105-lFss6U",
+  "postFailureBackup": ".agents/teamwork/closeout-20261105/live-runner/second-failed-post-close.state.sqlite",
+  "runnerGone": true,
+  "runnerGoneVerifiedAt": "2026-11-05T15:24:56.009Z"
+}

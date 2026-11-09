@@ -1,0 +1,17 @@
+{
+  "at": "2026-10-27T09:13:41.724707+00:00",
+  "files": {
+    "src/backlog-store.js": "5e65d74bbe513c58250b55a279e38cd8f8e391759ce9ffd3113cdb9f2f6a2ac1",
+    "src/candidate-store.js": "55fa94c7de70233df1630175df1b17a6340509205e3083a3b1f0c9026170a506",
+    "src/candidate-review.js": "f36009c9f7ce848714bc9a855ec641a4be7a9a96de11fd13e0043746e8b17875",
+    "src/delivery-acceptance.js": "e651388bfb32769910702424f598c00187d1fe56f3c7f9de3c7713ba661104d3",
+    "src/delivery-lifecycle.js": "1ac0c31de7583f014e737716e21966db3944445a367ad5586791835094d5111b",
+    "src/acceptance.js": "80a2d6760def4b806854c1670e7463c61bcab63f9120664413f1651b8bc8684a",
+    "src/workspace-snapshot.js": "b5b395177af41480174f55d4c463ba128cabdb7f9b0bd6311e8b1dbad5262956",
+    "test/delivery-acceptance-join.test.js": "bfd2ef265830e096f35845a4835cbaa7a0875caa71de9a4cb0a54552e24b7c72",
+    "test/delivery-acceptance.test.js": "545a4175112e06875ac8a52640c708dcaa3606f24e37dec6fddade5df3e1af85",
+    "test/backlog-store.test.js": "48f46b877712bbf09351a0b42273ec89d5cbe503cf1e8b9d7e4d2b3065f20932",
+    "test/candidate-review.test.js": "5cace6327f8680711ba2563e04bab6e8efd74b7510867b350624d57027df9529",
+    "test/delivery-lifecycle.test.js": "49f2d22bca37b5e178dabc7d66a2ce66d5b67098ed21c6fad6aabe11b6ce0806"
+  }
+}

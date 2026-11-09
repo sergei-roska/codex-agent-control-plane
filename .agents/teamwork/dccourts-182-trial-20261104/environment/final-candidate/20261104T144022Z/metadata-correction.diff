@@ -1,0 +1,7 @@
+diff --git a/composer.lock b/composer.lock
+index 2593137d9..428562db0 100644
+--- a/composer.lock
++++ b/composer.lock
+@@ -7 +7 @@
+-    "content-hash": "4ff23405c51255a7d30b60debfc0c8f4",
++    "content-hash": "b11ee237605d169df4d354b37fbe9781",

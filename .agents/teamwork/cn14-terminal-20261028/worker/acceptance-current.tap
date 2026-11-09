@@ -1,0 +1,34 @@
+✔ terminal failure requires independent original group death, preserves drift and replays executor closure (214.941388ms)
+✔ shutdown terminal failure denies receipt (128.376575ms)
+✔ shutdown terminal failure denies receipt-generation (113.918046ms)
+✔ shutdown terminal failure denies receipt-turn (102.282611ms)
+✔ shutdown terminal failure denies escaped (105.317912ms)
+✔ shutdown terminal failure denies owner (109.443743ms)
+✔ shutdown terminal failure denies request (102.676876ms)
+✔ shutdown terminal failure denies settings (106.528357ms)
+✔ shutdown terminal failure denies publication (106.690241ms)
+✔ shutdown preparation excludes succeeded read-only execution with an actual qualified receipt (62.632528ms)
+✔ shutdown reconciliation revalidates request after lane completion await (99.154092ms)
+✔ shutdown reconciliation revalidates settings after lane completion await (99.401145ms)
+✔ shutdown reconciliation revalidates receipt after lane completion await (124.467439ms)
+✔ shutdown writable reconciliation refuses unavailable shared workspace observation (107.720187ms)
+✔ cooperative held lost acknowledgement retries staged close after original provider group death (10331.472732ms)
+
+Interrupted while running:
+
+⚠ test/server-delivery-engine.test.js (test/server-delivery-engine.test.js:1:1)
+✖ test/server-delivery-engine.test.js (94392.837899ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 94403.351332
+
+✖ failing tests:
+
+test at test/server-delivery-engine.test.js:1:1
+✖ test/server-delivery-engine.test.js (94392.837899ms)
+  'Promise resolution is still pending but the event loop has already resolved'

@@ -1,0 +1,26 @@
+{
+  ".runtime/state.sqlite": {
+    "exists": true,
+    "sha256": "a4520807e3b60ad689e95a7d488dcea5cb4c131241d71831c84e7d14d4978e12"
+  },
+  ".runtime/state.sqlite-wal": {
+    "exists": true,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  ".runtime/projects/3d9c2e759c/state.sqlite": {
+    "exists": true,
+    "sha256": "f55ae6ef9a8102304a72fb5351ac1e6b195fd5e96f669d6f61146ba6a08054f5"
+  },
+  ".runtime/projects/3d9c2e759c/state.sqlite-wal": {
+    "exists": true,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  ".runtime/projects/3d9c2e759c/project-settings.json": {
+    "exists": true,
+    "sha256": "64c83aecc0a19406f9f01c9f46bda96bb3519d597a3e8bab3daaed06adb26de0"
+  },
+  ".runtime/projects.json": {
+    "exists": true,
+    "sha256": "8cfa80a7c21a151277638b1ca3b3e21984d57ff608ce09ef19e87a12bcde3420"
+  }
+}

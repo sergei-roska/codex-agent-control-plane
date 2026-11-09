@@ -1,0 +1,9 @@
+{
+  "originalTargetSnapshotUnchanged": true,
+  "originalHarnessRuntimeSnapshotUnchanged": true,
+  "trialWorktreeRemoved": true,
+  "trialBranchRemoved": true,
+  "patchRestoredToBaseBeforeRemoval": "4b526e7e3e4f727c99f02fd44a655df595adfe0c",
+  "preservedPatch": "runner/final-four-file-candidate.patch",
+  "ownedNativeTaskSafelyClosed": true
+}

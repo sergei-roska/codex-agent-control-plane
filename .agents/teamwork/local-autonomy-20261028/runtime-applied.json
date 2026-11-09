@@ -1,0 +1,22 @@
+{
+  "oldLauncherPid": 861028,
+  "launcherPid": 1014081,
+  "projectPid": 1014121,
+  "projectId": "3d9c2e759c",
+  "engine": "concurrent-v1",
+  "executionPermissions": "full-access",
+  "launcherDefault": "full-access",
+  "registeredProjectsConfigured": 2,
+  "taskStatesPreserved": true,
+  "runningSourceVerified": [
+    "src/project-settings.js",
+    "src/execution-permissions.js",
+    "src/codex-app-server.js",
+    "src/concurrent-delivery-engine.js",
+    "src/delivery-role-capabilities.js",
+    "src/delivery-acceptance.js",
+    "src/acceptance.js",
+    "src/lead-graph.js"
+  ],
+  "pausedRunResumed": false
+}

@@ -1,0 +1,3 @@
+# QA display label update
+
+Replace displayed "Quality Engineer" with "QA (Quality Assistance)" in the assigned role-name mapping, launcher transcript mapping, verifier profile display_name, expected display-label assertion, README, and auditor routing/transfer docs. Preserve canonical verifier and legacy orch-verifier IDs and all behavior, permissions, model, and instructions. No new tests. Run `node --test test/role-names.test.js` and `git diff --check`. Do not restart services or mutate live tasks/processes, commit, or edit outside the assigned source/doc files and this coordination directory. Preserve untracked `docs/harness-runtime-efficiency-2026-10-19.md`.

@@ -1,0 +1,6 @@
+candidate_root=/home/sr/Projects/dccourtscode-harness-trial-20261104
+plugin_version=2.0.0
+shs_version=2.0.7
+candidate_patches_lock_sha256=83b2aaa09bffc9353546a1b8cd5e6930f8cfaaea607944f681e960753e55e614
+regenerated_patches_lock_sha256=e68acceec7ef04ff16e8e00121e4677d8a408a33671aecdce7959b35bf8322c1
+exit_status=1

@@ -1,0 +1,462 @@
+TAP version 13
+# Subtest: authenticated role card and returnImmediately TaskExecutor publish private output only through CandidateStore
+ok 1 - authenticated role card and returnImmediately TaskExecutor publish private output only through CandidateStore
+  ---
+  duration_ms: 470.326282
+  type: 'test'
+  ...
+# Subtest: role card and execution provenance preserve effective Fast modes
+    # Subtest: inherit
+    ok 1 - inherit
+      ---
+      duration_ms: 144.081373
+      type: 'test'
+      ...
+    # Subtest: off
+    ok 2 - off
+      ---
+      duration_ms: 120.771309
+      type: 'test'
+      ...
+    # Subtest: on
+    ok 3 - on
+      ---
+      duration_ms: 130.06546
+      type: 'test'
+      ...
+    1..3
+ok 2 - role card and execution provenance preserve effective Fast modes
+  ---
+  duration_ms: 395.889715
+  type: 'test'
+  ...
+# Subtest: same-role writers overlap in private lanes while the shared tree remains unchanged
+ok 3 - same-role writers overlap in private lanes while the shared tree remains unchanged
+  ---
+  duration_ms: 553.199141
+  type: 'test'
+  ...
+# Subtest: same-owner pause or correction after turn admission settles terminal private output without publication
+    # Subtest: pause
+    ok 1 - pause
+      ---
+      duration_ms: 147.10116
+      type: 'test'
+      ...
+    # Subtest: correction
+    ok 2 - correction
+      ---
+      duration_ms: 133.696849
+      type: 'test'
+      ...
+    1..2
+ok 4 - same-owner pause or correction after turn admission settles terminal private output without publication
+  ---
+  duration_ms: 281.427949
+  type: 'test'
+  ...
+# Subtest: stale refused bridge history cannot settle without current CandidateStore refusal evidence
+ok 5 - stale refused bridge history cannot settle without current CandidateStore refusal evidence
+  ---
+  duration_ms: 217.561407
+  type: 'test'
+  ...
+# Subtest: forged claim metadata is rejected before AppServer execution
+ok 6 - forged claim metadata is rejected before AppServer execution
+  ---
+  duration_ms: 68.997279
+  type: 'test'
+  ...
+# Subtest: known host rejection before AppServer invocation settles failed without retaining uncertainty
+ok 7 - known host rejection before AppServer invocation settles failed without retaining uncertainty
+  ---
+  duration_ms: 126.197959
+  type: 'test'
+  ...
+# Subtest: configured read-only role executes against an immutable candidate copy
+ok 8 - configured read-only role executes against an immutable candidate copy
+  ---
+  duration_ms: 74.431532
+  type: 'test'
+  ...
+# Subtest: verifier host check proof and frozen CandidateReview receipt require pinned passing checks
+ok 9 - verifier host check proof and frozen CandidateReview receipt require pinned passing checks
+  ---
+  duration_ms: 114.901794
+  type: 'test'
+  ...
+# Subtest: reopened running execution projects unknown and is never resent
+ok 10 - reopened running execution projects unknown and is never resent
+  ---
+  duration_ms: 56.910029
+  type: 'test'
+  ...
+# Subtest: terminal private output prepares an immutable no-publication proof for executor recovery
+ok 11 - terminal private output prepares an immutable no-publication proof for executor recovery
+  ---
+  duration_ms: 124.374912
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: provider
+ok 12 - no-publication recovery refuses altered durable facts: provider
+  ---
+  duration_ms: 137.486143
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: settings
+ok 13 - no-publication recovery refuses altered durable facts: settings
+  ---
+  duration_ms: 125.587744
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: model
+ok 14 - no-publication recovery refuses altered durable facts: model
+  ---
+  duration_ms: 129.607148
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: context
+ok 15 - no-publication recovery refuses altered durable facts: context
+  ---
+  duration_ms: 135.657402
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: request
+ok 16 - no-publication recovery refuses altered durable facts: request
+  ---
+  duration_ms: 135.039529
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: contract
+ok 17 - no-publication recovery refuses altered durable facts: contract
+  ---
+  duration_ms: 144.409103
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: fence
+ok 18 - no-publication recovery refuses altered durable facts: fence
+  ---
+  duration_ms: 141.737888
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: generation
+ok 19 - no-publication recovery refuses altered durable facts: generation
+  ---
+  duration_ms: 140.836253
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: terminal
+ok 20 - no-publication recovery refuses altered durable facts: terminal
+  ---
+  duration_ms: 141.314906
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: process
+ok 21 - no-publication recovery refuses altered durable facts: process
+  ---
+  duration_ms: 135.432535
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: lane-owner
+ok 22 - no-publication recovery refuses altered durable facts: lane-owner
+  ---
+  duration_ms: 145.553526
+  type: 'test'
+  ...
+# Subtest: no-publication recovery refuses altered durable facts: publication
+ok 23 - no-publication recovery refuses altered durable facts: publication
+  ---
+  duration_ms: 140.711515
+  type: 'test'
+  ...
+# Subtest: no-publication preparation closes publication before late terminal delivery and rechecks proof pins
+ok 24 - no-publication preparation closes publication before late terminal delivery and rechecks proof pins
+  ---
+  duration_ms: 141.238937
+  type: 'test'
+  ...
+# Subtest: canceled owner generation recovers private output without requeue or publication
+ok 25 - canceled owner generation recovers private output without requeue or publication
+  ---
+  duration_ms: 158.566736
+  type: 'test'
+  ...
+# Subtest: terminal failure requires independent original group death, preserves drift and replays executor closure
+ok 26 - terminal failure requires independent original group death, preserves drift and replays executor closure
+  ---
+  duration_ms: 167.943116
+  type: 'test'
+  ...
+# Subtest: shutdown terminal failure denies receipt
+ok 27 - shutdown terminal failure denies receipt
+  ---
+  duration_ms: 131.936383
+  type: 'test'
+  ...
+# Subtest: shutdown terminal failure denies receipt-generation
+ok 28 - shutdown terminal failure denies receipt-generation
+  ---
+  duration_ms: 124.987644
+  type: 'test'
+  ...
+# Subtest: shutdown terminal failure denies receipt-turn
+ok 29 - shutdown terminal failure denies receipt-turn
+  ---
+  duration_ms: 131.578709
+  type: 'test'
+  ...
+# Subtest: shutdown terminal failure denies escaped
+ok 30 - shutdown terminal failure denies escaped
+  ---
+  duration_ms: 125.10901
+  type: 'test'
+  ...
+# Subtest: shutdown terminal failure denies owner
+ok 31 - shutdown terminal failure denies owner
+  ---
+  duration_ms: 139.302335
+  type: 'test'
+  ...
+# Subtest: shutdown terminal failure denies request
+ok 32 - shutdown terminal failure denies request
+  ---
+  duration_ms: 140.617566
+  type: 'test'
+  ...
+# Subtest: shutdown terminal failure denies settings
+ok 33 - shutdown terminal failure denies settings
+  ---
+  duration_ms: 151.552456
+  type: 'test'
+  ...
+# Subtest: shutdown terminal failure denies publication
+ok 34 - shutdown terminal failure denies publication
+  ---
+  duration_ms: 137.663858
+  type: 'test'
+  ...
+# Subtest: shutdown preparation excludes succeeded read-only execution with an actual qualified receipt
+ok 35 - shutdown preparation excludes succeeded read-only execution with an actual qualified receipt
+  ---
+  duration_ms: 84.022432
+  type: 'test'
+  ...
+# Subtest: shutdown reconciliation revalidates request after lane completion await
+ok 36 - shutdown reconciliation revalidates request after lane completion await
+  ---
+  duration_ms: 143.789908
+  type: 'test'
+  ...
+# Subtest: shutdown reconciliation revalidates settings after lane completion await
+ok 37 - shutdown reconciliation revalidates settings after lane completion await
+  ---
+  duration_ms: 143.907677
+  type: 'test'
+  ...
+# Subtest: shutdown reconciliation revalidates receipt after lane completion await
+ok 38 - shutdown reconciliation revalidates receipt after lane completion await
+  ---
+  duration_ms: 147.721567
+  type: 'test'
+  ...
+# Subtest: shutdown writable reconciliation refuses unavailable shared workspace observation
+ok 39 - shutdown writable reconciliation refuses unavailable shared workspace observation
+  ---
+  duration_ms: 138.615423
+  type: 'test'
+  ...
+# Subtest: send intent and pinned write/scratch scopes are durable before fake transport runs
+ok 40 - send intent and pinned write/scratch scopes are durable before fake transport runs
+  ---
+  duration_ms: 21.755866
+  type: 'test'
+  ...
+# Subtest: concurrent execute calls share one committed send intent and only one sends
+ok 41 - concurrent execute calls share one committed send intent and only one sends
+  ---
+  duration_ms: 6.969425
+  type: 'test'
+  ...
+# Subtest: first send rejects a caller task ID that differs from the durable attempt tuple
+ok 42 - first send rejects a caller task ID that differs from the durable attempt tuple
+  ---
+  duration_ms: 11.475211
+  type: 'test'
+  ...
+# Subtest: same-attempt execute replay returns the linked task without repinning or resending
+ok 43 - same-attempt execute replay returns the linked task without repinning or resending
+  ---
+  duration_ms: 6.202594
+  type: 'test'
+  ...
+# Subtest: existing intent replay and terminal handling reject a different caller task ID
+ok 44 - existing intent replay and terminal handling reject a different caller task ID
+  ---
+  duration_ms: 7.57993
+  type: 'test'
+  ...
+# Subtest: interrupted send reconciles one deterministic context and links the discovered identity
+ok 45 - interrupted send reconciles one deterministic context and links the discovered identity
+  ---
+  duration_ms: 6.224245
+  type: 'test'
+  ...
+# Subtest: absent and failed lookups never resend or release capacity
+ok 46 - absent and failed lookups never resend or release capacity
+  ---
+  duration_ms: 15.801329
+  type: 'test'
+  ...
+# Subtest: duplicate terminal event settles once with only injected candidate/output facts
+ok 47 - duplicate terminal event settles once with only injected candidate/output facts
+  ---
+  duration_ms: 9.250947
+  type: 'test'
+  ...
+# Subtest: late successful provider result after objective cancellation settles and reports canceled
+ok 48 - late successful provider result after objective cancellation settles and reports canceled
+  ---
+  duration_ms: 7.98832
+  type: 'test'
+  ...
+# Subtest: wrong context, task, thread, and late fence outcomes are evidence and cannot settle
+ok 49 - wrong context, task, thread, and late fence outcomes are evidence and cannot settle
+  ---
+  duration_ms: 7.011544
+  type: 'test'
+  ...
+# Subtest: first observed remote thread is pinned and rejects later terminal thread drift
+ok 50 - first observed remote thread is pinned and rejects later terminal thread drift
+  ---
+  duration_ms: 5.868509
+  type: 'test'
+  ...
+# Subtest: known continuation thread is reserved before send across active attempts
+ok 51 - known continuation thread is reserved before send across active attempts
+  ---
+  duration_ms: 9.086254
+  type: 'test'
+  ...
+# Subtest: default transport group fans shared failure across roles in one project
+ok 52 - default transport group fans shared failure across roles in one project
+  ---
+  duration_ms: 11.581698
+  type: 'test'
+  ...
+# Subtest: request adapter cannot expand the task product write scope
+ok 53 - request adapter cannot expand the task product write scope
+  ---
+  duration_ms: 4.223652
+  type: 'test'
+  ...
+# Subtest: request adapter cannot replace or truncate the pinned task objective
+ok 54 - request adapter cannot replace or truncate the pinned task objective
+  ---
+  duration_ms: 4.120627
+  type: 'test'
+  ...
+# Subtest: terminal status alone cannot settle without owned process quiescence evidence
+ok 55 - terminal status alone cannot settle without owned process quiescence evidence
+  ---
+  duration_ms: 9.964237
+  type: 'test'
+  ...
+# Subtest: owner pause allows cancellation request for an existing submitted attempt
+ok 56 - owner pause allows cancellation request for an existing submitted attempt
+  ---
+  duration_ms: 7.045333
+  type: 'test'
+  ...
+# Subtest: owner pause allows polling and truthful settlement with current control passed to adapter
+ok 57 - owner pause allows polling and truthful settlement with current control passed to adapter
+  ---
+  duration_ms: 7.628663
+  type: 'test'
+  ...
+# Subtest: owner pause permits direct terminal evidence for an existing submitted attempt
+ok 58 - owner pause permits direct terminal evidence for an existing submitted attempt
+  ---
+  duration_ms: 6.02816
+  type: 'test'
+  ...
+# Subtest: control drift after settings pin prevents intent and network send
+ok 59 - control drift after settings pin prevents intent and network send
+  ---
+  duration_ms: 4.481286
+  type: 'test'
+  ...
+# Subtest: generation drift while transport resolution is pending prevents send and retains the intent claim
+ok 60 - generation drift while transport resolution is pending prevents send and retains the intent claim
+  ---
+  duration_ms: 5.124171
+  type: 'test'
+  ...
+# Subtest: settings drift is rejected by the durable settings pin before any intent
+ok 61 - settings drift is rejected by the durable settings pin before any intent
+  ---
+  duration_ms: 4.634776
+  type: 'test'
+  ...
+# Subtest: shared transport failure marks every associated attempt uncertain and retains claims
+ok 62 - shared transport failure marks every associated attempt uncertain and retains claims
+  ---
+  duration_ms: 9.529693
+  type: 'test'
+  ...
+# Subtest: shared resolver failures in poll, reconcile, and abort fan out to sibling attempts
+ok 63 - shared resolver failures in poll, reconcile, and abort fan out to sibling attempts
+  ---
+  duration_ms: 28.180964
+  type: 'test'
+  ...
+# Subtest: a shared transport death automatically fences siblings and blocks later sends
+ok 64 - a shared transport death automatically fences siblings and blocks later sends
+  ---
+  duration_ms: 9.152427
+  type: 'test'
+  ...
+# Subtest: abort only requests cancellation and cannot claim quiescence
+ok 65 - abort only requests cancellation and cannot claim quiescence
+  ---
+  duration_ms: 5.339745
+  type: 'test'
+  ...
+# Subtest: expired and generation-taken-over attempts settle only through explicit trusted reconciliation
+ok 66 - expired and generation-taken-over attempts settle only through explicit trusted reconciliation
+  ---
+  duration_ms: 8.456201
+  type: 'test'
+  ...
+# Subtest: restart recovery releases and requeues only with exact synchronous no-effect proof
+ok 67 - restart recovery releases and requeues only with exact synchronous no-effect proof
+  ---
+  duration_ms: 10.706859
+  type: 'test'
+  ...
+# Subtest: missing, asynchronous, or mismatched recovery proof keeps claim and fence held
+ok 68 - missing, asynchronous, or mismatched recovery proof keeps claim and fence held
+  ---
+  duration_ms: 6.989209
+  type: 'test'
+  ...
+# Subtest: repeated exact no-effect recovery ends in durable blocked_technical
+ok 69 - repeated exact no-effect recovery ends in durable blocked_technical
+  ---
+  duration_ms: 7.283461
+  type: 'test'
+  ...
+# Subtest: exhausted recovery blocks only its task while a ready sibling remains claimable
+ok 70 - exhausted recovery blocks only its task while a ready sibling remains claimable
+  ---
+  duration_ms: 10.781047
+  type: 'test'
+  ...
+1..70
+# tests 75
+# suites 0
+# pass 75
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6748.55001

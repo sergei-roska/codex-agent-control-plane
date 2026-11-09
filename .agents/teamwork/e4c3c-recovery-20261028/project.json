@@ -1,0 +1,11 @@
+{
+  "id": "2f5c3c70b4",
+  "path": "/home/sr/Projects/Workspace/agent-harness-worktrees/fixture-owner-dispatch-impl",
+  "name": "fixture-owner-dispatch-impl",
+  "port": 3003,
+  "stateDb": "/home/sr/Projects/Workspace/codex-agent-control-plane/.runtime/projects/2f5c3c70b4/state.sqlite",
+  "addedAt": "2026-10-28T19:58:00.896Z",
+  "lastUsedAt": null,
+  "pid": null,
+  "status": "stopped"
+}

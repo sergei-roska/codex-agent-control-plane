@@ -1,0 +1,2 @@
+b099b2568458eba0e6d0f93074d872e225abff4ec195d730d3fc940f896a71df  /home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/environment/evaluate-composer-patches-v2.sh
+2da27fcc63feb86021d75fe6220c6db1c444eebfb5fef6abf4406caa6bd40f05  /home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/environment/validate-composer-project.sh

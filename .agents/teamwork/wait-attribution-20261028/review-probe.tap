@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: review probe binds backlog to original creation and leaves revised or ambiguous observations unknown
+ok 1 - review probe binds backlog to original creation and leaves revised or ambiguous observations unknown
+  ---
+  duration_ms: 22.395676
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 83.595164

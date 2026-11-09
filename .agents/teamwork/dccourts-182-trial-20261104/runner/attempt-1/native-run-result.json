@@ -1,0 +1,509 @@
+{
+  "status": "failed",
+  "inputSha256": "df7a81cd30cfca54ce89d2e7b2a958103d9b2a0752985197c7d8fc92ea2f9de5",
+  "sourceBefore": {
+    "head": "5ddfe8317a030f20509c32502ec66c6e79b7461c",
+    "branch": "test/harness-DCCOURTS-182-20261104",
+    "status": "",
+    "sourceHashes": {
+      "AGENTS.md": "82fe198b8d4613441f2db16c42903be9b0739bba9fa9ca45fc12f11a3577e8b1",
+      ".lando.yml": "c784eff105e8ed23b7fdb3e5af2de39c2a1be2c14b774cf154c1e4e963f628b5",
+      "scripts/harness/validate-dccourts-182.sh": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+      "composer.json": "767f5a9bba018d081d17c46d8343b8b6a72642fedcb71eb60acaca991aa28833",
+      "composer.lock": "9119ee491127c03ac9eb5541c08ef036f097f259a695de1a808d91b5bbb01167",
+      "patches.lock.json": "b633b23a1451e40b1ddcbe5097a185e2c0cccc8afa3b21dd31dd0c300fbbee26",
+      "web/modules/contrib/shs/js/shs.js": null
+    },
+    "expectedPatchHash": null,
+    "trackedDiffHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "runRoot": "/tmp/dccourts182-native-ymuUCR",
+  "roleOverrides": {
+    "coordinator": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "engineer": {
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "fastMode": "off"
+    },
+    "verifier": {
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "fastMode": "off"
+    }
+  },
+  "acceptance": {
+    "source": "agent",
+    "requiredChecks": [
+      {
+        "id": "dccourts-182-upstream-kernel",
+        "argv": [
+          "bash",
+          "scripts/harness/validate-dccourts-182.sh"
+        ],
+        "timeoutMs": 600000
+      }
+    ]
+  },
+  "ownedLandoServicesBefore": [],
+  "providerExecutions": [
+    {
+      "role": "coordinator",
+      "configuredModel": "gpt-6-luna",
+      "configuredEffort": "low",
+      "outcome": "completed",
+      "status": "completed",
+      "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+      "turnId": "01a1a5da-bd9d-7910-b917-0d91e53d7a77",
+      "usage": {
+        "model": "gpt-6-luna",
+        "effort": "low",
+        "fastMode": "off",
+        "elapsedMs": 13244,
+        "turns": 1,
+        "tokens": {
+          "inputTokens": 19837,
+          "cachedInputTokens": 16256,
+          "outputTokens": 346,
+          "reasoningOutputTokens": 0,
+          "totalTokens": 20183
+        },
+        "tokenSource": "total_delta"
+      },
+      "failureClass": null,
+      "execution": {
+        "generation": 1,
+        "processIdentity": {
+          "pid": 1020407,
+          "pgid": 1020407,
+          "startTime": "968950"
+        },
+        "turnStartSent": true,
+        "turnStartRejected": false,
+        "turnTerminal": true
+      }
+    },
+    {
+      "role": "coordinator",
+      "configuredModel": "gpt-6-luna",
+      "configuredEffort": "low",
+      "outcome": "completed",
+      "status": "completed",
+      "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+      "turnId": "01a1a5da-f3a1-7532-bba9-170297298dc4",
+      "usage": {
+        "model": "gpt-6-luna",
+        "effort": "low",
+        "fastMode": "off",
+        "elapsedMs": 8548,
+        "turns": 1,
+        "tokens": {
+          "inputTokens": 23566,
+          "cachedInputTokens": 19712,
+          "outputTokens": 366,
+          "reasoningOutputTokens": 0,
+          "totalTokens": 23932
+        },
+        "tokenSource": "total_delta"
+      },
+      "failureClass": null,
+      "execution": {
+        "generation": 1,
+        "processIdentity": {
+          "pid": 1020407,
+          "pgid": 1020407,
+          "startTime": "968950"
+        },
+        "turnStartSent": true,
+        "turnStartRejected": false,
+        "turnTerminal": true
+      }
+    }
+  ],
+  "startup": {
+    "host": "127.0.0.1",
+    "port": 35633,
+    "projectId": "c0eaa8b856",
+    "deliveryEngine": "concurrent-v1",
+    "writerIsolation": {
+      "mode": "cooperative",
+      "reason": "owner_full_access_cooperative",
+      "lanesRoot": "/tmp/dccourts182-native-ymuUCR/lanes",
+      "links": [
+        ".venv",
+        "venv",
+        "node_modules"
+      ],
+      "networkAccess": true,
+      "confinement": "none",
+      "inherited": false,
+      "ownerFullAccess": true,
+      "profile": ":danger-full-access",
+      "probe": null,
+      "recovery": {
+        "orphaned": [],
+        "integrated": [],
+        "notIntegrated": [],
+        "removed": [],
+        "failed": []
+      }
+    },
+    "roles": [
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "xhigh"
+      },
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "medium"
+      },
+      {
+        "model": "gpt-6.1-terra",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "medium"
+      },
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "high"
+      }
+    ]
+  },
+  "a2a": {
+    "id": "5c3cf67a-5c51-4c4e-a195-51ce30760aba",
+    "state": 6,
+    "stateName": "TASK_STATE_INPUT_REQUIRED",
+    "finalMessage": "The run stopped on an error: The lead planner did not produce a confirmed result (unexpected_expected_revision). The run remains fenced until the provider outcome is reconciled.\nSend a message to this task to retry the failed step.\nAnswer with: npm run ask -- --task 5c3cf67a-5c51-4c4e-a195-51ce30760aba \"<answer>\""
+  },
+  "mapping": {
+    "engine": "concurrent-v1",
+    "objectiveId": "delivery-50efba734c20a14b92407fd661014d6d"
+  },
+  "snapshotBeforeClose": {
+    "run": {
+      "status": "paused",
+      "result": null
+    },
+    "objective": {
+      "objectiveId": "delivery-50efba734c20a14b92407fd661014d6d",
+      "disposition": "executing"
+    },
+    "tasks": [
+      {
+        "task_id": "implement-shs-patch",
+        "state": "failed"
+      }
+    ],
+    "finalization": null,
+    "roleExecutions": [
+      {
+        "role": "engineer",
+        "taskId": "implement-shs-patch",
+        "state": "settled",
+        "externalStateName": "TASK_STATE_FAILED",
+        "failureCode": "binding_authorization_denied",
+        "model": null,
+        "effort": null,
+        "turns": null,
+        "tokens": null,
+        "outcome": null,
+        "effectsSettled": true
+      }
+    ],
+    "proofs": [],
+    "usage": [],
+    "shutdownPhase": null,
+    "plannerFacts": [
+      {
+        "start": {
+          "processIdentity": {
+            "pgid": 1020407,
+            "pid": 1020407,
+            "startTime": "968950"
+          },
+          "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a"
+        },
+        "terminal": {
+          "execution": {
+            "cleanupReceipt": {
+              "completion": "confirmed",
+              "generation": 1,
+              "method": "thread/backgroundTerminals/clean",
+              "processIdentity": {
+                "pgid": 1020407,
+                "pid": 1020407,
+                "startTime": "968950"
+              },
+              "scope": "provider-managed-background-terminals",
+              "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+              "turnId": "01a1a5da-bd9d-7910-b917-0d91e53d7a77",
+              "version": 1
+            },
+            "generation": 1,
+            "processIdentity": {
+              "pgid": 1020407,
+              "pid": 1020407,
+              "startTime": "968950"
+            },
+            "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+            "turnId": "01a1a5da-bd9d-7910-b917-0d91e53d7a77",
+            "turnStartRejected": false,
+            "turnStartSent": true,
+            "turnTerminal": true
+          },
+          "status": "completed",
+          "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+          "turnId": "01a1a5da-bd9d-7910-b917-0d91e53d7a77"
+        }
+      },
+      {
+        "start": {
+          "processIdentity": {
+            "pgid": 1020407,
+            "pid": 1020407,
+            "startTime": "968950"
+          },
+          "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a"
+        },
+        "terminal": {
+          "execution": {
+            "cleanupReceipt": {
+              "completion": "confirmed",
+              "generation": 1,
+              "method": "thread/backgroundTerminals/clean",
+              "processIdentity": {
+                "pgid": 1020407,
+                "pid": 1020407,
+                "startTime": "968950"
+              },
+              "scope": "provider-managed-background-terminals",
+              "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+              "turnId": "01a1a5da-f3a1-7532-bba9-170297298dc4",
+              "version": 1
+            },
+            "generation": 1,
+            "processIdentity": {
+              "pgid": 1020407,
+              "pid": 1020407,
+              "startTime": "968950"
+            },
+            "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+            "turnId": "01a1a5da-f3a1-7532-bba9-170297298dc4",
+            "turnStartRejected": false,
+            "turnStartSent": true,
+            "turnTerminal": true
+          },
+          "status": "completed",
+          "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+          "turnId": "01a1a5da-f3a1-7532-bba9-170297298dc4"
+        }
+      }
+    ]
+  },
+  "ownedLandoServicesDuringRun": [],
+  "error": {
+    "name": "Error",
+    "code": "concurrent_shutdown_unsafe",
+    "message": "concurrent_shutdown_unsafe"
+  },
+  "candidateEvidence": {
+    "source": {
+      "head": "5ddfe8317a030f20509c32502ec66c6e79b7461c",
+      "branch": "test/harness-DCCOURTS-182-20261104",
+      "status": "",
+      "sourceHashes": {
+        "AGENTS.md": "82fe198b8d4613441f2db16c42903be9b0739bba9fa9ca45fc12f11a3577e8b1",
+        ".lando.yml": "c784eff105e8ed23b7fdb3e5af2de39c2a1be2c14b774cf154c1e4e963f628b5",
+        "scripts/harness/validate-dccourts-182.sh": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+        "composer.json": "767f5a9bba018d081d17c46d8343b8b6a72642fedcb71eb60acaca991aa28833",
+        "composer.lock": "9119ee491127c03ac9eb5541c08ef036f097f259a695de1a808d91b5bbb01167",
+        "patches.lock.json": "b633b23a1451e40b1ddcbe5097a185e2c0cccc8afa3b21dd31dd0c300fbbee26",
+        "web/modules/contrib/shs/js/shs.js": null
+      },
+      "expectedPatchHash": null,
+      "trackedDiffHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "diffPath": "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/runner/2026-11-04T09-19-21-762Z-5c3cf67a-5c51-4c4e-a195-51ce30760aba.diff",
+    "diffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "patchPath": null,
+    "patchSha256": null
+  },
+  "sourceAfter": {
+    "head": "5ddfe8317a030f20509c32502ec66c6e79b7461c",
+    "branch": "test/harness-DCCOURTS-182-20261104",
+    "status": "",
+    "sourceHashes": {
+      "AGENTS.md": "82fe198b8d4613441f2db16c42903be9b0739bba9fa9ca45fc12f11a3577e8b1",
+      ".lando.yml": "c784eff105e8ed23b7fdb3e5af2de39c2a1be2c14b774cf154c1e4e963f628b5",
+      "scripts/harness/validate-dccourts-182.sh": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+      "composer.json": "767f5a9bba018d081d17c46d8343b8b6a72642fedcb71eb60acaca991aa28833",
+      "composer.lock": "9119ee491127c03ac9eb5541c08ef036f097f259a695de1a808d91b5bbb01167",
+      "patches.lock.json": "b633b23a1451e40b1ddcbe5097a185e2c0cccc8afa3b21dd31dd0c300fbbee26",
+      "web/modules/contrib/shs/js/shs.js": null
+    },
+    "expectedPatchHash": null,
+    "trackedDiffHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "close": "unsafe_or_failed",
+  "closeError": {
+    "code": "concurrent_shutdown_unsafe",
+    "name": "Error"
+  },
+  "retainedRunRoot": "/tmp/dccourts182-native-ymuUCR",
+  "unsafeCloseSnapshot": {
+    "run": {
+      "status": "paused",
+      "result": null
+    },
+    "objective": {
+      "objectiveId": "delivery-50efba734c20a14b92407fd661014d6d",
+      "disposition": "executing"
+    },
+    "tasks": [
+      {
+        "task_id": "implement-shs-patch",
+        "state": "failed"
+      }
+    ],
+    "finalization": null,
+    "roleExecutions": [
+      {
+        "role": "engineer",
+        "taskId": "implement-shs-patch",
+        "state": "settled",
+        "externalStateName": "TASK_STATE_FAILED",
+        "failureCode": "binding_authorization_denied",
+        "model": null,
+        "effort": null,
+        "turns": null,
+        "tokens": null,
+        "outcome": null,
+        "effectsSettled": true
+      }
+    ],
+    "proofs": [],
+    "usage": [],
+    "shutdownPhase": {
+      "attempts": [],
+      "identities": [
+        {
+          "pgid": 1020407,
+          "pid": 1020407,
+          "startTime": "968950"
+        }
+      ],
+      "phase": "provider_closing"
+    },
+    "plannerFacts": [
+      {
+        "start": {
+          "processIdentity": {
+            "pgid": 1020407,
+            "pid": 1020407,
+            "startTime": "968950"
+          },
+          "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a"
+        },
+        "terminal": {
+          "execution": {
+            "cleanupReceipt": {
+              "completion": "confirmed",
+              "generation": 1,
+              "method": "thread/backgroundTerminals/clean",
+              "processIdentity": {
+                "pgid": 1020407,
+                "pid": 1020407,
+                "startTime": "968950"
+              },
+              "scope": "provider-managed-background-terminals",
+              "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+              "turnId": "01a1a5da-bd9d-7910-b917-0d91e53d7a77",
+              "version": 1
+            },
+            "generation": 1,
+            "processIdentity": {
+              "pgid": 1020407,
+              "pid": 1020407,
+              "startTime": "968950"
+            },
+            "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+            "turnId": "01a1a5da-bd9d-7910-b917-0d91e53d7a77",
+            "turnStartRejected": false,
+            "turnStartSent": true,
+            "turnTerminal": true
+          },
+          "status": "completed",
+          "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+          "turnId": "01a1a5da-bd9d-7910-b917-0d91e53d7a77"
+        }
+      },
+      {
+        "start": {
+          "processIdentity": {
+            "pgid": 1020407,
+            "pid": 1020407,
+            "startTime": "968950"
+          },
+          "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a"
+        },
+        "terminal": {
+          "execution": {
+            "cleanupReceipt": {
+              "completion": "confirmed",
+              "generation": 1,
+              "method": "thread/backgroundTerminals/clean",
+              "processIdentity": {
+                "pgid": 1020407,
+                "pid": 1020407,
+                "startTime": "968950"
+              },
+              "scope": "provider-managed-background-terminals",
+              "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+              "turnId": "01a1a5da-f3a1-7532-bba9-170297298dc4",
+              "version": 1
+            },
+            "generation": 1,
+            "processIdentity": {
+              "pgid": 1020407,
+              "pid": 1020407,
+              "startTime": "968950"
+            },
+            "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+            "turnId": "01a1a5da-f3a1-7532-bba9-170297298dc4",
+            "turnStartRejected": false,
+            "turnStartSent": true,
+            "turnTerminal": true
+          },
+          "status": "completed",
+          "threadId": "01a1a5da-bd76-7863-bcf9-a50840f05c3a",
+          "turnId": "01a1a5da-f3a1-7532-bba9-170297298dc4"
+        }
+      }
+    ]
+  },
+  "ownedProcessIdentities": [
+    {
+      "pgid": 1020407,
+      "pid": 1020407,
+      "startTime": "968950"
+    }
+  ],
+  "ownedLandoServicesFinal": []
+}

@@ -1,0 +1,223 @@
+TAP version 13
+# Subtest: restart with legacy default fences persisted concurrent objectives, mixed claims, and publications
+    # Subtest: active objective
+    ok 1 - active objective
+      ---
+      duration_ms: 246.014788
+      type: 'test'
+      ...
+    # Subtest: unknown claim
+    ok 2 - unknown claim
+      ---
+      duration_ms: 218.742567
+      type: 'test'
+      ...
+    # Subtest: active claim
+    ok 3 - active claim
+      ---
+      duration_ms: 227.135231
+      type: 'test'
+      ...
+    # Subtest: unknown publication
+    ok 4 - unknown publication
+      ---
+      duration_ms: 233.181995
+      type: 'test'
+      ...
+    # Subtest: pending publication
+    ok 5 - pending publication
+      ---
+      duration_ms: 220.558127
+      type: 'test'
+      ...
+    # Subtest: settled effects
+    ok 6 - settled effects
+      ---
+      duration_ms: 215.418713
+      type: 'test'
+      ...
+    1..6
+ok 1 - restart with legacy default fences persisted concurrent objectives, mixed claims, and publications
+  ---
+  duration_ms: 1362.685353
+  type: 'test'
+  ...
+# Subtest: restart refuses unknown stored engine selections without rewriting the durable mapping
+ok 2 - restart refuses unknown stored engine selections without rewriting the durable mapping
+  ---
+  duration_ms: 161.59134
+  type: 'test'
+  ...
+# Subtest: legacy downgrade checks the exact durable planner session even without a controller fence
+    # Subtest: unknown planner turn
+    ok 1 - unknown planner turn
+      ---
+      duration_ms: 200.172718
+      type: 'test'
+      ...
+    # Subtest: active planner turn
+    ok 2 - active planner turn
+      ---
+      duration_ms: 215.252012
+      type: 'test'
+      ...
+    # Subtest: unrecognized planner state
+    ok 3 - unrecognized planner state
+      ---
+      duration_ms: 192.921365
+      type: 'test'
+      ...
+    # Subtest: complete planner turn
+    ok 4 - complete planner turn
+      ---
+      duration_ms: 206.477641
+      type: 'test'
+      ...
+    # Subtest: stale planner turn
+    ok 5 - stale planner turn
+      ---
+      duration_ms: 220.990358
+      type: 'test'
+      ...
+    # Subtest: reconciled planner turn
+    ok 6 - reconciled planner turn
+      ---
+      duration_ms: 211.110438
+      type: 'test'
+      ...
+    # Subtest: unrelated session
+    ok 7 - unrelated session
+      ---
+      duration_ms: 219.06866
+      type: 'test'
+      ...
+    # Subtest: foreign project same session
+    ok 8 - foreign project same session
+      ---
+      duration_ms: 205.005826
+      type: 'test'
+      ...
+    # Subtest: missing mapping session
+    ok 9 - missing mapping session
+      ---
+      duration_ms: 202.82891
+      type: 'test'
+      ...
+    # Subtest: empty mapping session
+    ok 10 - empty mapping session
+      ---
+      duration_ms: 213.667156
+      type: 'test'
+      ...
+    # Subtest: missing mapping objective
+    ok 11 - missing mapping objective
+      ---
+      duration_ms: 212.360459
+      type: 'test'
+      ...
+    # Subtest: corrupt run session
+    ok 12 - corrupt run session
+      ---
+      duration_ms: 234.423845
+      type: 'test'
+      ...
+    # Subtest: corrupt mapping session
+    ok 13 - corrupt mapping session
+      ---
+      duration_ms: 231.616134
+      type: 'test'
+      ...
+    # Subtest: corrupt objective session
+    ok 14 - corrupt objective session
+      ---
+      duration_ms: 246.599407
+      type: 'test'
+      ...
+    1..14
+ok 3 - legacy downgrade checks the exact durable planner session even without a controller fence
+  ---
+  duration_ms: 3015.20013
+  type: 'test'
+  ...
+# Subtest: legacy downgrade fences authoritative effect records independently of settled publication caches
+    # Subtest: unknown candidate intent
+    ok 1 - unknown candidate intent
+      ---
+      duration_ms: 228.501155
+      type: 'test'
+      ...
+    # Subtest: prepared candidate intent
+    ok 2 - prepared candidate intent
+      ---
+      duration_ms: 228.64253
+      type: 'test'
+      ...
+    # Subtest: applying candidate intent
+    ok 3 - applying candidate intent
+      ---
+      duration_ms: 232.585408
+      type: 'test'
+      ...
+    # Subtest: settling candidate intent
+    ok 4 - settling candidate intent
+      ---
+      duration_ms: 248.500618
+      type: 'test'
+      ...
+    # Subtest: refused candidate intent
+    ok 5 - refused candidate intent
+      ---
+      duration_ms: 289.084257
+      type: 'test'
+      ...
+    # Subtest: not-applied candidate intent
+    ok 6 - not-applied candidate intent
+      ---
+      duration_ms: 282.140647
+      type: 'test'
+      ...
+    # Subtest: unknown role execution
+    ok 7 - unknown role execution
+      ---
+      duration_ms: 236.140677
+      type: 'test'
+      ...
+    # Subtest: terminal role effects unknown
+    ok 8 - terminal role effects unknown
+      ---
+      duration_ms: 239.621301
+      type: 'test'
+      ...
+    # Subtest: terminal role effects missing
+    ok 9 - terminal role effects missing
+      ---
+      duration_ms: 227.534272
+      type: 'test'
+      ...
+    # Subtest: settled role effects
+    ok 10 - settled role effects
+      ---
+      duration_ms: 247.993973
+      type: 'test'
+      ...
+    # Subtest: terminal role effects
+    ok 11 - terminal role effects
+      ---
+      duration_ms: 228.838222
+      type: 'test'
+      ...
+    1..11
+ok 4 - legacy downgrade fences authoritative effect records independently of settled publication caches
+  ---
+  duration_ms: 2691.647764
+  type: 'test'
+  ...
+1..4
+# tests 35
+# suites 0
+# pass 35
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7656.808707

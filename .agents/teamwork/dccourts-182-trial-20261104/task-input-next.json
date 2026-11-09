@@ -1,0 +1,75 @@
+{
+  "issue": "DCCOURTS-182",
+  "sourceUrl": "https://insomniacdesign.atlassian.net/browse/DCCOURTS-182",
+  "workspace": "/home/sr/Projects/dccourtscode-harness-trial-20261104",
+  "baseCommit": "4b526e7e3e4f727c99f02fd44a655df595adfe0c",
+  "goal": "Verify the completed code-only DCCOURTS-182 candidate in this isolated workspace. Do not change files or create implementation/investigation tasks. Return an empty/no-change plan so the host creates its mandatory verifier. Review the static candidate honestly against the criteria below; the host separately runs all three pinned checks before it can qualify or accept anything. Pending host checks are deferred host obligations; never claim those checks passed before they ran, and do not fabricate results. Any concrete candidate defect or missing semantic evidence must still be reported.\n\nDCCOURTS-182 is the SHS 2.0.7 category preselection fix: public upstream MR59 restores stored term preselection and removes deleted term references. Candidate must retain drupal/shs 2.0.7; register the upstream patch in composer.json and patches.lock.json; patch SHA256 6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9; patches.lock.json _hash dfc37cfe6cd7e4cdd678e03a170003d2398cea74c9e5967cae5244b0c203869d; composer.lock top-level content-hash b11ee237605d169df4d354b37fbe9781, computed by genuine Composer Locker. Inspect metadata and patch contents as needed.\n\nHost baseline comparison evidence, independently measured from dccr-master4b526e7e3e4f727c99f02fd44a655df595adfe0c: original composer.lock raw SHA256 9119ee491127c03ac9eb5541c08ef036f097f259a695de1a808d91b5bbb01167. All parsed lock fields except top-level content-hash must equal this baseline. This is directly checkable without the baseline file: Python json.loads of composer.lock, pop ONLY top-level content-hash, then json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode('utf-8'), WITHOUT trailing newline, must SHA256 to d400b617776beaa9e2e1c5925df33db865a7f7f4b0efa70365b3adb0aafbd130. Arrays preserve order. Host compared complete attested pre/post metadata-correction manifests (3207 paths): all3206 paths excluding composer.lock have identical path/mode/size/digest entries. Baseline manifest94b522a3f6c6614c22a6ffb863e830ad36b81f716913ccd574db2a42fa39ef53, corrected manifest5ebaf9a07f43b54fa0987dd08b056bdb49c3dc1965df6c02102844799e47b9c0. These host evidence establish preservation; no held-out completed-branch implementation was used.\n\nThe acceptance contract requires upstream kernel regression (5 tests/59 assertions), genuine Composer Patches2.0.0 full relock comparison (13records and hash), and composer validate --no-check-publish. In the immediately preceding genuine native task34504525-0b6f-4f2c-9e0b-e0f8aab9a199, all THREE host checks passed against this same unchanged frozen candidate. Its host proof bundle is retained with exact identity and candidate manifest. That run retained an inconclusive static verdict and was canceled ordinarily; it is not being restored. This fresh task must produce its own static review and all three new successful host check proofs; prior checks do not replace them. The helper scratch-copy fix is independently controlled and pinned. Baseline inherited schema/exact-version warnings remain, no suppression. Final host candidate integrity/check/receipt/finalization gates remain authoritative.\n\nNo production actions, content category restoration, production audit, Jira writes, deployment, Git mutations, SQL dump reads, dependency installation/update/resolution or contacting others. Original bugfix checkout/services excluded. Read scope covers candidate only; write scratch only. This is fresh verification of staged preserved work, not uninterrupted autonomous task success or restoration of canceled tasks.",
+  "acceptance": {
+    "source": "agent",
+    "requiredChecks": [
+      {
+        "id": "dccourts-182-upstream-kernel",
+        "argv": [
+          "bash",
+          "scripts/harness/validate-dccourts-182.sh"
+        ],
+        "timeoutMs": 600000
+      },
+      {
+        "id": "dccourts-182-composer-relock",
+        "argv": [
+          "bash",
+          "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/environment/evaluate-composer-patches-v2.sh",
+          "."
+        ],
+        "timeoutMs": 600000
+      },
+      {
+        "id": "dccourts-182-composer-project-validate",
+        "argv": [
+          "bash",
+          "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/environment/validate-composer-project.sh",
+          "."
+        ],
+        "timeoutMs": 600000
+      }
+    ]
+  },
+  "roleOverrides": {
+    "coordinator": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "engineer": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "verifier": {
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "fastMode": "off"
+    }
+  },
+  "bounds": {
+    "objectiveTimeoutMs": 900000,
+    "turnTimeoutMs": 180000
+  },
+  "excluded": [
+    "production content changes",
+    "production audit",
+    "deployment",
+    "Jira writes",
+    "completed branch implementation"
+  ],
+  "cleanup": "Capture patch and evidence, safely stop private services, restore owned trial to recorded dccr-master baseline. Original checkout unchanged.",
+  "trialBaselineCommit": "7470074adf82284dc9f3614f0ee0259aef6d027b",
+  "validationScriptSha256": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+  "stage": "final-frozen-candidate-verification",
+  "priorNativeTaskId": "a75b3e3b-4d73-4221-95c4-0f51cc40f7d2",
+  "metadataEvaluatorSha256": "b099b2568458eba0e6d0f93074d872e225abff4ec195d730d3fc940f896a71df",
+  "priorContinuationTaskId": "3d20463a-1c91-4805-aaff-489d9f4ff5b6",
+  "projectValidatorSha256": "2da27fcc63feb86021d75fe6220c6db1c444eebfb5fef6abf4406caa6bd40f05",
+  "priorVerificationTaskId": "34504525-0b6f-4f2c-9e0b-e0f8aab9a199"
+}

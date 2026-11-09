@@ -1,0 +1,12 @@
+{
+  "baselineContentHash": "4ff23405c51255a7d30b60debfc0c8f4",
+  "priorContentHash": "4ff23405c51255a7d30b60debfc0c8f4",
+  "finalContentHash": "b11ee237605d169df4d354b37fbe9781",
+  "baselineEqualsFinalExcludingOnlyTopLevelContentHash": true,
+  "priorEqualsFinalExcludingOnlyTopLevelContentHash": true,
+  "differingTopLevelKeys": [
+    "content-hash"
+  ],
+  "packagesArrayUnchangedFromBaseline": true,
+  "packagesDevArrayUnchangedFromBaseline": true
+}

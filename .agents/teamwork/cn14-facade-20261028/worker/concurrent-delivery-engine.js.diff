@@ -1,0 +1,36 @@
+--- .agents/teamwork/cn14-facade-20261028/worker/concurrent-delivery-engine.js	2026-10-28 09:50:04.982600826 +0200
++++ src/concurrent-delivery-engine.js	2026-10-28 09:51:45.882890469 +0200
+@@ -426,15 +426,14 @@
+     if (objective.disposition === 'canceled') return { runId, status: 'canceled', text: 'Canceled by the owner.', rounds: 0, assignments: [] };
+     if (isResume) {
+       const currentController = this.controllers.get(runId);
+-      if (!currentController || currentController.shutdownRequested) {
+-        if (['paused_owner', 'waiting_owner', 'waiting_budget'].includes(objective.disposition)) {
+-          const control = this.store.getLifecycleControl(this.projectId, run.objectiveId);
+-          if (control?.cause === 'owner_pause' || control?.cause === 'owner_stop') {
+-            objective = this.store.transitionLifecycleControl(this.projectId, run.objectiveId, { action: 'resume',
++      if (objective.disposition === 'paused_owner') {
++        const control = this.store.getLifecycleControl(this.projectId, run.objectiveId);
++        if (control?.cause === 'owner_pause' || control?.cause === 'owner_stop') {
++          objective = currentController && !currentController.shutdownRequested
++            ? currentController.resumeObjective()
++            : this.store.transitionLifecycleControl(this.projectId, run.objectiveId, { action: 'resume',
+               expectedControlRevision: objective.controlRevision, expectedOwnerGeneration: objective.ownerGeneration });
+-          }
+         }
+-        this.db.prepare('DELETE FROM concurrent_controller_fences WHERE project_id=? AND objective_id=?').run(this.projectId, run.objectiveId);
+       }
+       const controller = await this.#controller(run, { prepareThread: false });
+       if (input.input?.answer || typeof input.input === 'string') {
+@@ -712,6 +711,11 @@
+       const controller = this.controllers.get(run.runId);
+       if (!controller) throw error('concurrent_controller_missing');
+       const status = controller.status();
++      if (objective.disposition === 'paused_owner') {
++        const pause = { kind: 'owner_pause', message: 'Paused by the owner' };
++        this.#saveStatus(run.runId, 'paused');
++        return { runId: run.runId, status: 'input_required', text: pause.message, pause, rounds: 0, assignments: [] };
++      }
+       if (status.lastRecovery?.state === 'stale' || objective.disposition === 'blocked_technical') {
+         const pause = this.getPause(run.runId) || { kind: 'error', message: 'Concurrent delivery is blocked by an unresolved effect.' };
+         this.#savePause(run.runId, pause);

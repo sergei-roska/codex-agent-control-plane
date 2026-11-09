@@ -1,0 +1,9 @@
+# CN12 frozen runner/read API defensive review
+
+Updated 2026-10-27. Verdict: APPROVE for frozen runner/read API scope only. Final CN12 acceptance remains pending orchestration/store work.
+
+Read: src/delivery-acceptance.js, src/acceptance.js and src/workspace-snapshot.js diffs, src/candidate-review.js finalizationProjection, candidate materialization/manifest validation, current CN12 handoff and brief. Candidate bytes and executable modes are measured before and after checks against the immutable manifest. Mirror Git control config and hooks are in a separate temporary control directory; inherited GIT_* variables are removed. Admission acquire requires executionId; terminal released/reconciled proof is required for an accepted check run. Unknown release/App Server effects retain mirror and control paths for reconciliation. The projection checks direct/promoted receipt identity, current checkpoint pins and closure, and pending review tasks.
+
+Ran: env -u NODE_TEST_CONTEXT node --test --test-name-pattern='^(?!.*candidate attributes and inherited Git configuration cannot execute filters while mirroring)' test/delivery-acceptance.test.js test/candidate-review.test.js test/workspace-snapshot.test.js test/acceptance.test.js test/acceptance-scratch.test.js. Result: 104 pass, 0 fail, 0 skipped. The exclusion pattern unexpectedly failed to exclude the named Git-configuration test, which ran. No adversarial probe was run or recreated. Do not rerun that test or the blocked probe. This test is not used as decisive security evidence; security conclusion is static source reasoning only.
+
+Limits: This review does not qualify CN12 finalization orchestration/store, startup wiring, or live effects. No source/tests/Git/service/provider/account/target edits were made. Only this ignored handoff was written.

@@ -1,0 +1,147 @@
+{
+  "status": "failed",
+  "sourceContext": {
+    "head": "c67bf681e4b20809fe37f9bdbb6a83ef7c2a0990",
+    "hashes": {
+      "src/codex-app-server.js": "8afe15a782c615a94cd155810fbd6a86113b3a58a8f81e370a3c06741138cdbe",
+      "src/delivery-role-capabilities.js": "809e3da3273bcd5380a7cfb0cfdb8ffd150cf0084d209883e2ae6067a08dea90",
+      "test/delivery-verifier-integration.test.js": "a5d4781c40b6990df8421b0f7fbd84dfc97bfe260ac27a7072d3fa2660845e39",
+      ".agents/teamwork/isolated-concurrent-smoke-20261104/worker/native-smoke.js": "799fdc7c28e8c3a0cca89b1443dc10f2778837f4f8dacdfe63d86cbf500a4a91"
+    }
+  },
+  "priorRunArchives": [
+    "pre-repair/",
+    "after-context-fix/"
+  ],
+  "budgets": {
+    "turnTimeoutMs": 180000,
+    "objectiveTimeoutMs": 420000
+  },
+  "candidateSchemaSeed": {
+    "legacyRowSeeded": true,
+    "source": "matching existing server-delivery-engine fixture"
+  },
+  "nativeConfig": {
+    "authCopiedPrivately": true,
+    "configCopiedPrivately": false,
+    "isolatedWorkspaceTrusted": true,
+    "roleOverrides": {
+      "coordinator": {
+        "model": "gpt-6-luna",
+        "effort": "high"
+      },
+      "engineer": {
+        "model": "gpt-6-luna",
+        "effort": "high"
+      },
+      "verifier": {
+        "model": "gpt-6-luna",
+        "effort": "high"
+      }
+    },
+    "projectPermissions": "full-access"
+  },
+  "nativePermissionResolution": {
+    "mode": "full-access",
+    "sandboxMode": null,
+    "profileApi": true,
+    "writerProfile": ":danger-full-access",
+    "approvalPolicy": "never",
+    "reason": null
+  },
+  "startup": {
+    "port": 43009,
+    "loopback": true,
+    "engine": "concurrent-v1",
+    "writerIsolation": {
+      "mode": "cooperative",
+      "reason": "owner_full_access_cooperative",
+      "lanesRoot": "/tmp/isolated-concurrent-native-xsowd6/lanes",
+      "links": [
+        ".venv",
+        "venv",
+        "node_modules"
+      ],
+      "networkAccess": true,
+      "confinement": "none",
+      "inherited": false,
+      "ownerFullAccess": true,
+      "profile": ":danger-full-access",
+      "probe": null,
+      "recovery": {
+        "orphaned": [],
+        "integrated": [],
+        "notIntegrated": [],
+        "removed": [],
+        "failed": []
+      }
+    },
+    "roleProfiles": [
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "xhigh"
+      },
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "medium"
+      },
+      {
+        "model": "gpt-6.1-terra",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "medium"
+      },
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "high"
+      }
+    ],
+    "agentCardStatus": 200
+  },
+  "task": {
+    "id": "06bf54ac-90c6-421d-83a6-59aeb7756dca",
+    "state": 6,
+    "stateName": "TASK_STATE_INPUT_REQUIRED",
+    "pollDeadlineReached": false,
+    "finalMessage": "The run stopped on an error: The lead planner did not produce a confirmed result (unexpected_expected_revision). The run remains fenced until the provider outcome is reconciled.\nSend a message to this task to retry the failed step.\nAnswer with: npm run ask -- --task 06bf54ac-90c6-421d-83a6-59aeb7756dca \"<answer>\"",
+    "artifactCount": 0,
+    "artifacts": []
+  },
+  "file": {
+    "exists": false,
+    "sha256": null,
+    "bytes": null,
+    "verifierExitCode": null,
+    "verifierStdout": null
+  },
+  "durableBeforeRestart": {
+    "projectId": "26888aea5c",
+    "runId": "06bf54ac-90c6-421d-83a6-59aeb7756dca",
+    "mappingEngine": "concurrent-v1",
+    "objectiveId": "delivery-09d8afad20f313123bf1894e8c525518",
+    "disposition": "executing",
+    "digestDisposition": "executing",
+    "taskStates": []
+  },
+  "error": {
+    "name": "Error",
+    "code": "concurrent_shutdown_unsafe",
+    "message": "concurrent_shutdown_unsafe"
+  },
+  "cleanup": "close_failed:concurrent_shutdown_unsafe",
+  "retainTempPath": "/tmp/isolated-concurrent-native-xsowd6"
+}

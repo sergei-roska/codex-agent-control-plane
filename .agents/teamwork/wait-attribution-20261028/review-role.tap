@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: authenticated role card and returnImmediately TaskExecutor publish private output only through CandidateStore
+ok 1 - authenticated role card and returnImmediately TaskExecutor publish private output only through CandidateStore
+  ---
+  duration_ms: 334.365945
+  type: 'test'
+  ...
+# Subtest: verifier host check proof and frozen CandidateReview receipt require pinned passing checks
+ok 2 - verifier host check proof and frozen CandidateReview receipt require pinned passing checks
+  ---
+  duration_ms: 89.230439
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 712.039871

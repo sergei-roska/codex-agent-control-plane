@@ -1,0 +1,12 @@
+{
+  "readOnly": true,
+  "originalClassification": "busy",
+  "correctedClassification": true,
+  "misclassifiedTasks": [
+    {
+      "id": "cdb27a0c-e3c5-40c2-ac4a-9005e7c041ef",
+      "status_state": "TASK_STATE_INPUT_REQUIRED"
+    }
+  ],
+  "note": "Exact current guard on live read-only SQLite. Corrected classification is proposed until production patch is reviewed. No live task submitted."
+}

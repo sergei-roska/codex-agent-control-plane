@@ -1,0 +1,27 @@
+{
+  "repro_command": "node --test --test-reporter=tap test/concurrent-recovery-acceptance.test.js",
+  "observed_error": "delivery_role_check_evidence_invalid",
+  "required_check_passed": [
+    {
+      "checkId": "repaired-product",
+      "evidenceRef": "verifier-check:attempt-dffd0f1f5e3d6e7efa2c0115ddf686be:repaired-product",
+      "state": "passed"
+    }
+  ],
+  "evidence_refs_types": [
+    "str",
+    "dict",
+    "dict"
+  ],
+  "object_ref_contracts": [
+    "evidence-ref/v1",
+    "evidence-ref/v1"
+  ],
+  "object_ref_ids": [
+    "ev_a73b0628f7f57a209fea89f4cc044cbd",
+    "ev_a33f621d6f183e3e484494df1ded8dca"
+  ],
+  "producer": "src/concurrent-delivery-engine.js #checkEvidenceFor",
+  "consumer": "src/delivery-role-service.js #checkEvidence validRefs requires strings",
+  "temporary_db": "/tmp/concurrent-recovery-acceptance-vYv8rU/state.sqlite"
+}

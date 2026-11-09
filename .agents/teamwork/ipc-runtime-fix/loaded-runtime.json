@@ -1,0 +1,27 @@
+{
+  "pid": 168790,
+  "moduleLoadedAt": "2026-10-22T07:07:51.640Z",
+  "startupGitRevision": "65a970e0bfe9572a8d6df3d2d35d91fe33f82f83",
+  "matches": [
+    {
+      "file": "src/execution-permissions.js",
+      "sha256": "d296a208cf6a096a72ac9b52b114a602732747d35ed37212e0a5f304dc1feb72",
+      "loaded": "d296a208cf6a096a72ac9b52b114a602732747d35ed37212e0a5f304dc1feb72"
+    },
+    {
+      "file": "src/codex-app-server.js",
+      "sha256": "0a7d487684fa0b82f0559450770fef9cf0f785529f488c028021a37712df318a",
+      "loaded": "0a7d487684fa0b82f0559450770fef9cf0f785529f488c028021a37712df318a"
+    },
+    {
+      "file": "src/acceptance.js",
+      "sha256": "7ba0d185fef831988f6e09ef610c4bae33d7afe7cfa4c5210db95d101e4fa039",
+      "loaded": "7ba0d185fef831988f6e09ef610c4bae33d7afe7cfa4c5210db95d101e4fa039"
+    },
+    {
+      "file": "src/verification-preflight.js",
+      "sha256": "2db7d06709f28e4d68d1656c8d1a76253f67aa85dbd4310c364c604c5b4a0c6b",
+      "loaded": "2db7d06709f28e4d68d1656c8d1a76253f67aa85dbd4310c364c604c5b4a0c6b"
+    }
+  ]
+}

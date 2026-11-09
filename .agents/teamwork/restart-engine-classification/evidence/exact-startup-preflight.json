@@ -1,0 +1,19 @@
+{
+  "readOnly": true,
+  "exactProductionStartupClassification": true,
+  "results": [
+    {
+      "label": "before",
+      "sourceHash": "0982a0856578b089d74b08063661f857f76e61c158b4bc21baeaf41b9839b367",
+      "admission": "busy"
+    },
+    {
+      "label": "fixed",
+      "sourceHash": "1c5d12d37661b1e882c96c93691719a0647fa2bb0e9b4818a0a0e9e39d3bf5c6",
+      "admission": true
+    }
+  ],
+  "taskRowsUnchanged": true,
+  "liveTasksSubmitted": 0,
+  "liveServicesStarted": 0
+}

@@ -1,0 +1,23 @@
+{
+  "baseline": "/tmp/harness-cleanup-baseline-tc7142iw",
+  "command": [
+    "node",
+    "--test",
+    "--test-reporter=tap",
+    "--test-name-pattern=direct review continuations bind thread lane|direct verifier continuation requires its originating target",
+    "test/a2a-role-service.test.js"
+  ],
+  "exitCodes": [
+    1,
+    1
+  ],
+  "baselineFailures": [
+    "direct review continuations bind thread lane and codex home to their origin attempt",
+    "direct verifier continuation requires its originating target and preserves same-target control"
+  ],
+  "currentFailures": [
+    "direct review continuations bind thread lane and codex home to their origin attempt",
+    "direct verifier continuation requires its originating target and preserves same-target control"
+  ],
+  "sameFailureMessages": true
+}

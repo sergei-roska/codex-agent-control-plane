@@ -1,0 +1,67 @@
+TAP version 13
+# Subtest: direct review continuations bind thread lane and codex home to their origin attempt
+not ok 1 - direct review continuations bind thread lane and codex home to their origin attempt
+  ---
+  duration_ms: 55.615683
+  type: 'test'
+  location: '/tmp/harness-cleanup-baseline-tc7142iw/test/a2a-role-service.test.js:1416:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      {
+        codexHome: 'home-A',
+        laneId: null,
+    +   mcpToolPins: [],
+        threadId: 'thread-2'
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    threadId: 'thread-2'
+    laneId: ~
+    codexHome: 'home-A'
+  actual:
+    threadId: 'thread-2'
+    laneId: ~
+    codexHome: 'home-A'
+    mcpToolPins:
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/harness-cleanup-baseline-tc7142iw/test/a2a-role-service.test.js:1448:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+# Subtest: direct verifier continuation requires its originating target and preserves same-target control
+not ok 2 - direct verifier continuation requires its originating target and preserves same-target control
+  ---
+  duration_ms: 9.234353
+  type: 'test'
+  location: '/tmp/harness-cleanup-baseline-tc7142iw/test/a2a-role-service.test.js:1610:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    same-target verifier continuation reaches the injected App Server boundary
+    
+    1 !== 2
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 2
+  actual: 1
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/harness-cleanup-baseline-tc7142iw/test/a2a-role-service.test.js:1689:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 448.019331

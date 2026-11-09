@@ -1,0 +1,19 @@
+✔ versioned delta adds a successor without waiting for worker records (15.251177ms)
+✔ new inbox receipt invalidates a running plan before it can mutate backlog (4.544338ms)
+✔ one provider thread cannot run overlapping planner turns and empty wake is idle (6.861188ms)
+✔ a planner cannot authorize itself by returning a newer captured revision (3.743341ms)
+✔ recovery metadata is structurally bounded and never triggers a fallback turn (3.123162ms)
+✔ active same-thread turns stay busy and never invoke opportunistic reconciliation (7.153904ms)
+✔ unknown turns require exact no-effect and remote/process quiescence proof before fence release (7.271834ms)
+✔ only a trusted local pre-dispatch rejection is labeled as such in the planner ledger (2.705128ms)
+✔ reopened active turns require authorized lifecycle quiescence before reconciliation (8.271502ms)
+✔ owner takeover stales held and subsequent old-planner turns while the new owner can proceed (6.776386ms)
+✔ owner generation is scoped to its objective on the same project (5.610605ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 139.905121

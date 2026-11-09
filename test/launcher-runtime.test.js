@@ -256,3 +256,73 @@ test('rejects an off-port pairing URL without placing any pairing secret in stat
   assert.equal(children[0].child.signalCode, 'SIGTERM');
   await fs.promises.rm(root, { recursive: true, force: true });
 });
+
+test('auto-discovered Atlassian config is skipped for a port its redirect does not name', async () => {
+  const root = temporary();
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const xdg = path.join(root, 'xdg');
+  const config = path.join(xdg, 'orchestrator-atlassian', 'config.json');
+  fs.mkdirSync(path.dirname(config), { recursive: true });
+  fs.writeFileSync(config, `${JSON.stringify({ redirectUri: 'http://127.0.0.1:3000/api/dashboard/v1/integrations/atlassian/callback' })}\n`);
+  const saved = { xdg: process.env.XDG_CONFIG_HOME, explicit: process.env.CODEX_ATLASSIAN_CONFIG };
+  const hadExplicit = Object.hasOwn(process.env, 'CODEX_ATLASSIAN_CONFIG');
+  process.env.XDG_CONFIG_HOME = xdg;
+  delete process.env.CODEX_ATLASSIAN_CONFIG;
+  try {
+    const skipped = makeRuntime(project, { root });
+    const offPort = await skipped.runtime.start({ projectPath: project, port: 3001 });
+    assert.equal(offPort.status, 'running');
+    assert.equal(Object.hasOwn(skipped.children[0].spawnOptions.env, 'CODEX_ATLASSIAN_CONFIG'), false);
+    assert.match(offPort.notice, /Atlassian is off for port 3001.*port 3000/);
+    assert.doesNotMatch(JSON.stringify(skipped.runtime.snapshot()), /pair=/);
+    await skipped.runtime.stop();
+
+    const matched = makeRuntime(project, { root });
+    const onPort = await matched.runtime.start({ projectPath: project });
+    assert.equal(matched.children[0].spawnOptions.env.CODEX_ATLASSIAN_CONFIG, config);
+    assert.equal(onPort.notice, undefined);
+    await matched.runtime.stop();
+
+    process.env.CODEX_ATLASSIAN_CONFIG = config;
+    const explicit = makeRuntime(project, { root });
+    await explicit.runtime.start({ projectPath: project, port: 3001 });
+    assert.equal(explicit.children[0].spawnOptions.env.CODEX_ATLASSIAN_CONFIG, config);
+    await explicit.runtime.stop();
+  } finally {
+    if (saved.xdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = saved.xdg;
+    if (hadExplicit) process.env.CODEX_ATLASSIAN_CONFIG = saved.explicit; else delete process.env.CODEX_ATLASSIAN_CONFIG;
+    await fs.promises.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('startup exit reports a short redacted tail of the child stderr', async () => {
+  const root = temporary();
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const { runtime, children } = makeRuntime(project, { root, ready: false, startTimeoutMs: 500 });
+  runtime.spawnImpl = (_exe, _args, spawnOptions) => {
+    const child = fakeChild({ ready: false });
+    children.push({ child, spawnOptions });
+    fs.mkdirSync(path.dirname(spawnOptions.env.CODEX_A2A_TOKEN_FILE), { recursive: true });
+    fs.writeFileSync(spawnOptions.env.CODEX_A2A_TOKEN_FILE, 'a'.repeat(43), { mode: 0o600 });
+    setImmediate(() => {
+      child.stderr.write('Atlassian configuration is invalid\n');
+      child.stderr.write('Bearer SECRETBEARER123 pair=SECRETPAIR456 client_secret=SECRETCLIENT789\n');
+      child.stderr.end();
+      child.exitCode = 1;
+      child.emit('exit', 1, null);
+    });
+    return child;
+  };
+  await assert.rejects(runtime.start({ projectPath: project }), (error) => {
+    assert.match(error.message, /^Project server exited during startup \(1\)\. Server output: /);
+    assert.match(error.message, /Atlassian configuration is invalid/);
+    assert.match(error.message, /pair=\[redacted\]/);
+    assert.doesNotMatch(error.message, /SECRETBEARER123|SECRETPAIR456|SECRETCLIENT789/);
+    return true;
+  });
+  assert.equal(runtime.snapshot().status, 'error');
+  assert.doesNotMatch(JSON.stringify(runtime.snapshot()), /SECRETBEARER123|SECRETPAIR456|SECRETCLIENT789/);
+  await fs.promises.rm(root, { recursive: true, force: true });
+});

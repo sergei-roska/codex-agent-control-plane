@@ -1,0 +1,33 @@
+{
+  "at": "2026-11-05T14:58:24.551Z",
+  "quota": {
+    "limitId": "codex",
+    "limitName": null,
+    "normalModelSlug": null,
+    "primary": {
+      "usedPercent": 61,
+      "windowDurationMins": 300,
+      "resetsAt": 1793905751
+    },
+    "secondary": {
+      "usedPercent": 26,
+      "windowDurationMins": 10080,
+      "resetsAt": 1794383888
+    },
+    "credits": {
+      "hasCredits": false,
+      "unlimited": false,
+      "balance": "0"
+    },
+    "individualLimit": null,
+    "spendControlReached": false,
+    "planType": "plus",
+    "rateLimitReachedType": null
+  },
+  "sourcePins": 341,
+  "sourceDrift": 0,
+  "sourceHead": "42af839879cf0cfe25c340ddc7656a95ad602df0",
+  "runnerSha256": "07a10b02b703776036ca0ae7de4fa1e84eb87f9fc5d7d67b972e9e64314a86c6",
+  "existingTempRoots": [],
+  "authorizedArm": "concurrent-v1"
+}

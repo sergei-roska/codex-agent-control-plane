@@ -1,0 +1,79 @@
+✖ owner decision real engine answer retains mandatory acceptance and authenticated controls (43.597854ms)
+✖ owner decision real engine replace retains mandatory acceptance and authenticated controls (25.657258ms)
+✖ owner decision real engine replace-drift retains mandatory acceptance and authenticated controls (21.650138ms)
+✖ owner decision real engine reopen retains mandatory acceptance and authenticated controls (20.840411ms)
+
+Interrupted while running:
+
+⚠ test/concurrent-delivery-engine.test.js (test/concurrent-delivery-engine.test.js:1:1)
+✖ test/concurrent-delivery-engine.test.js (74970.484355ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 0
+ℹ fail 4
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 74975.326617
+
+✖ failing tests:
+
+test at test/concurrent-delivery-engine.test.js:1443:70
+✖ owner decision real engine answer retains mandatory acceptance and authenticated controls (43.597854ms)
+  Error: delivery_role_description_required
+      at error (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:34:55)
+      at DeliveryRoleService.register (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:741:72)
+      at ConcurrentDeliveryEngine.register (/home/sr/Projects/Workspace/codex-agent-control-plane/src/concurrent-delivery-engine.js:251:43)
+      at createHarness (/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:116:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:1482:14)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    code: 'delivery_role_description_required'
+  }
+
+test at test/concurrent-delivery-engine.test.js:1443:70
+✖ owner decision real engine replace retains mandatory acceptance and authenticated controls (25.657258ms)
+  Error: delivery_role_description_required
+      at error (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:34:55)
+      at DeliveryRoleService.register (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:741:72)
+      at ConcurrentDeliveryEngine.register (/home/sr/Projects/Workspace/codex-agent-control-plane/src/concurrent-delivery-engine.js:251:43)
+      at createHarness (/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:116:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:1482:14)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    code: 'delivery_role_description_required'
+  }
+
+test at test/concurrent-delivery-engine.test.js:1443:70
+✖ owner decision real engine replace-drift retains mandatory acceptance and authenticated controls (21.650138ms)
+  Error: delivery_role_description_required
+      at error (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:34:55)
+      at DeliveryRoleService.register (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:741:72)
+      at ConcurrentDeliveryEngine.register (/home/sr/Projects/Workspace/codex-agent-control-plane/src/concurrent-delivery-engine.js:251:43)
+      at createHarness (/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:116:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:1482:14)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    code: 'delivery_role_description_required'
+  }
+
+test at test/concurrent-delivery-engine.test.js:1443:70
+✖ owner decision real engine reopen retains mandatory acceptance and authenticated controls (20.840411ms)
+  Error: delivery_role_description_required
+      at error (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:34:55)
+      at DeliveryRoleService.register (/home/sr/Projects/Workspace/codex-agent-control-plane/src/delivery-role-service.js:741:72)
+      at ConcurrentDeliveryEngine.register (/home/sr/Projects/Workspace/codex-agent-control-plane/src/concurrent-delivery-engine.js:251:43)
+      at createHarness (/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:116:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/concurrent-delivery-engine.test.js:1482:14)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    code: 'delivery_role_description_required'
+  }
+
+test at test/concurrent-delivery-engine.test.js:1:1
+✖ test/concurrent-delivery-engine.test.js (74970.484355ms)
+  'Promise resolution is still pending but the event loop has already resolved'

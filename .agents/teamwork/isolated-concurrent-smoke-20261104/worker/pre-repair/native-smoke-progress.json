@@ -1,0 +1,146 @@
+{
+  "status": "incomplete",
+  "proofKind": "closed_and_reopened_durable_native_smoke",
+  "source": "isolated SQLite snapshot while native HTTP task remains active",
+  "startup": {
+    "loopback": true,
+    "deliveryEngine": "concurrent-v1",
+    "agentCardStatus": 200,
+    "permissionMode": "full-access",
+    "permissionGate": "startServer admitted Concurrent; private config trusts only disposable workspace"
+  },
+  "roleSettings": {
+    "coordinator": {
+      "model": "gpt-6-luna",
+      "effort": "low"
+    },
+    "engineer": {
+      "model": "gpt-6-luna",
+      "effort": "low"
+    },
+    "verifier": {
+      "model": "gpt-6-luna",
+      "effort": "low"
+    }
+  },
+  "legacySchema": {
+    "runIdColumn": true,
+    "projectIdColumn": false,
+    "seededLegacyRowCount": 1,
+    "concurrentCandidatesTableExists": true
+  },
+  "run": {
+    "project_id": "8e9b4ba530",
+    "run_id": "b656b749-f1cc-4e86-856a-599a03e9377f",
+    "status": "running"
+  },
+  "plannerStates": [
+    "complete",
+    "complete",
+    "complete",
+    "complete"
+  ],
+  "tasks": [
+    {
+      "task_id": "write-output",
+      "state": "succeeded"
+    },
+    {
+      "task_id": "review-ced57298b69b4961367e0778",
+      "state": "failed"
+    }
+  ],
+  "roleExecutions": [
+    {
+      "role_id": "engineer",
+      "state": "settled"
+    },
+    {
+      "role_id": "verifier",
+      "state": "settled"
+    }
+  ],
+  "providerTurnFacts": [
+    {
+      "plannerTurnId": "lead-30081fddf03207cdd3b00ef19a401764",
+      "threadId": "01a1a5a9-db0b-7e40-9164-ebe2f41a1b64",
+      "providerTurnId": "01a1a5a9-db30-7922-9335-dfc1d6c95ee4",
+      "terminalStatus": "completed"
+    },
+    {
+      "plannerTurnId": "lead-1c9247375a59a4d3608f2f5632a20fd9",
+      "threadId": "01a1a5a9-db0b-7e40-9164-ebe2f41a1b64",
+      "providerTurnId": "01a1a5aa-19d5-72e3-8061-642efed2e463",
+      "terminalStatus": "completed"
+    },
+    {
+      "plannerTurnId": "lead-0eca3db015a3d19f9223f80921e2c4e9",
+      "threadId": "01a1a5a9-db0b-7e40-9164-ebe2f41a1b64",
+      "providerTurnId": "01a1a5aa-23bb-7970-887b-60dbb941dbb5",
+      "terminalStatus": "completed"
+    },
+    {
+      "plannerTurnId": "lead-f3d460cfdd043b87b2a77925821d13a4",
+      "threadId": "01a1a5a9-db0b-7e40-9164-ebe2f41a1b64",
+      "providerTurnId": "01a1a5aa-4a27-7af3-badb-655dff96575b",
+      "terminalStatus": "completed"
+    }
+  ],
+  "usage": [],
+  "completed": {
+    "objectiveTimeoutMs": 420000,
+    "taskState": 2,
+    "taskStateName": "TASK_STATE_WORKING",
+    "taskStillActiveAtBound": true,
+    "accepted": false,
+    "file": {
+      "exists": true,
+      "sha256": "5af9330850129a61b69ce46bab68efc6c46a267f8865fb4a907191911ba6bf25",
+      "bytes": 20,
+      "verifierExitCode": 0,
+      "verifierStdout": "PASS exact synthetic output"
+    },
+    "independentRetainedCheck": {
+      "command": "node verify-output.js",
+      "exitCode": 0,
+      "stdout": "PASS exact synthetic output"
+    },
+    "durableDispositionBeforeShutdown": "executing",
+    "objectiveDispositionAfterFirstClose": "canceled",
+    "shutdownPhaseAfterFirstClose": "released",
+    "restart": {
+      "port": 45219,
+      "loopback": true,
+      "engine": "concurrent-v1",
+      "agentCardStatus": 200
+    },
+    "objectiveDispositionAfterReopen": "canceled",
+    "shutdownPhaseAfterSecondClose": "released",
+    "legacyCandidatePreservedAfterRestart": true,
+    "concurrentCandidateCountAfterRestart": 2,
+    "temporaryAuthAndStateRemoved": true
+  },
+  "verifierFailure": {
+    "taskId": "review-ced57298b69b4961367e0778",
+    "attemptId": "attempt-8e4f47bfde04e9a1a4a29fbbfd38d4cb",
+    "state": "failed",
+    "failureKind": "role_report_or_turn_failed",
+    "roleExecution": {
+      "terminalStatus": "completed",
+      "failureCode": "role_report_or_turn_failed",
+      "outputState": "not_published"
+    },
+    "reportOutcome": "blocked",
+    "reportReason": "No candidate artifacts or review scope were provided in the workspace",
+    "requiredCheck": {
+      "id": "verify-output",
+      "state": "not_run",
+      "invocationCapability": false
+    },
+    "usageTokens": 16474,
+    "usageSource": "delivery_role_executions.record_json.usage (read-only inspection by root)"
+  },
+  "usageLedgerRows": 0,
+  "runStorageStatusAfterShutdown": "running",
+  "sourceLimit": "The A2A task was still WORKING at the 420000 ms polling bound; server close canceled the objective. No acceptance claim."
+}

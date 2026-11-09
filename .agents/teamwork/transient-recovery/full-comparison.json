@@ -1,0 +1,22 @@
+{
+  "counts": {
+    "tests": "1400",
+    "pass": "1391",
+    "fail": "8",
+    "cancelled": "0",
+    "skipped": "1",
+    "duration_ms": "34279.444126"
+  },
+  "failures": [
+    "direct review continuations bind thread lane and codex home to their origin attempt",
+    "direct verifier continuation requires its originating target and preserves same-target control",
+    "enumeration failure still sends apps/plugins/skills overrides and marks enforced false",
+    "selected skills are explicit turn inputs with scoped boundary and hash provenance",
+    "every shipped role and the lead have an empty MCP allowlist and skills off",
+    "rejects malformed a2a_tools tables",
+    "a usage-limited lane writer reports a continuation with its thread, lane, and home",
+    "a completed lane writer publishes thread, lane, and home as continuation metadata"
+  ],
+  "newFailures": [],
+  "log": ".agents/teamwork/transient-recovery/full-tests.log"
+}

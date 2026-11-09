@@ -1,0 +1,2 @@
+{"scenario":"old completion while new request pending","before":true,"after":true,"newerRequestStillPending":true}
+{"scenario":"intermediate working poll then same semantic error","outcome":false,"selectedChoice":"keep","draft":"Please continue after checking the provider."}

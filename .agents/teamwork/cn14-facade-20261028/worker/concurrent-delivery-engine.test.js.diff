@@ -1,0 +1,179 @@
+--- .agents/teamwork/cn14-facade-20261028/worker/concurrent-delivery-engine.test.js	2026-10-28 09:50:04.982680666 +0200
++++ test/concurrent-delivery-engine.test.js	2026-10-28 09:55:48.097410648 +0200
+@@ -909,3 +909,176 @@
+     } finally { reopenedDb?.close(); }
+   });
+ }
++
++function facadeIntake(signal) {
++  return { runId: 'pause-facade-run', goal: 'Preserve admitted work across owner pause.', contract: { requiredChecks: [] }, signal,
++    engineMapping: { engine: 'concurrent-v1', projectId, objectiveId: 'engine-objective-1', sessionId: 'pause-facade-session' } };
++}
++
++function facadePlannerResult(options, turnId) {
++  const threadId = options.threadId;
++  const processIdentity = readProcessIdentity(process.pid);
++  options.onTurnStart({ threadId, processIdentity });
++  return { threadId, turnId, status: 'completed',
++    text: JSON.stringify({ expected: JSON.parse(options.input.slice(options.input.indexOf('\n') + 1)).pins,
++      delta: null, dialogue: null, recovery: null, ownerDecision: null }),
++    execution: { threadId, turnId, processIdentity, turnStartSent: true, turnStartRejected: false, turnTerminal: true } };
++}
++
++for (const reopen of [false, true]) test(`owner pause facade resumes ${reopen ? 'reopened SQLite' : 'reused controller'} without overlapping planner calls`, { timeout: 15000 }, async (t) => {
++  const entered = deferred();
++  const release = deferred();
++  let calls = 0;
++  let active = 0;
++  let maxActive = 0;
++  t.after(() => release.resolve());
++  const fx = await createHarness(t, { appServer: { async run(options) {
++    calls += 1;
++    active += 1;
++    maxActive = Math.max(maxActive, active);
++    const result = facadePlannerResult(options, `pause-turn-${calls}`);
++    if (calls === 1) { entered.resolve(); await release.promise; }
++    active -= 1;
++    return result;
++  } } });
++  const abort = new AbortController();
++  const pending = fx.engine.run(facadeIntake(abort.signal));
++  await entered.promise;
++  assert.equal(fx.engine.requestPause('pause-facade-run'), true);
++  let paused;
++  pending.then((value) => { paused = value; });
++  await waitFor(() => paused, 'owner pause did not return from the facade', 700);
++  assert.equal(paused.status, 'input_required');
++  assert.equal(paused.pause.kind, 'owner_pause');
++  assert.equal(active, 1, 'pause must retain the admitted planner call');
++  let engine = fx.engine;
++  const prior = engine.controllers.get('pause-facade-run');
++  if (reopen) {
++    release.resolve();
++    await waitFor(() => !prior.cycle, 'paused planner did not drain');
++    await engine.shutdown().catch(() => {});
++    const db = new Database(path.join(fx.storageRoot, 'state.sqlite'));
++    const identity = { accountId: 'fake-account', codexHome };
++    const admission = new WriterAdmission({ db, workspace: fx.workspace });
++    const lanes = new LaneManager({ db, workspace: fx.workspace, admission, mode: 'worktree', lanesRoot: path.join(fx.storageRoot, 'lanes'), links: [] });
++    engine = new ConcurrentDeliveryEngine({ db, workspace: fx.workspace, projectId, storageRoot: fx.storageRoot,
++      baseUrl: fx.baseUrl, authMiddleware: auth, authToken: 'concurrent-test-token', appServer: fx.appServer,
++      providerIdentity: identity, providerIdentityFor: () => identity, roles: fx.roles, leadRole: fx.lead, admission, lanes,
++      writerIsolation: { mode: 'worktree' }, sleepMs: 10 });
++    t.after(async () => { await engine.shutdown().catch(() => {}); db.close(); });
++    await engine.recoverStoredRuns();
++    assert.equal(engine.getRunDigest('pause-facade-run').disposition, 'paused_owner');
++  }
++  const resumed = engine.resume({ runId: 'pause-facade-run', signal: abort.signal });
++  assert.equal(engine.getRunDigest('pause-facade-run').disposition, 'executing');
++  const revision = engine.controlStatus('pause-facade-run').revisions.controlRevision;
++  const duplicate = engine.resume({ runId: 'pause-facade-run', signal: abort.signal });
++  assert.equal(engine.controlStatus('pause-facade-run').revisions.controlRevision, revision);
++  assert.equal(engine.getPause('pause-facade-run'), null);
++  release.resolve();
++  await waitFor(() => calls >= 2 && active === 0
++    && fx.db.prepare("SELECT status FROM delivery_planner_turns WHERE status='complete'").get(), 'resumed planner did not complete');
++  assert.equal(maxActive, 1);
++  if (!reopen) assert.equal(engine.controllers.get('pause-facade-run'), prior);
++  assert.equal(engine.requestPause('pause-facade-run'), true);
++  const results = await Promise.all([resumed, duplicate]);
++  assert.ok(results.every((value) => value.pause.kind === 'owner_pause'));
++  assert.ok(fx.db.prepare("SELECT status FROM delivery_planner_turns WHERE status='stale'").get(), 'old planner result is retained as stale');
++  assert.ok(fx.db.prepare("SELECT status FROM delivery_planner_turns WHERE status='complete'").get(), 'resumed completion is retained');
++});
++
++for (const unknown of [false, true]) test(`owner pause facade retains admitted worker ${unknown ? 'unknown effects' : 'completion'}`, { timeout: 15000 }, async (t) => {
++  const entered = deferred();
++  const release = deferred();
++  t.after(() => release.resolve());
++  let workerCalls = 0;
++  let plannerCalls = 0;
++  const roles = new Map([
++    ['engineer', { id: 'engineer', name: 'Engineer', description: 'Writes private work.', sandbox: 'workspace-write', model: 'test-model', effort: 'low', fastMode: 'off' }],
++    ['verifier', { id: 'verifier', name: 'Verifier', description: 'Reviews candidates.', sandbox: 'read-only', model: 'test-model', effort: 'low', fastMode: 'off' }],
++  ]);
++  const fx = await createHarness(t, { roles, appServer: { async run(options) {
++    const threadId = options.threadId || 'pause-worker-thread';
++    const turnId = `${options.role.id}-pause-${plannerCalls + workerCalls}`;
++    const processIdentity = readProcessIdentity(process.pid);
++    options.onTurnStart({ threadId, processIdentity });
++    let text;
++    if (options.role.id === 'lead') {
++      plannerCalls += 1;
++      const pins = JSON.parse(options.input.slice(options.input.indexOf('\n') + 1)).pins;
++      text = JSON.stringify({ expected: pins, delta: plannerCalls === 1
++        ? planDelta(pins, [engineerTask('engine-objective-1', 'paused-worker', 'private.txt', 'complete after pause')]) : null,
++      dialogue: null, recovery: null, ownerDecision: null });
++    } else if (options.role.id === 'verifier') {
++      text = JSON.stringify({ outcome: 'completed', summary: 'VERDICT: pass', filesChanged: [], filesInspected: ['source.txt'],
++        checks: [], risks: [], scopeExpansion: [], decisionRequest: null });
++    } else {
++      workerCalls += 1;
++      fs.writeFileSync(path.join(options.cwd, 'private.txt'), 'retained\n');
++      entered.resolve();
++      await release.promise;
++      if (unknown) throw new Error('unknown worker outcome');
++      text = JSON.stringify({ outcome: 'completed', summary: 'Completed private work.', filesChanged: ['private.txt'],
++        filesInspected: ['source.txt'], checks: [], risks: [], scopeExpansion: [], decisionRequest: null });
++    }
++    return { threadId, turnId, status: 'completed', text,
++      execution: { threadId, turnId, processIdentity, turnStartSent: true, turnStartRejected: false, turnTerminal: true } };
++  } } });
++  const abort = new AbortController();
++  const pending = fx.engine.run(facadeIntake(abort.signal));
++  await entered.promise;
++  const attempt = fx.engine.store.listAttempts(projectId, 'engine-objective-1').find((row) => row.taskId === 'paused-worker');
++  assert.equal(fx.engine.requestPause('pause-facade-run'), true);
++  assert.equal((await pending).pause.kind, 'owner_pause');
++  assert.equal(fx.engine.roleService.getExecution(attempt.attemptId).state, 'running');
++  const resumed = fx.engine.resume({ runId: 'pause-facade-run', signal: abort.signal });
++  assert.equal(fx.engine.requestPause('pause-facade-run'), true);
++  assert.equal((await resumed).pause.kind, 'owner_pause');
++  release.resolve();
++  await waitFor(() => !fx.engine.roleService.active.size, 'worker call did not finish');
++  const execution = fx.engine.roleService.getExecution(attempt.attemptId);
++  assert.equal(workerCalls, 1);
++  assert.equal(fs.existsSync(path.join(fx.workspace, 'private.txt')), false);
++  assert.equal(fs.readFileSync(path.join(fx.lanes.store.get(execution.laneId).path, 'private.txt'), 'utf8'), 'retained\n');
++  if (unknown) {
++    await assert.rejects(fx.engine.shutdown(), { code: 'concurrent_shutdown_unsafe' });
++    assert.ok(fx.engine.store.listClaims(projectId, 'engine-objective-1').some((claim) => ['active', 'expired', 'fenced'].includes(claim.state)));
++  } else {
++    const completing = fx.engine.resume({ runId: 'pause-facade-run', signal: abort.signal });
++    await waitFor(() => fx.engine.executor.getAttempt(attempt.attemptId).state === 'settled', 'worker completion was lost');
++    const completed = fx.engine.store.listAttempts(projectId, 'engine-objective-1').find((row) => row.attemptId === attempt.attemptId);
++    assert.equal(completed.state, 'failed');
++    assert.equal(completed.outcome.failureKind, 'publication_authorization_changed');
++    assert.equal(completed.outcome.publicationState, 'not_published');
++    assert.equal(fx.engine.requestPause('pause-facade-run'), true);
++    assert.equal((await completing).pause.kind, 'owner_pause');
++    assert.equal(workerCalls, 1);
++  }
++});
++
++for (const boundary of ['owner-stop-unknown', 'technical', 'budget']) test(`owner pause facade resume preserves ${boundary} boundary`, { timeout: 15000 }, async (t) => {
++  let calls = 0;
++  const fx = await createHarness(t, { appServer: { async run(options) {
++    calls += 1;
++    options.onTurnStart({ threadId: options.threadId, processIdentity: readProcessIdentity(process.pid) });
++    throw new Error('planner outcome unknown');
++  } } });
++  const abort = new AbortController();
++  const pending = fx.engine.run(facadeIntake(abort.signal));
++  const controller = () => fx.engine.controllers.get('pause-facade-run');
++  await waitFor(() => controller()?.status().lastRecovery, 'unknown planner was not held');
++  const objective = fx.engine.store.getObjective(projectId, 'engine-objective-1');
++  if (boundary === 'owner-stop-unknown') await controller().emergencyStop();
++  else if (boundary === 'technical') fx.engine.store.blockTechnical(projectId, objective.objectiveId, {
++    failureCode: 'held_effect', expectedControlRevision: objective.controlRevision, expectedOwnerGeneration: objective.ownerGeneration });
++  else controller().lifecycle.recordBudgetWait({ waitId: 'pause-budget', source: 'test', provider: 'app-server', model: 'test-model', reasonCode: 'quota', delayMs: 60000 });
++  const expectedDisposition = boundary === 'owner-stop-unknown' ? 'executing' : boundary === 'technical' ? 'blocked_technical' : 'waiting_budget';
++  const resumed = fx.engine.resume({ runId: 'pause-facade-run', signal: abort.signal });
++  await new Promise((resolve) => setTimeout(resolve, 100));
++  assert.equal(fx.engine.getRunDigest('pause-facade-run').disposition, expectedDisposition);
++  assert.equal(calls, 1);
++  assert.equal(fx.db.prepare('SELECT status FROM delivery_planner_turns').get().status, 'unknown');
++  await assert.rejects(fx.engine.shutdown(), { code: 'concurrent_shutdown_unsafe' });
++  abort.abort();
++  await Promise.all([pending, resumed]);
++});

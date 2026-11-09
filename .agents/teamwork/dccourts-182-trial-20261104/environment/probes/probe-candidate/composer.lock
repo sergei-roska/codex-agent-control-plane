@@ -1,0 +1,17 @@
+{
+  "packages": [
+    {
+      "name": "cweagans/composer-configurable-plugin",
+      "version": "2.0.0"
+    },
+    {
+      "name": "cweagans/composer-patches",
+      "version": "2.0.0"
+    },
+    {
+      "name": "drupal/shs",
+      "version": "2.0.7"
+    }
+  ],
+  "packages-dev": []
+}

@@ -1,0 +1,12 @@
+{
+  "temporaryLog": "/tmp/lifecycle-continuation-full-20261027.tap",
+  "total": 1691,
+  "pass": 1681,
+  "fail": 9,
+  "skip": 1,
+  "failuresMatchKnownBaseline": true,
+  "inputDriftSinceSnapshot": [
+    "src/delivery-acceptance.js"
+  ],
+  "currentFrozenQualification": false
+}

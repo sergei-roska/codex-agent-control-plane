@@ -1,0 +1,74 @@
+{
+  "issue": "DCCOURTS-182",
+  "sourceUrl": "https://insomniacdesign.atlassian.net/browse/DCCOURTS-182",
+  "workspace": "/home/sr/Projects/dccourtscode-harness-trial-20261104",
+  "baseCommit": "4b526e7e3e4f727c99f02fd44a655df595adfe0c",
+  "goal": "Complete the code-only DCCOURTS-182 trial candidate. Make exactly one metadata correction: in composer.lock change top-level content-hash from 4ff23405c51255a7d30b60debfc0c8f4 to b11ee237605d169df4d354b37fbe9781. These values were measured by the genuine Composer 2.11.1 Locker::getContentHash in Lando PHP 8.3: adding extra.patches.drupal/shs changed the root hash. Preserve every other lock field and all dependency records. Do not run composer update, install or dependency resolution. Preserve every other tracked file. This is one bounded engineer task followed by normal mandatory verification, not a verification-only empty plan.\n\nThe existing upstream MR59 SHS patch restores stored category preselection and removes deleted term references, while drupal/shs remains at 2.0.7. Patch patches/shs-3620147-preselect-stored-values.patch SHA-256 must remain 6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9. composer.json registration and patches.lock.json records must remain unchanged; patches.lock.json _hash must remain dfc37cfe6cd7e4cdd678e03a170003d2398cea74c9e5967cae5244b0c203869d.\n\nAcceptance requires all three pinned host checks against the frozen candidate: upstream kernel regression (5 tests/59 assertions), genuine Composer Patches 2.0.0 full relock comparison (13 records and hash), and composer validate --no-check-publish with fresh composer.lock. Baseline dccr-master returns exit 0 with inherited schema/exact-version warnings; stale candidate returns exit 2; the exact metadata-only scratch correction returns exit 0. Preserve the baseline warnings honestly; do not suppress failed checks. The host runs the checks and controls acceptance. Do not claim acceptance yourself.\n\nNo production actions, content category restoration, production audit, Jira writes, deployment, commits, branch switching, SQL dump reads, or contacting others. The original bugfix checkout and services are excluded. Existing trial infrastructure must remain unchanged. This fresh task completes preserved output of prior staged runs; it is not an uninterrupted replay or a restoration of a canceled task.",
+  "acceptance": {
+    "source": "agent",
+    "requiredChecks": [
+      {
+        "id": "dccourts-182-upstream-kernel",
+        "argv": [
+          "bash",
+          "scripts/harness/validate-dccourts-182.sh"
+        ],
+        "timeoutMs": 600000
+      },
+      {
+        "id": "dccourts-182-composer-relock",
+        "argv": [
+          "bash",
+          "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/environment/evaluate-composer-patches-v2.sh",
+          "."
+        ],
+        "timeoutMs": 600000
+      },
+      {
+        "id": "dccourts-182-composer-project-validate",
+        "argv": [
+          "bash",
+          "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/environment/validate-composer-project.sh",
+          "."
+        ],
+        "timeoutMs": 600000
+      }
+    ]
+  },
+  "roleOverrides": {
+    "coordinator": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "engineer": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "verifier": {
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "fastMode": "off"
+    }
+  },
+  "bounds": {
+    "objectiveTimeoutMs": 900000,
+    "turnTimeoutMs": 180000
+  },
+  "excluded": [
+    "production content changes",
+    "production audit",
+    "deployment",
+    "Jira writes",
+    "completed branch implementation"
+  ],
+  "cleanup": "Capture patch and evidence, safely stop private services, restore owned trial to recorded dccr-master baseline. Original checkout unchanged.",
+  "trialBaselineCommit": "42266cb100b6386510e049da161d2d0b8ab940ed",
+  "validationScriptSha256": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+  "stage": "composer-content-hash-correction-and-acceptance",
+  "priorNativeTaskId": "a75b3e3b-4d73-4221-95c4-0f51cc40f7d2",
+  "metadataEvaluatorSha256": "5a18d2e38db0b643630d9b6be66abea535463d0435973f86310c89610b3682ff",
+  "priorContinuationTaskId": "3d20463a-1c91-4805-aaff-489d9f4ff5b6",
+  "projectValidatorSha256": "2da27fcc63feb86021d75fe6220c6db1c444eebfb5fef6abf4406caa6bd40f05"
+}

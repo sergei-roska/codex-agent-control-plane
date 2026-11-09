@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-05T14:23:45.576Z",
+  "fixtureWorkspace": "temporary disposable fixture; not a live native workspace",
+  "initialNegativeControl": {
+    "exitCode": 1,
+    "signal": null,
+    "stdout": "",
+    "stderr": "node:internal/assert/utils:146\n  throw error;\n  ^\n\nAssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n+ actual - expected\n\n+ '  north star  '\n- 'NORTH STAR'\n\n    at Object.<anonymous> (/tmp/harness-cn15-20261105-fixture-lW0oOW/verify-product.js:8:8)\n    at Module._compile (node:internal/modules/cjs/loader:1968:14)\n    at Object..js (node:internal/modules/cjs/loader:2108:10)\n    at Module.load (node:internal/modules/cjs/loader:1690:32)\n    at Module._load (node:internal/modules/cjs/loader:1480:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)\n    at node:internal/main/run_main_module:33:47 {\n  generatedMessage: true,\n  code: 'ERR_ASSERTION',\n  actual: '  north star  ',\n  expected: 'NORTH STAR',\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n\nNode.js v26.13.0\n"
+  },
+  "productInputSha256": {
+    "format-label.js": "fdcf29d242bd05a05cd9c2c03b45be3e32f7654b5b698a7a7cb9ea93f9aa4b7f",
+    "sum-positive.js": "5f47b84f8c9d9891c3fd8fa23c5d32490b40cef3e6dc2a894709d517184046da",
+    "report.js": "40b3da950d7a296a882b3dd8d05a1fb09bd92021b7508ea3a8dba065e2d9af25",
+    "verify-product.js": "fed25a4acfc3d1c885dca35275f7876cbeacc24089d08011b0ebc3cdedfdbfdc"
+  },
+  "immutableCheckSha256": "fed25a4acfc3d1c885dca35275f7876cbeacc24089d08011b0ebc3cdedfdbfdc",
+  "positiveControl": {
+    "exitCode": 0,
+    "stdout": "PASS product contract\n",
+    "stderr": "",
+    "solutionHashes": {
+      "format-label.js": "196059fa02521a2cc44cbae30c96d9ffb1f7926ed5ff3a86e79dcb2ce6b30a24",
+      "sum-positive.js": "db61083bf40d3999323283a0cd5436a67d3601a2ed00fdec331170a730090f08",
+      "report.js": "9c0cd4514def1514accd90032c370e2c47e2db7259c615dd704334de58556bd2"
+    },
+    "outsideLiveWorkspace": true
+  }
+}

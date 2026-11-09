@@ -1,0 +1,81 @@
+--- original/src/codex-app-server.js
++++ current/src/codex-app-server.js
+@@ -1289,9 +1289,14 @@
+     if (!run.terminal) return;
+     const generation = run.ctx.generation;
+     const state = run.ctx.childState;
+-    if (!Number.isSafeInteger(generation) || generation !== this.generation
+-      || !state || state !== this.currentChildState || state.generation !== generation
+-      || state.failed || state.exited || this.childExited || !this.child) {
++    const originalCurrent = () => Number.isSafeInteger(generation) && generation === this.generation
++      && state && state === this.currentChildState && state.generation === generation
++      && state.child === this.child && !state.failed && !state.exited && !this.childExited && this.child;
++    const identity = run.ctx.processIdentity;
++    const observeIdentity = () => validCleanupIdentity(identity)
++      ? this.readProcessIdentityImpl(identity.pid) : null;
++    const before = observeIdentity();
++    if (!originalCurrent() || (validCleanupIdentity(before) && !sameCleanupIdentity(identity, before))) {
+       const error = new CodexAppServerError('Background terminal cleanup could not run on the original Codex App Server generation', {
+         failureClass: 'background_terminal_cleanup_failed',
+         generation,
+@@ -1305,6 +1310,17 @@
+       const result = await this._request('thread/backgroundTerminals/clean', { threadId: run.threadId }, {
+         timeoutMs: this.backgroundTerminalCleanupTimeoutMs,
+       });
++      if (!originalCurrent()) {
++        throw new CodexAppServerError('Background terminal cleanup completed after the original Codex App Server generation changed', {
++          failureClass: 'background_terminal_cleanup_failed', generation, threadId: run.threadId, turnId: run.turnId,
++        });
++      }
++      const after = observeIdentity();
++      if (validCleanupIdentity(after) && !sameCleanupIdentity(identity, after)) {
++        throw new CodexAppServerError('Background terminal cleanup completed after the original process identity changed', {
++          failureClass: 'background_terminal_cleanup_failed', generation, threadId: run.threadId, turnId: run.turnId,
++        });
++      }
+       if (!result || typeof result !== 'object' || Array.isArray(result)) {
+         throw new CodexAppServerError('Codex App Server returned an invalid background terminal cleanup response', {
+           failureClass: 'background_terminal_cleanup_failed',
+@@ -1313,6 +1329,16 @@
+           turnId: run.turnId,
+         });
+       }
++      if (identity?.pid === state.child.pid && sameCleanupIdentity(identity, state.identity)
++        && sameCleanupIdentity(identity, before) && sameCleanupIdentity(identity, after)
++        && typeof run.threadId === 'string' && run.threadId.length > 0
++        && typeof run.turnId === 'string' && run.turnId.length > 0) {
++        run.ctx.cleanupReceipt = {
++          version: 1, method: 'thread/backgroundTerminals/clean',
++          scope: 'provider-managed-background-terminals', completion: 'confirmed',
++          generation, processIdentity: { ...identity }, threadId: run.threadId, turnId: run.turnId,
++        };
++      }
+     } catch (cause) {
+       if (cause?.failureClass === 'background_terminal_cleanup_failed' && cause.generation === generation) {
+         throw this._recordCleanupFailure(cleanupError(cause, originalError, run));
+@@ -1774,6 +1800,17 @@
+   return error;
+ }
+ 
++function validCleanupIdentity(identity) {
++  return Number.isSafeInteger(identity?.pid) && identity.pid > 1
++    && Number.isSafeInteger(identity.pgid) && identity.pgid > 1
++    && typeof identity.startTime === 'string' && /^[0-9]+$/.test(identity.startTime);
++}
++
++function sameCleanupIdentity(a, b) {
++  return validCleanupIdentity(a) && validCleanupIdentity(b)
++    && a.pid === b.pid && a.pgid === b.pgid && a.startTime === b.startTime;
++}
++
+ function executionOf(ctx) {
+   return {
+     processIdentity: ctx.processIdentity,
+@@ -1783,6 +1820,7 @@
+     turnStartSent: ctx.turnStartSent,
+     turnStartRejected: ctx.turnStartRejected === true,
+     turnTerminal: Boolean(ctx.run?.terminal),
++    ...(ctx.cleanupReceipt ? { cleanupReceipt: ctx.cleanupReceipt } : {}),
+   };
+ }
+ 

@@ -1,0 +1,78 @@
+[
+  {
+    "assignmentId": "f849b522-1268-4726-8138-68e97517902d:r1:a0",
+    "attemptId": "f849b522-1268-4726-8138-68e97517902d:r1:a0:t1",
+    "type": "review_result",
+    "status": "failed",
+    "target": "review-target/v1:d20024e8a4d5c4f7cae8fd99131622cad8b81c2640da20bb66cf40a80d0c5e38",
+    "details": {
+      "checkpointId": "e4c3c-installed-owner-dispatch",
+      "currentTargetMatches": true,
+      "policyId": "auditor-routing/v1",
+      "reason": "review_report_invalid_or_incomplete",
+      "reportOutcome": "blocked",
+      "serviceReviewAccepted": false,
+      "serviceReviewStatus": "inconclusive",
+      "targetKnown": true,
+      "verdict": null,
+      "verifierTestWrite": false
+    }
+  },
+  {
+    "assignmentId": "f849b522-1268-4726-8138-68e97517902d:r2:a0",
+    "attemptId": "f849b522-1268-4726-8138-68e97517902d:r2:a0:t1",
+    "type": "review_result",
+    "status": "inconclusive",
+    "target": "review-target/v1:d20024e8a4d5c4f7cae8fd99131622cad8b81c2640da20bb66cf40a80d0c5e38",
+    "details": {
+      "checkpointId": "e4c3c-installed-owner-dispatch",
+      "currentTargetMatches": true,
+      "policyId": "auditor-routing/v1",
+      "reason": "review_origin_stale",
+      "reportOutcome": null,
+      "serviceReviewAccepted": false,
+      "serviceReviewStatus": "rejected",
+      "targetKnown": true,
+      "verdict": null,
+      "verifierTestWrite": false
+    }
+  },
+  {
+    "assignmentId": "f849b522-1268-4726-8138-68e97517902d:r3:a0",
+    "attemptId": "f849b522-1268-4726-8138-68e97517902d:r3:a0:t1",
+    "type": "review_result",
+    "status": "failed",
+    "target": "review-target/v1:d20024e8a4d5c4f7cae8fd99131622cad8b81c2640da20bb66cf40a80d0c5e38",
+    "details": {
+      "checkpointId": "e4c3c-installed-owner-dispatch",
+      "currentTargetMatches": true,
+      "policyId": "auditor-routing/v1",
+      "reason": "review_report_invalid_or_incomplete",
+      "reportOutcome": "blocked",
+      "serviceReviewAccepted": false,
+      "serviceReviewStatus": "inconclusive",
+      "targetKnown": true,
+      "verdict": null,
+      "verifierTestWrite": false
+    }
+  },
+  {
+    "assignmentId": "f849b522-1268-4726-8138-68e97517902d:r5:a0",
+    "attemptId": "f849b522-1268-4726-8138-68e97517902d:r5:a0:t1",
+    "type": "review_result",
+    "status": "accepted",
+    "target": "review-target/v1:d20024e8a4d5c4f7cae8fd99131622cad8b81c2640da20bb66cf40a80d0c5e38",
+    "details": {
+      "checkpointId": "e4c3c-installed-owner-dispatch",
+      "currentTargetMatches": true,
+      "policyId": "auditor-routing/v1",
+      "reason": null,
+      "reportOutcome": "completed",
+      "serviceReviewAccepted": true,
+      "serviceReviewStatus": "accepted",
+      "targetKnown": true,
+      "verdict": null,
+      "verifierTestWrite": false
+    }
+  }
+]

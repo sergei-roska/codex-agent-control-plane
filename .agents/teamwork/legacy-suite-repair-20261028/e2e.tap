@@ -1,0 +1,18 @@
+▶ e2e real stack
+  ✔ happy path: dispatch explorer, then finish (503.459829ms)
+  ✔ transient capacity failure retries the same real Lead checkpoint automatically (2701.780297ms)
+  ✔ explicit rateLimitExceeded uses transient recovery (5287.745676ms)
+  ✔ anonymous nested HTTP 429 preserves legacy budget handling (64.638803ms)
+  ✔ human decision: pause, answer, finish (204.085834ms)
+  ✔ wrong decisionId keeps the task waiting without calling the lead (229.272295ms)
+  ✔ usage limit pauses for budget and resumes on the next message (195.961512ms)
+  ✔ restart: reconciliation, resume, and the writer is not re-sent (371.315287ms)
+✔ e2e real stack (9575.054614ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10604.574206

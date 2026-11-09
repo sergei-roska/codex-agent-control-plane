@@ -1,0 +1,31 @@
+✔ shutdown no-publication recovery integrates owned lost acknowledgement (5266.364153ms)
+✔ shutdown no-publication recovery integrates cooperative lost acknowledgement (5148.493213ms)
+✔ shutdown no-publication recovery integrates unknown lost acknowledgement (5134.123268ms)
+✔ shutdown no-publication recovery integrates publication lost acknowledgement (5140.374536ms)
+✔ shutdown no-publication recovery integrates pending-inbox lost acknowledgement (5149.220351ms)
+✔ shutdown no-publication recovery integrates reopen lost acknowledgement (5160.622471ms)
+✔ owner pause facade resumes reused controller without overlapping planner calls (99.447641ms)
+✔ owner pause facade resumes reopened SQLite without overlapping planner calls (112.088201ms)
+✔ owner pause facade retains admitted worker completion (383.259035ms)
+✔ owner pause facade retains admitted worker unknown effects (165.066108ms)
+✔ owner pause facade resume preserves owner-stop-unknown boundary (183.347824ms)
+✔ owner pause facade resume preserves technical boundary (178.347177ms)
+✔ owner pause facade resume preserves budget boundary (172.609498ms)
+✔ terminal failure requires independent original group death, preserves drift and replays executor closure (200.289217ms)
+✔ shutdown terminal failure denies receipt (135.533059ms)
+✔ shutdown terminal failure denies receipt-generation (112.70291ms)
+✔ shutdown terminal failure denies receipt-turn (104.328667ms)
+✔ shutdown terminal failure denies escaped (95.80435ms)
+✔ shutdown terminal failure denies owner (99.423035ms)
+✔ shutdown terminal failure denies request (96.470742ms)
+✔ shutdown terminal failure denies settings (95.191596ms)
+✔ shutdown terminal failure denies publication (97.138457ms)
+✔ cooperative held lost acknowledgement retries staged close after original provider group death (10353.385182ms)
+ℹ tests 23
+ℹ suites 0
+ℹ pass 23
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 32623.784849

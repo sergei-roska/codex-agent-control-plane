@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-27T21:43:34.942Z",
+  "primary": {
+    "usedPercent": 89,
+    "windowDurationMins": 300,
+    "resetsAt": 1793152312
+  },
+  "secondary": {
+    "usedPercent": 91,
+    "windowDurationMins": 10080,
+    "resetsAt": 1793605670
+  }
+}

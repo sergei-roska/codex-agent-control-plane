@@ -1,0 +1,758 @@
+{
+  "schemaVersion": 1,
+  "taskId": "55090d5b-c1a7-4e2e-9e41-d4635272eec7",
+  "status": "incomplete",
+  "inputSha256": "f0124320f35ea277069232a9670754dc34cc0564926c2689b1d6e9f4fce24ab9",
+  "acceptance": {
+    "source": "agent",
+    "requiredChecks": [
+      {
+        "id": "dccourts-182-upstream-kernel",
+        "argv": [
+          "bash",
+          "scripts/harness/validate-dccourts-182.sh"
+        ],
+        "timeoutMs": 600000
+      },
+      {
+        "id": "dccourts-182-composer-relock",
+        "argv": [
+          "bash",
+          "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/environment/evaluate-composer-patches-v2.sh",
+          "."
+        ],
+        "timeoutMs": 600000
+      },
+      {
+        "id": "dccourts-182-composer-project-validate",
+        "argv": [
+          "bash",
+          "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/environment/validate-composer-project.sh",
+          "."
+        ],
+        "timeoutMs": 600000
+      }
+    ]
+  },
+  "roleOverrides": {
+    "coordinator": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "engineer": {
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "fastMode": "off"
+    },
+    "verifier": {
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "fastMode": "off"
+    }
+  },
+  "sourceBefore": {
+    "head": "7470074adf82284dc9f3614f0ee0259aef6d027b",
+    "branch": "test/harness-DCCOURTS-182-20261104",
+    "status": "",
+    "sourceHashes": {
+      "AGENTS.md": "82fe198b8d4613441f2db16c42903be9b0739bba9fa9ca45fc12f11a3577e8b1",
+      ".lando.yml": "c784eff105e8ed23b7fdb3e5af2de39c2a1be2c14b774cf154c1e4e963f628b5",
+      "scripts/harness/validate-dccourts-182.sh": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+      "composer.json": "dbd1482e5da48a83aaf70137c57186b19ea09ad4b701015c32c216ca39ab91f7",
+      "composer.lock": "4e040403c2ed8ef0d60642a451a6f8e571e4cd9ae26c90130573dff3e294034a",
+      "patches.lock.json": "e68acceec7ef04ff16e8e00121e4677d8a408a33671aecdce7959b35bf8322c1",
+      "web/modules/contrib/shs/js/shs.js": null
+    },
+    "expectedPatchHash": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+    "trackedDiffHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "sourceAfter": {
+    "head": "7470074adf82284dc9f3614f0ee0259aef6d027b",
+    "branch": "test/harness-DCCOURTS-182-20261104",
+    "status": "",
+    "sourceHashes": {
+      "AGENTS.md": "82fe198b8d4613441f2db16c42903be9b0739bba9fa9ca45fc12f11a3577e8b1",
+      ".lando.yml": "c784eff105e8ed23b7fdb3e5af2de39c2a1be2c14b774cf154c1e4e963f628b5",
+      "scripts/harness/validate-dccourts-182.sh": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+      "composer.json": "dbd1482e5da48a83aaf70137c57186b19ea09ad4b701015c32c216ca39ab91f7",
+      "composer.lock": "4e040403c2ed8ef0d60642a451a6f8e571e4cd9ae26c90130573dff3e294034a",
+      "patches.lock.json": "e68acceec7ef04ff16e8e00121e4677d8a408a33671aecdce7959b35bf8322c1",
+      "web/modules/contrib/shs/js/shs.js": null
+    },
+    "expectedPatchHash": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+    "trackedDiffHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "startup": {
+    "projectId": "c0eaa8b856",
+    "deliveryEngine": "concurrent-v1",
+    "roles": [
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "xhigh"
+      },
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "low"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "medium"
+      },
+      {
+        "model": "gpt-6.1-terra",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "medium"
+      },
+      {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "model": "gpt-6-luna",
+        "effort": "high"
+      }
+    ]
+  },
+  "a2a": {
+    "id": "55090d5b-c1a7-4e2e-9e41-d4635272eec7",
+    "state": 6,
+    "stateName": "TASK_STATE_INPUT_REQUIRED"
+  },
+  "mapping": {
+    "engine": "concurrent-v1",
+    "objectiveId": "delivery-04abce7019857fe6b64da67e5d114638"
+  },
+  "candidateEvidence": {
+    "source": {
+      "head": "7470074adf82284dc9f3614f0ee0259aef6d027b",
+      "branch": "test/harness-DCCOURTS-182-20261104",
+      "status": "",
+      "sourceHashes": {
+        "AGENTS.md": "82fe198b8d4613441f2db16c42903be9b0739bba9fa9ca45fc12f11a3577e8b1",
+        ".lando.yml": "c784eff105e8ed23b7fdb3e5af2de39c2a1be2c14b774cf154c1e4e963f628b5",
+        "scripts/harness/validate-dccourts-182.sh": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6",
+        "composer.json": "dbd1482e5da48a83aaf70137c57186b19ea09ad4b701015c32c216ca39ab91f7",
+        "composer.lock": "4e040403c2ed8ef0d60642a451a6f8e571e4cd9ae26c90130573dff3e294034a",
+        "patches.lock.json": "e68acceec7ef04ff16e8e00121e4677d8a408a33671aecdce7959b35bf8322c1",
+        "web/modules/contrib/shs/js/shs.js": null
+      },
+      "expectedPatchHash": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9",
+      "trackedDiffHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "diffPath": "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/runner/2026-11-04T14-52-53-110Z-55090d5b-c1a7-4e2e-9e41-d4635272eec7.diff",
+    "diffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "patchPath": "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/runner/2026-11-04T14-52-53-110Z-55090d5b-c1a7-4e2e-9e41-d4635272eec7.patch",
+    "patchSha256": "6b76ecff184aa6e1b4fd1dfb3519fd73f04dc34e841a82aff6597a404fd1dfc9"
+  },
+  "snapshotBeforeClose": {
+    "run": {
+      "status": "running",
+      "result": null
+    },
+    "objective": {
+      "objectiveId": "delivery-04abce7019857fe6b64da67e5d114638",
+      "disposition": "executing"
+    },
+    "tasks": [
+      {
+        "task_id": "review-1c96729a885cddf9b810f15b",
+        "state": "succeeded"
+      }
+    ],
+    "finalization": null,
+    "finalizationProofs": [],
+    "roleExecutions": [
+      {
+        "role": "verifier",
+        "taskId": "review-1c96729a885cddf9b810f15b",
+        "state": "settled",
+        "externalStateName": "TASK_STATE_COMPLETED",
+        "failureCode": null,
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "turns": 1,
+        "tokens": {
+          "cachedInputTokens": 100096,
+          "inputTokens": 127892,
+          "outputTokens": 1695,
+          "reasoningOutputTokens": 71,
+          "totalTokens": 129587
+        },
+        "outcome": "completed",
+        "effectsSettled": true
+      }
+    ],
+    "proofs": [
+      {
+        "attemptId": "attempt-1904b7732ceb48406f41f02b4eb2fd07",
+        "candidateId": "candidate-base-fb1b8973c113368a486cbe37",
+        "checkPins": [
+          "dccourts-182-composer-project-validate",
+          "dccourts-182-composer-relock",
+          "dccourts-182-upstream-kernel"
+        ],
+        "evidenceDigest": "sha256:1d7752950509772fb005a3908100201ff2a0e83307d0c2b15812feabcb03831c",
+        "evidenceRefs": [
+          "verifier-check-proof:attempt-1904b7732ceb48406f41f02b4eb2fd07",
+          "ev_b2a3af9dd4301c16ab075af857f9fda1",
+          "ev_99e708fb8c01542722ff5a037ec2c660",
+          "ev_043d093ae82de80fd34e6eb44c74a9dd",
+          "ev_418898d9f5a52e331372480e6f7c74ec",
+          "ev_80d1ad6db6dfd60db7ceb97f6a00cac2",
+          "ev_3639a3ab592ef2a32c170283c1f5231f"
+        ],
+        "fencingToken": 1,
+        "inputManifestDigest": "055d0689d8cacf79fc12358da6454b5fe253891cbf7e8c9e114743fe1f2a19fb",
+        "objectiveId": "delivery-04abce7019857fe6b64da67e5d114638",
+        "projectId": "c0eaa8b856",
+        "providerContextId": "32046659-3f47-555f-8af9-113268abbc61",
+        "providerThreadId": "01a1a70b-1593-7a72-b93b-5bc09d33066e",
+        "requestDigest": "sha256:739c1de5c46d8b1fade98c437408fffb83bdb25b7dd5d30f90ccbf9f8f15730a",
+        "results": [
+          {
+            "checkId": "dccourts-182-composer-project-validate",
+            "evidenceRef": "verifier-check:attempt-1904b7732ceb48406f41f02b4eb2fd07:dccourts-182-composer-project-validate",
+            "state": "passed"
+          },
+          {
+            "checkId": "dccourts-182-composer-relock",
+            "evidenceRef": "verifier-check:attempt-1904b7732ceb48406f41f02b4eb2fd07:dccourts-182-composer-relock",
+            "state": "passed"
+          },
+          {
+            "checkId": "dccourts-182-upstream-kernel",
+            "evidenceRef": "verifier-check:attempt-1904b7732ceb48406f41f02b4eb2fd07:dccourts-182-upstream-kernel",
+            "state": "passed"
+          }
+        ],
+        "selectedSettingsDigest": "sha256:cfdd3c1b009c646b56769b5971850faacf5360f16b1bcadc14c345971a9d8641",
+        "taskId": "review-1c96729a885cddf9b810f15b"
+      }
+    ],
+    "usage": [],
+    "shutdownPhase": null,
+    "plannerFacts": [
+      {
+        "start": {
+          "processIdentity": {
+            "pgid": 2813775,
+            "pid": 2813775,
+            "startTime": "2961190"
+          },
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63"
+        },
+        "terminal": {
+          "execution": {
+            "cleanupReceipt": {
+              "completion": "confirmed",
+              "generation": 1,
+              "method": "thread/backgroundTerminals/clean",
+              "processIdentity": {
+                "pgid": 2813775,
+                "pid": 2813775,
+                "startTime": "2961190"
+              },
+              "scope": "provider-managed-background-terminals",
+              "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+              "turnId": "01a1a70a-bbed-7212-93d1-b31809bdad26",
+              "version": 1
+            },
+            "generation": 1,
+            "processIdentity": {
+              "pgid": 2813775,
+              "pid": 2813775,
+              "startTime": "2961190"
+            },
+            "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+            "turnId": "01a1a70a-bbed-7212-93d1-b31809bdad26",
+            "turnStartRejected": false,
+            "turnStartSent": true,
+            "turnTerminal": true
+          },
+          "status": "completed",
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+          "turnId": "01a1a70a-bbed-7212-93d1-b31809bdad26"
+        }
+      },
+      {
+        "start": {
+          "processIdentity": {
+            "pgid": 2813775,
+            "pid": 2813775,
+            "startTime": "2961190"
+          },
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63"
+        },
+        "terminal": {
+          "execution": {
+            "cleanupReceipt": {
+              "completion": "confirmed",
+              "generation": 1,
+              "method": "thread/backgroundTerminals/clean",
+              "processIdentity": {
+                "pgid": 2813775,
+                "pid": 2813775,
+                "startTime": "2961190"
+              },
+              "scope": "provider-managed-background-terminals",
+              "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+              "turnId": "01a1a70a-e94c-7d82-aefa-4560925ef4f7",
+              "version": 1
+            },
+            "generation": 1,
+            "processIdentity": {
+              "pgid": 2813775,
+              "pid": 2813775,
+              "startTime": "2961190"
+            },
+            "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+            "turnId": "01a1a70a-e94c-7d82-aefa-4560925ef4f7",
+            "turnStartRejected": false,
+            "turnStartSent": true,
+            "turnTerminal": true
+          },
+          "status": "completed",
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+          "turnId": "01a1a70a-e94c-7d82-aefa-4560925ef4f7"
+        }
+      },
+      {
+        "start": {
+          "processIdentity": {
+            "pgid": 2813775,
+            "pid": 2813775,
+            "startTime": "2961190"
+          },
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63"
+        },
+        "terminal": {
+          "execution": {
+            "cleanupReceipt": {
+              "completion": "confirmed",
+              "generation": 1,
+              "method": "thread/backgroundTerminals/clean",
+              "processIdentity": {
+                "pgid": 2813775,
+                "pid": 2813775,
+                "startTime": "2961190"
+              },
+              "scope": "provider-managed-background-terminals",
+              "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+              "turnId": "01a1a70c-597b-7062-bf44-b800a7f1e3b8",
+              "version": 1
+            },
+            "generation": 1,
+            "processIdentity": {
+              "pgid": 2813775,
+              "pid": 2813775,
+              "startTime": "2961190"
+            },
+            "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+            "turnId": "01a1a70c-597b-7062-bf44-b800a7f1e3b8",
+            "turnStartRejected": false,
+            "turnStartSent": true,
+            "turnTerminal": true
+          },
+          "status": "completed",
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+          "turnId": "01a1a70c-597b-7062-bf44-b800a7f1e3b8"
+        }
+      }
+    ]
+  },
+  "snapshotAfterClose": {
+    "run": {
+      "status": "running",
+      "result": null
+    },
+    "objective": {
+      "objectiveId": "delivery-04abce7019857fe6b64da67e5d114638",
+      "disposition": "executing"
+    },
+    "tasks": [
+      {
+        "task_id": "review-1c96729a885cddf9b810f15b",
+        "state": "succeeded"
+      }
+    ],
+    "finalization": null,
+    "finalizationProofs": [],
+    "roleExecutions": [
+      {
+        "role": "verifier",
+        "taskId": "review-1c96729a885cddf9b810f15b",
+        "state": "settled",
+        "externalStateName": "TASK_STATE_COMPLETED",
+        "failureCode": null,
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "turns": 1,
+        "tokens": {
+          "cachedInputTokens": 100096,
+          "inputTokens": 127892,
+          "outputTokens": 1695,
+          "reasoningOutputTokens": 71,
+          "totalTokens": 129587
+        },
+        "outcome": "completed",
+        "effectsSettled": true
+      }
+    ],
+    "proofs": [
+      {
+        "attemptId": "attempt-1904b7732ceb48406f41f02b4eb2fd07",
+        "candidateId": "candidate-base-fb1b8973c113368a486cbe37",
+        "checkPins": [
+          "dccourts-182-composer-project-validate",
+          "dccourts-182-composer-relock",
+          "dccourts-182-upstream-kernel"
+        ],
+        "evidenceDigest": "sha256:1d7752950509772fb005a3908100201ff2a0e83307d0c2b15812feabcb03831c",
+        "evidenceRefs": [
+          "verifier-check-proof:attempt-1904b7732ceb48406f41f02b4eb2fd07",
+          "ev_b2a3af9dd4301c16ab075af857f9fda1",
+          "ev_99e708fb8c01542722ff5a037ec2c660",
+          "ev_043d093ae82de80fd34e6eb44c74a9dd",
+          "ev_418898d9f5a52e331372480e6f7c74ec",
+          "ev_80d1ad6db6dfd60db7ceb97f6a00cac2",
+          "ev_3639a3ab592ef2a32c170283c1f5231f"
+        ],
+        "fencingToken": 1,
+        "inputManifestDigest": "055d0689d8cacf79fc12358da6454b5fe253891cbf7e8c9e114743fe1f2a19fb",
+        "objectiveId": "delivery-04abce7019857fe6b64da67e5d114638",
+        "projectId": "c0eaa8b856",
+        "providerContextId": "32046659-3f47-555f-8af9-113268abbc61",
+        "providerThreadId": "01a1a70b-1593-7a72-b93b-5bc09d33066e",
+        "requestDigest": "sha256:739c1de5c46d8b1fade98c437408fffb83bdb25b7dd5d30f90ccbf9f8f15730a",
+        "results": [
+          {
+            "checkId": "dccourts-182-composer-project-validate",
+            "evidenceRef": "verifier-check:attempt-1904b7732ceb48406f41f02b4eb2fd07:dccourts-182-composer-project-validate",
+            "state": "passed"
+          },
+          {
+            "checkId": "dccourts-182-composer-relock",
+            "evidenceRef": "verifier-check:attempt-1904b7732ceb48406f41f02b4eb2fd07:dccourts-182-composer-relock",
+            "state": "passed"
+          },
+          {
+            "checkId": "dccourts-182-upstream-kernel",
+            "evidenceRef": "verifier-check:attempt-1904b7732ceb48406f41f02b4eb2fd07:dccourts-182-upstream-kernel",
+            "state": "passed"
+          }
+        ],
+        "selectedSettingsDigest": "sha256:cfdd3c1b009c646b56769b5971850faacf5360f16b1bcadc14c345971a9d8641",
+        "taskId": "review-1c96729a885cddf9b810f15b"
+      }
+    ],
+    "usage": [],
+    "shutdownPhase": {
+      "attempts": [],
+      "identities": [
+        {
+          "pgid": 2813775,
+          "pid": 2813775,
+          "startTime": "2961190"
+        }
+      ],
+      "phase": "released"
+    },
+    "plannerFacts": [
+      {
+        "start": {
+          "processIdentity": {
+            "pgid": 2813775,
+            "pid": 2813775,
+            "startTime": "2961190"
+          },
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63"
+        },
+        "terminal": {
+          "execution": {
+            "cleanupReceipt": {
+              "completion": "confirmed",
+              "generation": 1,
+              "method": "thread/backgroundTerminals/clean",
+              "processIdentity": {
+                "pgid": 2813775,
+                "pid": 2813775,
+                "startTime": "2961190"
+              },
+              "scope": "provider-managed-background-terminals",
+              "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+              "turnId": "01a1a70a-bbed-7212-93d1-b31809bdad26",
+              "version": 1
+            },
+            "generation": 1,
+            "processIdentity": {
+              "pgid": 2813775,
+              "pid": 2813775,
+              "startTime": "2961190"
+            },
+            "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+            "turnId": "01a1a70a-bbed-7212-93d1-b31809bdad26",
+            "turnStartRejected": false,
+            "turnStartSent": true,
+            "turnTerminal": true
+          },
+          "status": "completed",
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+          "turnId": "01a1a70a-bbed-7212-93d1-b31809bdad26"
+        }
+      },
+      {
+        "start": {
+          "processIdentity": {
+            "pgid": 2813775,
+            "pid": 2813775,
+            "startTime": "2961190"
+          },
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63"
+        },
+        "terminal": {
+          "execution": {
+            "cleanupReceipt": {
+              "completion": "confirmed",
+              "generation": 1,
+              "method": "thread/backgroundTerminals/clean",
+              "processIdentity": {
+                "pgid": 2813775,
+                "pid": 2813775,
+                "startTime": "2961190"
+              },
+              "scope": "provider-managed-background-terminals",
+              "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+              "turnId": "01a1a70a-e94c-7d82-aefa-4560925ef4f7",
+              "version": 1
+            },
+            "generation": 1,
+            "processIdentity": {
+              "pgid": 2813775,
+              "pid": 2813775,
+              "startTime": "2961190"
+            },
+            "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+            "turnId": "01a1a70a-e94c-7d82-aefa-4560925ef4f7",
+            "turnStartRejected": false,
+            "turnStartSent": true,
+            "turnTerminal": true
+          },
+          "status": "completed",
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+          "turnId": "01a1a70a-e94c-7d82-aefa-4560925ef4f7"
+        }
+      },
+      {
+        "start": {
+          "processIdentity": {
+            "pgid": 2813775,
+            "pid": 2813775,
+            "startTime": "2961190"
+          },
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63"
+        },
+        "terminal": {
+          "execution": {
+            "cleanupReceipt": {
+              "completion": "confirmed",
+              "generation": 1,
+              "method": "thread/backgroundTerminals/clean",
+              "processIdentity": {
+                "pgid": 2813775,
+                "pid": 2813775,
+                "startTime": "2961190"
+              },
+              "scope": "provider-managed-background-terminals",
+              "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+              "turnId": "01a1a70c-597b-7062-bf44-b800a7f1e3b8",
+              "version": 1
+            },
+            "generation": 1,
+            "processIdentity": {
+              "pgid": 2813775,
+              "pid": 2813775,
+              "startTime": "2961190"
+            },
+            "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+            "turnId": "01a1a70c-597b-7062-bf44-b800a7f1e3b8",
+            "turnStartRejected": false,
+            "turnStartSent": true,
+            "turnTerminal": true
+          },
+          "status": "completed",
+          "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+          "turnId": "01a1a70c-597b-7062-bf44-b800a7f1e3b8"
+        }
+      }
+    ]
+  },
+  "unsafeCloseSnapshot": null,
+  "providerExecutions": [
+    {
+      "role": "coordinator",
+      "configuredModel": "gpt-6-luna",
+      "configuredEffort": "low",
+      "outcome": "completed",
+      "status": "completed",
+      "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+      "turnId": "01a1a70a-bbed-7212-93d1-b31809bdad26",
+      "usage": {
+        "model": "gpt-6-luna",
+        "effort": "low",
+        "fastMode": "off",
+        "elapsedMs": 11039,
+        "turns": 1,
+        "tokens": {
+          "inputTokens": 19845,
+          "cachedInputTokens": 0,
+          "outputTokens": 58,
+          "reasoningOutputTokens": 0,
+          "totalTokens": 19903
+        },
+        "tokenSource": "total_delta"
+      },
+      "failureClass": null,
+      "execution": {
+        "generation": 1,
+        "processIdentity": {
+          "pid": 2813775,
+          "pgid": 2813775,
+          "startTime": "2961190"
+        },
+        "turnStartSent": true,
+        "turnStartRejected": false,
+        "turnTerminal": true
+      }
+    },
+    {
+      "role": "coordinator",
+      "configuredModel": "gpt-6-luna",
+      "configuredEffort": "low",
+      "outcome": "completed",
+      "status": "completed",
+      "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+      "turnId": "01a1a70a-e94c-7d82-aefa-4560925ef4f7",
+      "usage": {
+        "model": "gpt-6-luna",
+        "effort": "low",
+        "fastMode": "off",
+        "elapsedMs": 9383,
+        "turns": 1,
+        "tokens": {
+          "inputTokens": 23883,
+          "cachedInputTokens": 19712,
+          "outputTokens": 58,
+          "reasoningOutputTokens": 0,
+          "totalTokens": 23941
+        },
+        "tokenSource": "total_delta"
+      },
+      "failureClass": null,
+      "execution": {
+        "generation": 1,
+        "processIdentity": {
+          "pid": 2813775,
+          "pgid": 2813775,
+          "startTime": "2961190"
+        },
+        "turnStartSent": true,
+        "turnStartRejected": false,
+        "turnTerminal": true
+      }
+    },
+    {
+      "role": "verifier",
+      "configuredModel": "gpt-6-luna",
+      "configuredEffort": "high",
+      "outcome": "completed",
+      "status": "completed",
+      "threadId": "01a1a70b-1593-7a72-b93b-5bc09d33066e",
+      "turnId": "01a1a70b-1855-70e3-9055-37a49eb1a3ad",
+      "usage": {
+        "model": "gpt-6-luna",
+        "effort": "high",
+        "fastMode": "off",
+        "elapsedMs": 44334,
+        "turns": 1,
+        "tokens": {
+          "inputTokens": 127892,
+          "cachedInputTokens": 100096,
+          "outputTokens": 1695,
+          "reasoningOutputTokens": 71,
+          "totalTokens": 129587
+        },
+        "tokenSource": "total_delta"
+      },
+      "failureClass": null,
+      "execution": {
+        "generation": 1,
+        "processIdentity": {
+          "pid": 2813775,
+          "pgid": 2813775,
+          "startTime": "2961190"
+        },
+        "turnStartSent": true,
+        "turnStartRejected": false,
+        "turnTerminal": true
+      }
+    },
+    {
+      "role": "coordinator",
+      "configuredModel": "gpt-6-luna",
+      "configuredEffort": "low",
+      "outcome": "completed",
+      "status": "completed",
+      "threadId": "01a1a70a-bbc9-7a13-a514-2827c77d5b63",
+      "turnId": "01a1a70c-597b-7062-bf44-b800a7f1e3b8",
+      "usage": {
+        "model": "gpt-6-luna",
+        "effort": "low",
+        "fastMode": "off",
+        "elapsedMs": 4797,
+        "turns": 1,
+        "tokens": {
+          "inputTokens": 29706,
+          "cachedInputTokens": 23680,
+          "outputTokens": 58,
+          "reasoningOutputTokens": 0,
+          "totalTokens": 29764
+        },
+        "tokenSource": "total_delta"
+      },
+      "failureClass": null,
+      "execution": {
+        "generation": 1,
+        "processIdentity": {
+          "pid": 2813775,
+          "pgid": 2813775,
+          "startTime": "2961190"
+        },
+        "turnStartSent": true,
+        "turnStartRejected": false,
+        "turnTerminal": true
+      }
+    }
+  ],
+  "stateBackup": {
+    "path": "/home/sr/Projects/Workspace/codex-agent-control-plane/.agents/teamwork/dccourts-182-trial-20261104/runner/55090d5b-c1a7-4e2e-9e41-d4635272eec7.state.sqlite",
+    "sha256": "922e0f761eca7505f17bde8cd28e435220d1a7c81de214fd4d58a6c661063966",
+    "bytes": 1896448
+  },
+  "stateBackupError": null,
+  "close": "completed",
+  "retainedRunRoot": "/tmp/dccourts182-native-FffhpM",
+  "ownedLandoServicesBefore": [],
+  "ownedLandoServicesDuringRun": [],
+  "ownedLandoServicesAfter": [],
+  "ownedLandoServicesFinal": [],
+  "error": null,
+  "closeError": null
+}

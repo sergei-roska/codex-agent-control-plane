@@ -1,0 +1,26 @@
+{
+  "at": "2026-10-19T12:19:36.988Z",
+  "pid": 261953,
+  "loadedAt": "2026-10-19T12:19:28.131Z",
+  "loadedHash": "2d66a96b2b8ed2bb6da4f3b7b0b176e719d4fb2425eb223d9091faa461424584",
+  "diskHash": "2d66a96b2b8ed2bb6da4f3b7b0b176e719d4fb2425eb223d9091faa461424584",
+  "profileHashes": {
+    "profiles/TEAM.md": "5a93eb6935b162cce8164e80047d69bf7b86d4bbfb64a6b08a406746e1017179",
+    "profiles/agents/architect.toml": "ecc23c8214ecfd0b60c49b0e5249c2779999335312451b435cda7229d6fb28c1",
+    "profiles/agents/auditor.toml": "7fb6e44641ddb5e50f17cdc62ca08340f7514bdf27d709137877212036631af4",
+    "profiles/agents/engineer.toml": "df9c54077fda9f9b20baada6ac3f51ad261016bf9536741aade35d97a7d6f97d",
+    "profiles/agents/explorer.toml": "0b31b2d999785310ed91eb49670118ba643e5c2699a79e2b45ee2c51369259f2",
+    "profiles/agents/recovery-engineer.toml": "e848acc9b61258b240202db817c167eb754b1a98dc12d55f48e645c5061df2ab",
+    "profiles/agents/scout.toml": "f1c93ca441486892bf6e81e8a5a5234392b72f4fd36b9ff1f88408c9cfd1e44a",
+    "profiles/agents/senior-engineer.toml": "8309779fbc39cb8b1301d9724dcf80a6be16debf84fc42974ab1bc833b0eaec5",
+    "profiles/agents/verifier.toml": "4c6074f383c65ce9e49a23d2240983a42d065c94fc320d4dc812aa28b8994604"
+  },
+  "situation": {
+    "state": "TASK_STATE_INPUT_REQUIRED",
+    "node": "collect",
+    "pauseKind": "owner_pause",
+    "round": 157,
+    "leadTaskId": "9e2c8b53-458b-4ccf-924b-ee13639510df",
+    "openDecisions": 0
+  }
+}

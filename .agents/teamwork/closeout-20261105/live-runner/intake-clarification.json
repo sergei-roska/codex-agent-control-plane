@@ -1,0 +1,9 @@
+{
+  "at": "2026-11-05T15:10:53.134647+00:00",
+  "scope": "Benchmark intake clarification only; collector logic, fixture, checks and model settings unchanged",
+  "reason": "Explicitly require a genuine failed probe outcome and investigation from failure evidence; a diagnostic that merely observes a failed check could otherwise legitimately report completed, missing the intended recovery trace. Read-only role follows the actual specialist capability contract.",
+  "priorArm": "39a9d0e3-84f1-4285-b968-a5dd50d25a6a remains incomplete; not replayed or rewritten",
+  "archivedCollectorSha256": "07a10b02b703776036ca0ae7de4fa1e84eb87f9fc5d7d67b972e9e64314a86c6",
+  "currentCollectorSha256": "2398eaad9ad818fbb48a8426171b2895969ad39be89361c030ac3f57bf5f5500",
+  "comparison": "Both future arms use identical revised goal/checks. Do not compare the earlier incomplete arm as accepted work."
+}

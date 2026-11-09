@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-28T08:38:12Z",
+  "profile": "/home/sr/codex-work",
+  "primary": {
+    "usedPercent": 92,
+    "windowDurationMins": 300,
+    "resetsAt": 1793191583
+  },
+  "secondary": {
+    "usedPercent": 14,
+    "windowDurationMins": 10080,
+    "resetsAt": 1793778383
+  }
+}

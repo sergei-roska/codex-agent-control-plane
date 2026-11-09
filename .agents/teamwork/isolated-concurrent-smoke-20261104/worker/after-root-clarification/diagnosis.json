@@ -1,0 +1,51 @@
+{
+  "status": "failed_before_role_execution",
+  "runId": "06bf54ac-90c6-421d-83a6-59aeb7756dca",
+  "projectId": "26888aea5c",
+  "objectiveId": "delivery-09d8afad20f313123bf1894e8c525518",
+  "sourceHead": "c67bf681e4b20809fe37f9bdbb6a83ef7c2a0990",
+  "sourceHashesAtRun": {
+    "src/codex-app-server.js": "8afe15a782c615a94cd155810fbd6a86113b3a58a8f81e370a3c06741138cdbe",
+    "src/delivery-role-capabilities.js": "809e3da3273bcd5380a7cfb0cfdb8ffd150cf0084d209883e2ae6067a08dea90",
+    "test/delivery-verifier-integration.test.js": "a5d4781c40b6990df8421b0f7fbd84dfc97bfe260ac27a7072d3fa2660845e39",
+    "worker/native-smoke.js": "799fdc7c28e8c3a0cca89b1443dc10f2778837f4f8dacdfe63d86cbf500a4a91"
+  },
+  "effectiveLeadSettings": {
+    "model": "gpt-6-luna",
+    "effort": "high",
+    "fast": "off",
+    "turnStatus": "unknown"
+  },
+  "task": {
+    "state": "TASK_STATE_INPUT_REQUIRED",
+    "message": "The lead planner did not produce a confirmed result (unexpected_expected_revision). The run remains fenced until the provider outcome is reconciled.",
+    "failureCode": "unexpected_expected_revision",
+    "failurePath": "$.tasks[0].expectedRevision",
+    "objectiveDisposition": "executing",
+    "runStatus": "paused",
+    "roleExecutions": [],
+    "verifierInvoked": false,
+    "outputFileCreated": false,
+    "acceptance": "not_recorded",
+    "providerUsage": null
+  },
+  "shutdown": {
+    "runtimeCloseError": "concurrent_shutdown_unsafe",
+    "shutdownPhaseAtRetention": "provider_closing",
+    "providerPid": 879930,
+    "providerPidStillExists": false,
+    "runnerPid": 879880,
+    "runnerPidStoppedWithSignal": "SIGTERM",
+    "loopbackPort": 43009,
+    "listenerAfterRunnerStop": false,
+    "safeCloseProved": false,
+    "privateStateRetained": "/tmp/isolated-concurrent-native-xsowd6",
+    "stateOrLockFilesDeleted": false
+  },
+  "notes": [
+    "Planner execution facts recorded a completed terminal turn, but the planner result was rejected at expectedRevision and the run remains fenced.",
+    "Runtime role catalog contained defaults across roles; the effective lead settings pinned in delivery_planner_turns were Luna/high, Fast off.",
+    "No verifier failure was reached, so the new verifier fail-fast path was not exercised.",
+    "Do not restart this retained runtime or delete its DB, locks, workspace, or storage without root direction."
+  ]
+}

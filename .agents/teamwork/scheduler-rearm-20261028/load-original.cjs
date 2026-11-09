@@ -1,0 +1,12 @@
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const Module = require('node:module');
+const root = path.resolve(__dirname, '../../..');
+const filename = path.join(root, 'src/task-scheduler.js');
+const original = path.join(__dirname, 'task-scheduler.js');
+const loaded = new Module(filename, module);
+loaded.filename = filename;
+loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+loaded._compile(fs.readFileSync(original, 'utf8'), filename);
+require.cache[filename] = loaded;

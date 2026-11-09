@@ -1,0 +1,32 @@
+TAP version 13
+# Subtest: cooperative held lost acknowledgement retries staged close after original provider group death with immediate provider close
+not ok 1 - cooperative held lost acknowledgement retries staged close after original provider group death with immediate provider close
+  ---
+  duration_ms: 5321.100746
+  type: 'test'
+  location: '/home/sr/Projects/Workspace/codex-agent-control-plane/test/server-delivery-engine.test.js:706:43'
+  failureType: 'testCodeFailure'
+  error: |-
+    injected failure to verify disposable fixture cleanup
+    
+    0 !== 99
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 99
+  actual: 0
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/sr/Projects/Workspace/codex-agent-control-plane/test/server-delivery-engine.test.js:768:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5715.209586

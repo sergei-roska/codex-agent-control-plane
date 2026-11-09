@@ -1,0 +1,319 @@
+--- .agents/teamwork/cn14-facade-20261028/correction/concurrent-delivery-engine.test.js	2026-10-28 10:02:47.462759582 +0200
++++ test/concurrent-delivery-engine.test.js	2026-10-28 10:15:02.730773495 +0200
+@@ -1082,3 +1082,316 @@
+   abort.abort();
+   await Promise.all([pending, resumed]);
+ });
++
++function ownerCorrectionMessage(objective, messageId, requirementDigest) {
++  return { messageId, kind: 'owner_correction', source: 'verified-owner-adapter', payload: { correction: {
++    expectedGoalRevision: objective.goalRevision, expectedAuthorityRevision: objective.authorityRevision,
++    expectedControlRevision: objective.controlRevision, requirementDigest } } };
++}
++
++async function reopenCorrectionHarness(t, fx) {
++  const db = new Database(path.join(fx.storageRoot, 'state.sqlite'));
++  const app = express();
++  const server = http.createServer(app);
++  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
++  const admission = new WriterAdmission({ db, workspace: fx.workspace });
++  const lanes = new LaneManager({ db, workspace: fx.workspace, admission, mode: 'worktree', lanesRoot: path.join(fx.storageRoot, 'lanes'), links: [] });
++  const identity = { accountId: 'fake-account', codexHome };
++  const engine = new ConcurrentDeliveryEngine({ db, workspace: fx.workspace, projectId, storageRoot: fx.storageRoot,
++    baseUrl: `http://127.0.0.1:${server.address().port}`, authMiddleware: auth, authToken: 'concurrent-test-token',
++    appServer: fx.appServer, providerIdentity: identity, providerIdentityFor: () => identity, roles: fx.roles, leadRole: fx.lead,
++    admission, lanes, writerIsolation: { mode: 'worktree' }, sleepMs: 10,
++    authenticateOwner: ({ source }) => source === 'verified-owner-adapter', ownerCorrectionAuthorized: () => true });
++  engine.register(app);
++  t.after(async () => {
++    await engine.shutdown().catch(() => {});
++    await new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
++    db.close();
++  });
++  return { engine, db };
++}
++
++for (const recoverFirst of [true, false]) test(`owner correction facade carries pending correction through SQLite reopen with ${recoverFirst ? 'recovered controller' : 'direct resume'}`, { timeout: 15000 }, async (t) => {
++  const entered = deferred();
++  const release = deferred();
++  const releaseSecond = deferred();
++  t.after(() => releaseSecond.resolve());
++  t.after(() => release.resolve());
++  const prompts = [];
++  let calls = 0;
++  const correctedDigest = `sha256:${'c'.repeat(64)}`;
++  const fx = await createHarness(t, { appServer: { async run(options) {
++    calls += 1;
++    const threadId = options.threadId || `${options.role.id}-correction-thread`;
++    const turnId = `correction-turn-${calls}`;
++    const processIdentity = readProcessIdentity(process.pid);
++    options.onTurnStart({ threadId, processIdentity });
++    let text;
++    if (options.role.id === 'lead') {
++      const prompt = JSON.parse(options.input.slice(options.input.indexOf('\n') + 1));
++      prompts.push(prompt);
++      if (prompts.length === 1) { entered.resolve(); await release.promise; }
++      if (recoverFirst && prompts.length === 2) await releaseSecond.promise;
++      text = JSON.stringify({ expected: prompt.pins, delta: null, dialogue: null, recovery: null, ownerDecision: null });
++    } else {
++      assert.equal(options.role.id, 'verifier');
++      const details = scopedExecutionDetails(options.deliveryCapability);
++      assert.equal(details.verifyCandidate(), true);
++      execFileSync(process.execPath, ['verify-source.js'], { cwd: details.candidatePath, stdio: 'pipe' });
++      text = JSON.stringify({ outcome: 'completed', summary: 'VERDICT: pass\nFrozen source checked.', filesChanged: [], filesInspected: ['source.txt', 'verify-source.js'],
++        checks: [{ command: 'verify-source.js', result: 'passed', detail: 'Executed in frozen candidate.' }], risks: [], scopeExpansion: [], decisionRequest: null });
++    }
++    return { threadId, turnId, status: 'completed', text,
++      execution: { threadId, turnId, processIdentity, turnStartSent: true, turnStartRejected: false, turnTerminal: true } };
++  } } });
++  fx.engine.authenticateOwner = ({ source }) => source === 'verified-owner-adapter';
++  fx.engine.ownerCorrectionAuthorized = () => true;
++  const abort = new AbortController();
++  const pending = fx.engine.run({ ...facadeIntake(abort.signal),
++    contract: { requiredChecks: [{ id: 'source-check', argv: [process.execPath, 'verify-source.js'] }] } });
++  await entered.promise;
++  const originalIntake = fx.db.prepare('SELECT * FROM concurrent_delivery_runs').get();
++  const originalCheckpoint = fx.db.prepare('SELECT * FROM review_checkpoints').get();
++  assert.equal(fx.engine.requestPause('pause-facade-run'), true);
++  assert.equal((await pending).pause.kind, 'owner_pause');
++  const controller = fx.engine.controllers.get('pause-facade-run');
++  const paused = fx.engine.store.getObjective(projectId, 'engine-objective-1');
++  const correction = ownerCorrectionMessage(paused, 'correction-reopen', correctedDigest);
++  assert.equal(controller.receive(correction).state, 'received');
++  const shuttingDown = fx.engine.shutdown();
++  release.resolve();
++  await shuttingDown.catch(() => {});
++  assert.equal(controller.inbox.get(correction.messageId).state, 'received');
++  assert.ok(fx.db.prepare("SELECT status FROM delivery_planner_turns WHERE status='stale'").get());
++  let reopened = await reopenCorrectionHarness(t, fx);
++  if (recoverFirst) await reopened.engine.recoverStoredRuns();
++  let running = reopened.engine.resume({ runId: 'pause-facade-run', signal: abort.signal });
++  t.after(async () => { abort.abort(); await running; });
++  await waitFor(() => reopened.engine.controllers.get('pause-facade-run')?.inbox.get(correction.messageId).state === 'applied', 'pending correction not applied by facade');
++  let recovered = reopened.engine.controllers.get('pause-facade-run');
++  let corrected = reopened.engine.store.getObjective(projectId, 'engine-objective-1');
++  assert.equal(corrected.goalRevision, paused.goalRevision + 1);
++  assert.equal(corrected.requirementDigest, correctedDigest);
++  assert.equal(corrected.controlRevision, paused.controlRevision + 2);
++  assert.equal(recovered.receive(correction).duplicate, true);
++  await waitFor(() => prompts.length >= 2, 'corrected planner did not run');
++  assert.equal(prompts[1].ownerContext.requirementDigest, correctedDigest);
++  assert.equal(prompts[1].pins.goalRevision, corrected.goalRevision);
++  assert.equal(prompts[1].pins.controlRevision, corrected.controlRevision);
++  if (recoverFirst) {
++    assert.equal(reopened.engine.requestPause('pause-facade-run'), true);
++    assert.equal((await running).pause.kind, 'owner_pause');
++    const secondPaused = reopened.engine.store.getObjective(projectId, 'engine-objective-1');
++    const second = ownerCorrectionMessage(secondPaused, 'correction-reopen-again', `sha256:${'d'.repeat(64)}`);
++    recovered.receive(second);
++    const shutdown = reopened.engine.shutdown();
++    releaseSecond.resolve();
++    await shutdown.catch(() => {});
++    const historyBeforeReopen = reopened.db.prepare('SELECT * FROM review_checkpoints ORDER BY checkpoint_id').all();
++    reopened = await reopenCorrectionHarness(t, fx);
++    running = reopened.engine.resume({ runId: 'pause-facade-run', signal: abort.signal });
++    await waitFor(() => prompts.length >= 3, 'repeated correction did not reach planner');
++    recovered = reopened.engine.controllers.get('pause-facade-run');
++    corrected = reopened.engine.store.getObjective(projectId, 'engine-objective-1');
++    assert.equal(corrected.goalRevision, secondPaused.goalRevision + 1);
++    assert.equal(prompts[2].pins.goalRevision, corrected.goalRevision);
++    assert.equal(prompts[2].pins.controlRevision, corrected.controlRevision);
++    assert.equal(prompts[2].ownerContext.requirementDigest, second.payload.correction.requirementDigest);
++    for (const row of historyBeforeReopen) assert.deepEqual(reopened.db.prepare('SELECT * FROM review_checkpoints WHERE checkpoint_id=?').get(row.checkpoint_id), row);
++    assert.equal(recovered.receive(correction).duplicate, true);
++    assert.equal(recovered.receive(second).duplicate, true);
++  }
++  let result;
++  running.then((value) => { result = value; });
++  try { await waitFor(() => result, 'corrected objective did not reach honest acceptance', 7000); }
++  catch (cause) {
++    t.diagnostic(JSON.stringify({ objective: reopened.engine.store.getObjective(projectId, 'engine-objective-1'),
++      controller: recovered.status(), checkpoints: reopened.engine.reviewStore.checkpointHistory({ projectId, objectiveId: 'engine-objective-1' }),
++      review: reopened.engine.reviewStore.finalizationProjection({ projectId, objectiveId: 'engine-objective-1',
++        candidateId: reopened.db.prepare("SELECT candidate_id FROM candidates WHERE status='known' ORDER BY integration_generation DESC LIMIT 1").get().candidate_id, requiredRoles: ['verifier'] }),
++      pause: reopened.engine.getPause('pause-facade-run'),
++      finalizations: reopened.engine.store.listFinalizations(projectId, 'engine-objective-1'),
++      plannerTurns: reopened.db.prepare('SELECT status,result_json FROM delivery_planner_turns').all() }));
++    throw cause;
++  }
++  assert.equal(result.disposition, 'accepted');
++  const terminal = reopened.engine.store.listFinalizations(projectId, 'engine-objective-1').find((row) => row.state === 'accepted').terminalRecord;
++  assert.equal(terminal.pins.requirementDigest, corrected.requirementDigest);
++  assert.equal(terminal.pins.goalRevision, corrected.goalRevision);
++  assert.deepEqual(reopened.db.prepare('SELECT * FROM review_checkpoints WHERE checkpoint_id=?').get(originalCheckpoint.checkpoint_id), originalCheckpoint);
++  const supersessions = reopened.engine.reviewStore.checkpointSupersessions({ projectId, objectiveId: 'engine-objective-1' });
++  assert.equal(supersessions.length, recoverFirst ? 2 : 1);
++  assert.equal(supersessions[0].sourceMessageId, correction.messageId);
++  const currentCheckpoint = reopened.engine.reviewStore.checkpointHistory({ projectId, objectiveId: 'engine-objective-1' })
++    .find((entry) => entry.checkpoint.goalRevision === corrected.goalRevision).checkpoint;
++  assert.deepEqual(currentCheckpoint.checkPins, ['source-check']);
++  assert.deepEqual(currentCheckpoint.profilePins, JSON.parse(originalCheckpoint.checkpoint_json).profilePins);
++  assert.equal(result.acceptance.checkResults.find((check) => check.id === 'source-check').result, 'passed');
++  const finalIntake = reopened.db.prepare('SELECT * FROM concurrent_delivery_runs').get();
++  for (const field of ['goal', 'contract_json', 'contract_digest', 'requirement_digest', 'checks_digest', 'check_identity', 'objective_id', 'session_id']) {
++    assert.equal(finalIntake[field], originalIntake[field], `immutable intake changed: ${field}`);
++  }
++});
++
++test('owner correction facade refuses unauthenticated unauthorized and stale messages without rewriting intake', { timeout: 15000 }, async (t) => {
++  const entered = deferred();
++  const release = deferred();
++  t.after(() => release.resolve());
++  const fx = await createHarness(t, { appServer: { async run(options) {
++    const result = facadePlannerResult(options, 'correction-negative-turn');
++    entered.resolve();
++    await release.promise;
++    return result;
++  } } });
++  const abort = new AbortController();
++  const pending = fx.engine.run(facadeIntake(abort.signal));
++  t.after(async () => { abort.abort(); await pending; });
++  await entered.promise;
++  assert.equal(fx.engine.requestPause('pause-facade-run'), true);
++  await pending;
++  const controller = fx.engine.controllers.get('pause-facade-run');
++  const original = fx.engine.store.getObjective(projectId, 'engine-objective-1');
++  const intake = fx.db.prepare('SELECT goal,contract_json,requirement_digest FROM concurrent_delivery_runs').get();
++  const message = ownerCorrectionMessage(original, 'denied-correction', `sha256:${'d'.repeat(64)}`);
++  assert.throws(() => controller.receive(message), { code: 'owner_authentication_required' });
++  assert.equal(controller.inbox.get(message.messageId), null);
++  fx.engine.authenticateOwner = ({ source }) => source === 'verified-owner-adapter';
++  controller.receive(message);
++  release.resolve();
++  await waitFor(() => controller.inbox.get(message.messageId).state === 'blocked', 'unauthorized correction was not blocked');
++  assert.equal(controller.inbox.get(message.messageId).result.code, 'owner_correction_unauthorized');
++  assert.equal(fx.engine.store.getObjective(projectId, 'engine-objective-1').goalRevision, original.goalRevision);
++  fx.engine.ownerCorrectionAuthorized = () => true;
++  const stale = ownerCorrectionMessage({ ...original, controlRevision: original.controlRevision - 1 }, 'stale-correction', `sha256:${'e'.repeat(64)}`);
++  controller.receive(stale);
++  await waitFor(() => controller.inbox.get(stale.messageId).state === 'blocked', 'stale correction was not blocked');
++  assert.equal(controller.inbox.get(stale.messageId).result.code, 'owner_correction_revision_stale');
++  const valid = ownerCorrectionMessage(original, 'valid-correction', `sha256:${'f'.repeat(64)}`);
++  controller.receive(valid);
++  await waitFor(() => controller.inbox.get(valid.messageId).state === 'applied', 'authorized correction was not applied');
++  const corrected = fx.engine.store.getObjective(projectId, 'engine-objective-1');
++  assert.equal(corrected.goalRevision, original.goalRevision + 1);
++  assert.equal(corrected.controlRevision, original.controlRevision + 1);
++  assert.equal(corrected.requirementDigest, valid.payload.correction.requirementDigest);
++  assert.equal(controller.receive(valid).duplicate, true);
++  assert.throws(() => controller.receive({ ...valid, payload: { correction: { ...valid.payload.correction, requirementDigest: `sha256:${'a'.repeat(64)}` } } }), { code: 'message_id_conflict' });
++  assert.equal(fx.db.prepare('SELECT COUNT(*) AS n FROM backlog_owner_corrections').get().n, 1);
++  assert.equal(fx.engine.store.events.replay(projectId).filter((event) => event.eventType === 'objective.owner_correction').length, 1);
++  assert.deepEqual(fx.db.prepare('SELECT goal,contract_json,requirement_digest FROM concurrent_delivery_runs').get(), intake);
++});
++
++for (const failure of ['register', 'supersede', 'ack']) test(`owner correction facade rolls back checkpoint inventory history and acknowledgement on ${failure}`, { timeout: 15000 }, async (t) => {
++  const entered = deferred();
++  const release = deferred();
++  t.after(() => release.resolve());
++  const fx = await createHarness(t, { appServer: { async run(options) {
++    const result = facadePlannerResult(options, 'correction-rollback-turn');
++    entered.resolve(); await release.promise; return result;
++  } } });
++  fx.engine.authenticateOwner = () => true;
++  fx.engine.ownerCorrectionAuthorized = () => true;
++  const pending = fx.engine.run(facadeIntake());
++  await entered.promise;
++  fx.engine.requestPause('pause-facade-run');
++  await pending;
++  const controller = fx.engine.controllers.get('pause-facade-run');
++  release.resolve();
++  await waitFor(() => !controller.cycle, 'planner did not drain');
++  const before = fx.engine.store.getObjective(projectId, 'engine-objective-1');
++  const inventory = fx.db.prepare('SELECT checkpoint_ids_json FROM concurrent_delivery_runs').get();
++  const history = fx.db.prepare('SELECT * FROM review_checkpoints ORDER BY checkpoint_id').all();
++  const target = failure === 'ack' ? controller.inbox : fx.engine.reviewStore;
++  const method = failure === 'register' ? 'registerCheckpoint' : failure === 'supersede' ? 'supersedeCheckpoints' : 'markApplied';
++  const original = target[method].bind(target);
++  target[method] = (...args) => {
++    original(...args);
++    throw Object.assign(new Error('injected composition rollback'), { code: 'composition_rollback' });
++  };
++  const message = ownerCorrectionMessage(before, 'atomic-correction', `sha256:${'b'.repeat(64)}`);
++  controller.receive(message);
++  await waitFor(() => controller.inbox.get(message.messageId).state === 'blocked', 'failed correction not blocked');
++  assert.equal(controller.inbox.get(message.messageId).result.code, 'composition_rollback');
++  assert.deepEqual(fx.engine.store.getObjective(projectId, 'engine-objective-1'), before);
++  assert.deepEqual(fx.db.prepare('SELECT checkpoint_ids_json FROM concurrent_delivery_runs').get(), inventory);
++  assert.deepEqual(fx.db.prepare('SELECT * FROM review_checkpoints ORDER BY checkpoint_id').all(), history);
++  assert.equal(fx.db.prepare('SELECT COUNT(*) AS n FROM review_checkpoint_supersessions').get().n, 0);
++  assert.equal(fx.db.prepare('SELECT COUNT(*) AS n FROM backlog_owner_corrections').get().n, 0);
++  assert.equal(fx.engine.store.events.replay(projectId).filter((event) => ['objective.owner_correction', 'review.checkpoints_superseded'].includes(event.eventType)).length, 0);
++});
++
++test('owner correction facade preserves admitted worker contract fences and private terminal report', { timeout: 15000 }, async (t) => {
++  const entered = deferred();
++  const release = deferred();
++  t.after(() => release.resolve());
++  let plannerCalls = 0;
++  let workerCalls = 0;
++  const roles = new Map([
++    ['engineer', { id: 'engineer', name: 'Engineer', description: 'Writes private work.', sandbox: 'workspace-write', model: 'test-model', effort: 'low', fastMode: 'off' }],
++    ['verifier', { id: 'verifier', name: 'Verifier', description: 'Reviews candidates.', sandbox: 'read-only', model: 'test-model', effort: 'low', fastMode: 'off' }],
++  ]);
++  const fx = await createHarness(t, { roles, appServer: { async run(options) {
++    const threadId = options.threadId || `${options.role.id}-correction-thread`;
++    const turnId = `${options.role.id}-correction-${plannerCalls + workerCalls}`;
++    const processIdentity = readProcessIdentity(process.pid);
++    options.onTurnStart({ threadId, processIdentity });
++    let text;
++    if (options.role.id === 'lead') {
++      plannerCalls += 1;
++      const prompt = JSON.parse(options.input.slice(options.input.indexOf('\n') + 1));
++      text = JSON.stringify({ expected: prompt.pins, delta: plannerCalls === 1
++        ? planDelta(prompt.pins, [engineerTask('engine-objective-1', 'old-contract-worker', 'old-private.txt', 'retain admitted contract')]) : null,
++      dialogue: null, recovery: null, ownerDecision: null });
++    } else if (options.role.id === 'engineer') {
++      workerCalls += 1;
++      fs.writeFileSync(path.join(options.cwd, 'old-private.txt'), 'retained old contract output\n');
++      entered.resolve(); await release.promise;
++      text = JSON.stringify({ outcome: 'completed', summary: 'Old contract completed privately.', filesChanged: ['old-private.txt'],
++        filesInspected: ['source.txt'], checks: [], risks: [], scopeExpansion: [], decisionRequest: null });
++    } else {
++      const details = scopedExecutionDetails(options.deliveryCapability);
++      assert.equal(details.verifyCandidate(), true);
++      execFileSync(process.execPath, ['verify-source.js'], { cwd: details.candidatePath, stdio: 'pipe' });
++      text = JSON.stringify({ outcome: 'completed', summary: 'VERDICT: pass\nFrozen source checked.', filesChanged: [],
++        filesInspected: ['source.txt', 'verify-source.js'], checks: [{ command: 'verify-source.js', result: 'passed', detail: 'Checked frozen candidate.' }],
++        risks: [], scopeExpansion: [], decisionRequest: null });
++    }
++    return { threadId, turnId, status: 'completed', text,
++      execution: { threadId, turnId, processIdentity, turnStartSent: true, turnStartRejected: false, turnTerminal: true } };
++  } } });
++  fx.engine.authenticateOwner = () => true;
++  fx.engine.ownerCorrectionAuthorized = () => true;
++  const abort = new AbortController();
++  const running = fx.engine.run(facadeIntake(abort.signal));
++  t.after(async () => { abort.abort(); await running; });
++  await entered.promise;
++  const attempt = fx.engine.store.listAttempts(projectId, 'engine-objective-1').find((row) => row.taskId === 'old-contract-worker');
++  const claim = fx.engine.store.listClaims(projectId, 'engine-objective-1').find((row) => row.attemptId === attempt.attemptId);
++  const controller = fx.engine.controllers.get('pause-facade-run');
++  const before = fx.engine.store.getObjective(projectId, 'engine-objective-1');
++  const message = ownerCorrectionMessage(before, 'worker-correction', `sha256:${'a'.repeat(64)}`);
++  controller.receive(message);
++  await waitFor(() => controller.inbox.get(message.messageId).state === 'applied', 'worker correction did not apply');
++  const held = fx.engine.store.listAttempts(projectId, 'engine-objective-1').find((row) => row.attemptId === attempt.attemptId);
++  assert.deepEqual(held.contractSnapshot, attempt.contractSnapshot);
++  assert.deepEqual(held.capturedControls, attempt.capturedControls);
++  assert.equal(held.fencingToken, attempt.fencingToken);
++  assert.deepEqual(fx.engine.store.listClaims(projectId, 'engine-objective-1').find((row) => row.attemptId === attempt.attemptId), claim);
++  fx.engine.requestPause('pause-facade-run');
++  assert.equal((await running).pause.kind, 'owner_pause');
++  assert.equal(controller.lifecycle.shutdownProjection().safeToRelease, false);
++  assert.ok(fx.engine.store.listClaims(projectId, 'engine-objective-1').some((row) => row.attemptId === attempt.attemptId && row.state === 'active'));
++  release.resolve();
++  await waitFor(() => !fx.engine.roleService.active.size, 'old worker did not drain');
++  const resumed = fx.engine.resume({ runId: 'pause-facade-run', signal: abort.signal });
++  t.after(async () => { abort.abort(); await resumed; });
++  await waitFor(() => fx.engine.executor.getAttempt(attempt.attemptId).state === 'settled', 'old worker result did not settle');
++  const settled = fx.engine.store.listAttempts(projectId, 'engine-objective-1').find((row) => row.attemptId === attempt.attemptId);
++  assert.equal(settled.outcome.failureKind, 'publication_authorization_changed');
++  assert.equal(settled.outcome.publicationState, 'not_published');
++  assert.deepEqual(settled.contractSnapshot, attempt.contractSnapshot);
++  const execution = fx.engine.roleService.getExecution(attempt.attemptId);
++  assert.equal(execution.report.summary, 'Old contract completed privately.');
++  assert.equal(fs.readFileSync(path.join(fx.lanes.store.get(execution.laneId).path, 'old-private.txt'), 'utf8'), 'retained old contract output\n');
++  assert.equal(fs.existsSync(path.join(fx.workspace, 'old-private.txt')), false);
++  assert.equal(workerCalls, 1);
++});

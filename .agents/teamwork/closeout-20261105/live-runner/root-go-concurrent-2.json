@@ -1,0 +1,36 @@
+{
+  "at": "2026-11-05T15:20:18.041Z",
+  "quota": {
+    "limitId": "codex",
+    "limitName": null,
+    "normalModelSlug": null,
+    "primary": {
+      "usedPercent": 80,
+      "windowDurationMins": 300,
+      "resetsAt": 1793905751
+    },
+    "secondary": {
+      "usedPercent": 29,
+      "windowDurationMins": 10080,
+      "resetsAt": 1794383888
+    },
+    "credits": {
+      "hasCredits": false,
+      "unlimited": false,
+      "balance": "0"
+    },
+    "individualLimit": null,
+    "spendControlReached": false,
+    "planType": "plus",
+    "rateLimitReachedType": null
+  },
+  "sourcePins": 341,
+  "sourceDrift": 0,
+  "sourceHead": "4192a08ac39e808440d82cf6f5475e177a88cec5",
+  "runnerSha256": "2398eaad9ad818fbb48a8426171b2895969ad39be89361c030ac3f57bf5f5500",
+  "existingTempRoots": [
+    "/tmp/harness-cn15-20261105-qaK7xX"
+  ],
+  "authorizedArm": "concurrent-v1",
+  "intakeVersion": 2
+}

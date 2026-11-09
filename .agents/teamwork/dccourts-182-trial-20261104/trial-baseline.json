@@ -1,0 +1,10 @@
+{
+  "sourceBaseCommit": "4b526e7e3e4f727c99f02fd44a655df595adfe0c",
+  "trialBaselineCommit": "5ddfe8317a030f20509c32502ec66c6e79b7461c",
+  "infrastructureFiles": [
+    "AGENTS.md",
+    ".lando.yml",
+    "scripts/harness/validate-dccourts-182.sh"
+  ],
+  "validationScriptSha256": "939d0d1e13734e4f6267fbab7337e99eded5f4d98f697d15db6a031a1c333fe6"
+}

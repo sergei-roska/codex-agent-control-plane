@@ -1,0 +1,30 @@
+# AD-03 concurrent account wait research
+
+Status: complete; research only. No source edits or live provider calls.
+
+## Findings
+
+- Read `docs/autonomous-delivery-backlog.md` AD-03: required behavior is to persist all relevant provider blocking windows for both accounts, treat reset times as scheduling hints only, survive restart, check authoritative availability, select a suitable account/model, preserve the same objective, and re-arm after repeated exhaustion.
+- Read `src/backlog-store.js:921-990`: current durable wait row is one `{source, provider, model, reasonCode, nextWakeAt}` with control/owner pins. `recordBudgetWait` only accepts `planning`/`executing`, moves the objective to `waiting_budget`, and `wakeBudgetWait` restores the saved disposition. There is no persisted account identity or set of blocking windows. A second wait cannot be appended after the first transitions the objective.
+- Read `src/delivery-lifecycle.js:37-63,99-133`: the lifecycle has an injectable `budgetWakeEligibility` callback defaulting to `() => false`; it wakes only when the callback returns literal `true`, the scheduled time is due, and owner/control pins still match. This correctly keeps timestamps as hints, but default production wiring never supplies eligibility.
+- Read `src/concurrent-delivery-engine.js:1292-1335`: controller creation passes planner recovery hooks and lifecycle settlement options, but no budget eligibility callback and no custom wake callback. `ProjectDeliveryController` adds its own `onWake` wrapper (`src/project-delivery-controller.js:78-83`). `recoverStoredRuns` (`concurrent-delivery-engine.js:477-501`) starts only planning/executing/draining objectives. `waiting_budget` is not started after reopen.
+- Read `src/concurrent-delivery-engine.js:2177-2185`: provider identity getter deliberately rejects any identity different from the engine's pinned identity. `#resumeWithCurrentProvider` (`:1152-1225`) has a safe rebind path requiring `#providerResumeEligibility`; current eligibility rejects pending budget waits (`:1108`) and rebind demands settled effects / no live claims. There is no automatic bridge from budget availability to this rebind path.
+- Read `src/server.js:1475-1495,1530-1565`: startup supplies the concurrent engine one initial provider pin and recovers stored runs before creating the legacy `BudgetWatcher`. The watcher gets account-profile and per-home limit adapters, but lists only legacy task-store budget pauses. Concurrent waits are not connected. The production switching wrapper is available only when the app server is not injected (`server.js:1278-1289`).
+- Read `src/budget-watcher.js:30-52,114-145,210-278`: reusable authoritative logic is `isBudgetAvailable(response, models)`, which rejects positive reached-limit signals and accepts explicit availability; `earliestResetMs` only schedules checks. Account switching checks profiles, reads limits per home, switches to the first available profile, and treats profile-file changes as wake signals. This can inform concurrent wiring but is currently legacy-only.
+- Relevant tests: `test/delivery-lifecycle.test.js:40-86` verifies literal-true eligibility, due-time enforcement, durable wait, and owner pause fencing. `test/concurrent-delivery-engine.test.js:1017-1104` has router/SQLite reopen composition. `test/server.test.js:1976-2036` provides two-profile server fixtures; `test/budget-watcher.test.js:260-280,318-355` covers all-profile checks and switching. No test currently composes two-account limits, concurrent wait persistence, host reopen, current-account rebind, authoritative positive availability, and same-objective continuation.
+
+## Dependencies and minimal sequence
+
+1. Complete AD-02 first: unsettled effects must be reconciled before switching; its remaining owner re-login/auth behavior may provide reusable profile-change semantics. Do not let account switch bypass AD-05 fences.
+2. Extend the durable wait contract/store to represent all relevant account/model/window blockers (including per-account identity and reset hint) while keeping the objective in one `waiting_budget` state. Preserve owner-generation/control-revision pins; repeated exhaustion must replace/re-arm resolved waits safely.
+3. Add concurrent-engine budget adapters to read each configured account's authoritative model limits, choose a suitable account, and schedule a durable check. Keep reset timestamps as next-check hints only. Do not call wake when reads are null/ambiguous or only a non-required model is available.
+4. At a wake, first prove no live/unknown worker, planner, publication, or workspace effects (AD-05), then bind/switch to the eligible identity and perform a fresh provider-thread rebind while preserving run/objective/check lineage. Current immutable engine pin likely requires an explicit safe engine rebind design or per-run engine recreation; do not mutate it casually.
+5. On server startup, recover `waiting_budget` mappings into a durable watcher before accepting work, then recheck limits and resume without owner input. Ensure host close/reopen tests use the same SQLite/workspace sequentially.
+6. Add deterministic lifecycle/store tests for multiple short/weekly/model-specific windows and reset-hint-only non-wake; concurrent engine tests for A resets while B remains blocked, B-only availability, repeated re-exhaustion, owner pause/cancel winning a stale wake; and one server composition test using disposable profiles and fake App Servers. Reuse fake limit/provider patterns; no live provider needed.
+
+## Important traps
+
+- Do not wire the existing legacy watcher directly to `router.resume` and assume it supports concurrent runs; it lists legacy A2A tasks and would miss durable objective wait records.
+- Do not treat a reset timestamp or `null` limit read as proof of availability.
+- Do not rebind while AD-05 has unresolved effects. Current `providerResumeEligibility` intentionally fails closed.
+- Do not test only same-account wake: account identity change currently causes `#providerIdentity()` to throw, and the engine is pinned at construction.

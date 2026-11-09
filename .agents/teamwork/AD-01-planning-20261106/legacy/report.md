@@ -1,0 +1,23 @@
+# AD-01 legacy runtime map
+
+## Read evidence
+
+- Composition defaults `projectSettings.deliveryEngine` to `legacy`, routes requests through the selected delivery engine, and gives the legacy Lead a SQLite-backed task store plus the SQLite checkpointer (`src/server.js:1385-1439,1483-1500`). `openStateDatabase` opens SQLite with WAL and `synchronous=FULL`, and constructs `SqliteSaver` over the shared DB (`src/durable-store.js:132-159`). `createTaskStore` namespaces task records by owner (`src/durable-store.js:247-253`).
+- The A2A task ID is the LangGraph thread/run ID: intake calls `orchestrator.run({goal, runId: taskId, contract, contextId})`, and resume calls `orchestrator.resume({runId: taskId,...})` (`src/server.js:938-942,966-971`). `LeadOrchestrator` uses `thread_id: runId` for checkpoint lookup and stores run input fields in graph state (`src/lead-orchestrator.js:448-458,489-500`). It rejects a second new run for an existing checkpoint (`:452-458`).
+- Durable graph state has `goal`, `runId`, `pinned`, `threadId`, `round`, `outcomes`, `pendingAssignments`, `reviewObligations`, `contract`, `acceptance`, and checkpoint ledger fields (`src/lead-graph.js:736-783`). The checked contract is validated and pinned at initial run; server persists its acceptance contract in the task before execution and refuses to start if it cannot read it back (`src/server.js:912-935`; `src/lead-orchestrator.js:448-458`). Resume ignores replacement acceptance metadata (`src/server.js:908-914`).
+- Scope is configured as an absolute `workspace` on the orchestrator instance (`src/lead-orchestrator.js:214-280`), and pinned graph context reads workspace plus roles/instructions (`src/lead-graph.js:321-339`). The legacy graph state does not declare a durable project/workspace identity field; the workspace comes from current server composition. Inference: same run ID reopened under a different workspace/server configuration is not prevented by the task/checkpoint key itself.
+- Attempt lineage is durable in the dispatch journal: rows carry `attemptId`, `runId`, `assignmentId`, role, sandbox, `contextId`, task ID, state and result (`src/durable-store.js:266-288`). The checkpointed graph also stores outcomes and pending assignments (`src/lead-graph.js:743-746`). No project/objective key is present in the legacy journal contract. Provider/account identity is not a field in either listed graph identity fields or `dispatch_journal` rows (`src/durable-store.js:266-288`); provider-account association may exist in separate session-thread records, but no legacy lineage binding was established in this trace.
+- On restart, server calls `reconcileInterruptedTasks` before readiness; an interrupted Lead task becomes `INPUT_REQUIRED` with `pause.kind=restart`, while specialist tasks become failed/unknown (`src/server.js:1380-1384`; `src/durable-store.js:432-470`). On follow-up, the executor resumes the same task/run from checkpoint. If there was no first checkpoint, it recovers the original goal and pinned contract from task history, otherwise errors rather than starting an empty goal (`src/server.js:938-963`).
+
+## Coverage read (not run)
+
+- `test/durable-store.test.js:141-186` checks restart reconciliation of interrupted Lead/specialist tasks; `:201-217` reopens the DB and resumes a persisted graph checkpoint in a new instance.
+- `test/e2e.test.js:378-399` covers a new server stack resuming a Lead task after restart. `test/lead-graph.test.js` has extensive pinned contract, checkpoint, and assignment/context tests (e.g. `:659-680`, `:830-847`), but no single assertion found for stable objective identity + workspace binding + contract/check IDs + attempt/account lineage across a full server reopen.
+- Candidate focused verification: `node --test test/durable-store.test.js test/e2e.test.js test/lead-graph.test.js`. Not run per brief.
+
+## Boundary and gaps
+
+An independently reviewable AD-01 slice can be limited to the legacy path: task intake metadata, legacy run/checkpoint state identity and restart recovery, with integration coverage through `test/e2e.test.js` and focused store/orchestrator cases. Preserve current task/run ID and contract recovery contracts. Evidence-backed gaps to close are durable validation/binding of project/workspace scope to the run, an explicit durable objective identity distinct from task/run identity, and provider identity/attempt lineage across account change. Missing mandatory fields must remain invalid/unknown rather than being reconstructed as success. This report does not establish a behavior for concurrent engine.
+
+Status: complete
+Scope expansion: none

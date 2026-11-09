@@ -1,0 +1,130 @@
+TAP version 13
+# Subtest: owner decision survives real host and SQLite reopen and resumes mandatory acceptance
+ok 1 - owner decision survives real host and SQLite reopen and resumes mandatory acceptance
+  ---
+  duration_ms: 2501.606053
+  type: 'test'
+  ...
+# Subtest: owner decision rejects routine without creating a wait
+ok 2 - owner decision rejects routine without creating a wait
+  ---
+  duration_ms: 22.052615
+  type: 'test'
+  ...
+# Subtest: owner decision rejects no-investigation without creating a wait
+ok 3 - owner decision rejects no-investigation without creating a wait
+  ---
+  duration_ms: 7.208454
+  type: 'test'
+  ...
+# Subtest: owner decision rejects unknown-evidence without creating a wait
+ok 4 - owner decision rejects unknown-evidence without creating a wait
+  ---
+  duration_ms: 7.21561
+  type: 'test'
+  ...
+# Subtest: owner decision rejects untrusted without creating a wait
+ok 5 - owner decision rejects untrusted without creating a wait
+  ---
+  duration_ms: 5.766236
+  type: 'test'
+  ...
+# Subtest: owner decision rejects writable without creating a wait
+ok 6 - owner decision rejects writable without creating a wait
+  ---
+  duration_ms: 6.05323
+  type: 'test'
+  ...
+# Subtest: owner decision rejects stale-investigation without creating a wait
+ok 7 - owner decision rejects stale-investigation without creating a wait
+  ---
+  duration_ms: 7.127498
+  type: 'test'
+  ...
+# Subtest: owner decision rejects obligation without creating a wait
+ok 8 - owner decision rejects obligation without creating a wait
+  ---
+  duration_ms: 4.964573
+  type: 'test'
+  ...
+# Subtest: owner decision rejects option without creating a wait
+ok 9 - owner decision rejects option without creating a wait
+  ---
+  duration_ms: 4.185137
+  type: 'test'
+  ...
+# Subtest: owner decision rejects extra without creating a wait
+ok 10 - owner decision rejects extra without creating a wait
+  ---
+  duration_ms: 6.357981
+  type: 'test'
+  ...
+# Subtest: owner request fences direct claims and finalization even if disposition is corrupted
+ok 11 - owner request fences direct claims and finalization even if disposition is corrupted
+  ---
+  duration_ms: 11.283914
+  type: 'test'
+  ...
+# Subtest: owner replies require exact authorization, scope, option, request and current pins
+ok 12 - owner replies require exact authorization, scope, option, request and current pins
+  ---
+  duration_ms: 14.190723
+  type: 'test'
+  ...
+# Subtest: legacy requestControl cannot resume through a pending owner decision
+ok 13 - legacy requestControl cannot resume through a pending owner decision
+  ---
+  duration_ms: 7.337129
+  type: 'test'
+  ...
+# Subtest: owner reply preserves later pause
+ok 14 - owner reply preserves later pause
+  ---
+  duration_ms: 8.560485
+  type: 'test'
+  ...
+# Subtest: owner reply preserves later stop
+ok 15 - owner reply preserves later stop
+  ---
+  duration_ms: 8.136865
+  type: 'test'
+  ...
+# Subtest: owner reply preserves later cancel
+ok 16 - owner reply preserves later cancel
+  ---
+  duration_ms: 6.667924
+  type: 'test'
+  ...
+# Subtest: changed goal requires authenticated replacement with revalidated investigation and retained history
+ok 17 - changed goal requires authenticated replacement with revalidated investigation and retained history
+  ---
+  duration_ms: 17.782242
+  type: 'test'
+  ...
+# Subtest: planner request registration is atomic, consumes trigger and makes no owner wait model loop
+ok 18 - planner request registration is atomic, consumes trigger and makes no owner wait model loop
+  ---
+  duration_ms: 17.842735
+  type: 'test'
+  ...
+# Subtest: planner answer cannot register a decision after owner control changes during its await
+ok 19 - planner answer cannot register a decision after owner control changes during its await
+  ---
+  duration_ms: 9.517556
+  type: 'test'
+  ...
+# Subtest: owner wait survives SQLite reopen with immutable digest and exact reply pins
+ok 20 - owner wait survives SQLite reopen with immutable digest and exact reply pins
+  ---
+  duration_ms: 10.385164
+  type: 'test'
+  ...
+1..20
+# tests 20
+# suites 0
+# pass 20
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3079.172081

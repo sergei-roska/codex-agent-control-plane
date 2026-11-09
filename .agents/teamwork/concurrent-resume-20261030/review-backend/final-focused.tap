@@ -1,0 +1,24 @@
+▶ blocked technical resume requires an exact released no-effect review receipt
+  ✔ accepts the exact frozen verifier attempt and advances the control revision once (21.473368ms)
+  ✔ refuses tampered-receipt without changing objective or event history (7.116794ms)
+  ✔ refuses failed-task without changing objective or event history (4.184282ms)
+  ✔ refuses retry-pending without changing objective or event history (3.733872ms)
+  ✔ refuses unknown-attempt without changing objective or event history (4.015084ms)
+  ✔ refuses stale-control without changing objective or event history (4.455932ms)
+✔ blocked technical resume requires an exact released no-effect review receipt (46.07089ms)
+✔ provider drift stays dormant until explicit resume prepares and durably binds a fresh planner thread (139.526275ms)
+✔ provider rebind refuses control drift during delayed thread preparation without writing history (85.8043ms)
+✔ provider rebind refuses binding drift during delayed thread preparation without writing history (82.638254ms)
+✔ provider drift resumes a blocked objective through its exact frozen verifier and keeps unknown siblings fenced (729.969482ms)
+✔ provider rebound finalization rejects verifier settings drift (394.917986ms)
+✔ provider rebound finalization rejects tampered rebound lineage (399.428223ms)
+✔ provider rebound finalization rejects unrelated rebound lineage (406.869987ms)
+✔ owner pause facade resume preserves technical boundary (191.934451ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2747.465738

@@ -1,0 +1,33 @@
+{
+  "affectedSummary": {
+    "tests": 748,
+    "suites": 32,
+    "pass": 746,
+    "fail": 2,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "fullSummary": {
+    "tests": 1906,
+    "suites": 54,
+    "pass": 1893,
+    "fail": 12,
+    "cancelled": 0,
+    "skipped": 1,
+    "todo": 0
+  },
+  "affectedSameOrderedBaselineFailures": true,
+  "fullNewFailureNames": [
+    "owner correction facade carries pending correction through SQLite reopen with direct resume",
+    "launcher becomes ready on a free port and shuts down cleanly"
+  ],
+  "fullMissingBaselineFailureNames": [],
+  "affectedInputDrift": [],
+  "fullInputDrift": [],
+  "notes": [
+    "Launcher signal-exit failure is a retained intermittent predecessor observation; isolated1/1 passed, no launcher fix.",
+    "New direct-resume correction acceptance timeout passed isolated1/1; deterministic early poll loss reproduced separately, historical full-run causality not proved.",
+    "Scheduler source/tests unchanged; source repair and regression independent review remain pending at quota checkpoint."
+  ]
+}

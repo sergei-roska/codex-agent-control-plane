@@ -1,0 +1,97 @@
+{
+  "at": "2026-10-19T12:19:19.723Z",
+  "root": 8848,
+  "processes": [
+    {
+      "pid": 8848,
+      "ppid": 8216,
+      "pgid": 8216,
+      "startTime": "14040",
+      "comm": "MainThread"
+    },
+    {
+      "pid": 8856,
+      "ppid": 8848,
+      "pgid": 8856,
+      "startTime": "14133",
+      "comm": "codex"
+    },
+    {
+      "pid": 89417,
+      "ppid": 8856,
+      "pgid": 89417,
+      "startTime": "378579",
+      "comm": "codex-linux-san"
+    },
+    {
+      "pid": 89438,
+      "ppid": 89417,
+      "pgid": 89438,
+      "startTime": "378584",
+      "comm": "bwrap"
+    },
+    {
+      "pid": 89444,
+      "ppid": 89438,
+      "pgid": 89444,
+      "startTime": "378584",
+      "comm": "codex"
+    },
+    {
+      "pid": 89471,
+      "ppid": 89444,
+      "pgid": 89444,
+      "startTime": "378589",
+      "comm": "uv"
+    },
+    {
+      "pid": 89538,
+      "ppid": 89471,
+      "pgid": 89444,
+      "startTime": "378612",
+      "comm": "pytest"
+    },
+    {
+      "pid": 12153,
+      "ppid": 8856,
+      "pgid": 12153,
+      "startTime": "20104",
+      "comm": "codex-code-mode"
+    },
+    {
+      "pid": 141572,
+      "ppid": 8856,
+      "pgid": 141572,
+      "startTime": "759962",
+      "comm": "codex-linux-san"
+    },
+    {
+      "pid": 141576,
+      "ppid": 141572,
+      "pgid": 141576,
+      "startTime": "759964",
+      "comm": "bwrap"
+    },
+    {
+      "pid": 141577,
+      "ppid": 141576,
+      "pgid": 141577,
+      "startTime": "759964",
+      "comm": "codex"
+    },
+    {
+      "pid": 141578,
+      "ppid": 141577,
+      "pgid": 141577,
+      "startTime": "759965",
+      "comm": "uv"
+    },
+    {
+      "pid": 141582,
+      "ppid": 141578,
+      "pgid": 141577,
+      "startTime": "759970",
+      "comm": "pytest"
+    }
+  ]
+}

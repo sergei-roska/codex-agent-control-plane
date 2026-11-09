@@ -1,0 +1,32 @@
+✔ decision submit preserves its draft after network failure (3.561307ms)
+✔ decision submit preserves its draft after HTTP error response (1.930302ms)
+✔ decision submit preserves its draft after application failure response (1.28065ms)
+✔ decision submit preserves its draft after A2A task still paused on error (1.751791ms)
+✔ decision submit preserves its draft after A2A error pause without a pause message (1.44635ms)
+✔ decision submit clears only the submitted draft after acknowledged continuation (1.256497ms)
+✔ decision submit keeps edits made while the request is pending (2.285033ms)
+✔ decision submit does not apply an old response to a changed session (1.160168ms)
+▶ new session controls
+  ✔ enables New session after the matching owner pause is parked (3.368998ms)
+  ✔ sends the next goal with a fresh context and no old task continuation fields (1.666325ms)
+  ✔ enables a confirmed stopped pause with a numeric task state (0.888453ms)
+  ✔ keeps New session disabled while the pause is pending or workers are running (1.676567ms)
+  ✔ rejects stale situations from another task or project (3.469906ms)
+  ✔ keeps the action disabled for unsettled sends and pending turns (2.670315ms)
+  ✔ preserves terminal-session behavior without requiring a situation (0.757754ms)
+✔ new session controls (15.494555ms)
+▶ acceptance checks in the composer
+  ✔ sends one command per line as checks and clears the box (1.036258ms)
+  ✔ omits the field for an empty or blank box so the project defaults apply (1.534285ms)
+  ✔ sends checks with a follow-up run but never with a resume of a paused task (1.548172ms)
+  ✔ hides the checks box in scout mode (1.747653ms)
+  ✔ the page declares the textarea with the host-execution hint (0.297446ms)
+✔ acceptance checks in the composer (6.489571ms)
+ℹ tests 20
+ℹ suites 2
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 73.779471
