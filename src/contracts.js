@@ -995,6 +995,76 @@ function checkWaveScopes(assignments, ctx) {
   }
 }
 
+const MAX_NORMALIZATION_DETAIL = 300;
+
+/**
+ * Deterministic repair of three mechanically fixable lead-decision defects, applied before validateDecision.
+ * Pure: never mutates the input; returns { decision, normalizations: [{ code, field, detail }] }, where decision is
+ * the input itself when nothing applied. Every other defect is left for validateDecision to reject.
+ *   final_cleared: dispatch and request_human_input leave final empty, so a non-empty final is dropped.
+ *   ledger_all_accepted: a checkpoints ledger whose every entry is accepted (and passes every other ledger rule)
+ *     becomes a plain finish with goalAchieved true and checkpoints null, as the validator message prescribes.
+ *     Skipped when the owner deferred checkpoints (ctx.hasOwnerBlockedCheckpoints): a partial finish reports those
+ *     as blocked and a plain finish would not.
+ *   record_related_ids_pruned / record_dropped: a remedy or verification record keeps only relatedIds that name an
+ *     existing problem record (this decision's problems plus ctx.knownProblemIds) and is dropped when none remain.
+ *     Applied only when every record is otherwise well formed, so records with other defects still reject.
+ * ctx = { knownProblemIds?: string[], hasOwnerBlockedCheckpoints?: boolean }
+ */
+function normalizeDecision(decision, ctx = {}) {
+  const normalizations = [];
+  if (!isPlainObject(decision)) return { decision, normalizations };
+  const next = { ...decision };
+  const note = (code, field, detail) => normalizations.push({ code, field, detail: String(detail).slice(0, MAX_NORMALIZATION_DETAIL) });
+
+  if (['dispatch', 'request_human_input'].includes(next.action) && typeof next.final === 'string' && next.final.trim()) {
+    note('final_cleared', 'final', `${next.action} decisions leave final empty; dropped ${next.final.length} characters`);
+    next.final = '';
+  }
+
+  if (next.action === 'finish' && Array.isArray(next.checkpoints) && typeof next.goalAchieved === 'boolean'
+    && !ctx.hasOwnerBlockedCheckpoints && normalizeLedger(next.checkpoints).allAccepted === true) {
+    note('ledger_all_accepted', 'checkpoints', `every one of ${next.checkpoints.length} checkpoints is accepted; finished with goalAchieved true and no ledger`);
+    next.goalAchieved = true;
+    next.checkpoints = null;
+  }
+
+  if (Array.isArray(next.records) && next.records.length > 0) {
+    let shaped = null;
+    try {
+      shaped = checkDecisionRecordsShape(next.records);
+    } catch (_) { /* Malformed records stay as they are and are rejected by validateDecision. */ }
+    if (shaped) {
+      const known = new Set([...(ctx.knownProblemIds || []), ...shaped.filter((entry) => entry.kind === 'problem').map((entry) => entry.id)]);
+      const kept = [];
+      let changed = false;
+      for (const [index, entry] of shaped.entries()) {
+        if (!['remedy', 'verification'].includes(entry.kind)) {
+          kept.push(next.records[index]);
+          continue;
+        }
+        const valid = entry.relatedIds.filter((id) => known.has(id));
+        if (valid.length === entry.relatedIds.length && valid.length > 0) {
+          kept.push(next.records[index]);
+          continue;
+        }
+        changed = true;
+        const label = `records[${index}] (${entry.kind} ${entry.id})`;
+        if (valid.length === 0) {
+          note('record_dropped', `records[${index}]`, `${label} named no existing problem record ID; record dropped`);
+        } else {
+          note('record_related_ids_pruned', `records[${index}].relatedIds`,
+            `${label} kept ${valid.join(', ')}; dropped unknown ${entry.relatedIds.filter((id) => !known.has(id)).join(', ')}`);
+          kept.push({ ...next.records[index], relatedIds: valid });
+        }
+      }
+      if (changed) next.records = kept;
+    }
+  }
+
+  return { decision: normalizations.length > 0 ? next : decision, normalizations };
+}
+
 /**
  * Validate a parsed lead decision. Throws Error on violation.
  * ctx = { roles: Map, attemptedRoles: Set, outcomeCount: number, openDecisionIds: Set, unresolvedWriterCount?: number,
@@ -1118,6 +1188,7 @@ module.exports = {
   parseWorkerReport,
   DECISION_SCHEMA,
   validateDecision,
+  normalizeDecision,
   BoundaryViolation,
   BOUNDARY_PREDICATES,
   classifyCodexError,

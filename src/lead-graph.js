@@ -8,7 +8,7 @@ const {
 } = require('@langchain/langgraph');
 const { Role: A2ARole, TaskState } = require('@a2a-js/sdk');
 const {
-  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, BoundaryViolation, parseWorkerReport, executionGroups,
+  DECISION_SCHEMA, WORKER_REPORT_CONTRACT, validateDecision, normalizeDecision, BoundaryViolation, parseWorkerReport, executionGroups,
   checkDecisionRecordsShape, safeRelativePath,
 } = require('./contracts');
 const {
@@ -3074,6 +3074,7 @@ function buildLeadGraph(deps) {
     let decision;
     let agentContract = null;
     let proposal = null;
+    let normalizations = [];
     // LL-4: proposals are honored only while the run has no owner checks and none are pinned.
     const proposalsOpen = !state.contract?.invalid && (state.contract?.requiredChecks || []).length === 0;
     try {
@@ -3108,6 +3109,9 @@ function buildLeadGraph(deps) {
             `Checkpoint ${entry.checkpointId} is blocked (${entry.reason}); do not dispatch ${reviewer ? 'reviewers' : 'work'} for it. When every remaining checkpoint is accepted or blocked, finish with the partial ledger.`);
         }
       }
+      // Mechanically fixable contract slips are repaired deterministically (and audited below) instead of costing a retry round.
+      const knownProblemIds = knownProblemIdsForDecision(decision.records);
+      ({ decision, normalizations } = normalizeDecision(decision, { knownProblemIds, hasOwnerBlockedCheckpoints: ownerBlockedIds(state).size > 0 }));
       validateDecision(decision, {
         roles,
         attemptedRoles: new Set(state.attemptedRoles),
@@ -3119,7 +3123,7 @@ function buildLeadGraph(deps) {
         skillCandidateIds: candidateIds,
         mcpToolCatalog: mcpCatalog,
         mcpToolCandidateIds,
-        knownProblemIds: knownProblemIdsForDecision(decision.records),
+        knownProblemIds,
         // LL-6 investigate first.
         investigations: investigationsOf(state),
         openDecisionRounds: new Map(state.openDecisions.map((entry) => [entry.id, roundOf(entry.assignmentId) ?? 0])),
@@ -3201,6 +3205,11 @@ function buildLeadGraph(deps) {
     update.retryDecide = false;
     if (state.planningRecovery?.phase === 'fresh_pending') update.planningRecovery = null;
     deps.emit(runtime.onEvent, { type: 'decision', round: state.round + 1, action: decision.action });
+    for (const entry of normalizations) {
+      try {
+        recordStage('decision_normalized', { runId: state.runId, status: entry.code, payload: { ...entry, round: state.round + 1 } });
+      } catch (_) { /* The audit trail never breaks a run. */ }
+    }
     recordSemanticRecords(state, decision.records);
     recordLeadResolutions(state, decision.resolutions);
     if (agentContract) {

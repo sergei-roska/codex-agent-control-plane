@@ -49,7 +49,10 @@ function normalizeLedger(value) {
     ledger.push({ id, status: entry.status, reason, evidence });
   }
   if (ledger.every((entry) => entry.status === 'accepted')) {
-    return { error: 'A partial ledger needs at least one blocked or not_started checkpoint; when every checkpoint is accepted, finish with goalAchieved true' };
+    return {
+      error: 'A partial ledger needs at least one blocked or not_started checkpoint; when every checkpoint is accepted, finish with goalAchieved true',
+      allAccepted: true,
+    };
   }
   return { ledger };
 }

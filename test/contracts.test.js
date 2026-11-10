@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const {
   WORKER_REPORT_SCHEMA, WORKER_REPORT_CONTRACT, validateWorkerReport, parseWorkerReport,
-  DECISION_SCHEMA, validateDecision, classifyCodexError, findCodexErrorInfo, safeRelativePath,
+  DECISION_SCHEMA, validateDecision, normalizeDecision, classifyCodexError, findCodexErrorInfo, safeRelativePath,
   ASSIGNMENT_FIELDS, MAX_ASSIGNMENTS, BoundaryViolation, BOUNDARY_PREDICATES,
   checkSpecialistRequest, pathsOutsideAllowed, executionGroups, HUMAN_REASONS,
 } = require('../src/contracts');
@@ -879,4 +879,160 @@ test('a repeated unmet-goal finish needs an investigation finished after the fir
   assert.match(caught.message, /needs a finished read-only investigation from a round after 2, cited by its assignmentId in final/);
   validateDecision(finish({ goalAchieved: false, final: 'X needs a paid license (run:r3:a0)' }), since(2, [{ assignmentId: 'run:r3:a0', round: 3 }]));
   validateDecision(finish({ goalAchieved: true, final: 'Done' }), since(2, []));
+});
+
+const record = (overrides = {}) => ({
+  id: 'rec-1', kind: 'problem', status: 'open', summary: 'A problem', evidenceIds: [], relatedIds: [], adrPath: null, ...overrides,
+});
+const ACCEPTED_ONLY = [
+  { id: 'cp-1', status: 'accepted', reason: '', evidence: ['run:r2:a0'] },
+  { id: 'cp-2', status: 'accepted', reason: 'Landed', evidence: ['run:r3:a0'] },
+];
+const codes = (result) => result.normalizations.map((entry) => entry.code);
+
+test('normalizeDecision clears a non-empty final on dispatch and request_human_input without mutating the input', () => {
+  for (const original of [dispatch([assignment()], { final: 'Dispatching now' }), ask({ final: 'Need your input' })]) {
+    const frozen = JSON.stringify(original);
+    const result = normalizeDecision(original, {});
+    assert.equal(JSON.stringify(original), frozen);
+    assert.notEqual(result.decision, original);
+    assert.equal(result.decision.final, '');
+    assert.deepEqual(codes(result), ['final_cleared']);
+    assert.equal(result.normalizations[0].field, 'final');
+    assert.doesNotMatch(result.normalizations[0].detail, /Dispatching now|Need your input/);
+    validateDecision(result.decision, ctx());
+  }
+  // Rejected without normalization, so the normalizer is what changes the outcome.
+  throws(dispatch([assignment()], { final: 'x' }), ctx(), /Dispatch decisions must leave final empty/);
+  throws(ask({ final: 'x' }), ctx(), /request_human_input decisions must leave final empty/);
+});
+
+test('normalizeDecision leaves clean decisions, finish text, and unsupported actions alone', () => {
+  for (const clean of [dispatch(), ask(), finish(), finish({ goalAchieved: true })]) {
+    const result = normalizeDecision(clean, {});
+    assert.equal(result.decision, clean);
+    assert.deepEqual(result.normalizations, []);
+  }
+  const unsupported = { ...dispatch(), action: 'pause', final: 'x' };
+  assert.equal(normalizeDecision(unsupported, {}).decision, unsupported);
+  throws(unsupported, ctx(), /Unsupported lead action/);
+  assert.equal(normalizeDecision(null, {}).decision, null);
+  assert.equal(normalizeDecision('text', {}).decision, 'text');
+  // Blank final is not a defect and is left untouched.
+  assert.deepEqual(normalizeDecision(dispatch([assignment()], { final: '  ' }), {}).normalizations, []);
+});
+
+test('normalizeDecision turns a fully accepted ledger into a plain finish with goalAchieved true', () => {
+  for (const goalAchieved of [false, true]) {
+    const original = finish({ goalAchieved, checkpoints: ACCEPTED_ONLY.map((entry) => ({ ...entry })) });
+    const frozen = JSON.stringify(original);
+    const result = normalizeDecision(original, {});
+    assert.equal(JSON.stringify(original), frozen);
+    assert.equal(result.decision.goalAchieved, true);
+    assert.equal(result.decision.checkpoints, null);
+    assert.equal(result.decision.final, 'All done');
+    assert.deepEqual(codes(result), ['ledger_all_accepted']);
+    assert.equal(result.normalizations[0].field, 'checkpoints');
+    // The repeated-finish investigation rule does not apply to the normalized finish, and validation passes.
+    validateDecision(result.decision, ctx({ goalInvestigationRound: 5 }));
+    throws(original, ctx(), /at least one blocked or not_started checkpoint/);
+  }
+});
+
+test('normalizeDecision keeps every other ledger defect, partial ledger, and owner-deferral as a rejection', () => {
+  const stillRejected = (checkpoints, overrides = {}, context = {}, pattern = /partial_ledger_invalid|checkpoint/) => {
+    const result = normalizeDecision(finish({ goalAchieved: false, checkpoints, ...overrides }), context);
+    assert.deepEqual(result.normalizations, []);
+    assert.throws(() => validateDecision(result.decision, ctx()), pattern);
+  };
+  // A real partial ledger is untouched.
+  const partial = finish({ goalAchieved: false, checkpoints: LEDGER.map((entry) => ({ ...entry })) });
+  assert.equal(normalizeDecision(partial, {}).decision, partial);
+  // A blocked or not_started checkpoint presented as one more accepted checkpoint is still a ledger with a defect.
+  stillRejected([ACCEPTED_ONLY[0], { id: 'cp-2', status: 'accepted', reason: '', evidence: [] }], {}, {}, /accepted checkpoint cp-2 needs evidence/);
+  stillRejected([ACCEPTED_ONLY[0], ACCEPTED_ONLY[0]], {}, {}, /listed twice/);
+  stillRejected([{ ...ACCEPTED_ONLY[0], status: 'done' }], {}, {}, /status must be one of/);
+  stillRejected([{ id: 'cp-1', status: 'accepted' }], {}, {}, /exactly id, status, reason, and evidence/);
+  // goalAchieved null or a non-boolean is not guessed.
+  const unstated = finish({ goalAchieved: null, checkpoints: ACCEPTED_ONLY });
+  assert.equal(normalizeDecision(unstated, {}).decision, unstated);
+  // Owner-deferred checkpoints must still be reported as blocked, so a partial ledger path is not rewritten.
+  const deferred = finish({ goalAchieved: false, checkpoints: ACCEPTED_ONLY });
+  const result = normalizeDecision(deferred, { hasOwnerBlockedCheckpoints: true });
+  assert.equal(result.decision, deferred);
+  assert.deepEqual(result.normalizations, []);
+  // Dispatch with an accepted-only ledger is not a finish and is not touched here (validation drops the ledger as before).
+  const dispatched = dispatch([assignment()], { checkpoints: ACCEPTED_ONLY });
+  assert.equal(normalizeDecision(dispatched, {}).decision, dispatched);
+});
+
+test('normalizeDecision prunes unknown relatedIds of remedy and verification records and drops records with none', () => {
+  const problem = record({ id: 'problem-a' });
+  const original = finish({
+    records: [
+      problem,
+      record({ id: 'remedy-ok', kind: 'remedy', status: 'implemented', relatedIds: ['problem-a', 'problem-prior'] }),
+      record({ id: 'remedy-partial', kind: 'remedy', status: 'implemented', relatedIds: ['problem-a', 'problem-ghost'] }),
+      record({ id: 'verify-none', kind: 'verification', status: 'tested', relatedIds: ['problem-ghost'] }),
+      record({ id: 'verify-empty', kind: 'verification', status: 'tested', relatedIds: [] }),
+      record({ id: 'decision-1', kind: 'decision', status: 'accepted', relatedIds: ['anything-goes'] }),
+    ],
+  });
+  const frozen = JSON.stringify(original);
+  const result = normalizeDecision(original, { knownProblemIds: ['problem-prior'] });
+  assert.equal(JSON.stringify(original), frozen);
+  assert.deepEqual(result.decision.records.map((entry) => entry.id), ['problem-a', 'remedy-ok', 'remedy-partial', 'decision-1']);
+  assert.deepEqual(result.decision.records[1].relatedIds, ['problem-a', 'problem-prior']);
+  assert.deepEqual(result.decision.records[2].relatedIds, ['problem-a']);
+  assert.deepEqual(result.decision.records[3].relatedIds, ['anything-goes']);
+  assert.deepEqual(result.normalizations.map(({ code, field }) => ({ code, field })), [
+    { code: 'record_related_ids_pruned', field: 'records[2].relatedIds' },
+    { code: 'record_dropped', field: 'records[3]' },
+    { code: 'record_dropped', field: 'records[4]' },
+  ]);
+  validateDecision(result.decision, ctx({ knownProblemIds: ['problem-prior'] }));
+  throws(finish({ records: original.records }), ctx({ knownProblemIds: ['problem-prior'] }), /must relate to an existing problem record ID/);
+});
+
+test('normalizeDecision does not touch records that are valid or have any other defect', () => {
+  const remedy = (overrides) => record({ id: 'remedy-1', kind: 'remedy', status: 'implemented', relatedIds: ['problem-ghost'], ...overrides });
+  const valid = finish({ records: [record({ id: 'problem-a' }), remedy({ relatedIds: ['problem-a'] })] });
+  assert.equal(normalizeDecision(valid, {}).decision, valid);
+  const defective = [
+    ['unsupported status', remedy({ status: 'bogus' })],
+    ['unsafe related id', remedy({ relatedIds: ['token=probe-secret'] })],
+    ['duplicate related ids', remedy({ relatedIds: ['problem-ghost', 'problem-ghost'] })],
+    ['empty summary', remedy({ summary: '' })],
+    ['adrPath on a remedy', remedy({ adrPath: 'docs/adr/x.md' })],
+    ['extra field', { ...remedy(), extra: true }],
+  ];
+  for (const [label, entry] of defective) {
+    const decision = finish({ records: [entry] });
+    const result = normalizeDecision(decision, {});
+    assert.equal(result.decision, decision, label);
+    assert.deepEqual(result.normalizations, [], label);
+    assert.throws(() => validateDecision(result.decision, ctx()), (error) => error instanceof BoundaryViolation && error.violations[0].code === 'records_invalid', label);
+  }
+  // One defective record keeps every record as it is, including an otherwise prunable one.
+  const mixed = finish({ records: [remedy(), remedy({ id: 'remedy-2', status: 'bogus' })] });
+  assert.equal(normalizeDecision(mixed, {}).decision, mixed);
+  for (const bad of [{}, 'x', null, [null]]) {
+    const decision = finish({ records: bad });
+    assert.equal(normalizeDecision(decision, {}).decision, decision);
+  }
+});
+
+test('normalizeDecision does not repair semantic violations', () => {
+  const badReview = { kind: 'routine', checkpointId: 'cp', reason: 'r', paths: [], evidenceIds: [] };
+  const auditor = assignment({ role: 'orch-auditor', allowedFiles: [], review: badReview });
+  // The slip on final is repaired, the review context defect is not: validation still rejects it.
+  const slipped = dispatch([auditor], { final: 'Dispatching' });
+  const result = normalizeDecision(slipped, {});
+  assert.deepEqual(codes(result), ['final_cleared']);
+  assert.equal(result.decision.assignments, slipped.assignments);
+  assert.throws(() => validateDecision(result.decision, ctx()), (error) => error instanceof BoundaryViolation
+    && error.violations[0].code === 'review_context_invalid');
+  const repeated = finish({ goalAchieved: false, final: 'Still blocked' });
+  assert.equal(normalizeDecision(repeated, {}).decision, repeated);
+  investigateFirst(repeated, ctx({ goalInvestigationRound: 2, investigations: [INVESTIGATION] }));
 });

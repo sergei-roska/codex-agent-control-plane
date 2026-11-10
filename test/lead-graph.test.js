@@ -1904,6 +1904,60 @@ test('structured problem and architecture records are written to the semantic ev
   }, { orchestrator: { stagingLog } });
 });
 
+test('mechanical decision slips are normalized without a retry and leave an audit event', async () => {
+  const stagingLog = new InMemoryStagingLog();
+  const accepted = [
+    { id: 'cp-1', status: 'accepted', reason: '', evidence: ['run-1:r1:a0'] },
+    { id: 'cp-2', status: 'accepted', reason: 'Landed', evidence: ['run-1:r1:a1'] },
+  ];
+  const problem = { id: 'problem-norm-1', kind: 'problem', status: 'open', summary: 'A problem', evidenceIds: [], relatedIds: [], adrPath: null };
+  const orphanRemedy = { id: 'remedy-norm-1', kind: 'remedy', status: 'implemented', summary: 'Fix', evidenceIds: [], relatedIds: ['problem-ghost'], adrPath: null };
+  const partlyRelated = { id: 'verify-norm-1', kind: 'verification', status: 'tested', summary: 'Checked', evidenceIds: [], relatedIds: ['problem-norm-1', 'problem-ghost'], adrPath: null };
+  const world = makeWorld({ script: [
+    decision({ action: 'dispatch', assignments: [brief('orch-explorer', [])], final: 'Starting the investigation' }),
+    decision({ action: 'finish', final: 'All checkpoints accepted', goalAchieved: false, checkpoints: accepted, records: [problem, orphanRemedy, partlyRelated] }),
+  ] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal('disposition' in result, false);
+    // Two lead turns for two rounds: no rejection and no retry round.
+    assert.equal(world.leadTurns, 2);
+    assert.equal(world.prompts.some((prompt) => /decision_rejected|partial_ledger_invalid|records_invalid|must leave final empty/.test(prompt)), false);
+    const normalized = stagingLog.list({ runId: RUN_ID, type: 'decision_normalized' });
+    assert.deepEqual(normalized.map((event) => [event.payload.round, event.payload.code, event.payload.field]), [
+      [1, 'final_cleared', 'final'],
+      [2, 'ledger_all_accepted', 'checkpoints'],
+      [2, 'record_dropped', 'records[1]'],
+      [2, 'record_related_ids_pruned', 'records[2].relatedIds'],
+    ]);
+    assert.ok(normalized.every((event) => typeof event.payload.detail === 'string' && event.status === event.payload.code));
+    const recorded = stagingLog.list({ runId: RUN_ID }).filter((event) => event.type.endsWith('_recorded'));
+    assert.deepEqual(recorded.map((event) => [event.type, event.payload.id, event.payload.relatedIds]), [
+      ['problem_recorded', 'problem-norm-1', []],
+      ['verification_recorded', 'verify-norm-1', ['problem-norm-1']],
+    ]);
+  }, { orchestrator: { stagingLog } });
+});
+
+test('a decision with a non-normalizable violation is still rejected and records no normalization', async () => {
+  const stagingLog = new InMemoryStagingLog();
+  const defect = { id: 'remedy-bad-1', kind: 'remedy', status: 'bogus', summary: 'Fix', evidenceIds: [], relatedIds: ['problem-ghost'], adrPath: null };
+  const world = makeWorld({ script: [
+    decision({ action: 'dispatch', assignments: [brief('orch-explorer', [])], final: 'Starting', records: [defect] }),
+    partialFinish('Only accepted, no evidence', [{ id: 'cp-1', status: 'accepted', reason: '', evidence: [] }]),
+    met('Done'),
+  ] });
+  await withSession(world, async (session) => {
+    const result = await session.orchestrator.run({ goal: 'Do A', runId: RUN_ID });
+    assert.equal(result.status, 'completed');
+    assert.equal(world.leadTurns, 3);
+    assert.match(world.prompts[1], /decision\.records records_invalid/);
+    assert.match(world.prompts[2], /decision\.partial partial_ledger_invalid: accepted checkpoint cp-1 needs evidence/);
+    assert.equal(stagingLog.list({ runId: RUN_ID, type: 'decision_normalized' }).length, 0);
+  }, { orchestrator: { stagingLog } });
+});
+
 test('malformed semantic records are rejected and reprompted before history lookup', async (t) => {
   const malformed = [
     ['object', {}],
