@@ -697,3 +697,28 @@ measured audit savings.
 - Production: after independent review, apply the narrow correction to the
   original server and verify restart/intake through its supported API without
   changing stored task state.
+
+### P-43 Pinned-check audit gate demanded pass while the auditor answered preserve
+
+- Symptom: a one-line lint fix (CDB-390) ran 30 role calls over 12 minutes and
+  stopped with `infeasible_requirement`: "auditors must return preserve, while
+  the checkpoint gate requires pass". Four verifier and three auditor rounds
+  repeated without any finding; each rejected auditor triggered a verifier refresh.
+- Cause: a gated review of kind `pinned_check` is answered with
+  `VERDICT: preserve|weaken` (role service guidance, auditor profile), but the
+  lead graph checked auditor receipts against `verdict === 'pass'` and
+  `reviewResult` parsed only pass/fail/inconclusive. The coordinator followed
+  `profiles/TEAM.md` audit trigger 5 and dispatched such an audit as a standing
+  checkpoint, which could never be accepted.
+- Correction: `acceptingAuditVerdict(review)` in `src/review-policy.js` gives
+  the accepting verdict per kind (`preserve` for `pinned_check`, else `pass`);
+  `auditVerdict` and `reviewResult` parse the matching verdict set; the three
+  lead-graph receipt gates use it. Other kinds are unchanged.
+- Evidence: `test/review-policy.test.js` (new pinned-check test); lead-graph,
+  role-service, and delivery-review-policy suites pass (360 tests).
+- Related, not fixed here: the coordinator can still add redundant review
+  rounds on trivial work (audit of an agent-authored check script); a lead
+  agent that authors its own acceptance script then audits that script is a
+  planning-policy question for the owner.
+- Production: apply the same per-kind accepting verdict to any gate that
+  compares auditor verdicts.

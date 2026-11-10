@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { computeReviewTarget, reviewResult, sameReviewScope } = require('../src/review-policy');
+const { computeReviewTarget, reviewResult, sameReviewScope, acceptingAuditVerdict } = require('../src/review-policy');
 
 const review = { kind: 'risk_change', checkpointId: 'cp-1', reason: 'boundary change', paths: ['src/file.js'], evidenceIds: [] };
 
@@ -118,6 +118,29 @@ test('auditor verdict must be the complete standalone first line', () => {
     outcome.report.summary = summary;
     assert.equal(reviewResult(outcome, 'auditor', review).reason, 'audit_verdict_missing_or_invalid', summary);
   }
+});
+
+test('a pinned-check integrity audit is accepted by preserve and rejected by weaken or pass', () => {
+  const pinned = { ...review, kind: 'pinned_check' };
+  const outcome = (summary) => ({
+    status: 'TASK_STATE_COMPLETED',
+    sandbox: 'read-only',
+    report: {
+      outcome: 'completed', summary,
+      filesInspected: ['src/file.js'], checks: [{ result: 'passed' }], decisionRequest: null,
+    },
+  });
+  assert.equal(acceptingAuditVerdict(pinned), 'preserve');
+  assert.equal(acceptingAuditVerdict(review), 'pass');
+  const preserved = reviewResult(outcome('VERDICT: preserve'), 'auditor', pinned);
+  assert.equal(preserved.valid, true);
+  assert.equal(preserved.status, 'accepted');
+  assert.equal(preserved.verdict, 'preserve');
+  const weakened = reviewResult(outcome('VERDICT: weaken'), 'auditor', pinned);
+  assert.equal(weakened.valid, false);
+  assert.equal(weakened.reason, 'audit_verdict_weaken');
+  assert.equal(reviewResult(outcome('VERDICT: pass'), 'auditor', pinned).reason, 'audit_verdict_missing_or_invalid');
+  assert.equal(reviewResult(outcome('VERDICT: preserve'), 'auditor', review).reason, 'audit_verdict_missing_or_invalid');
 });
 
 test('a writable verifier accepts only a proven empty lane with stable review coverage', () => {

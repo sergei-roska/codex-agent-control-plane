@@ -154,9 +154,16 @@ function computeReviewTarget({ workspace, review, runId = null, goal = '', check
   };
 }
 
-function auditVerdict(report) {
+// A pinned-check integrity review is answered with preserve/weaken (see the auditor profile and the
+// role service guidance); every other gated audit uses pass/fail/inconclusive.
+function acceptingAuditVerdict(review) {
+  return review?.kind === 'pinned_check' ? 'preserve' : 'pass';
+}
+
+function auditVerdict(report, review = null) {
   const first = String(report?.summary || '').split(/\r?\n/, 1)[0];
-  const match = /^VERDICT: (pass|fail|inconclusive)$/.exec(first);
+  const pattern = review?.kind === 'pinned_check' ? /^VERDICT: (preserve|weaken)$/ : /^VERDICT: (pass|fail|inconclusive)$/;
+  const match = pattern.exec(first);
   return match ? match[1] : null;
 }
 
@@ -235,9 +242,9 @@ function reviewResult(outcome, role, review = null) {
     }
   }
   if (role === 'auditor') {
-    const verdict = auditVerdict(report);
+    const verdict = auditVerdict(report, review);
     if (!verdict) return { ...base, reason: 'audit_verdict_missing_or_invalid' };
-    if (verdict !== 'pass') return { ...base, verdict, reason: `audit_verdict_${verdict}` };
+    if (verdict !== acceptingAuditVerdict(review)) return { ...base, verdict, reason: `audit_verdict_${verdict}` };
     return { valid: true, status: 'accepted', verdict, reason: null };
   }
   if (role === 'verifier') {
@@ -257,6 +264,7 @@ module.exports = {
   sameReviewScope,
   computeReviewTarget,
   auditVerdict,
+  acceptingAuditVerdict,
   inspectedScopeMatch,
   reviewResult,
 };

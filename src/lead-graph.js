@@ -26,7 +26,7 @@ const { canonicalRoleId, getRole, roleDisplayName } = require('./role-names');
 const { classifyTransientFailure } = require('./transient-recovery');
 const { InMemoryStagingLog } = require('./staging-log');
 const {
-  POLICY_ID, isGatedReview, sameReviewScope, computeReviewTarget, reviewResult,
+  POLICY_ID, isGatedReview, sameReviewScope, computeReviewTarget, reviewResult, acceptingAuditVerdict,
 } = require('./review-policy');
 const {
   makeObservation, observeLoopGuard, resetLoopGuard, reportEvidenceIdentity, warningText,
@@ -1578,7 +1578,7 @@ function buildLeadGraph(deps) {
     if (!outcome) return false;
     const evidence = reviewResult(outcome, role, obligation.review);
     return evidence.valid === true && evidence.status === 'accepted'
-      && (role !== 'auditor' || evidence.verdict === 'pass');
+      && (role !== 'auditor' || evidence.verdict === acceptingAuditVerdict(obligation.review));
   }
 
   function receiptReuseAllowed(obligation, entry, role, state, batch = null) {
@@ -1635,7 +1635,7 @@ function buildLeadGraph(deps) {
       const receipt = receipts[index];
       if (receipt.role !== 'auditor' || receipt.targetIdentity !== target.identity || receipt.status === 'stale') continue;
       if (receipt.continuationPending === true) continue;
-      if (receipt.status === 'accepted' && receipt.verdict === 'pass') return null;
+      if (receipt.status === 'accepted' && receipt.verdict === acceptingAuditVerdict(obligation.review)) return null;
       return receipt;
     }
     return null;
@@ -2517,7 +2517,7 @@ function buildLeadGraph(deps) {
               || serviceReview.status !== 'accepted'
               || serviceReview.accepted !== true
               || serviceReview.valid !== true
-              || (role === 'auditor' && serviceReview.verdict !== 'pass')
+              || (role === 'auditor' && serviceReview.verdict !== acceptingAuditVerdict(review))
             );
             let status = 'failed';
             let reason = evidence.reason;
