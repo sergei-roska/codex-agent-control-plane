@@ -50,8 +50,8 @@
 .table-scroll { overflow-x: auto; margin-top: 13px; }
 .empty-chart { color: var(--text-dim); padding: 14px; text-align: center; border: 1px dashed var(--border-subtle); border-radius: var(--radius-sm); font-size: 15px; }
 .table-more { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; color: var(--text-dim); font-size: 14px; }
-table { width: 100%; border-collapse: collapse; min-width: 590px; text-align: left; }
-th { color: var(--text-dim); font: 600 14px 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: .04em; padding: 9px 10px; }
+table { width: 100%; border-collapse: collapse; min-width: 820px; text-align: left; }
+th { color: var(--text-dim); font: 600 14px 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: .04em; padding: 9px 10px; text-align: left; }
 td { color: var(--text-secondary); font-size: 16px; padding: 10px; border-top: 1px solid var(--border-hairline); vertical-align: top; }
 td strong { color: var(--text-main); font-weight: 600; display: block; }
 td small { display: block; color: var(--text-dim); font-size: 14px; margin-top: 3px; overflow-wrap: anywhere; }
@@ -77,3 +77,5 @@ td small { display: block; color: var(--text-dim); font-size: 14px; margin-top: 
   .task-details { padding: 0 14px 14px; }
   .task-details > summary { padding: 14px 0; }
 }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+th.num { text-align: right; }

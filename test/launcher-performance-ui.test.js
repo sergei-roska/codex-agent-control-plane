@@ -105,7 +105,7 @@ test('performance page overlays current per-task usage onto a same-session unkno
   const { elements, requests } = await renderPage({ snapshot, usage });
   assert.ok(requests.includes('/api/projects/aaaaaaaaaa/sessions/session-1/usage?details=performance'));
   assert.match(elements.get('tokenTotal').textContent, /^16/);
-  assert.match(elements.get('taskTokenCoverage').textContent, /Showing top 1 of 1 known task token totals; 1 partial; 1 unknown/);
+  assert.match(elements.get('taskTokenCoverage').textContent, /Showing top 1 of 1 known role token totals; 1 partial; 1 unknown/);
   assert.match(elements.get('taskRows').innerHTML, />16\+/);
   assert.match(elements.get('taskRows').innerHTML, />Unknown/);
 });
@@ -120,7 +120,7 @@ test('performance page recognizes nested and legacy snake-case token fields with
     ],
   };
   const { elements } = await renderPage({ snapshot, usage: { total: {}, unknownCount: 0 } });
-  assert.match(elements.get('taskTokenCoverage').textContent, /Showing top 1 of 1 known task token totals; 1 unknown/);
+  assert.match(elements.get('taskTokenCoverage').textContent, /Showing top 1 of 1 known role token totals; 1 unknown/);
   assert.match(elements.get('taskRows').innerHTML, />9</);
   assert.match(elements.get('taskRows').innerHTML, />Unknown/);
 });
@@ -144,7 +144,7 @@ test('performance page builds task token rows from live detailed usage when no s
       { task_id: 'worker-2', assignment_id: 'lead-1:r2:a1', role: 'reviewer', state: 'TASK_STATE_FAILED', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:01Z' },
     ],
   }] } });
-  assert.match(elements.get('taskTokenCoverage').textContent, /Showing top 1 of 1 known task token totals; 2 unknown/);
+  assert.match(elements.get('taskTokenCoverage').textContent, /Showing top 1 of 1 known role token totals; 2 unknown/);
   assert.match(elements.get('taskRows').innerHTML, />10</);
   assert.match(elements.get('taskRows').innerHTML, />Unknown/);
   assert.match(elements.get('timeDetail').textContent, /1 measured, 2 lifecycle spans, 0 unknown \/ 3 tasks/);
@@ -154,7 +154,7 @@ test('performance page builds task token rows from live detailed usage when no s
   assert.match(elements.get('taskRows').innerHTML, />Failed</);
   assert.match(elements.get('taskRows').innerHTML, /dispatch-created to journal-updated lifecycle span, not model latency/);
   assert.match(elements.get('taskRows').innerHTML, /recorded execution time, including tools and startup when present/);
-  assert.match(elements.get('taskTimeCoverage').textContent, /Showing top 3 of 3 known task durations; 1 measured; 2 lifecycle spans/);
+  assert.match(elements.get('taskTimeCoverage').textContent, /Showing top 3 of 3 known role durations; 1 measured; 2 lifecycle spans/);
   assert.match(elements.get('taskTimeCoverage').textContent, /Lifecycle spans are not model latency/);
   assert.match(elements.get('tableNote').textContent, /1 measured execution duration/);
   assert.match(elements.get('tableNote').textContent, /2 dispatch-created to journal-updated lifecycle spans, not model latency/);
@@ -219,7 +219,7 @@ test('incomplete live token rows do not downgrade a known snapshot group', async
   };
   const { elements } = await renderPage({ snapshot, usage });
   assert.equal(elements.get('tokenTotal').textContent, '12');
-  assert.match(elements.get('taskTokenCoverage').textContent, /Showing top 1 of 1 known task token totals\./);
+  assert.match(elements.get('taskTokenCoverage').textContent, /Showing top 1 of 1 known role token totals\./);
   assert.doesNotMatch(elements.get('taskTokenCoverage').textContent, /partial/);
   assert.match(elements.get('taskRows').innerHTML, />12</);
   assert.match(elements.get('taskRows').innerHTML, />50 ms</);
@@ -239,7 +239,7 @@ test('a one-attempt live subset cannot replace a two-attempt persisted token and
   const { elements } = await renderPage({ snapshot, usage });
   assert.equal(elements.get('tokenTotal').textContent, '12');
   assert.match(elements.get('taskRows').innerHTML, />12</);
-  assert.match(elements.get('taskRows').innerHTML, /Input 10, cached input Unknown, output 2/);
+  assert.match(elements.get('taskRows').innerHTML, /<td class="num">10<\/td><td class="num">Unknown<\/td><td class="num">2<\/td>/);
   assert.match(elements.get('taskRows').innerHTML, />100 ms</);
   assert.equal(elements.get('timeTotal').textContent, '100 ms');
   assert.match(elements.get('tokenDetail').textContent, /2 attempts/);
@@ -275,7 +275,7 @@ test('partial live token components do not mix with a known persisted token aggr
   };
   const { elements } = await renderPage({ snapshot, usage });
   assert.equal(elements.get('tokenTotal').textContent, '12');
-  assert.match(elements.get('taskRows').innerHTML, /Input 10, cached input 2, output 2/);
+  assert.match(elements.get('taskRows').innerHTML, /<td class="num">10<\/td><td class="num">2<\/td><td class="num">2<\/td>/);
   assert.match(elements.get('taskRows').innerHTML, />100 ms</);
 });
 
@@ -317,7 +317,6 @@ test('live retries aggregate by assignment without merging distinct assignments 
   };
   const { elements } = await renderPage({ snapshot, usage });
   assert.match(elements.get('tokenTotal').textContent, /^35/);
-  assert.match(elements.get('taskTokenCoverage').textContent, /Showing top 2 of 2 known task token totals/);
-  assert.match(elements.get('taskRows').innerHTML, />15</);
-  assert.match(elements.get('taskRows').innerHTML, />20</);
+  assert.match(elements.get('taskTokenCoverage').textContent, /Showing top 1 of 1 known role token totals/);
+  assert.match(elements.get('taskRows').innerHTML, /<strong>Engineer<\/strong><small>2 tasks<\/small><\/td>.*?>35</);
 });

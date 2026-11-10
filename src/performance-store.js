@@ -233,6 +233,7 @@ function buildSnapshot(db, projectId, contextId, report) {
         output: [],
         total: [],
         elapsed: [],
+        models: new Map(),
         attempts: 0,
         knownTotalTokenRows: 0,
         knownTimeRows: 0,
@@ -265,6 +266,11 @@ function buildSnapshot(db, projectId, contextId, report) {
     });
     group.attempts += 1;
     const tokens = attempt.tokens || {};
+    if (attempt.model) {
+      const m = group.models.get(attempt.model) || { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+      for (const key of ['inputTokens', 'cachedInputTokens', 'outputTokens']) if (isNum(tokens[key])) m[key] += tokens[key];
+      group.models.set(attempt.model, m);
+    }
     for (const [key, collection] of [['inputTokens', group.input], ['cachedInputTokens', group.cached], ['outputTokens', group.output]]) {
       if (isNum(tokens[key])) collection.push(tokens[key]);
     }
@@ -289,6 +295,7 @@ function buildSnapshot(db, projectId, contextId, report) {
     cachedInputTokens: sumKnown(group.cached),
     outputTokens: sumKnown(group.output),
     elapsedMs: sumKnown(group.elapsed),
+    models: Object.fromEntries(group.models),
     state: group.state,
     unknownTokenRows: group.knownTotalTokenRows === 0 ? null : group.attempts - group.knownTotalTokenRows,
     unknownTimeRows: group.knownTimeRows === 0 ? null : group.attempts - group.knownTimeRows,

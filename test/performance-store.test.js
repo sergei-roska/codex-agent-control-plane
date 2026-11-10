@@ -77,7 +77,7 @@ test('collector is idempotent, session-scoped, read-only on state, and writes a 
   assert.deepEqual(worker, {
     taskId: 'worker-1', assignmentId: 'lead-1:r2:a0', round: 2, role: 'engineer',
     totalTokens: 11, inputTokens: 7, cachedInputTokens: 6, outputTokens: 4, elapsedMs: 35,
-    state: 'TASK_STATE_COMPLETED', unknownTokenRows: 1, unknownTimeRows: 1,
+    models: {}, state: 'TASK_STATE_COMPLETED', unknownTokenRows: 1, unknownTimeRows: 1,
   });
   const active = first.snapshot.tasks.find((row) => row.taskId === 'worker-2');
   assert.deepEqual([active.state, active.totalTokens, active.elapsedMs, active.unknownTokenRows, active.unknownTimeRows],
@@ -167,7 +167,7 @@ test('collector handles a legacy state database without usage_ledger and keeps u
   assert.deepEqual(result.snapshot.tasks, [{
     taskId: null, assignmentId: 'legacy-lead:r1:a0', round: 1, role: 'engineer',
     totalTokens: null, inputTokens: null, cachedInputTokens: null, outputTokens: null, elapsedMs: null,
-    state: 'submitting', unknownTokenRows: null, unknownTimeRows: null,
+    models: {}, state: 'submitting', unknownTokenRows: null, unknownTimeRows: null,
   }]);
   assert.equal(digest(statePath), before);
 });

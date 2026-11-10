@@ -4,6 +4,7 @@
   const $ = function (id) { return document.getElementById(id); };
   const params = new URLSearchParams(window.location.search);
   const state = {
+    prices: null,
     projects: [], sessions: [], projectId: params.get('project') || '', sessionId: params.get('session') || '',
     snapshot: null, usage: null, session: null, controller: null, requestId: 0, timer: 0, visibleTaskCount: 50, chartTasks: []
   };
@@ -47,8 +48,55 @@
   }
   function taskLabel(task) {
     if (/^(lead|coordinator)$/i.test(task.role)) return 'Coordinator / Run';
+    if (task.taskCount) return task.role + (task.taskCount > 1 ? ' (' + task.taskCount + ' tasks)' : '');
     if (task.round !== undefined && task.round !== null) return 'Round ' + task.round + ' / ' + task.role;
     return task.role;
+  }
+  function aggregateByRole(tasks) {
+    const groups = new Map();
+    tasks.forEach(function (task) {
+      const role = /^(lead|coordinator)$/i.test(task.role) ? 'Coordinator' : task.role;
+      let g = groups.get(role);
+      if (!g) {
+        g = { taskId: null, assignmentId: null, round: null, role: role, taskCount: 0, totalTokens: null, inputTokens: null, cachedInputTokens: null, outputTokens: null, elapsedMs: null, unknownTokenRows: 0, unknownTimeRows: 0, timingKind: 'measured', lifecycleOnly: true, states: new Map(), models: {} };
+        groups.set(role, g);
+      }
+      const add = function (key, value) { if (value !== null && value !== undefined) g[key] = (g[key] || 0) + value; };
+      g.taskCount += 1;
+      Object.keys(task.models || {}).forEach(function (name) {
+        const m = g.models[name] || (g.models[name] = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 });
+        ['inputTokens', 'cachedInputTokens', 'outputTokens'].forEach(function (key) { m[key] += finite(task.models[name][key]) || 0; });
+      });
+      g.states.set(task.state, (g.states.get(task.state) || 0) + 1);
+      add('totalTokens', task.totalTokens); add('inputTokens', task.inputTokens);
+      add('cachedInputTokens', task.cachedInputTokens); add('outputTokens', task.outputTokens);
+      add('elapsedMs', task.elapsedMs);
+      g.unknownTokenRows += task.unknownTokenRows;
+      g.unknownTimeRows += task.unknownTimeRows;
+      if (task.elapsedMs !== null && task.timingKind !== 'lifecycle') g.lifecycleOnly = false;
+    });
+    return Array.from(groups.values()).map(function (g) {
+      g.timingKind = g.lifecycleOnly ? 'lifecycle' : 'measured';
+      g.state = g.states.size === 1 ? Array.from(g.states.keys())[0] : Array.from(g.states.entries()).map(function (e) { return e[1] + ' ' + e[0]; }).join(', ');
+      return g;
+    });
+  }
+  function roleCost(models) {
+    const names = Object.keys(models || {});
+    if (!names.length) return { cost: null, unpriced: [] };
+    let cost = 0;
+    const unpriced = [];
+    names.forEach(function (name) {
+      const price = state.prices && state.prices.models && state.prices.models[name];
+      if (!price) { unpriced.push(name); return; }
+      const m = models[name];
+      const fresh = Math.max(m.inputTokens - m.cachedInputTokens, 0);
+      cost += (fresh * price.inputPerMTok + m.cachedInputTokens * price.cachedInputPerMTok + m.outputTokens * price.outputPerMTok) / 1e6;
+    });
+    return { cost: unpriced.length === names.length ? null : cost, unpriced: unpriced };
+  }
+  function money(value) {
+    return value === null ? 'Unknown' : '$' + (value < 1 ? value.toFixed(4) : value.toFixed(2));
   }
   function svgNode(tag, attrs, value) {
     const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -84,6 +132,7 @@
   }
   function renderMetricChart(containerId, coverageId, tasks, metric) {
     const tokenChart = metric === 'tokens';
+    tasks = aggregateByRole(tasks);
     const timing = tokenChart ? null : timeProvenance(tasks);
     const amountOf = function (task) { return tokenChart ? task.totalTokens : task.elapsedMs; };
     const known = tasks.filter(function (task) { return amountOf(task) !== null; }).sort(function (a, b) { return amountOf(b) - amountOf(a); });
@@ -91,9 +140,9 @@
     const unknownCount = tasks.length - known.length;
     const container = $(containerId);
     if (!known.length) {
-      container.innerHTML = '<div class="empty-chart">No known per-task ' + (tokenChart ? 'token totals' : 'working times') + ' are available.</div>';
+      container.innerHTML = '<div class="empty-chart">No known per-role ' + (tokenChart ? 'token totals' : 'working times') + ' are available.</div>';
       $(coverageId).textContent = tasks.length
-        ? tokenChart ? 'All ' + tasks.length + ' tasks have unknown token totals.' : timeProvenanceText(timing, tasks.length) + '. '
+        ? tokenChart ? 'All ' + tasks.length + ' roles have unknown token totals.' : timeProvenanceText(timing, tasks.length) + '. '
           + (timing.unknownContributions ? timing.unknownContributions + ' timing contribution(s) unknown. ' : '')
           + 'Lifecycle spans are not model latency.'
         : 'No task rows are recorded.';
@@ -119,7 +168,7 @@
     const prefix = tokenChart ? 'token' : 'time';
     const patternId = prefix + 'PartialPattern';
     const svg = svgNode('svg', { viewBox: '0 0 ' + width + ' ' + height, role: 'img', 'aria-labelledby': containerId + 'Title ' + containerId + 'Description', preserveAspectRatio: 'xMinYMin meet' });
-    const title = svgNode('title', { id: containerId + 'Title' }, tokenChart ? 'Top tasks by known token use' : 'Top tasks by recorded working time');
+    const title = svgNode('title', { id: containerId + 'Title' }, tokenChart ? 'Roles by known token use' : 'Roles by recorded working time');
     const desc = svgNode('desc', { id: containerId + 'Description' }, tokenChart
       ? 'Horizontal bars scaled to the largest displayed value. Focus a row for exact metrics and coverage.'
       : 'Horizontal bars scale recorded durations. Rows identify measured execution time or lifecycle spans; lifecycle spans are not model latency.');
@@ -147,7 +196,7 @@
     });
     container.textContent = '';
     container.appendChild(svg);
-    const knownText = 'Showing top ' + visible.length + ' of ' + known.length + ' known task ' + (tokenChart ? 'token totals' : 'durations');
+    const knownText = 'Showing top ' + visible.length + ' of ' + known.length + ' known role ' + (tokenChart ? 'token totals' : 'durations');
     const coverage = partialCount ? '; ' + partialCount + ' partial' : '';
     const missing = unknownCount ? '; ' + unknownCount + ' unknown' : '';
     const timeSources = tokenChart ? '' : '; ' + timing.measured + ' measured; ' + timing.lifecycle + ' lifecycle spans';
@@ -213,6 +262,7 @@
       taskId: task.taskId || task.task_id || null,
       assignmentId: task.assignmentId || task.assignment_id || null,
       round: task.round,
+      models: task.models && typeof task.models === 'object' ? task.models : {},
       role: roleLabel(task.role),
       totalTokens: totalTokens,
       inputTokens: inputTokens,
@@ -239,13 +289,17 @@
       const key = assignmentId ? JSON.stringify(['assignment', assignmentId]) : JSON.stringify(['task', taskId || null]);
       if (!groups.has(key)) groups.set(key, {
         taskId: taskId || null, assignmentId: assignmentId, round: attempt.round,
-        role: attempt.role, input: [], cached: [], output: [], totals: [], elapsed: [], entryIds: [], attempts: 0, known: 0, timed: 0
+        role: attempt.role, models: {}, input: [], cached: [], output: [], totals: [], elapsed: [], entryIds: [], attempts: 0, known: 0, timed: 0
       });
       const group = groups.get(key);
       if (!group.taskId && taskId) group.taskId = taskId;
       if (typeof attempt.entryId === 'string') group.entryIds.push(attempt.entryId);
       group.attempts += 1;
       const tokens = attempt.tokens || {};
+      if (attempt.model) {
+        const m = group.models[attempt.model] || (group.models[attempt.model] = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 });
+        ['inputTokens', 'cachedInputTokens', 'outputTokens'].forEach(function (key) { if (finite(tokens[key]) !== null) m[key] += tokens[key]; });
+      }
       if (finite(attempt.elapsedMs) !== null) {
         group.elapsed.push(attempt.elapsedMs);
         group.timed += 1;
@@ -264,7 +318,7 @@
       totalTokens: sum(group.totals), inputTokens: sum(group.input), cachedInputTokens: sum(group.cached),
       outputTokens: sum(group.output), unknownTokenRows: group.attempts - group.known,
       elapsedMs: sum(group.elapsed), unknownTimeRows: group.attempts - group.timed,
-      entryIds: group.entryIds, attempts: group.attempts
+      entryIds: group.entryIds, attempts: group.attempts, models: group.models
     }; });
     return { tasks: tasks, unattributedUsageRows: unattributedUsageRows };
   }
@@ -331,6 +385,7 @@
           target.inputTokens = task.inputTokens;
           target.cachedInputTokens = task.cachedInputTokens;
           target.outputTokens = task.outputTokens;
+          target.models = task.models;
           target.unknownTokenRows = task.unknownTokenRows + missingAttempts;
         }
         const hasPersistedMeasuredTime = finite(target.elapsedMs) !== null && target.timingKind !== 'lifecycle';
@@ -427,9 +482,10 @@
     renderMetricChart('taskTimeChart', 'taskTimeCoverage', tasks, 'time');
 
     if (!tasks.length) {
-      $('taskRows').innerHTML = '<tr><td colspan="4">No task or assignment rows are recorded.</td></tr>';
+      $('taskRows').innerHTML = '<tr><td colspan="8">No task or assignment rows are recorded.</td></tr>';
     } else {
-      const ordered = tasks.slice().sort(function (a, b) {
+      const roles = aggregateByRole(tasks);
+      const ordered = roles.slice().sort(function (a, b) {
         const aActive = /active|working|running|progress|submitted|submitting|starting/i.test(String(a.state));
         const bActive = /active|working|running|progress|submitted|submitting|starting/i.test(String(b.state));
         if (aActive !== bActive) return aActive ? -1 : 1;
@@ -437,26 +493,34 @@
       });
       const visible = ordered.slice(0, state.visibleTaskCount);
       $('taskRows').innerHTML = visible.map(function (task) {
-        const name = taskLabel(task);
-        const references = [task.taskId && 'Task ' + task.taskId, task.assignmentId && 'Assignment ' + task.assignmentId].filter(Boolean);
-        const reference = references.length ? references.join(' | ') : '';
         const timingTitle = task.timingKind === 'lifecycle' ? 'dispatch-created to journal-updated lifecycle span, not model latency' : 'recorded execution time, including tools and startup when present';
-        const tokenTitle = task.totalTokens === null ? 'Per-task token data unavailable from this endpoint' : 'Input ' + fmt(task.inputTokens) + ', cached input ' + fmt(task.cachedInputTokens) + ', output ' + fmt(task.outputTokens) + (task.unknownTokenRows ? '; ' + task.unknownTokenRows + ' contribution(s) unknown' : '');
-        const tokenValue = task.totalTokens === null ? 'Unknown' : fmt(task.totalTokens) + (task.unknownTokenRows ? '+' : '');
+        const partial = task.unknownTokenRows ? '<small>Partial; ' + esc(task.unknownTokenRows) + ' unknown</small>' : '';
         const timeValue = task.elapsedMs === null ? 'Unknown' : duration(task.elapsedMs) + (task.unknownTimeRows ? '+' : '');
-        const tokenNote = task.totalTokens === null ? '<small>Unavailable</small>' : task.unknownTokenRows ? '<small>Partial; ' + esc(task.unknownTokenRows) + ' unknown</small>' : '';
-        const timeNote = task.unknownTimeRows ? '<small>Partial; ' + esc(task.unknownTimeRows) + ' unknown</small>' : '';
-        return '<tr title="' + esc(reference) + '"><td><strong>' + esc(name) + '</strong>' + (reference ? '<small>' + esc(concise(reference, 100)) + '</small>' : '') + '</td><td title="' + esc(tokenTitle) + '">' + esc(tokenValue) + tokenNote + '</td><td title="' + esc(timingTitle) + '">' + esc(timeValue) + timeNote + '</td><td>' + esc(task.state) + '</td></tr>';
+        const priced = roleCost(task.models);
+        const models = Object.keys(task.models || {}).join(', ');
+        const costNote = priced.unpriced.length ? '<small>No price: ' + esc(priced.unpriced.join(', ')) + '</small>' : models ? '<small>' + esc(models) + '</small>' : '';
+        const num = function (v) { return esc(fmt(v)); };
+        return '<tr><td><strong>' + esc(task.role) + '</strong><small>' + esc(task.taskCount + (task.taskCount === 1 ? ' task' : ' tasks')) + '</small></td>'
+          + '<td class="num">' + num(task.inputTokens) + '</td><td class="num">' + num(task.cachedInputTokens) + '</td><td class="num">' + num(task.outputTokens) + '</td>'
+          + '<td class="num">' + esc(task.totalTokens === null ? 'Unknown' : fmt(task.totalTokens) + (task.unknownTokenRows ? '+' : '')) + partial + '</td>'
+          + '<td class="num" title="' + esc(timingTitle) + '">' + esc(timeValue) + '</td>'
+          + '<td class="num">' + esc(money(priced.cost)) + (task.unknownTokenRows && priced.cost !== null ? '+' : '') + costNote + '</td>'
+          + '<td>' + esc(task.state) + '</td></tr>';
       }).join('');
     }
-    $('rowCount').textContent = tasks.length ? 'Showing ' + Math.min(state.visibleTaskCount, tasks.length) + ' of ' + tasks.length + ' tasks' : '';
-    $('loadMoreButton').classList.toggle('hidden', tasks.length <= state.visibleTaskCount);
+    const roleCount = aggregateByRole(tasks).length;
+    $('rowCount').textContent = tasks.length ? 'Showing ' + Math.min(state.visibleTaskCount, roleCount) + ' of ' + roleCount + ' roles (' + tasks.length + ' tasks)' : '';
+    $('loadMoreButton').classList.toggle('hidden', roleCount <= state.visibleTaskCount);
     const timestamp = snapshot && snapshot.generatedAt
       ? 'Performance data generated ' + new Date(snapshot.generatedAt).toLocaleString() + '. '
       : '';
     const legacyTokens = !snapshot && state.usage && !state.usage.performance
       ? 'Legacy token fallback provides session and role totals only. ' : '';
-    $('tableNote').textContent = timestamp + legacyTokens + timeSourceNote(timing);
+    const allRoles = aggregateByRole(tasks);
+    let totalCost = 0, anyCost = false;
+    allRoles.forEach(function (r) { const c = roleCost(r.models); if (c.cost !== null) { totalCost += c.cost; anyCost = true; } });
+    const costNote = anyCost ? 'Estimated OpenAI API cost (standard rates, not subscription spend): ' + money(totalCost) + '. ' : '';
+    $('tableNote').textContent = costNote + timestamp + legacyTokens + timeSourceNote(timing);
   }
 
   async function requestJson(url, signal, noStore) {
@@ -532,6 +596,9 @@
     const projectId = state.projectId;
     const sessionId = state.sessionId;
     setRefreshStatus('Refreshing...');
+    if (!state.prices) {
+      try { state.prices = await requestJson('/ui/model-prices.json', controller.signal); } catch (error) { state.prices = { models: {} }; }
+    }
     setMessage('Loading session performance...');
     const base = '/api/projects/' + encodeURIComponent(projectId) + '/sessions/' + encodeURIComponent(sessionId);
     const snapshotUrl = '/ui/metrics/' + encodeURIComponent(projectId) + '/' + encodeURIComponent(sessionId) + '.json';

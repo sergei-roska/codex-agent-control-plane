@@ -44,19 +44,19 @@
       </section>
       <div class="task-charts">
         <section class="panel" aria-labelledby="taskTokenTitle">
-          <div class="panel-heading"><div><p class="eyebrow">TASK TOKENS</p><h2 id="taskTokenTitle">Tokens per task</h2></div></div>
+          <div class="panel-heading"><div><p class="eyebrow">TASK TOKENS</p><h2 id="taskTokenTitle">Tokens per role</h2></div></div>
           <div id="taskTokenChart" class="task-chart"></div>
           <p id="taskTokenCoverage" class="panel-note"></p>
         </section>
         <section class="panel" aria-labelledby="taskTimeTitle">
-          <div class="panel-heading"><div><p class="eyebrow">RECORDED TIME</p><h2 id="taskTimeTitle">Working time per task</h2></div></div>
+          <div class="panel-heading"><div><p class="eyebrow">RECORDED TIME</p><h2 id="taskTimeTitle">Working time per role</h2></div></div>
           <div id="taskTimeChart" class="task-chart"></div>
           <p id="taskTimeCoverage" class="panel-note"></p>
         </section>
       </div>
       <details class="panel task-details" id="taskDetails">
-        <summary>Task and assignment details <span id="rowCount" class="details-count"></span></summary>
-        <div class="table-scroll"><table><thead><tr><th scope="col">Task / role</th><th scope="col">Tokens</th><th scope="col">Working time</th><th scope="col">State</th></tr></thead><tbody id="taskRows"></tbody></table></div>
+        <summary>Role details <span id="rowCount" class="details-count"></span></summary>
+        <div class="table-scroll"><table><thead><tr><th scope="col">Role</th><th scope="col" class="num">Input</th><th scope="col" class="num">Cached</th><th scope="col" class="num">Output</th><th scope="col" class="num">Total</th><th scope="col" class="num">Working time</th><th scope="col" class="num">API cost</th><th scope="col">State</th></tr></thead><tbody id="taskRows"></tbody></table></div>
         <div class="table-more"><span></span><button class="btn btn-secondary btn-sm hidden" id="loadMoreButton" type="button">Load more</button></div>
         <p id="tableNote" class="panel-note"></p>
       </details>

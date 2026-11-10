@@ -1,0 +1,9 @@
+{
+  "source": "https://developers.openai.com/api/docs/pricing (standard rates, USD per 1M tokens; checked 2026-11-10)",
+  "note": "Estimate only. Prompts over 272K input tokens are billed at higher long-context rates; that is not modeled. Verify gpt-6-luna cached rate.",
+  "models": {
+    "gpt-6.1-sol": { "inputPerMTok": 2, "cachedInputPerMTok": 0.1, "outputPerMTok": 10 },
+    "gpt-6.1-terra": { "inputPerMTok": 1, "cachedInputPerMTok": 0.05, "outputPerMTok": 5 },
+    "gpt-6-luna": { "inputPerMTok": 0.1, "cachedInputPerMTok": 0.01, "outputPerMTok": 0.5 }
+  }
+}
