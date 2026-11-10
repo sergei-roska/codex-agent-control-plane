@@ -832,7 +832,10 @@
       if (isTerminalState(last && last.state)) return true;
       if (!isPausedState(last && last.state)) return false;
       const sit = situationKey === situationScope() ? situation : null;
-      return !!sit && sit.phase === 'paused' && (sit.pauseKind === 'owner_pause' || sit.pauseKind === 'stopped')
+      // A session parked on an owner pause, a Stop, or an unanswered decision (waiting_owner) can be left;
+      // the stored session is not changed and stays reachable in the session list.
+      return !!sit && ((sit.phase === 'paused' && (sit.pauseKind === 'owner_pause' || sit.pauseKind === 'stopped'))
+        || sit.phase === 'waiting_owner')
         && sit.leadTaskId === last.id
         && !situationBatch(sit).some(function (item) { return item.state === 'running'; });
     }

@@ -147,6 +147,17 @@ describe('new session controls', () => {
     assert.equal(elements.newSessionBtn.disabled, false);
   });
 
+  it('enables New session while the lead waits for an owner decision', () => {
+    const { context, elements } = loadControls({
+      sessionData: { turns: [{ leadTask: { id: 'task-old', state: 'TASK_STATE_INPUT_REQUIRED' } }] },
+      situation: { phase: 'waiting_owner', pauseKind: null, leadTaskId: 'task-old', batch: [] },
+    });
+    context.updateComposer();
+    assert.equal(elements.newSessionBtn.disabled, false);
+    assert.equal(context.newSession(), true);
+    assert.equal(context.fetchCalls, 0);
+  });
+
   it('keeps New session disabled while the pause is pending or workers are running', () => {
     for (const situation of [
       { phase: 'pausing', leadTaskId: 'task-old', batch: [] },
