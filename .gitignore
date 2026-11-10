@@ -17,3 +17,6 @@ runtime/
 data/
 artifacts/
 mcp/drupal/*/vendor/
+
+# Lock file left by tests that open the state store with filePath ":memory:"
+:memory:.lockdb
