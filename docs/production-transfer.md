@@ -722,3 +722,49 @@ measured audit savings.
   planning-policy question for the owner.
 - Production: apply the same per-kind accepting verdict to any gate that
   compares auditor verdicts.
+
+### P-44 Mechanically fixable lead-decision defects cost a full lead round each
+
+- Symptom: 3-5 rejected lead decisions per run on a one-line task, on Sol and
+  Luna alike; each retry re-read 30-110K tokens and took 30-90 s.
+- Cause: the validator rejected defects whose correct form it already
+  prescribed: non-empty `final` on dispatch or human-input decisions, an
+  all-accepted partial ledger, and records without an existing problem
+  relation.
+- Correction: `normalizeDecision` (`src/contracts.js`) repairs these
+  deterministically before validation and records `decision_normalized`;
+  other violations still reject. See
+  `docs/adr/lead-decision-normalization-and-jira-intake.md`.
+- Evidence: `test/contracts.test.js`, `test/lead-graph.test.js` (no retry,
+  stage event recorded; non-normalizable defects still retry).
+- Production: normalize only defects with one prescribed correct form, and
+  keep an audit event for each.
+
+### P-45 Jira retrieval cost one to three explorer rounds per run
+
+- Symptom: every CDB-390 run spent extra explorer and lead rounds before the
+  ticket text was known.
+- Cause: empty `cloudId` on `getJiraIssue`; an explorer read "contact others"
+  as a ban on the Atlassian tool; invalid needs_decision report.
+- Correction: intake fetches named Jira issues once with a low-effort Luna
+  turn and gives them to the lead as untrusted data; role profiles clarify
+  "contact others"; Atlassian turns get a cloudId note.
+- Evidence: `test/intake-jira.test.js`, INTAKE-01 tests in
+  `test/lead-graph.test.js`, `test/role-catalog.test.js`,
+  `test/codex-app-server.test.js`.
+- Production: resolve ticket context in intake, not through an exploring
+  agent.
+
+### P-46 Performance counted lead time twice
+
+- Symptom: "Coordinator / Run" showed 16m42s; the ledger had 8m21s.
+- Cause: the live dashboard added lifecycle spans of coordinator planning
+  entries to the measured lead row; the snapshot emitted an empty extra
+  coordinator row. Intake turns, also `lead_turn` rows, would have merged
+  into the lead row.
+- Correction: skip coordinator worker spans when a lead row exists
+  (`launcher-ui/performance.js`), skip planning dispatch rows in snapshots
+  (`src/performance-store.js`), and key the intake turn as
+  `<runId>:intake` (`src/session-performance.js`).
+- Evidence: `test/launcher-performance-ui.test.js`,
+  `test/performance-store.test.js`, `test/launcher-performance.test.js`.

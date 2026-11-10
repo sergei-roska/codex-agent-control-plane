@@ -4,6 +4,7 @@ const { sessionLeadTaskIds } = require('./launcher-sessions');
 const { UsageLedger } = require('./usage-ledger');
 const { summarize } = require('./usage-report');
 const { parseWorkerReport } = require('./contracts');
+const { INTAKE_ROLE_NAME } = require('./intake-jira');
 
 const LEGACY_LEAD_ROLE = 'orch-lead';
 const LEAD_ROLE_NAME = 'coordinator';
@@ -175,7 +176,9 @@ function sessionPerformance(db, contextId, options = {}) {
 
   const attempts = entries.map((row) => {
     const journal = row.kind === 'worker_turn' ? journalByAttempt.get(row.attemptId) : null;
-    const assignmentId = journal?.assignment_id ?? null;
+    // INTAKE-01: the intake turn is a lead_turn row of the same run; its own assignment key keeps it out of the lead group.
+    const intakeTurn = row.kind === 'lead_turn' && row.role === INTAKE_ROLE_NAME && row.runId;
+    const assignmentId = intakeTurn ? `${row.runId}:intake` : journal?.assignment_id ?? null;
     const hasFinalResult = row.attemptId != null && finalEntryByAttempt.get(row.attemptId) === row.entryId;
     const metrics = hasFinalResult ? reportMetrics(journal) : { reportedVerdict: null, checks: null };
     return {

@@ -89,6 +89,23 @@ test('session performance stays session-bound, deduplicates entries, and exposes
   }
 });
 
+test('the intake turn keeps its own assignment key so it is not merged into the lead run row', async () => {
+  const state = await fixture();
+  try {
+    new UsageLedger({ db: state.db }).record({ entryId: 'intake:1', kind: 'lead_turn', runId: 'lead-1', role: 'intake',
+      startedAt: '2026-01-01T00:00:00.500Z', elapsedMs: 900, tokens: { inputTokens: 5, outputTokens: 1, totalTokens: 6 }, permissionEvents: [] });
+    const report = sessionPerformance(state.db, 'session-a');
+    const intake = report.attempts.find((row) => row.entryId === 'intake:1');
+    const lead = report.attempts.find((row) => row.entryId === 'lead:1');
+    assert.equal(intake.assignmentId, 'lead-1:intake');
+    assert.equal(intake.round, null);
+    assert.equal(lead.assignmentId, null);
+    assert.equal(report.byRole.intake.rows, 1);
+  } finally {
+    await state.close();
+  }
+});
+
 test('final task report and receipt attach only to the last recorded turn', async () => {
   const state = await fixture();
   try {
