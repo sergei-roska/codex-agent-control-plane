@@ -18,6 +18,7 @@ const { assignmentId: makeAssignmentId, attemptId: makeAttemptId, deterministicC
 const { loadSkillCatalog, findSkillCandidates, resolveSkillSelection } = require('./skill-catalog');
 const { loadMcpCatalog, findMcpToolCandidates, mcpToolPins } = require('./mcp-catalog');
 const { withConnectors, resolveManagedToolSelection: resolveMcpToolSelection } = require('./connector-catalog');
+const { detectJiraKeys, fetchJiraIssues, renderIntakeBlock, INTAKE_ROLE_NAME } = require('./intake-jira');
 const {
   AUT03_SKILL_ID, AUT03_SKILL_SHA256, expectedLeadSkillContext,
   resolveLeadSelectedSkills, sameLeadSkillContext,
@@ -828,6 +829,8 @@ const LeadState = Annotation.Root({
   continuable: last(() => []),
   // LL-8: bounded checkpointed observations and the current repeated-work episode.
   loopGuard: last(() => null),
+  // INTAKE-01: Jira issues named in the goal, read once before the first lead decision ({ status, keys, issues, failed }).
+  jiraIntake: last(() => null),
 });
 
 /**
@@ -2732,6 +2735,10 @@ function buildLeadGraph(deps) {
       else if (state.newRequest) sections.push(`New message from the owner (authoritative; the earlier conversation in this thread is background):\n${state.newRequest}`);
       else sections.push(`New goal from the owner (authoritative):\n${state.goal}`);
     }
+    if (extras.goalChanged) {
+      const intakeBlock = renderIntakeBlock(state.jiraIntake);
+      if (intakeBlock) sections.push(intakeBlock);
+    }
     sections.push(roundsLine(state), checksLine(state));
     sections.push(reviewObligationsSection(reviewProjection));
     sections.push(nextStepSection(reviewProjection));
@@ -2778,6 +2785,8 @@ function buildLeadGraph(deps) {
       'MCP candidate descriptions are lexical hints. You may select any trusted listed MCP tool ID based on semantic relevance, even when it was not in the candidate shortlist.',
     ];
     if (extras.sessionDigest) sections.splice(1 + goal.length + 1, 0, `Session so far (this lead thread is new; the earlier conversation of this session is summarized here, background only):\n${extras.sessionDigest}`);
+    const intakeBlock = renderIntakeBlock(state.jiraIntake);
+    if (intakeBlock) sections.push(intakeBlock);
     if (extras.notes.length > 0) sections.push('Notes:\n' + extras.notes.map((note) => `- ${note}`).join('\n'));
     sections.push(openDecisionsSection(state));
     sections.push(...stateNotes(state));
@@ -2845,6 +2854,69 @@ function buildLeadGraph(deps) {
     } catch (_) { /* Usage recording never breaks a run. */ }
   }
 
+  // INTAKE-01: usage of the intake turn goes to the ledger as a lead_turn row labeled with the intake role.
+  function recordIntakeTurn(state, source, outcome) {
+    if (!deps.usageLedger || !source?.usage) return;
+    try {
+      const usage = source.usage;
+      const turnId = source.turnId || source.execution?.turnId || null;
+      const threadId = source.threadId || source.execution?.threadId || null;
+      deps.usageLedger.record({
+        entryId: turnId
+          ? `intake:${threadId || state.runId}:${turnId}`
+          : `intake:${state.runId}:${usage.startedAt || new Date().toISOString()}`,
+        kind: 'lead_turn',
+        runId: state.runId,
+        role: INTAKE_ROLE_NAME,
+        taskId: null,
+        contextId: null,
+        attemptId: null,
+        model: usage.model ?? null,
+        effort: usage.effort ?? null,
+        startedAt: usage.startedAt ?? null,
+        elapsedMs: usage.elapsedMs ?? null,
+        turns: usage.turns ?? null,
+        modelRequests: usage.modelRequests ?? null,
+        retries: null,
+        tokens: usage.tokens ?? null,
+        tokenSource: usage.tokenSource ?? 'unavailable',
+        cumulativeTotal: usage.cumulativeTotal ?? null,
+        appServerVersion: usage.appServerVersion ?? null,
+        outcome,
+        permissionEvents: Array.isArray(source.permissionEvents) ? source.permissionEvents : [],
+      });
+    } catch (_) { /* Usage recording never breaks a run. */ }
+  }
+
+  // INTAKE-01: read the Jira issues named in the goal once, before the first lead decision. Runs only when a
+  // role may use the Atlassian connector; the app server still refuses a connector the owner disabled.
+  // Any failure leaves the run exactly as without intake. Resolves with a state update, or {} when skipped.
+  async function intakeJiraIssues(state, runtime) {
+    if (state.jiraIntake || deps.jiraIntake === false) return {};
+    try {
+      const keys = detectJiraKeys(state.goal);
+      if (keys.length === 0) return {};
+      const allowed = [...roles.values()].some((profile) => (profile.tools?.mcpServers || []).includes('harness-atlassian'));
+      if (!allowed) return {};
+      const fetchIssues = typeof deps.jiraIntake === 'function' ? deps.jiraIntake : fetchJiraIssues;
+      const result = await fetchIssues({
+        appServer, workspace, mcpCatalog, keys, signal: runtime.signal,
+        executionPermissions: deps.executionPermissions || 'inherit',
+      });
+      recordIntakeTurn(state, result.source, result.outcome);
+      const stage = (type, key, status, payload) => {
+        try {
+          recordStage(type, { runId: state.runId, role: INTAKE_ROLE_NAME, target: key, status, payload: { key, ...payload } });
+        } catch (_) { /* Staging never breaks a run. */ }
+      };
+      for (const issue of result.issues) stage('intake_issue_fetched', issue.key, 'fetched', { chars: issue.text.length });
+      for (const entry of result.failed) stage('intake_issue_failed', entry.key, 'failed', { reason: entry.reason });
+      return { jiraIntake: { status: result.status, keys, issues: result.issues, failed: result.failed } };
+    } catch (_) {
+      return {};
+    }
+  }
+
   // ---- nodes
 
   async function intake(state, config) {
@@ -2855,9 +2927,10 @@ function buildLeadGraph(deps) {
       throw new Error('AUT-03 lead skill run context changed; start a new run ID');
     }
     const current = readPinned({ roles, leadRole, workspace, skillCatalog, mcpCatalog });
-    if (!state.pinned) return { pinned: current, leadSkillContext: expectedSkillContext };
+    const jira = await intakeJiraIssues(state, runtime);
+    if (!state.pinned) return { pinned: current, leadSkillContext: expectedSkillContext, ...jira };
     runtime.pendingNotes = [...(runtime.pendingNotes || []), ...instructionChanges(state.pinned, current)];
-    return { pinned: current, leadSkillContext: expectedSkillContext };
+    return { pinned: current, leadSkillContext: expectedSkillContext, ...jira };
   }
 
   // A canceled run ends at finish. STOP-01: when the abort was a shutdown stop (the signal reason says so)

@@ -122,6 +122,17 @@ test('shipped roles have their curated MCP allowlists and skills off', () => {
   assert.deepEqual(createLeadRole().tools, { mcpServers: [], skills: false });
 });
 
+test('every profile that bans contacting others still allows read-only connector lookups', () => {
+  let checked = 0;
+  for (const [name, role] of loadRoles()) {
+    if (!/contact others/.test(role.instructions)) continue;
+    checked += 1;
+    assert.match(role.instructions, /contact others \(message people or write to external systems\)/, name);
+    assert.match(role.instructions, /Read-only lookups through the connector tools assigned to this role are allowed/, name);
+  }
+  assert.equal(checked, 8);
+});
+
 function withProfile(mutate) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-role-tools-'));
   const copied = path.join(tempRoot, 'profiles');

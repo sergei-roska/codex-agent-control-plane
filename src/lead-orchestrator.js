@@ -245,6 +245,7 @@ class LeadOrchestrator {
     aut03SkillPin,
     sessionThreads = null,
     rolloverTokens = rolloverTokensFromEnv(),
+    jiraIntake,
   } = {}) {
     if (!appServer || typeof appServer.run !== 'function') throw new TypeError('appServer.run is required');
     if (!(roles instanceof Map)) throw new TypeError('roles must be a Map');
@@ -308,6 +309,7 @@ class LeadOrchestrator {
       ...(aut03SkillPin ? { aut03SkillPin } : {}),
       sessionThreads,
       rolloverTokens,
+      ...(jiraIntake === undefined ? {} : { jiraIntake }),
       sessionDigest: (input) => this._sessionDigest(input),
       runtimeFor: (runId) => this.runtimes.get(runId),
       clientFor: (roleName) => this._clientFor(roleName),

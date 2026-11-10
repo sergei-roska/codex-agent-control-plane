@@ -2127,6 +2127,19 @@ test('a selected connector gets its url, exact enabled_tools and required false'
   assert.deepEqual(policy.mcpMissing, ['harness-context7']);
 });
 
+test('only a turn that selected Atlassian tools gets the cloudId usage note', async (t) => {
+  const note = 'Atlassian tools need cloudId: call getAccessibleAtlassianResources once or pass the site hostname.';
+  const instructionsFor = async (selectedMcpTools) => {
+    const fake = fakeSpawn(inventoryHandler(['alpha']));
+    const client = new CodexAppServer({ spawnImpl: fake.spawnImpl });
+    t.after(() => client.close());
+    await client.run({ role: toolRole({ mcpServers: ['harness-atlassian', 'harness-figma'], skills: false }), cwd: '/tmp/work', input: 'hi', selectedMcpTools });
+    return fake.getChild().sent.find(({ method }) => method === 'thread/start').params.developerInstructions;
+  };
+  assert.ok((await instructionsFor(connectorPick('harness-atlassian:getJiraIssue'))).includes(note));
+  assert.equal((await instructionsFor(connectorPick('harness-figma:whoami'))).includes(note), false);
+});
+
 test('a disabled selected connector is denied before thread or turn setup', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'disabled-connector-'));
   const preferencesFile = path.join(root, 'connector-preferences.json');
