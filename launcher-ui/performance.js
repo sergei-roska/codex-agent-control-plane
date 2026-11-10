@@ -434,6 +434,9 @@
         });
       }
       (turn.workers || []).forEach(function (worker) {
+        // The lead row already carries the run time; coordinator worker spans duplicate it.
+        // Keep them only when no lead row exists, so their time is not lost.
+        if (lead && /^(lead|coordinator)$/i.test(String(worker.role || ''))) return;
         const start = dateValue(worker.created_at || worker.createdAt);
         const end = dateValue(worker.updated_at || worker.updatedAt);
         tasks.push({

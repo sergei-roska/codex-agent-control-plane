@@ -171,3 +171,30 @@ test('collector handles a legacy state database without usage_ledger and keeps u
   }]);
   assert.equal(digest(statePath), before);
 });
+
+test('snapshot counts lead run time once and emits no coordinator planning row next to the lead row', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'performance-lead-planning-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const statePath = path.join(root, 'state.sqlite');
+  const state = await openStateDatabase({ filePath: statePath });
+  state.db.prepare(`INSERT INTO tasks
+    (tenant, owner, id, context_id, status_last_updated, status_state, artifacts)
+    VALUES ('t', 'orchestrator', 'lead-plan', 'lead-session', 1, 'TASK_STATE_COMPLETED', '[]')`).run();
+  const journal = state.db.prepare(`INSERT INTO dispatch_journal
+    (attempt_id, run_id, assignment_id, role, sandbox, context_id, task_id, state, result_json, created_at, updated_at)
+    VALUES (?, 'lead-plan', 'lead-plan:lead-planning', 'coordinator', 'read-only', 'lead-session', NULL, 'finished', NULL, '2026-01-01', '2026-01-01')`);
+  for (const attemptId of ['plan-attempt-1', 'plan-attempt-2', 'plan-attempt-3']) journal.run(attemptId);
+  const ledger = new UsageLedger({ db: state.db });
+  [1000, 2000, 3000].forEach((elapsedMs, index) => ledger.record({
+    entryId: `lead-turn-${index + 1}`, kind: 'lead_turn', role: 'coordinator', runId: 'lead-plan', taskId: null,
+    contextId: 'lead-session', startedAt: `2026-01-01T00:00:0${index}.000Z`, recordedAt: `2026-01-01T00:00:0${index}.000Z`,
+    outcome: 'completed', elapsedMs, tokens: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, permissionEvents: [],
+  }));
+  await state.close();
+  const result = collectOnce({ statePath, projectId: PROJECT, contextId: 'lead-session', snapshotDir: path.join(root, 'snapshots') });
+  assert.equal(result.snapshot.tasks.filter((row) => row.role === 'coordinator').length, 1);
+  assert.equal(result.snapshot.tasks.some((row) => row.assignmentId === 'lead-plan:lead-planning'), false);
+  const lead = result.snapshot.tasks.find((row) => row.role === 'coordinator');
+  assert.equal(lead.elapsedMs, 6000);
+  assert.equal(lead.taskId, 'lead-plan');
+});

@@ -244,6 +244,8 @@ function buildSnapshot(db, projectId, contextId, report) {
   };
 
   for (const row of assignments) {
+    // Lead planning dispatches carry no attempts of their own; their time is the lead row's (from lead_turn attempts).
+    if (/^(lead|coordinator)$/i.test(row.role ?? '')) continue;
     const group = ensure({
       taskId: row.task_id,
       assignmentId: row.assignment_id,

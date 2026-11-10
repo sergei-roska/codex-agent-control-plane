@@ -320,3 +320,28 @@ test('live retries aggregate by assignment without merging distinct assignments 
   assert.match(elements.get('taskTokenCoverage').textContent, /Showing top 1 of 1 known role token totals/);
   assert.match(elements.get('taskRows').innerHTML, /<strong>Engineer<\/strong><small>2 tasks<\/small><\/td>.*?>35</);
 });
+
+test('lead run time is counted once when lead turns are measured and coordinator worker spans exist', async () => {
+  const session = { turns: [{
+    leadTask: { id: 'lead-1', state: 'TASK_STATE_COMPLETED', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:10Z' },
+    workers: [
+      { task_id: null, assignment_id: 'lead-1:lead-planning', role: 'coordinator', state: 'TASK_STATE_COMPLETED', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:02Z' },
+      { task_id: null, assignment_id: 'lead-1:lead-planning', role: 'coordinator', state: 'TASK_STATE_COMPLETED', created_at: '2026-01-01T00:00:03Z', updated_at: '2026-01-01T00:00:05Z' },
+      { task_id: null, assignment_id: 'lead-1:lead-planning', role: 'coordinator', state: 'TASK_STATE_COMPLETED', created_at: '2026-01-01T00:00:06Z', updated_at: '2026-01-01T00:00:08Z' },
+    ],
+  }] };
+  const usage = {
+    total: { totalTokens: null, attempts: 3 }, unknownCount: 0,
+    performance: {
+      schema: 'session-performance/v1', generatedAt: '2026-01-02T00:00:00.000Z',
+      attempts: [
+        { entryId: 'lead-turn-1', kind: 'lead_turn', taskId: null, runId: 'lead-1', assignmentId: null, role: 'coordinator', elapsedMs: 1000, tokens: null },
+        { entryId: 'lead-turn-2', kind: 'lead_turn', taskId: null, runId: 'lead-1', assignmentId: null, role: 'coordinator', elapsedMs: 2000, tokens: null },
+        { entryId: 'lead-turn-3', kind: 'lead_turn', taskId: null, runId: 'lead-1', assignmentId: null, role: 'coordinator', elapsedMs: 3000, tokens: null },
+      ],
+    },
+  };
+  const { elements } = await renderPage({ snapshot: null, usage, session });
+  assert.match(elements.get('taskRows').innerHTML, /<strong>Coordinator<\/strong>[\s\S]*?>6 s</);
+  assert.doesNotMatch(elements.get('taskRows').innerHTML, />12 s</);
+});
